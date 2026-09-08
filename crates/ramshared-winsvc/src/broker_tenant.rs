@@ -399,7 +399,13 @@ mod tests {
     // silence unused helper
     #[test]
     fn dual_with_reply_helper_compiles() {
-        let _ = with_reply(Msg::Ack, Msg::Registered { tenant_id: 1 });
+        let (mut cur, in_buf) = with_reply(Msg::Ack, Msg::Registered { tenant_id: 1 })
+            .expect("with_reply should successfully serialize test messages");
+        assert!(in_buf.is_empty());
+        let msg = read_msg(&mut cur)
+            .expect("read_msg should succeed")
+            .expect("expected registered message");
+        assert_eq!(msg, Msg::Registered { tenant_id: 1 });
     }
 
     #[test]
