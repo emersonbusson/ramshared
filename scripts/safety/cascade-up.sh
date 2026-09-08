@@ -67,6 +67,11 @@ if [[ -n $VRAM_OVERRIDE ]]; then
   EXPECTED_APPROVAL="activate:$RELEASE_VERSION:vram=$VRAM_MIB:zram=$ZRAM_MIB"
 fi
 [[ ${RAMSHARED_NBD_LIFECYCLE_APPROVAL:-} == "$EXPECTED_APPROVAL" ]] || refuse APPROVAL_MISSING
+
+if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ramshared-cascade.service 2>/dev/null; then
+  refuse ALREADY_ACTIVE
+fi
+
 RAMSHARED_NBD_VRAM_MIB=$VRAM_MIB "$PREFLIGHT" --check
 
 printf 'NBD_LIFECYCLE_STATE=EXECUTING\n'
