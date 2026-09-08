@@ -317,6 +317,41 @@ function Get-GpuIdentity {
     }
 }
 
+function Assert-WslAndDiskPrerequisite {
+    param(
+        [Parameter(Mandatory = $true)][string]$ArtifactRoot,
+        [Parameter(Mandatory = $true)][string]$Distro
+    )
+    $drive = Split-Path -Path $ArtifactRoot -Qualifier
+    if ([string]::IsNullOrWhiteSpace($drive)) {
+        Write-Error -Message "artifact_root_must_be_windows_drive_path" -ErrorId "InvalidDrive" -Category InvalidArgument
+        throw [System.ArgumentException]::new("artifact_root_must_be_windows_drive_path")
+    }
+    try {
+        $driveInfo = [System.IO.DriveInfo]::new($drive)
+    } catch {
+        Write-Error -Message "drive_not_found" -ErrorId "DriveNotFound" -Category ObjectNotFound
+        throw [System.Management.Automation.ItemNotFoundException]::new("drive_not_found")
+    }
+
+    if ($driveInfo.AvailableFreeSpace -lt 10737418240) {
+        Write-Error -Message "insufficient_disk_space" -ErrorId "InsufficientDiskSpace" -Category ResourceUnavailable
+        throw [System.IO.IOException]::new("insufficient_disk_space")
+    }
+
+    $wslExecutable = Join-Path $env:SystemRoot "System32\wsl.exe"
+    if (-not (Test-Path -LiteralPath $wslExecutable -PathType Leaf)) {
+        Write-Error -Message "wsl_executable_unavailable" -ErrorId "WslNotFound" -Category ObjectNotFound
+        throw [System.Management.Automation.ItemNotFoundException]::new("wsl_executable_unavailable")
+    }
+
+    $checkDistro = (Start-Process -FilePath $wslExecutable -ArgumentList "-d", $Distro, "--", "bash", "-c", "command -v fio && command -v nbd-client" -Wait -NoNewWindow -PassThru)
+    if ($checkDistro.ExitCode -ne 0) {
+        Write-Error -Message "wsl_distro_or_binaries_missing" -ErrorId "WslPrerequisitesMissing" -Category ObjectNotFound
+        throw [System.Management.Automation.ItemNotFoundException]::new("wsl_distro_or_binaries_missing")
+    }
+}
+
 function Assert-InputContract {
     if ($Distro -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
         throw "distro_name_invalid"
@@ -3906,6 +3941,7 @@ if (-not [string]::IsNullOrWhiteSpace($ManufacturedSelfTestCase)) {
 }
 
 Assert-InputContract
+Assert-WslAndDiskPrerequisite -ArtifactRoot $ArtifactRoot -Distro $Distro
 New-Item -ItemType Directory -Force -Path $ArtifactRoot | Out-Null
 $planPath = Join-Path $ArtifactRoot $PlanFileName
 if ($PlanOnly) {
