@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
 VERSION_CLEAN="${VERSION#v}"
-DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
+DEB_VERSION="${VERSION_CLEAN//-beta./-beta}"
 ARCH="amd64"
 
 OUT_DIR="$ROOT/artifacts/packages"
@@ -29,7 +29,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 69
 fi
 
 # Clean previous staging
@@ -92,17 +92,19 @@ install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
 install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
 
 # Generate DEBIAN/control file
-printf "Package: ramshared\n" > "$STAGE_DIR/DEBIAN/control"
-printf "Version: %s\n" "${DEB_VERSION}" >> "$STAGE_DIR/DEBIAN/control"
-printf "Section: admin\n" >> "$STAGE_DIR/DEBIAN/control"
-printf "Priority: optional\n" >> "$STAGE_DIR/DEBIAN/control"
-printf "Architecture: %s\n" "${ARCH}" >> "$STAGE_DIR/DEBIAN/control"
-printf "Depends: libc6 (>= 2.31)\n" >> "$STAGE_DIR/DEBIAN/control"
-printf "Maintainer: Emerson Busson\n" >> "$STAGE_DIR/DEBIAN/control"
-printf "Description: High-Performance VRAM memory tier for Linux and WSL2\n" >> "$STAGE_DIR/DEBIAN/control"
-printf " RamShared is an R&D system that utilizes idle GPU Video RAM (VRAM)\n" >> "$STAGE_DIR/DEBIAN/control"
-printf " over PCIe as an accelerated, high-throughput memory tier for Linux and WSL2.\n" >> "$STAGE_DIR/DEBIAN/control"
-printf " Absorbs memory pressure spikes and prevents desktop/WSL2 swap freezes.\n" >> "$STAGE_DIR/DEBIAN/control"
+{
+  printf "Package: ramshared\n"
+  printf "Version: %s\n" "${DEB_VERSION}"
+  printf "Section: admin\n"
+  printf "Priority: optional\n"
+  printf "Architecture: %s\n" "${ARCH}"
+  printf "Depends: libc6 (>= 2.31)\n"
+  printf "Maintainer: Emerson Busson\n"
+  printf "Description: High-Performance VRAM memory tier for Linux and WSL2\n"
+  printf " RamShared is an R&D system that utilizes idle GPU Video RAM (VRAM)\n"
+  printf " over PCIe as an accelerated, high-throughput memory tier for Linux and WSL2.\n"
+  printf " Absorbs memory pressure spikes and prevents desktop/WSL2 swap freezes.\n"
+} > "$STAGE_DIR/DEBIAN/control"
 
 # Generate DEBIAN/postinst (post-installation script)
 cat << 'POSTINST_EOF' > "$STAGE_DIR/DEBIAN/postinst"
@@ -148,6 +150,15 @@ chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 mkdir -p "$OUT_DIR"
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
+
+# Run Lintian validation
+echo "==> Running lintian verification..."
+if command -v lintian >/dev/null 2>&1; then
+  # We allow warnings to pass by suppressing tags and just printing output
+  lintian --suppress-tags file-in-etc-not-marked-as-conffile,malformed-contact,no-changelog,python3-script-but-no-python3-dep,unstripped-binary-or-object,maintainer-script-calls-systemctl,no-manual-page,non-standard-dir-perm,script-not-executable "$DEB_FILE" || true
+else
+  echo "WARN: lintian not found, skipping validation" >&2
+fi
 
 # Compute SHA-256
 (cd "$OUT_DIR" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
