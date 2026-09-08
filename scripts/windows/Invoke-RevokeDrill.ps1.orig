@@ -44,7 +44,7 @@ if ($targetSvc.BinaryPathName -match '([^\\]+\.exe)') {
 }
 
 $locks = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Name -ne $exeName -and $_.CommandLine -match [regex]::Escape($ServiceName) -and $_.ProcessId -ne $PID
+    $_.Name -ne $exeName -and $_.CommandLine -match $ServiceName -and $_.ProcessId -ne $PID
 }
 
 if ($locks) {
