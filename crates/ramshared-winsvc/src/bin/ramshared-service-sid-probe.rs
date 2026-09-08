@@ -14,8 +14,8 @@ fn parse_args<I>(args: I) -> Result<ProbeArgs, Box<dyn std::error::Error>>
 where
     I: IntoIterator<Item = String>,
 {
-    let mut service_name = DEFAULT_SERVICE_NAME.to_string();
-    let mut mode = "lease".to_string();
+    let mut service_name = None;
+    let mut mode = None;
     let mut deny_sid = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
@@ -25,7 +25,7 @@ where
                     .next()
                     .filter(|value| !value.is_empty())
                     .ok_or("--service-name requires a value")?;
-                service_name = value;
+                service_name = Some(value);
             }
             "--mode" => {
                 let value = iter
@@ -37,7 +37,7 @@ where
                         )
                     })
                     .ok_or("--mode must be lease, oversized, partial, or blocked-read")?;
-                mode = value;
+                mode = Some(value);
             }
             "--deny-sid" => {
                 let value = iter
@@ -50,8 +50,8 @@ where
         }
     }
     Ok(ProbeArgs {
-        service_name,
-        mode,
+        service_name: service_name.unwrap_or_else(|| DEFAULT_SERVICE_NAME.to_string()),
+        mode: mode.unwrap_or_else(|| "lease".to_string()),
         deny_sid,
     })
 }
@@ -343,5 +343,21 @@ mod tests {
         let input = vec!["--unknown".to_string()];
         let err = parse_args(input).unwrap_err();
         assert_eq!(err.to_string(), "unknown probe argument");
+    }
+
+    #[test]
+    fn parse_args_benchmark() {
+        let start = std::time::Instant::now();
+        for _ in 0..10_000 {
+            let input = vec![
+                "--service-name".to_string(),
+                "Svc".to_string(),
+                "--mode".to_string(),
+                "lease".to_string(),
+            ];
+            let args = parse_args(input).unwrap();
+            assert_eq!(args.service_name, "Svc");
+        }
+        assert!(start.elapsed().as_millis() < 1000);
     }
 }
