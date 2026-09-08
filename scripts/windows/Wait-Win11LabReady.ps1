@@ -47,9 +47,7 @@ param(
     [ValidateRange(5, 600)]
     [int]$PerAttemptTimeoutSeconds = 120,
     [ValidateRange(1, 180)]
-    [int]$PsDirectConnectTimeoutSeconds = 60,
-    [ValidateRange(1, 30)]
-    [int]$PollIntervalSeconds = 5
+    [int]$PsDirectConnectTimeoutSeconds = 60
 )
 
 Set-StrictMode -Version Latest
@@ -1233,6 +1231,7 @@ catch {
 }
 
 $attemptNumber = 0
+$currentBackoffSeconds = 2
 while (-not $hostBeforeProviderFailed -and [DateTime]::UtcNow -lt $deadlineUtc) {
     $attemptNumber++
     $attemptStartedUtc = [DateTime]::UtcNow
@@ -1325,7 +1324,8 @@ while (-not $hostBeforeProviderFailed -and [DateTime]::UtcNow -lt $deadlineUtc) 
     if ($remainingAfterAttempt -le 0) {
         break
     }
-    Start-Sleep -Seconds ([Math]::Min($PollIntervalSeconds, $remainingAfterAttempt))
+    Start-Sleep -Seconds ([Math]::Min($currentBackoffSeconds, $remainingAfterAttempt))
+    $currentBackoffSeconds = [Math]::Min($currentBackoffSeconds * 2, 300)
 }
 
 if ($null -eq $after) {
