@@ -846,4 +846,51 @@ mod tests {
         let err_len = queue.driver_read_slot(1, 4097).unwrap_err();
         assert!(matches!(err_len, DriverLinkError::Invalid(_)));
     }
+
+    #[test]
+    fn test_driver_complete_wraparound_and_capacity() {
+        let queue_depth = 4;
+        let mut queue = InMemoryQueue::new(queue_depth, 4096, 4096).unwrap();
+
+        // Push until full (4 entries)
+        for i in 0..queue_depth {
+            queue
+                .push_cqe(Cqe {
+                    tag: i as u64,
+                    status: ST_OK,
+                    reserved: 0,
+                })
+                .unwrap();
+        }
+        // Pushing 5th entry must fail with DriverLinkError::Full
+        assert_eq!(
+            queue.push_cqe(Cqe {
+                tag: 99,
+                status: ST_OK,
+                reserved: 0,
+            }),
+            Err(DriverLinkError::Full)
+        );
+
+        // Pop all entries using driver_complete and verify FIFO order
+        for i in 0..queue_depth {
+            let cqe = queue.driver_complete().unwrap().expect("CQE present");
+            assert_eq!(cqe.tag, i as u64);
+        }
+        assert_eq!(queue.driver_complete().unwrap(), None);
+
+        // Perform multiple push/pop cycles across index wraparound (e.g. 20 iterations)
+        for i in 0..20 {
+            queue
+                .push_cqe(Cqe {
+                    tag: 100 + i,
+                    status: ST_OK,
+                    reserved: 0,
+                })
+                .unwrap();
+            let cqe = queue.driver_complete().unwrap().expect("CQE present");
+            assert_eq!(cqe.tag, 100 + i);
+        }
+        assert_eq!(queue.driver_complete().unwrap(), None);
+    }
 }
