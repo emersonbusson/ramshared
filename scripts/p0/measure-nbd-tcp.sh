@@ -28,13 +28,31 @@ modprobe nbd nbds_max=1 2>/dev/null || true
 SRV_PID=""
 cleanup() {
 	nbd-client -d "$DEV" 2>/dev/null || true
-	[ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true
+	if [ -n "$SRV_PID" ]; then kill "$SRV_PID" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
 
 log "starting nbdkit memory 1G on $HOST:$PORT"
 nbdkit --foreground --port "$PORT" --ipaddr "$HOST" memory 1G & SRV_PID=$!
 sleep 1
+
+# --- TCP & Network Reachability Preflight ---
+if ! nc -z -w 2 "$HOST" "$PORT" >/dev/null 2>&1; then
+	log "ERROR: NBD server at $HOST:$PORT is not reachable via TCP (nc -z failed)"
+	exit 69 # EX_UNAVAILABLE
+fi
+
+IFACE=$(ip route get "$HOST" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); break}}' || true)
+if [ -n "$IFACE" ]; then
+	MTU=$(ip link show "$IFACE" 2>/dev/null | grep -oE 'mtu [0-9]+' | awk '{print $2}' || true)
+	if [ -n "$MTU" ]; then
+		if [ "$MTU" -lt 1500 ]; then
+			log "ERROR: Network interface $IFACE has MTU $MTU, which is below the physical minimum of 1500 required for NBD/TCP testing"
+			exit 78 # EX_CONFIG
+		fi
+	fi
+fi
+
 log "connecting nbd-client -> $DEV (-timeout 30, never -persist)"
 nbd-client "$HOST" "$PORT" "$DEV" -timeout 30
 sleep 1
