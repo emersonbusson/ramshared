@@ -157,11 +157,26 @@ test('multiline_comment_state_is_bounded', () => {
 test('english_comment_and_identifier_are_ignored', () => {
   const findings = scanText('src/example.rs', [
     '// bounded English comment',
-    `let ${HIGH} = true;`,
+    `let endpoint = true;`,
     'let endpoint = "https://example.invalid/ready";',
     '',
   ].join('\n'))
   assert.deepEqual(findings, [])
+})
+
+test('identifier_is_scanned', () => {
+  const findings = scanText('src/example.rs', [
+    '// bounded English comment',
+    `let ${HIGH} = true;`,
+    'let endpoint = "https://example.invalid/ready";',
+    '',
+  ].join('\n'))
+  assert.deepEqual(findings, [{
+    path: 'src/example.rs',
+    line: 2,
+    rule: 'LANG-PT-001',
+    scope: 'identifier'
+  }])
 })
 
 test('quoted_source_text_and_declared_comment_anchors_are_scanned', (t) => {

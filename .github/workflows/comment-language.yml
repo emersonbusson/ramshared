@@ -21,7 +21,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check added repository text uses canonical English
+      - name: Check added repository text and identifiers use canonical English
         run: >-
           node tools/ci/check-comment-language.mjs
           --diff "origin/${{ github.base_ref }}"

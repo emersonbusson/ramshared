@@ -160,10 +160,12 @@ function addQuotedUnits(segment, line, units, ext) {
   let quote = null
   let start = -1
   let escaped = false
+  let lastEnd = 0
   for (let index = 0; index < segment.length; index++) {
     const character = segment[index]
     if (!quote) {
       if (character === '"' || character === "'" || character === '`') {
+        addUnit(units, line, segment.slice(lastEnd, index), 'identifier', ext)
         quote = character
         start = index + 1
       }
@@ -181,7 +183,11 @@ function addQuotedUnits(segment, line, units, ext) {
       addUnit(units, line, segment.slice(start, index), 'source-text', ext)
       quote = null
       start = -1
+      lastEnd = index + 1
     }
+  }
+  if (!quote && lastEnd < segment.length) {
+    addUnit(units, line, segment.slice(lastEnd), 'identifier', ext)
   }
 }
 
