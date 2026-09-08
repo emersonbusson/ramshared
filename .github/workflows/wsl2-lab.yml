@@ -36,6 +36,18 @@ jobs:
       LAB_REVISION: ${{ github.sha }}
       LAB_ENVIRONMENT: protected-isolated-lab
     steps:
+      - name: Check WSL2 kernel and distro availability
+        run: |
+          set -euo pipefail
+          if ! grep -qi microsoft /proc/version; then
+            echo "Error: WSL2 kernel not detected."
+            exit 69
+          fi
+          if ! command -v wsl.exe >/dev/null 2>&1; then
+            echo "Error: wsl.exe not found for distro interop."
+            exit 69
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
