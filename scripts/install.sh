@@ -6,7 +6,6 @@ set -euo pipefail
 
 REPO="emersonbusson/ramshared"
 VERSION="${RAMSHARED_VERSION:-v0.9.0-beta.2}"
-ARCH="amd64"
 INSTALL_PREFIX="/usr/local"
 BIN_DIR="${INSTALL_PREFIX}/bin"
 SHARE_DIR="${INSTALL_PREFIX}/share/ramshared"
@@ -25,9 +24,32 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
+# Validate required build dependencies and target architecture
+if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
+  echo "Error: Required dependency 'cargo' or 'rustc' not found in PATH." >&2
+  exit 69
+fi
+if ! command -v gcc >/dev/null 2>&1; then
+  echo "Error: Required dependency 'gcc' toolchain not found in PATH." >&2
+  exit 69
+fi
+
+SYSTEM_ARCH="$(uname -m)"
+if [[ "${SYSTEM_ARCH}" == "x86_64" ]]; then
+  # shellcheck disable=SC2034
+  ARCH="amd64"
+elif [[ "${SYSTEM_ARCH}" == "aarch64" ]]; then
+  # shellcheck disable=SC2034
+  ARCH="arm64"
+else
+  echo "Error: Unsupported architecture '${SYSTEM_ARCH}'. Expected x86_64 or aarch64." >&2
+  exit 69
+fi
+
 # Detect environment
 IS_WSL=0
 if grep -qi microsoft /proc/version 2>/dev/null; then
+  # shellcheck disable=SC2034
   IS_WSL=1
   echo "  [+] Environment detected: Microsoft WSL2"
 else
