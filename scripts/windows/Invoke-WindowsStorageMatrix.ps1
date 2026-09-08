@@ -953,8 +953,12 @@ function Invoke-BoundedProcessStart(
         }
         $completed = $process.HasExited
         if (-not $completed) {
-            & (Join-Path $env:SystemRoot "System32\taskkill.exe") `
-                /PID ([string]$process.Id) /T /F 2>&1 | Out-Null
+            if ($env:SystemRoot) {
+                & (Join-Path $env:SystemRoot "System32\taskkill.exe") `
+                    /PID ([string]$process.Id) /T /F 2>&1 | Out-Null
+            } else {
+                kill -9 $process.Id 2>&1 | Out-Null
+            }
             $taskkillExit = $LASTEXITCODE
             $processTreeTerminated = $process.WaitForExit(5000)
             if (-not $processTreeTerminated -or

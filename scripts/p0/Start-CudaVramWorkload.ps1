@@ -23,24 +23,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)) {
-    throw "nvidia-smi not found. CUDA toolkit must be installed."
-}
-
-$nvCudaFound = $false
-$cudaPaths = @(
-    "$env:SystemRoot\System32\nvcuda.dll",
-    "$env:SystemRoot\SysWOW64\nvcuda.dll"
-)
-foreach ($path in $cudaPaths) {
-    if (Test-Path -LiteralPath $path) {
-        $nvCudaFound = $true
-        break
+if (-not $HandshakeSelfTest -and -not $CleanupSelfTest) {
+    if (-not (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)) {
+        throw "nvidia-smi not found. CUDA toolkit must be installed."
     }
-}
 
-if (-not $nvCudaFound) {
-    throw "nvcuda.dll missing. CUDA toolkit must be installed."
+    $nvCudaFound = $false
+    $cudaPaths = @(
+        "$env:SystemRoot\System32\nvcuda.dll",
+        "$env:SystemRoot\SysWOW64\nvcuda.dll"
+    )
+    foreach ($path in $cudaPaths) {
+        if (Test-Path -LiteralPath $path) {
+            $nvCudaFound = $true
+            break
+        }
+    }
+
+    if (-not $nvCudaFound) {
+        throw "nvcuda.dll missing. CUDA toolkit must be installed."
+    }
 }
 
 if (-not ("RamSharedCudaVramWorkload" -as [type])) {
