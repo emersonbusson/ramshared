@@ -9,13 +9,41 @@ if [[ "$host_arch" != "x86_64" && "$host_arch" != "aarch64" ]]; then
   exit 69 # EX_UNAVAILABLE
 fi
 
-host_kernel=$(uname -r)
-if [[ ! "$host_kernel" =~ ^[5-9]\. && ! "$host_kernel" =~ ^[1-9][0-9]\. ]]; then
-  echo "Error: Unsupported kernel version $host_kernel. Cascade requires Linux 5.0+." >&2
-  exit 69 # EX_UNAVAILABLE
-fi
-
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+
+BIN_DIR="${RAMSHARED_BIN_DIR:-}"
+if [[ -z "$BIN_DIR" ]]; then
+  if [[ -x "$REPO/target/release/ramshared" ]]; then
+    BIN_DIR="$REPO/target/release"
+  elif [[ -x "$REPO/target/debug/ramshared" ]]; then
+    BIN_DIR="$REPO/target/debug"
+  else
+    BIN_DIR="$REPO/target/release"
+  fi
+fi
+CLI="${RAMSHARED_CLI:-$BIN_DIR/ramshared}"
+
+if [[ -n "${RAMSHARED_SKIP_BIN_CHECK:-}" ]]; then
+  : # skip
+elif [[ ! -x "$CLI" ]]; then
+  echo "Error: Cascade binary not found or not executable at $CLI" >&2
+  exit 69 # EX_UNAVAILABLE
+else
+  bin_info=$(file -b "$CLI" 2>/dev/null || true)
+  if [[ "$host_arch" == "x86_64" && ! "$bin_info" =~ x86-64 ]]; then
+    echo "Error: Binary architecture mismatch. Host is x86_64 but binary is not." >&2
+    exit 69 # EX_UNAVAILABLE
+  elif [[ "$host_arch" == "aarch64" && ! "$bin_info" =~ aarch64 && ! "$bin_info" =~ ARM ]]; then
+    echo "Error: Binary architecture mismatch. Host is aarch64 but binary is not." >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+
+  bin_version=$("$CLI" --version 2>/dev/null || echo "unknown")
+  if [[ -z "$bin_version" || "$bin_version" == "unknown" ]]; then
+    echo "Error: Could not determine Cascade binary version." >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+fi
 SCRIPTS="$REPO/scripts/safety"
 TEMPLATE="$SCRIPTS/ramshared-cushion.desktop.in"
 
