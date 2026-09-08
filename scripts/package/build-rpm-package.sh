@@ -23,13 +23,13 @@ DAEMON_BIN="$ROOT/target/release/ramsharedd"
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "==> Binaries missing in target/release, skipping cargo or building if available"
   if command -v cargo >/dev/null 2>&1; then
-    cargo build -p ramshared-cli -p ramshared-wsl2d --release || true
+    cargo build -p ramshared-cli -p ramshared-wsl2d --release || exit 74
   fi
 fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 65
 fi
 
 # Clean previous build root
@@ -81,8 +81,8 @@ SPEC_EOF
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE" || exit 74
+  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || exit 73
   echo "✓ RPM package built under $OUT_DIR/"
 else
   echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
