@@ -899,9 +899,8 @@ mod tests {
     fn backend<'a>(
         provider: &'a FakeProvider,
         origin: ScriptedOrigin,
-    ) -> WriteThroughCacheBackend<'a, FakeProvider, ScriptedOrigin> {
+    ) -> Result<WriteThroughCacheBackend<'a, FakeProvider, ScriptedOrigin>, IoError> {
         WriteThroughCacheBackend::with_chunk_bytes(provider, origin, 32, 4, 8)
-            .expect("valid test backend geometry")
     }
 
     fn grow_one<O: OriginStorage>(backend: &mut WriteThroughCacheBackend<'_, FakeProvider, O>) {
@@ -915,7 +914,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         events.borrow_mut().clear();
 
@@ -938,7 +937,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         events.borrow_mut().clear();
 
@@ -972,7 +971,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         provider.fail_alloc.set(true);
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(0));
         backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(1));
@@ -990,7 +989,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         assert_eq!(
             backend
@@ -1056,7 +1055,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         backend.set_physical_cap_bytes(8);
 
         let outcome = backend.observe_gpu(Some(healthy_sample()), Duration::ZERO);
@@ -1069,7 +1068,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, events);
         origin.fail_write.set(true);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         assert!(backend.write_at(0, b"fail").is_err());
         assert_eq!(backend.origin_state(), OriginState::Failed);
@@ -1084,7 +1083,7 @@ mod tests {
         let mut origin = ScriptedOrigin::new(32, Rc::clone(&events));
         origin.max_write = 2;
         let bytes = Rc::clone(&origin.bytes);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         backend.write_at(4, b"partial!").unwrap();
 
@@ -1107,7 +1106,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, events);
         origin.zero_write.set(true);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         let error = backend.write_at(0, b"stop").unwrap_err();
 
@@ -1122,7 +1121,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
         let fail_sync = Rc::clone(&origin.fail_sync);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         events.borrow_mut().clear();
 
@@ -1142,7 +1141,7 @@ mod tests {
         origin.max_write = 4;
         let bytes = Rc::clone(&origin.bytes);
         let writes_before_failure = Rc::clone(&origin.writes_before_failure);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         backend.write_at(0, b"ABCDEFGH").unwrap();
 
@@ -1165,7 +1164,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
         let fail_sync = Rc::clone(&origin.fail_sync);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         backend.write_at(0, b"old!").unwrap();
         backend.flush().unwrap();
@@ -1189,7 +1188,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
         let bytes = Rc::clone(&origin.bytes);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         backend.write_at(8, b"good").unwrap();
         backend.flush().unwrap();
@@ -1204,7 +1203,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         backend.write_at(0, b"one!").unwrap();
         backend.write_at(4, b"two!").unwrap();
@@ -1228,7 +1227,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
 
         backend
             .write_at_with_options(0, b"fua!", WriteOptions { fua: true })
@@ -1245,7 +1244,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
         let fail_sync = Rc::clone(&origin.fail_sync);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         backend.write_at(0, b"data").unwrap();
         assert_eq!(backend.telemetry().valid_blocks, 1);
@@ -1289,7 +1288,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         backend.write_at(0, b"data").unwrap();
         provider.fail_read.set(true);
@@ -1315,7 +1314,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         assert_eq!(
             backend
@@ -1349,7 +1348,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         grow_one(&mut backend);
         backend.write_at(0, b"gen!").unwrap();
         backend.release_cache();
@@ -1374,7 +1373,7 @@ mod tests {
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, events);
         let fail_write = Rc::clone(&origin.fail_write);
-        let mut backend = backend(&provider, origin);
+        let mut backend = backend(&provider, origin).expect("valid test backend geometry");
         fail_write.set(true);
         assert!(backend.write_at(0, b"fail").is_err());
         fail_write.set(false);
