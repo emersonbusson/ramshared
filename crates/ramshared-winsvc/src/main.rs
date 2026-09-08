@@ -148,6 +148,52 @@ mod windows_svc {
             // SCM default without service dispatcher running returns 1
             assert_eq!(code, 1);
         }
+
+        #[test]
+        fn test_entry_commands_error_paths() {
+            assert_eq!(entry(vec!["app".into(), "status".into()]), 1);
+            assert_eq!(entry(vec!["app".into(), "status".into(), "--json".into()]), 1);
+            assert_eq!(entry(vec!["app".into(), "start".into()]), 1);
+            assert_eq!(entry(vec!["app".into(), "stop".into()]), 1);
+            assert_eq!(entry(vec!["app".into(), "uninstall".into()]), 1);
+            assert_eq!(
+                entry(vec![
+                    "app".into(),
+                    "install".into(),
+                    "--manifest".into(),
+                    r"C:\missing.json".into(),
+                ]),
+                1
+            );
+            assert_eq!(
+                entry(vec![
+                    "app".into(),
+                    "probe-cuda".into(),
+                    "--config".into(),
+                    r"C:\missing.toml".into(),
+                ]),
+                1
+            );
+            assert_eq!(
+                entry(vec![
+                    "app".into(),
+                    "console".into(),
+                    "--config".into(),
+                    r"C:\missing.toml".into(),
+                    "--storage-only".into(),
+                ]),
+                1
+            );
+        }
+
+        #[test]
+        fn test_entry_scm_default_config_selection() {
+            let cfg_path = r"C:\Program Files\RamShared\versions\v1\winsvc.toml".to_string();
+            let first_call = entry(vec!["app".into(), "--config".into(), cfg_path.clone()]);
+            assert_eq!(first_call, 1);
+            let second_call = entry(vec!["app".into(), "--config".into(), cfg_path]);
+            assert_eq!(second_call, 2);
+        }
     }
 
     fn service_main(_args: Vec<OsString>) {
