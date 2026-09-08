@@ -1053,6 +1053,21 @@ function Assert-TargetLetterAvailable {
         throw "foreign volume occupies target letter"
     }
 }
+function Assert-TargetVolumeFreeSpace {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$TargetLetter
+    )
+    $drive = Get-PSDrive -Name $TargetLetter -ErrorAction SilentlyContinue
+    if (-not $drive) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("target volume $TargetLetter does not exist")
+    }
+    if ($drive.Free -lt 1GB) {
+        throw [System.IO.IOException]::new("target volume $TargetLetter has less than 1GB free space")
+    }
+}
 function Invoke-BoundedController([string[]]$Arguments) {
     $run = Start-BoundedExternalProcess $Controller $Arguments $controllerTimeoutSeconds
     if (-not $run.completed) {
@@ -2348,6 +2363,7 @@ try {
         }
         Assert-CounterJsonlSemantics $counterJsonl ([string]$storage.serial) `
             ([UInt64]$storage.size) | Out-Null
+        Assert-TargetVolumeFreeSpace $Letter
         for ($repetition = 1; $repetition -le $Runs; $repetition++) {
             foreach ($workload in $workloads) {
                 Update-WatchdogHeartbeat
