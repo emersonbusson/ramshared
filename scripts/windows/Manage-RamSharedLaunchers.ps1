@@ -15,6 +15,36 @@ $Backup = Join-Path $env:LOCALAPPDATA "RamShared\launcher-backup"
 $BackupManifest = Join-Path $Backup "launcher-backup-manifest.json"
 $Files = @("ramshared-shell.cmd", "ramshared-terminal.cmd", "ramshared-vscode.cmd")
 
+function Assert-LauncherExecutable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name,
+
+        [switch]$RequireSignature
+    )
+
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($null -eq $cmd -or -not (Test-Path -LiteralPath $cmd.Path -PathType Leaf)) {
+        Write-Error -Message "Launcher executable '$Name' not found." -ErrorId "ExecutableNotFound" -ErrorAction Continue
+        throw [System.Management.Automation.ItemNotFoundException]::new("Executable '$Name' not found.")
+    }
+
+    if ($RequireSignature) {
+        $path = $cmd.Path
+        # Skip signature check for App Execution Aliases which lack embedded PE signatures
+        if ($path -match 'WindowsApps') {
+            return
+        }
+        $sig = Get-AuthenticodeSignature -FilePath $path -ErrorAction SilentlyContinue
+        if ($null -eq $sig -or $sig.Status -ne 'Valid') {
+            Write-Error -Message "Launcher executable '$Name' has an invalid digital signature." -ErrorId "InvalidSignature" -ErrorAction Continue
+            throw [System.Security.SecurityException]::new("Executable '$Name' has an invalid digital signature.")
+        }
+    }
+}
+
 function Get-LauncherSha256 {
     param([string]$Path)
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop).Hash.ToUpperInvariant()
@@ -23,9 +53,19 @@ function Get-LauncherSha256 {
 function Get-LauncherContent {
     param([string]$Name)
     switch ($Name) {
-        "ramshared-shell.cmd" { return "@wsl.exe -d `"$Distro`" -- ramshared session --class interactive" }
-        "ramshared-terminal.cmd" { return "@wt.exe wsl.exe -d `"$Distro`" -- ramshared session --class interactive" }
-        "ramshared-vscode.cmd" { return "@wsl.exe -d `"$Distro`" -- ramshared run --class interactive -- code ." }
+        "ramshared-shell.cmd" {
+            Assert-LauncherExecutable -Name "wsl.exe" -RequireSignature
+            return "@wsl.exe -d `"$Distro`" -- ramshared session --class interactive"
+        }
+        "ramshared-terminal.cmd" {
+            Assert-LauncherExecutable -Name "wt.exe" -RequireSignature
+            Assert-LauncherExecutable -Name "wsl.exe" -RequireSignature
+            return "@wt.exe wsl.exe -d `"$Distro`" -- ramshared session --class interactive"
+        }
+        "ramshared-vscode.cmd" {
+            Assert-LauncherExecutable -Name "wsl.exe" -RequireSignature
+            return "@wsl.exe -d `"$Distro`" -- ramshared run --class interactive -- code ."
+        }
         default { throw "launcher_name_invalid" }
     }
 }
