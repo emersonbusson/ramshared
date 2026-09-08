@@ -124,6 +124,23 @@ public static class IoctlVal {
     return ok;
   }
 
+  public static object IoctlEx(SafeFileHandle h, uint code, byte[] input, int outputSize) {
+    uint ret;
+    byte[] ob = outputSize > 0 ? new byte[outputSize] : null;
+    bool ok = DeviceIoControl(h, code, input, input == null ? 0u : (uint)input.Length, ob, outputSize == 0 ? 0u : (uint)outputSize, out ret, IntPtr.Zero);
+    int err = ok ? 0 : Marshal.GetLastWin32Error();
+    string msg = err == 0 ? "" : new System.ComponentModel.Win32Exception(err).Message;
+    var res = new System.Collections.Hashtable();
+    res["IoctlCode"] = code;
+    res["ExpectedSize"] = outputSize;
+    res["ActualSize"] = ret;
+    res["ErrorMessage"] = msg;
+    res["IsSuccess"] = ok;
+    res["ErrorCode"] = err;
+    res["Output"] = ob;
+    return res;
+  }
+
   /* Sync COMMIT for same-process concurrent teardown probe (returns Win32 err; 0=ok). */
   public static int BlockingIoctl(SafeFileHandle h, uint code) {
     uint ret;
@@ -343,6 +360,52 @@ public static class IoctlVal {
 '@
 
 Add-Type -TypeDefinition $cs -ErrorAction Stop
+
+function Invoke-RamSharedIoctl {
+    <#
+    .SYNOPSIS
+      Executes a WinDrive IOCTL and returns a structured PSCustomObject.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [Microsoft.Win32.SafeHandles.SafeFileHandle]$Handle,
+
+        [Parameter(Mandatory=$true)]
+        [uint32]$IoctlCode,
+
+        [byte[]]$InputBuffer,
+
+        [int]$ExpectedOutputSize = 0
+    )
+
+    if ($Handle -eq $null -or $Handle.IsInvalid) {
+        Write-Error "Invalid handle." -ErrorId "InvalidHandle" -ErrorAction Continue
+        throw [System.ArgumentException]::new("Handle is invalid or null.")
+    }
+
+    $res = [IoctlVal]::IoctlEx($Handle, $IoctlCode, $InputBuffer, $ExpectedOutputSize)
+
+    $obj = [PSCustomObject]@{
+        IoctlCode    = $res["IoctlCode"]
+        ExpectedSize = $res["ExpectedSize"]
+        ActualSize   = $res["ActualSize"]
+        ErrorMessage = $res["ErrorMessage"]
+    }
+
+    if (-not $res["IsSuccess"]) {
+        $errRecord = [System.Management.Automation.ErrorRecord]::new(
+            [System.Exception]::new("IOCTL failed: $($res["ErrorMessage"])"),
+            "IoctlFailed",
+            [System.Management.Automation.ErrorCategory]::InvalidOperation,
+            $obj
+        )
+        Write-Error $errRecord -ErrorAction Continue
+        throw [System.Management.Automation.RuntimeException]::new("IOCTL failed with code $($res["ErrorCode"])")
+    }
+
+    return $obj
+}
 
 function Open-Ctl {
     # FILE_SHARE_READ|WRITE: concurrent probes need a second handle while COMMIT is pended.
