@@ -34,6 +34,22 @@ case $# in
 esac
 
 [[ ${RAMSHARED_NBD_LIFECYCLE_APPROVAL:-} == "deactivate:$RELEASE_VERSION" ]] || refuse APPROVAL_MISSING
+
+if [[ -f /proc/swaps ]]; then
+  while read -r line; do
+    case "$line" in
+      Filename*|*'Type'*) continue ;;
+      *nbd*|*zram*|*ublk*)
+        if awk '{if ($4 > 0) exit 1}' <<<"$line"; then
+          :
+        else
+          refuse SWAP_PAGES_STILL_PINNED
+        fi
+        ;;
+    esac
+  done < /proc/swaps
+fi
+
 printf 'NBD_LIFECYCLE_STATE=EXECUTING\n'
 printf 'NBD_LIFECYCLE_ACTION=deactivate\n'
 printf 'NBD_LIFECYCLE_VERSION=%s\n' "$RELEASE_VERSION"
