@@ -51,8 +51,8 @@ if (-not (Test-Path -LiteralPath $mediaContractPath -PathType Leaf)) {
 . $mediaContractPath
 
 function Fail([string]$Message) {
-    Write-Error $Message
-    exit 2
+    Write-Error $Message -ErrorId "Win11LabVmError" -ErrorAction Continue
+    throw [System.InvalidOperationException]::new($Message)
 }
 
 if ($MinMemoryGB -gt $StartupMemoryGB -or
@@ -157,7 +157,8 @@ function Get-Win11LabSetupStartFailureCode {
 }
 
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
-    Fail "VM already exists: $VMName"
+    Write-Output "VM already exists: $VMName. Skipping creation."
+    exit 0
 }
 if (-not (Test-Path -LiteralPath $WindowsIso)) {
     Fail "Windows ISO not found: $WindowsIso"
