@@ -21,7 +21,7 @@
 # (--cgroupns=host is mandatory: without it, writing to cgroup.procs returns ENOENT)
 # optional environment:
 #   HOG_MB=2200 CAP_MB=512 MIN_NBD_MIB=150 RESTORE=1 RAW=/tmp/cascade-demote.txt
-set -u
+set -euo pipefail
 
 HOG_BIN="${HOG_BIN:-}"
 if [ -z "$HOG_BIN" ]; then
@@ -67,11 +67,12 @@ tier_present() {
 
 snapshot_swaps() {
   log "--- /proc/swaps ---"
-  cat /proc/swaps | tee -a "$RAW"
+  tee -a "$RAW" < /proc/swaps
   log "--- free -h ---"
   free -h | tee -a "$RAW"
 }
 
+# shellcheck disable=SC2317
 teardown() {
   local rc=$?
   log ""
@@ -97,11 +98,12 @@ teardown() {
       fi
     fi
   fi
-  [ -d "$CG" ] && rmdir "$CG" 2>/dev/null || true
+  if [ -d "$CG" ]; then rmdir "$CG" 2>/dev/null || true; fi
   rm -f /tmp/cv-filled /tmp/cv-go
   log "RAW: $RAW"
   snapshot_swaps
 }
+# shellcheck disable=SC2317
 trap teardown EXIT
 trap 'exit 143' INT TERM
 
@@ -123,9 +125,16 @@ log_status() {
 log "### CASCADE DEMOTE DRILL — $(date -Is) ###"
 log "params: HOG_MB=$HOG_MB CAP_MB=$CAP_MB MIN_NBD_MIB=$MIN_NBD_MIB RESTORE=$RESTORE NBD=$NBD_DEV"
 log "issue: #31 demote under pressure + integrity (action path = spawn_swapoff)"
-[ "$(id -u)" = 0 ] || { log "root is required"; exit 2; }
-[ -x "$HOG_BIN" ] || { log "hog missing: $HOG_BIN"; exit 2; }
-[ -b "$NBD_DEV" ] || { log "block device missing: $NBD_DEV"; exit 2; }
+[ "$(id -u)" = 0 ] || { log "root is required"; exit 77; }
+[ -x "$HOG_BIN" ] || { log "hog missing: $HOG_BIN"; exit 69; }
+[ -b "$NBD_DEV" ] || { log "block device missing: $NBD_DEV"; exit 69; }
+
+for zram_dev in /sys/block/zram*; do
+  [ -e "$zram_dev" ] || continue
+  [ -d "$zram_dev" ] || { log "FAILURE: cascade sysfs entry missing: $zram_dev"; exit 69; }
+  [ -f "$zram_dev/mm_stat" ] || { log "FAILURE: cascade sysfs mm_stat missing: $zram_dev/mm_stat"; exit 69; }
+done
+
 
 log ""
 log "=== 0. preflight cascade ==="
