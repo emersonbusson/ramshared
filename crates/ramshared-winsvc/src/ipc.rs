@@ -245,11 +245,45 @@ mod tests {
     }
     #[cfg(windows)]
     #[test]
+    fn connect_status_pipe_with_future_deadline_times_out() {
+        let deadline = Instant::now() + Duration::from_millis(10);
+        let result = NamedPipeBrokerStream::connect_status_pipe(deadline);
+        assert!(matches!(
+            result,
+            Err(BrokerConnectError::Deadline) | Err(BrokerConnectError::NonTransient(_))
+        ));
+    }
+    #[cfg(windows)]
+    #[test]
     fn connect_status_pipe_deadline_stops_retry() {
         let result = NamedPipeBrokerStream::connect_status_pipe(Instant::now());
         assert!(matches!(
             result,
             Err(BrokerConnectError::Deadline) | Err(BrokerConnectError::NonTransient(_))
         ));
+    }
+    #[test]
+    fn retry_until_non_transient_error() {
+        let result = retry_until(Instant::now(), || Err(5));
+        assert_eq!(result, Err(BrokerConnectError::NonTransient(5)));
+    }
+    #[test]
+    fn retry_until_success_first_try() {
+        let result = retry_until(Instant::now(), || Ok(()));
+        assert_eq!(result, Ok(()));
+    }
+    #[test]
+    fn retry_until_transient_then_success() {
+        let mut attempts = 0;
+        let result = retry_until(Instant::now() + Duration::from_secs(1), || {
+            attempts += 1;
+            if attempts == 1 {
+                Err(2)
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(attempts, 2);
     }
 }
