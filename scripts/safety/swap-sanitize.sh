@@ -109,12 +109,21 @@ PY
   rm -f -- "$owned_devices_file"
   ((${#owned_devices[@]} > 0)) || { echo 'swapoff_refused_no_owned_devices' >&2; exit 2; }
 
+  if [[ ! -f "$proc_swaps" ]]; then
+    echo "swapoff_refused_proc_swaps_missing" >&2
+    exit 74 # EX_IOERR
+  fi
+
   swap_names=$(awk 'NR > 1 { print $1 }' "$proc_swaps")
   swapped=0
   for device in "${owned_devices[@]}"; do
     if ! grep -Fqx -- "$device" <<<"$swap_names"; then
       echo "swapoff_skipped_not_live=$device"
       continue
+    fi
+    if [[ ! -e "$device" ]]; then
+      echo "swapoff_refused_device_not_found=$device" >&2
+      exit 74 # EX_IOERR
     fi
     echo "swapoff $device"
     if ! swapoff "$device"; then
