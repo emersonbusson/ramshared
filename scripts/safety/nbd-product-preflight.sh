@@ -2,6 +2,7 @@
 # Read-only WSL2 NBD product readiness gate.
 # SPEC: docs/specs/no-milestone/wsl2-nbd-product-readiness/SPEC.md
 set -euo pipefail
+# Strict error handling
 
 PRODUCT_ROOT=${RAMSHARED_PRODUCT_ROOT:-/opt/ramshared}
 RELEASE_ROOT="$PRODUCT_ROOT/releases"
