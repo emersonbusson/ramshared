@@ -302,7 +302,7 @@ try {
     }
     foreach ($cell in @($plan.cells)) {
         if ($cell.measurement -ne "allocation_to_hold_ms" -or
-            $cell.allocation_chunk_bytes -ne 67108864 -or $cell.worker_threads -ne 1 -or
+            $cell.allocation_chunk_bytes -ne 67108864 -or $cell.worker_threads -ne [Environment]::ProcessorCount -or
             $cell.workload -ne "anonymous_memory_sequential_write" -or
             $null -ne $cell.PSObject.Properties["block_size_bytes"] -or
             $null -ne $cell.PSObject.Properties["queue_depth"]) {
