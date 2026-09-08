@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ $(readlink /proc/self/ns/cgroup) != $(readlink /proc/1/ns/cgroup) ]] || {
+  printf 'FAIL test cgroup namespace is not isolated\n' >&2
+  exit 69
+}
+
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 CELL="$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 CGROUP_LAUNCH="$ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh"
 BENCHMARK_LIB="$ROOT/scripts/safety/nbd-benchmark-lib.sh"
-TMP=$(mktemp -d)
+TMP=""
 declare -a TEST_CHILD_PIDS=()
 cleanup_test_children() {
   local pid
@@ -13,10 +18,11 @@ cleanup_test_children() {
     kill -TERM "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
   done
-  rm -rf -- "$TMP"
+  [[ -z ${TMP:-} ]] || rm -rf -- "$TMP"
 }
 trap cleanup_test_children EXIT
 
+TMP=$(mktemp -d)
 pass_count=0
 
 pass() {
@@ -2823,7 +2829,8 @@ PY
 }
 
 run_custody_frontier_fault_fixture() {
-  local root=$1 fault=$2 library="$root/functions.sh"
+  local root=$1 fault=$2
+  local library="$root/functions.sh"
   timeout --foreground --kill-after=2s 10s bash -c '
     set -euo pipefail
     source "$1"
