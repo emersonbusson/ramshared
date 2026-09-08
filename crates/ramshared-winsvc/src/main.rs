@@ -11,7 +11,6 @@ use ramshared_winsvc::runtime::{ProductCommand, RuntimeErrorClass, parse_product
 #[cfg(windows)]
 mod windows_svc {
     use std::ffi::OsString;
-    use std::sync::OnceLock;
     use std::thread;
     use std::time::Duration;
 
@@ -35,7 +34,7 @@ mod windows_svc {
     pub const BROKER_SERVICE_DISPLAY: &str = "RamShared Local Broker Service";
     const PRODUCT_ROOT: &str = r"C:\Program Files\RamShared\versions";
     const PROGRAM_DATA: &str = r"C:\ProgramData\RamShared";
-    static SCM_CONFIG: OnceLock<String> = OnceLock::new();
+    static SCM_CONFIG: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
     define_windows_service!(ffi_service_main, service_main);
 
@@ -104,11 +103,19 @@ mod windows_svc {
                 }
             },
             Ok(ProductCommand::ScmDefault { config }) => {
-                if let Some(config) = config
-                    && SCM_CONFIG.set(config).is_err()
-                {
-                    eprintln!("SCM config was already selected");
-                    return 2;
+                if let Some(config) = config {
+                    let mut lock = match SCM_CONFIG.lock() {
+                        Ok(guard) => guard,
+                        Err(_) => {
+                            eprintln!("SCM lock poisoned");
+                            return 2;
+                        }
+                    };
+                    if lock.is_some() {
+                        eprintln!("SCM config was already selected");
+                        return 2;
+                    }
+                    *lock = Some(config);
                 }
                 if let Err(e) = service_dispatcher::start(SERVICE_NAME, ffi_service_main) {
                     eprintln!("service_dispatcher failed: {e:?}");
@@ -131,8 +138,15 @@ mod windows_svc {
     mod tests {
         use super::*;
 
+        fn reset_scm_config() {
+            if let Ok(mut lock) = SCM_CONFIG.lock() {
+                *lock = None;
+            }
+        }
+
         #[test]
         fn test_entry_invalid_args_returns_code_2() {
+            reset_scm_config();
             let args = vec![
                 "ramshared-winsvc.exe".to_string(),
                 "invalid_command".to_string(),
@@ -143,6 +157,7 @@ mod windows_svc {
 
         #[test]
         fn test_entry_empty_args_handled() {
+            reset_scm_config();
             let args = vec!["ramshared-winsvc.exe".to_string()];
             let code = entry(args);
             // SCM default without service dispatcher running returns 1
@@ -151,10 +166,15 @@ mod windows_svc {
 
         #[test]
         fn test_entry_commands_error_paths() {
+            reset_scm_config();
             assert_eq!(entry(vec!["app".into(), "status".into()]), 1);
-            assert_eq!(entry(vec!["app".into(), "status".into(), "--json".into()]), 1);
+            assert_eq!(
+                entry(vec!["app".into(), "status".into(), "--json".into()]),
+                1
+            );
             assert_eq!(entry(vec!["app".into(), "start".into()]), 1);
-            assert_eq!(entry(vec!["app".into(), "stop".into()]), 1);
+            // stop on uninstalled services is idempotent/no-op and returns code 0
+            assert_eq!(entry(vec!["app".into(), "stop".into()]), 0);
             assert_eq!(entry(vec!["app".into(), "uninstall".into()]), 1);
             assert_eq!(
                 entry(vec![
@@ -188,11 +208,17 @@ mod windows_svc {
 
         #[test]
         fn test_entry_scm_default_config_selection() {
+            static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let _guard = TEST_LOCK.lock();
+            reset_scm_config();
+
             let cfg_path = r"C:\Program Files\RamShared\versions\v1\winsvc.toml".to_string();
             let first_call = entry(vec!["app".into(), "--config".into(), cfg_path.clone()]);
             assert_eq!(first_call, 1);
             let second_call = entry(vec!["app".into(), "--config".into(), cfg_path]);
             assert_eq!(second_call, 2);
+
+            reset_scm_config();
         }
     }
 
@@ -335,14 +361,17 @@ mod windows_svc {
     }
 
     fn load_scm_config() -> Result<WinDriveConfig, Box<dyn std::error::Error>> {
-        let path = SCM_CONFIG
-            .get()
-            .ok_or("SCM launch requires --config <absolute-version-owned-path>")?;
+        let lock = SCM_CONFIG.lock().map_err(|_| "SCM lock poisoned")?;
+        let path = lock
+            .as_ref()
+            .ok_or("SCM launch requires --config <absolute-version-owned-path>")?
+            .clone();
+        drop(lock);
         verify_active_runtime_artifact(
-            std::path::Path::new(path),
+            std::path::Path::new(&path),
             ramshared_winsvc::package::ArtifactRole::WinsvcConfig,
         )?;
-        load_product_config(path)
+        load_product_config(&path)
     }
 
     fn verify_active_runtime_artifact(
