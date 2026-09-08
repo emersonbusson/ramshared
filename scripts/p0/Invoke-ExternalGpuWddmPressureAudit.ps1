@@ -21,10 +21,26 @@ param(
     [string]$OutDir = "ramshared-external-gpu-wddm-pressure-audit-$(Get-Date -Format yyyyMMdd-HHmmss)"
 )
 
+
 $ErrorActionPreference = "Stop"
 
+if ($PSVersionTable.Platform -eq "Win32NT") {
+    $gpu = Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | Where-Object { $_.PNPDeviceID -match "PCI\\VEN_10DE|PCI\\VEN_1002" }
+
+    if (-not $gpu) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("No external GPU adapter found via PnP device query.")
+    }
+
+    $wddmVersion = [string]($gpu | Select-Object -First 1).DriverVersion
+    $driverMajor = ([version]$wddmVersion).Major
+    if ($driverMajor -lt 27) {
+        throw [System.NotSupportedException]::new("WDDM driver version is less than 2.7. Found: $wddmVersion")
+    }
+}
+
+
 function L([string]$Message) {
-    Write-Host "[external-gpu-wddm-pressure-audit] $Message"
+    Write-Output "[external-gpu-wddm-pressure-audit] $Message"
 }
 
 function Resolve-RamsharedExe {
