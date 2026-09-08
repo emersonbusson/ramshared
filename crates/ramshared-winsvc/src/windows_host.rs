@@ -1199,6 +1199,19 @@ mod tests {
     }
 
     #[test]
+    fn lock_product_volume_validates_range_and_case() {
+        for bad in ['a', 'b', 'c', '@', '1', '['] {
+            let err = WindowsHostState::lock_product_volume(bad, None).unwrap_err();
+            assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+        }
+
+        for valid in ['d', 'D', 'z', 'Z'] {
+            let err = WindowsHostState::lock_product_volume(valid, Some(1)).unwrap_err();
+            assert!(matches!(err, HostError::Volume(_)));
+        }
+    }
+
+    #[test]
     fn read_owned_config_rejects_relative_path() {
         let err = WindowsHostState::read_owned_config(Path::new("relative/path/winsvc.toml"))
             .unwrap_err();
