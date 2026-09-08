@@ -55,6 +55,16 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Error -ErrorId "MissingAdministratorPrivilege" -Message "Administrator privileges are required to manage Hyper-V."
+    throw [System.UnauthorizedAccessException]::new("Administrator privileges are required to manage Hyper-V.")
+}
+
+if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
+    Write-Error -ErrorId "MissingHyperVModule" -Message "The Hyper-V PowerShell module is not available."
+    throw [System.Management.Automation.ItemNotFoundException]::new("The Hyper-V PowerShell module is not available.")
+}
+
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
 function Normalize-Win11LabReadyThumbprint {
