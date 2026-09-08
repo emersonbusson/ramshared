@@ -12,14 +12,41 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateRange(1, 100)]
     [int]$Runs = 3,
     [ValidateSet("idle", "loaded")]
     [string]$LoadTag = "idle",
     [string]$RepoRoot = "",
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = ".\artifacts\pagefile-vram-measure"
 )
 
 $ErrorActionPreference = "Stop"
+
+try {
+    $gpuAdapters = Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop
+} catch {
+    Write-Error "Failed to query Win32_VideoController." -ErrorId "CimQueryFailed" -ErrorAction Continue
+    throw [System.Management.Automation.CommandNotFoundException]::new("CIM query for GPU adapters failed or is unsupported.")
+}
+
+if (-not $gpuAdapters) {
+    Write-Error "No GPU adapter detected via Win32_VideoController." -ErrorId "GpuNotFound" -ErrorAction Continue
+    throw [System.Management.Automation.ItemNotFoundException]::new("GPU adapter presence validation failed.")
+}
+
+$vramAvailable = $false
+foreach ($adapter in @($gpuAdapters)) {
+    if ($null -ne $adapter.AdapterRAM) {
+        $vramAvailable = $true
+        break
+    }
+}
+if (-not $vramAvailable) {
+    Write-Error "VRAM query availability validation failed." -ErrorId "VramUnavailable" -ErrorAction Continue
+    throw [System.NotSupportedException]::new("No GPU with queryable VRAM found.")
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
 function Measure-Once {
@@ -50,7 +77,7 @@ function Measure-Once {
 
 $samples = @()
 for ($i = 1; $i -le $Runs; $i++) {
-    Write-Host "Run $i / $Runs ($LoadTag)"
+    Write-Information "Run $i / $Runs ($LoadTag)" -InformationAction Continue
     $samples += Measure-Once -Label "window-$i"
 }
 
@@ -75,7 +102,7 @@ $record = [ordered]@{
 
 $json = ($record | ConvertTo-Json -Depth 6 -Compress)
 Set-Content -Path (Join-Path $ArtifactDir "$runId.json") -Value $json -Encoding UTF8
-Write-Host $json
+Write-Information $json -InformationAction Continue
 
 if ($RepoRoot -ne "") {
     $jsonl = Join-Path $RepoRoot "docs/benchmarks/results.jsonl"
@@ -95,5 +122,5 @@ if ($RepoRoot -ne "") {
     }
 }
 
-Write-Host "Done. Gate RNF-2: pagefile-VRAM usage under pressure must be > 0; p99 <= Kx disk (K from 1st real pair)."
+Write-Information "Done. Gate RNF-2: pagefile-VRAM usage under pressure must be > 0; p99 <= Kx disk (K from 1st real pair)." -InformationAction Continue
 exit 0
