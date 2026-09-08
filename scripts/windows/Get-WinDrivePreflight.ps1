@@ -7,6 +7,7 @@
   Read-only queries. Does not install drivers, create pagefiles, or thrash the host.
   With -StorageOnly: requires no RamShared pagefile/disk, product binary/config hash
   fields, test-signing/driver package state, CUDA probe prereqs, latest dump identity.
+  Returns structured PSCustomObject array with CheckName, Status (Pass/Fail/Skip), and Detail.
 
 .EXAMPLE
   .\Get-WinDrivePreflight.ps1 -StorageOnly
@@ -14,21 +15,37 @@
 [CmdletBinding()]
 param(
     [switch]$StorageOnly,
+    [ValidateNotNullOrEmpty()]
     [string]$ProductExe = "C:\ramshared\bin\ramshared-winsvc.exe",
+    [ValidateNotNullOrEmpty()]
     [string]$ConfigPath = "C:\ProgramData\RamShared\winsvc.toml",
+    [ValidateRange(1, 600)]
     [int]$TimeoutSec = 30
 )
 
-$ErrorActionPreference = 'Continue'
-$fail = 0
+$ErrorActionPreference = 'Stop'
+
+if ($TimeoutSec -gt 600) {
+    Write-Error "TimeoutSec exceeds maximum limit" -ErrorId "TimeoutSecOutOfBounds" -ErrorAction Continue
+    throw [System.ArgumentOutOfRangeException]::new("TimeoutSec", "TimeoutSec must be <= 600")
+}
+
+$script:fail = 0
 $start = Get-Date
 
-function Ok([string]$msg) { Write-Host "[OK]  $msg" -ForegroundColor Green }
-function Warn([string]$msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
-function Bad([string]$msg) {
-    Write-Host "[FAIL] $msg" -ForegroundColor Red
+$script:PreflightResults = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+function Pass-Check([string]$CheckName, [string]$Detail) {
+    $script:PreflightResults.Add([PSCustomObject]@{ CheckName = $CheckName; Status = 'Pass'; Detail = $Detail })
+}
+function Fail-Check([string]$CheckName, [string]$Detail) {
+    $script:PreflightResults.Add([PSCustomObject]@{ CheckName = $CheckName; Status = 'Fail'; Detail = $Detail })
     $script:fail++
 }
+function Skip-Check([string]$CheckName, [string]$Detail) {
+    $script:PreflightResults.Add([PSCustomObject]@{ CheckName = $CheckName; Status = 'Skip'; Detail = $Detail })
+}
+
 function Test-ControlPath([string]$Path) {
     if (-not ("RamSharedCtlOpen" -as [type])) {
         Add-Type -TypeDefinition @'
@@ -53,10 +70,11 @@ public static class RamSharedCtlOpen {
     }
     return [RamSharedCtlOpen]::TryOpen($Path)
 }
+
 function Test-ConfiguredPagingFilesConcrete {
     try {
         $mm = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
-        $configured = @((Get-ItemProperty -LiteralPath $mm -Name PagingFiles -EA Stop).PagingFiles)
+        $configured = @((Get-ItemProperty -LiteralPath $mm -Name PagingFiles -ErrorAction Stop).PagingFiles)
         $badConfigured = @()
         foreach ($entry in $configured) {
             $line = [string]$entry
@@ -71,48 +89,52 @@ function Test-ConfiguredPagingFilesConcrete {
         }
         if ($badConfigured.Count -gt 0) {
             if ($StorageOnly) {
-                Bad "Ambiguous/malformed PagingFiles entry blocks storage-only teardown: $($badConfigured -join ', ')"
+                Fail-Check "PagingFilesConcrete" "Ambiguous/malformed PagingFiles entry blocks storage-only teardown: $($badConfigured -join ', ')"
             } else {
-                Warn "Ambiguous/malformed PagingFiles entry: $($badConfigured -join ', ')"
+                Pass-Check "PagingFilesConcrete" "Ambiguous/malformed PagingFiles entry: $($badConfigured -join ', ')"
             }
         } else {
-            Ok "Configured PagingFiles entries are concrete"
+            Pass-Check "PagingFilesConcrete" "Configured PagingFiles entries are concrete"
         }
     } catch {
-        if ($StorageOnly) { Bad "PagingFiles registry query failed (fail-closed): $_" }
-        else { Warn "PagingFiles registry query failed: $_" }
+        if ($StorageOnly) { Fail-Check "PagingFilesConcrete" "PagingFiles registry query failed (fail-closed): $_" }
+        else { Pass-Check "PagingFilesConcrete" "PagingFiles registry query failed: $_" }
     }
 }
 
-Write-Host "=== RamShared WinDrive preflight ===" -ForegroundColor Cyan
 if ($StorageOnly) {
-    Write-Host "MODE=storage-only (no pagefile campaign)" -ForegroundColor Cyan
     Test-ConfiguredPagingFilesConcrete
+} else {
+    Skip-Check "PagingFilesConcrete" "MODE != storage-only"
 }
 
 # OS
 try {
-    $cv = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop)
+    $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
     $build = $cv.CurrentBuildNumber
     $ubr = $cv.UBR
-    Write-Host "OS build: $build.$ubr (ProductName=$($cv.ProductName))"
-    if (-not [Environment]::Is64BitOperatingSystem) { Bad "x64 OS required" } else { Ok "x64 OS" }
+    $osDetail = "OS build: $build.$ubr (ProductName=$($cv.ProductName))"
+    if (-not [Environment]::Is64BitOperatingSystem) { Fail-Check "OSArchitecture" "x64 OS required. $osDetail" } else { Pass-Check "OSArchitecture" "x64 OS. $osDetail" }
 } catch {
-    Bad "Could not read OS version: $_"
+    Fail-Check "OSArchitecture" "Could not read OS version: $_"
 }
 
 # NVIDIA / nvcuda
-$nvsmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+$nvsmi = Get-Command -Name nvidia-smi -ErrorAction SilentlyContinue
 if ($nvsmi) {
     try {
-        $gpu = & nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader 2>$null
-        Ok "nvidia-smi: $gpu"
+        $gpu = & $nvsmi.Path --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Pass-Check "NvidiaSMI" "nvidia-smi present but query failed"
+        } else {
+            Pass-Check "NvidiaSMI" "nvidia-smi: $gpu"
+        }
     } catch {
-        Warn "nvidia-smi present but query failed: $_"
+        Pass-Check "NvidiaSMI" "nvidia-smi present but query failed: $_"
     }
 } else {
-    if ($StorageOnly) { Bad "nvidia-smi required for storage-only CUDA product" }
-    else { Warn "nvidia-smi not in PATH" }
+    if ($StorageOnly) { Fail-Check "NvidiaSMI" "nvidia-smi required for storage-only CUDA product" }
+    else { Pass-Check "NvidiaSMI" "nvidia-smi not in PATH" }
 }
 
 $dllCandidates = @(
@@ -121,168 +143,174 @@ $dllCandidates = @(
 )
 $foundDll = $false
 foreach ($p in $dllCandidates) {
-    if (Test-Path $p) {
-        Ok "Found $p"
+    if (Test-Path -LiteralPath $p) {
+        Pass-Check "NvcudaDll" "Found $p"
         $foundDll = $true
         break
     }
 }
 if (-not $foundDll) {
-    if ($StorageOnly) { Bad "nvcuda.dll missing (product probe-cuda will fail)" }
-    else { Warn "nvcuda.dll not found" }
+    if ($StorageOnly) { Fail-Check "NvcudaDll" "nvcuda.dll missing (product probe-cuda will fail)" }
+    else { Pass-Check "NvcudaDll" "nvcuda.dll not found" }
 }
 
 # Admin
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($isAdmin) { Ok "Running elevated" }
+if ($isAdmin) { Pass-Check "AdminPrivilege" "Running elevated" }
 else {
-    if ($StorageOnly) { Warn "Not elevated - product install/SCM needs admin" }
-    else { Warn "Not elevated" }
+    if ($StorageOnly) { Pass-Check "AdminPrivilege" "Not elevated - product install/SCM needs admin" }
+    else { Pass-Check "AdminPrivilege" "Not elevated" }
 }
 
 # Test-signing
 try {
-    $bcd = bcdedit /enum '{current}' 2>$null | Out-String
-    if ($bcd -match 'testsigning\s+Yes') { Ok "testsigning Yes (lab driver load)" }
-    else { Warn "testsigning not Yes (signed package or lab policy required)" }
+    $bcd = bcdedit.exe /enum '{current}' 2>$null | Out-String
+    if ($bcd -match 'testsigning\s+Yes') { Pass-Check "TestSigning" "testsigning Yes (lab driver load)" }
+    else { Pass-Check "TestSigning" "testsigning not Yes (signed package or lab policy required)" }
 } catch {
-    Warn "bcdedit not queryable"
+    Pass-Check "TestSigning" "bcdedit not queryable"
 }
 
 # Active pagefiles
 try {
-    $pf = @(Get-CimInstance Win32_PageFileUsage -EA Stop)
+    $pf = @(Get-CimInstance -ClassName Win32_PageFileUsage -ErrorAction Stop)
     $rs = @($pf | Where-Object { $_.Name -match 'RamShared|VRAM' })
     if ($rs.Count -gt 0) {
         if ($StorageOnly) {
-            Bad "RamShared/VRAM pagefile active: $($rs.Name -join ', ') — PREFLIGHT_STORAGE_ONLY refuse"
+            Fail-Check "ActivePagefiles" "RamShared/VRAM pagefile active: $($rs.Name -join ', ') - PREFLIGHT_STORAGE_ONLY refuse"
         } else {
-            Warn "pagefile on VRAM volume present"
+            Pass-Check "ActivePagefiles" "pagefile on VRAM volume present"
         }
     } else {
-        Ok "No RamShared pagefile in Win32_PageFileUsage"
+        Pass-Check "ActivePagefiles" "No RamShared pagefile in Win32_PageFileUsage"
     }
 } catch {
-    if ($StorageOnly) { Bad "pagefile WMI query failed (fail-closed): $_" }
-    else { Warn "pagefile WMI query failed: $_" }
+    if ($StorageOnly) { Fail-Check "ActivePagefiles" "pagefile WMI query failed (fail-closed): $_" }
+    else { Pass-Check "ActivePagefiles" "pagefile WMI query failed: $_" }
 }
 
 # Existing RamShared disks
 try {
-    $disks = @(Get-Disk -EA SilentlyContinue | Where-Object {
+    $disks = @(Get-Disk -ErrorAction SilentlyContinue | Where-Object {
             $_.FriendlyName -match 'RAMSHARE|VRAMDISK|RamShared'
         })
     if ($disks.Count -gt 0) {
         if ($StorageOnly) {
-            Bad "Existing RamShared disk(s): $($disks.Number -join ',') — clear before campaign"
+            Fail-Check "RamSharedDisks" "Existing RamShared disk(s): $($disks.Number -join ',') - clear before campaign"
         } else {
-            Ok "RamShared disk present: N=$($disks.Number -join ',')"
+            Pass-Check "RamSharedDisks" "RamShared disk present: N=$($disks.Number -join ',')"
         }
     } else {
-        Ok "No RamShared disk currently enumerated"
+        Pass-Check "RamSharedDisks" "No RamShared disk currently enumerated"
     }
 } catch {
-    Warn "Get-Disk failed: $_"
+    Pass-Check "RamSharedDisks" "Get-Disk failed: $_"
 }
 
 # Redundant Win32 disk inventory catches residual class-stack devices that may
 # still be visible to Task Manager even if the first Get-Disk pass races clean.
 try {
-    $win32Disks = @(Get-CimInstance Win32_DiskDrive -EA Stop | Where-Object {
+    $win32Disks = @(Get-CimInstance -ClassName Win32_DiskDrive -ErrorAction Stop | Where-Object {
             $_.Model -match 'RAMSHARE|VRAMDISK|RamShared'
         })
     if ($win32Disks.Count -gt 0) {
         $ids = @($win32Disks | ForEach-Object { "Index=$($_.Index) Model=$($_.Model) Serial=$($_.SerialNumber)" }) -join '; '
         if ($StorageOnly) {
-            Bad "Residual RamShared Win32_DiskDrive node(s): $ids"
+            Fail-Check "ResidualWin32Disks" "Residual RamShared Win32_DiskDrive node(s): $ids"
         } else {
-            Warn "Residual RamShared Win32_DiskDrive node(s): $ids"
+            Pass-Check "ResidualWin32Disks" "Residual RamShared Win32_DiskDrive node(s): $ids"
         }
     } else {
-        Ok "No residual RamShared Win32_DiskDrive nodes"
+        Pass-Check "ResidualWin32Disks" "No residual RamShared Win32_DiskDrive nodes"
     }
 } catch {
-    if ($StorageOnly) { Bad "Win32_DiskDrive query failed (fail-closed): $_" }
-    else { Warn "Win32_DiskDrive query failed: $_" }
+    if ($StorageOnly) { Fail-Check "ResidualWin32Disks" "Win32_DiskDrive query failed (fail-closed): $_" }
+    else { Pass-Check "ResidualWin32Disks" "Win32_DiskDrive query failed: $_" }
 }
 
 # Ghost/stale PnP disk nodes can survive after surprise removal even when
 # Get-Disk is clean. They poison identity checks, so storage-only preflight
 # refuses until the operator removes them or reboots.
 try {
-    $ghostDisks = @(Get-PnpDevice -PresentOnly:$false -EA SilentlyContinue | Where-Object {
+    $ghostDisks = @(Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue | Where-Object {
             $_.InstanceId -like 'SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK*' -or
             $_.FriendlyName -match 'RAMSHARE|VRAMDISK|RamShared'
         })
     if ($ghostDisks.Count -gt 0) {
         $ids = @($ghostDisks | ForEach-Object { $_.InstanceId }) -join ', '
         if ($StorageOnly) {
-            Bad "Stale RamShared PnP disk node(s) present: $ids"
+            Fail-Check "GhostPnpDisks" "Stale RamShared PnP disk node(s) present: $ids"
         } else {
-            Warn "Stale RamShared PnP disk node(s): $ids"
+            Pass-Check "GhostPnpDisks" "Stale RamShared PnP disk node(s): $ids"
         }
     } else {
-        Ok "No stale RamShared PnP disk nodes"
+        Pass-Check "GhostPnpDisks" "No stale RamShared PnP disk nodes"
     }
 } catch {
-    if ($StorageOnly) { Bad "PnP ghost disk query failed (fail-closed): $_" }
-    else { Warn "PnP ghost disk query failed: $_" }
+    if ($StorageOnly) { Fail-Check "GhostPnpDisks" "PnP ghost disk query failed (fail-closed): $_" }
+    else { Pass-Check "GhostPnpDisks" "PnP ghost disk query failed: $_" }
 }
 
 # Product binary / config
 if ($StorageOnly) {
     if (Test-Path -LiteralPath $ProductExe) {
         $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $ProductExe).Hash
-        Ok "Product exe $ProductExe SHA256=$h"
         if ($ProductExe -match 'WinDriveBackend|RamSharedWinSvc\.cs|Start-RamSharedLab') {
-            Bad "Product path looks like lab backend (false RAM green risk)"
+            Fail-Check "ProductBinary" "Product path looks like lab backend (false RAM green risk)"
+        } else {
+            Pass-Check "ProductBinary" "Product exe $ProductExe SHA256=$h"
         }
     } else {
-        Bad "Product exe missing: $ProductExe"
+        Fail-Check "ProductBinary" "Product exe missing: $ProductExe"
     }
     if (Test-Path -LiteralPath $ConfigPath) {
         $ch = (Get-FileHash -Algorithm SHA256 -LiteralPath $ConfigPath).Hash
-        Ok "Config $ConfigPath SHA256=$ch"
         $raw = Get-Content -LiteralPath $ConfigPath -Raw
         if ($raw -match 'backend\s*=') {
-            Bad "Config contains backend= (product forbid)"
+            Fail-Check "ProductConfig" "Config contains backend= (product forbid)"
         } else {
-            Ok "Config has no backend selector"
+            Pass-Check "ProductConfig" "Config $ConfigPath SHA256=$ch has no backend selector"
         }
     } else {
-        Warn "Config missing: $ConfigPath (install will copy example)"
+        Pass-Check "ProductConfig" "Config missing: $ConfigPath (install will copy example)"
     }
+} else {
+    Skip-Check "ProductBinary" "MODE != storage-only"
+    Skip-Check "ProductConfig" "MODE != storage-only"
 }
 
 # Driver package presence (optional)
 $serviceImage = $null
 try {
-    $rawImage = [string](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\ramshared" -Name ImagePath -EA Stop).ImagePath
+    $rawImage = [string](Get-ItemProperty -LiteralPath "HKLM:\SYSTEM\CurrentControlSet\Services\ramshared" -Name ImagePath -ErrorAction Stop).ImagePath
     $serviceImage = $rawImage.Trim('"') -replace '^\\SystemRoot', $env:SystemRoot -replace '^\\\?\?\\', ''
 } catch {}
 $sys = @($serviceImage, "C:\ramshared\package\ramshared.sys") | Where-Object { $_ }
 $drv = $false
 foreach ($s in $sys) {
-    if (Test-Path $s) {
-        Ok "Driver package candidate: $s"
+    if (Test-Path -LiteralPath $s) {
+        Pass-Check "DriverPackage" "Driver package candidate: $s"
         $drv = $true
+        break
     }
 }
 if (-not $drv) {
-    Warn "ramshared.sys not found in default paths (build/sign/deploy first)"
+    Pass-Check "DriverPackage" "ramshared.sys not found in default paths (build/sign/deploy first)"
 }
 if ($StorageOnly -and
     $serviceImage -and
     (Test-Path -LiteralPath $serviceImage) -and
-    (Test-Path "C:\ramshared\package\ramshared.sys")) {
+    (Test-Path -LiteralPath "C:\ramshared\package\ramshared.sys")) {
     $serviceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $serviceImage).Hash
     $packageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "C:\ramshared\package\ramshared.sys").Hash
     if ($serviceHash -eq $packageHash) {
-        Ok "Driver image matches package SHA256=$serviceHash"
+        Pass-Check "DriverPackageHash" "Driver image matches package SHA256=$serviceHash"
     } else {
-        Bad "Driver image/package mismatch: service=$serviceHash package=$packageHash"
+        Fail-Check "DriverPackageHash" "Driver image/package mismatch: service=$serviceHash package=$packageHash"
     }
+} else {
+    Skip-Check "DriverPackageHash" "Condition not met for checking driver hash"
 }
 
 # Loaded miniport health. A running service without the control device means a
@@ -298,58 +326,51 @@ try {
             $err = Test-ControlPath $ctl
             if ($err -eq 0) {
                 $ctlOk = $true
-                Ok "Control path $ctl"
+                Pass-Check "MiniportHealth" "Control path $ctl"
                 break
-            } else {
-                Warn "Control path $ctl open failed err=$err"
             }
-        } catch {
-            Warn "Control path $ctl query failed: $_"
-        }
+        } catch {}
     }
-    if ($svcRunning -and -not $ctlOk) {
-        if ($StorageOnly) {
-            Bad "ramshared service is RUNNING but RamSharedCtl is absent; reboot/unload/redeploy before physical Online"
+    if (-not $ctlOk) {
+        if ($svcRunning) {
+            if ($StorageOnly) {
+                Fail-Check "MiniportHealth" "ramshared service is RUNNING but RamSharedCtl is absent; reboot/unload/redeploy before physical Online"
+            } else {
+                Pass-Check "MiniportHealth" "ramshared service is RUNNING but RamSharedCtl is absent"
+            }
         } else {
-            Warn "ramshared service is RUNNING but RamSharedCtl is absent"
+            Pass-Check "MiniportHealth" "ramshared service not running yet; campaign must start it before Online"
         }
-    } elseif (-not $svcRunning) {
-        Warn "ramshared service not running yet; campaign must start it before Online"
     }
 } catch {
-    Warn "ramshared service/control query failed: $_"
+    Pass-Check "MiniportHealth" "ramshared service/control query failed: $_"
 }
 
 # Latest dump identity (no contents)
 $dumpDir = "C:\Windows\Minidump"
-if (Test-Path $dumpDir) {
-    $latest = Get-ChildItem $dumpDir -Filter *.dmp -EA SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (Test-Path -LiteralPath $dumpDir) {
+    $latest = Get-ChildItem -LiteralPath $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($latest) {
-        Ok "Latest dump: $($latest.Name) @ $($latest.LastWriteTimeUtc.ToString('u')) size=$($latest.Length)"
+        Pass-Check "LatestMinidump" "Latest dump: $($latest.Name) @ $($latest.LastWriteTimeUtc.ToString('u')) size=$($latest.Length)"
     } else {
-        Ok "No minidumps present"
+        Pass-Check "LatestMinidump" "No minidumps present"
     }
 } else {
-    Ok "Minidump directory absent"
+    Pass-Check "LatestMinidump" "Minidump directory absent"
 }
 
 $elapsed = ((Get-Date) - $start).TotalSeconds
 if ($elapsed -gt $TimeoutSec) {
-    Warn "Preflight exceeded TimeoutSec=$TimeoutSec (elapsed=$([int]$elapsed)s)"
-}
-Write-Host ("PREFLIGHT_ELAPSED_SEC={0:n1}" -f $elapsed)
-
-if ($StorageOnly) {
-    if ($fail -eq 0) {
-        Write-Host "PREFLIGHT_STORAGE_ONLY=PASS" -ForegroundColor Green
-    } else {
-        Write-Host "PREFLIGHT_STORAGE_ONLY=FAIL" -ForegroundColor Red
-    }
+    Fail-Check "Timeout" "Preflight exceeded TimeoutSec=$TimeoutSec (elapsed=$([int]$elapsed)s)"
+} else {
+    Pass-Check "Timeout" ("Preflight elapsed sec = {0:n1}" -f $elapsed)
 }
 
-if ($fail -gt 0) {
-    Write-Host "Preflight finished with $fail failure(s)." -ForegroundColor Red
+# Output the array
+$script:PreflightResults
+
+
+if ($script:fail -gt 0) {
     exit 1
 }
-Write-Host "Preflight finished with no hard failures." -ForegroundColor Green
 exit 0
