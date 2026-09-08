@@ -71,6 +71,10 @@ Require-Positive "RecoveryDurationSec" $RecoveryDurationSec
 Require-Positive "IntervalMs" $IntervalMs
 Require-Positive "MinDeltaMib" $MinDeltaMib
 
+if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue) -and -not (Get-Command rocm-smi -ErrorAction SilentlyContinue)) {
+    throw "GPU driver/runtime unavailable: nvidia-smi or rocm-smi must be in PATH."
+}
+
 if ($PSCmdlet.ParameterSetName -eq "Attach" -and -not $AttachOnly) {
     throw "Use -AttachOnly when the workload is started externally, or pass -WorkloadCommand."
 }
