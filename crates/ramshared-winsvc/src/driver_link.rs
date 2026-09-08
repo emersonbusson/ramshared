@@ -822,6 +822,82 @@ mod tests {
     }
 
     #[test]
+    fn run_io_loop_zero_cycles_returns_zero() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_read(1, 0, 4096, 0).unwrap();
+        }
+        let processed = link.run_io_loop(&mut be, 0).unwrap();
+        assert_eq!(processed, 0);
+    }
+
+    #[test]
+    fn run_io_loop_accumulates_multiple_cycles() {
+        let mut link = DriverLink::new(8, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+
+        // Submit 2 items in first batch
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_read(1, 0, 4096, 0).unwrap();
+            fake.submit_read(2, 4096, 4096, 1).unwrap();
+        }
+
+        // Cycle 1 will process 2 items, Cycle 2 & 3 will process 0 items. Total = 2.
+        let total = link.run_io_loop(&mut be, 3).unwrap();
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn run_io_loop_propagates_cq_full_error() {
+        let mut link = DriverLink::new(2, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+
+        // Fill CQ to capacity (queue_depth = 2) without harvesting
+        link.q
+            .push_cqe(Cqe {
+                tag: 100,
+                status: ST_OK,
+                reserved: 0,
+            })
+            .unwrap();
+        link.q
+            .push_cqe(Cqe {
+                tag: 101,
+                status: ST_OK,
+                reserved: 0,
+            })
+            .unwrap();
+
+        // Submit another request
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_read(1, 0, 4096, 0).unwrap();
+        }
+
+        // run_io_loop should encounter CQ full error from commit_and_fetch
+        let res = link.run_io_loop(&mut be, 2);
+        assert_eq!(res, Err(DriverLinkError::Full));
+    }
+
+    #[test]
     fn from_queue_initializes_driver_link() {
         let queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
         let link = DriverLink::from_queue(queue);
