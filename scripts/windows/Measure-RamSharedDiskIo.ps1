@@ -34,6 +34,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+try {
+    $null = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk -MaxCount 1 -ErrorAction Stop
+    $null = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_LogicalDisk -MaxCount 1 -ErrorAction Stop
+} catch {
+    throw [System.Management.Automation.ItemNotFoundException]::new("Performance counters PhysicalDisk or LogicalDisk unavailable: $($_.Exception.Message)")
+}
+
 function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
 function Get-Sha256Hex {
