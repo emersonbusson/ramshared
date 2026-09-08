@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install one already-built, sealed NBD release. The no-argument path is a
 # read-only plan; every filesystem or systemd write needs exact version scope.
-set -euo pipefail
+set -euo pipefail # Strict error handling
 
 SOURCE_RELEASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 PRODUCT_ROOT=/opt/ramshared
@@ -39,9 +39,10 @@ declare -a AUXILIARY_UNIT_CREATED_PATHS=()
 declare -a AUXILIARY_UNIT_CREATED_SOURCES=()
 
 refuse() {
+  local code=${2:-1}
   printf 'NBD_INSTALL_STATE=REFUSED\n'
   printf 'NBD_INSTALL_REASON=%s\n' "$1"
-  exit 1
+  exit "$code"
 }
 
 usage() {
@@ -699,12 +700,16 @@ if [[ -z $APPROVED_VERSION ]]; then
   exit 0
 fi
 
+# Guard Clauses
+[[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED 77
+command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE 69
+test -f "$SOURCE_RELEASE/systemd/ramshared-cascade.service" || test -f "$SOURCE_RELEASE/scripts/safety/systemd/ramshared-cascade.service" || refuse SOURCE_UNIT_MISSING 78
+test -f "$SOURCE_RELEASE/systemd/ramsharedd.service" || test -f "$SOURCE_RELEASE/scripts/safety/systemd/ramsharedd.service" || refuse SOURCE_UNIT_MISSING 78
+
 [[ $APPROVED_VERSION == "$RELEASE_VERSION" ]] || refuse APPROVAL_SCOPE_INVALID
 [[ -n $LOWER_SINK ]] || refuse LOWER_SINK_APPROVAL_REQUIRED
 [[ -z $LEGACY_UNIT_APPROVED_HASH || $LEGACY_UNIT_APPROVED_HASH =~ ^[[:xdigit:]]{64}$ ]] || refuse LEGACY_UNIT_APPROVAL_INVALID
 inspect_lower_sink "$LOWER_SINK"
-[[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED
-command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE
 check_unit_inert ramshared-cascade.service
 check_unit_inert ramsharedd.service
 check_existing_unit_file
