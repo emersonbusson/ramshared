@@ -526,4 +526,46 @@ if [[ "$non_apply_source" == *"INSTALL_IMMUTABLE_KERNEL_LAUNCHER_BUNDLE"* ||
 fi
 
 echo 'SPEC_TEST=apply_is_the_only_gate_forwarder PASS'
+
+check_kernel_config() {
+	local cfg="$1"
+	if [[ ! -f "$cfg" ]]; then
+		echo "kernel config missing: $cfg" >&2
+		return 69
+	fi
+	grep -q '^CONFIG_BLK_DEV_UBLK=[ym]$' "$cfg" || {
+		echo 'missing CONFIG_BLK_DEV_UBLK' >&2
+		return 78
+	}
+	grep -q '^CONFIG_ZRAM=[ym]$' "$cfg" || {
+		echo 'missing CONFIG_ZRAM' >&2
+		return 78
+	}
+	grep -q '^CONFIG_PSI=y$' "$cfg" || {
+		echo 'missing CONFIG_PSI' >&2
+		return 78
+	}
+	return 0
+}
+
+fake_config="$fixture/fake-kernel.config"
+printf 'CONFIG_BLK_DEV_UBLK=m\nCONFIG_ZRAM=m\nCONFIG_PSI=y\n' > "$fake_config"
+check_kernel_config "$fake_config" || {
+    echo 'check_kernel_config failed on valid config' >&2
+    exit 1
+}
+
+printf 'CONFIG_ZRAM=m\nCONFIG_PSI=y\n' > "$fake_config"
+if check_kernel_config "$fake_config" 2>/dev/null; then
+    echo 'check_kernel_config accepted missing CONFIG_BLK_DEV_UBLK' >&2
+    exit 1
+fi
+
+REAL_CONFIG="$ROOT/config-wsl"
+if [[ -f "$REAL_CONFIG" ]]; then
+    check_kernel_config "$REAL_CONFIG" || {
+        echo 'check_kernel_config failed on actual kernel config' >&2
+        exit 1
+    }
+fi
 echo 'test-wsl-kernel-static: PASS'
