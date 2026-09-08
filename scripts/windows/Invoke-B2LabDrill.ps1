@@ -204,10 +204,13 @@ if ($pass) { exit 0 } else { exit 1 }
 } catch [System.TimeoutException] {
     Write-Error -ErrorId "TimeoutError" -Message "Operation timed out: $($_.Exception.Message)" -Category OperationTimeout -ErrorAction Continue
     exit 74
+} catch [System.Net.WebException], [System.Net.Sockets.SocketException] {
+    Write-Error -ErrorId "NetworkError" -Message "Network error: $($_.Exception.Message)" -Category ResourceUnavailable -ErrorAction Continue
+    exit 69
 } catch [System.UnauthorizedAccessException], [System.Security.SecurityException] {
     Write-Error -ErrorId "PermissionError" -Message "Permission denied: $($_.Exception.Message)" -Category PermissionDenied -ErrorAction Continue
     exit 77
-} catch [System.IO.DriveNotFoundException], [System.IO.FileNotFoundException] {
+} catch [System.Management.Automation.ItemNotFoundException], [System.IO.DriveNotFoundException], [System.IO.FileNotFoundException] {
     Write-Error -ErrorId "ResourceNotFound" -Message "Required resource missing: $($_.Exception.Message)" -Category ObjectNotFound -ErrorAction Continue
     exit 69
 } catch {
