@@ -1419,6 +1419,16 @@ function Get-GuestVerifierCurrentIdentity {
 
     $rows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 420 -ScriptBlock {
         param($CurrentRunId, $Stage, $ExpectedSysHash, $ExpectedScriptHash)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
         $allRoots = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
                 $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\'
@@ -1433,7 +1443,7 @@ function Get-GuestVerifierCurrentIdentity {
         $scsi = @($allScsi | Where-Object {
                 $_.Status -eq "OK" -and [int]$_.Problem -eq 0
             })
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop |
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop |
             Where-Object { $_.State -eq "Running" })
         if ($allRoots.Count -ne 1 -or $roots.Count -ne 1 -or
             $allScsi.Count -ne 1 -or $scsi.Count -ne 1 -or $services.Count -ne 1) {
@@ -1676,6 +1686,16 @@ function Get-GuestVerifierCurrentRunTeardownBinding {
         param($CurrentRunId, $ExpectedPublishedInf, $ExpectedSysHash, $ExpectedInfHash, $ExpectedCatHash,
             $ExpectedHardware, $ExpectedSerial, $ExpectedService, $PassStarted,
             $NormalState, $NormalSerial, $VerifierState, $VerifierSerial)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
 
         function Resolve-GuestVerifierDriverStoreImage {
@@ -1743,7 +1763,7 @@ function Get-GuestVerifierCurrentRunTeardownBinding {
             throw "ROOT RamShared hardware ID is foreign or ambiguous"
         }
 
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         if ($services.Count -ne 1 -or [string]$services[0].Name -cne $ExpectedService -or
             [string]$services[0].State -cnotin @("Running", "Stopped")) {
             throw "RamShared service binding is zero, foreign, ambiguous, or not in an exact teardown state"
@@ -1968,6 +1988,16 @@ function Remove-GuestVerifierRootRemovedArtifacts {
     $rows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 420 -ScriptBlock {
         param($ExpectedPublishedInf, $ExpectedServiceName, $ExpectedServicePath,
             $ExpectedSysHash, $ExpectedInfFileHash, $ExpectedCatHash, $ExpectedRetiredInstanceId)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
         $packages = @(Get-WindowsDriver -Online -All -ErrorAction Stop | Where-Object {
                 [string]$_.OriginalFileName -match '(?i)(^|\\)ramshared\.inf$'
@@ -1978,7 +2008,7 @@ function Remove-GuestVerifierRootRemovedArtifacts {
         $roots = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
                 $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\'
             })
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         if ($packages.Count -ne 1 -or $publishedPackages.Count -ne 1 -or $roots.Count -ne 0 -or
             $services.Count -ne 1 -or [string]$services[0].Name -cne $ExpectedServiceName -or
             [string]$services[0].State -cne "Stopped") {
@@ -2018,7 +2048,7 @@ function Remove-GuestVerifierRootRemovedArtifacts {
         if ($serviceDeleteExit -ne 0) { throw "exact service deletion failed exit=$serviceDeleteExit" }
         $serviceDeadline = [DateTime]::UtcNow.AddSeconds(60)
         do {
-            $remainingServices = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+            $remainingServices = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
             if ($remainingServices.Count -eq 0) { break }
             Start-Sleep -Seconds 2
         } while ([DateTime]::UtcNow -lt $serviceDeadline)
@@ -2083,6 +2113,16 @@ function Remove-GuestVerifierCurrentRunArtifacts {
     $rows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 900 -ScriptBlock {
         param($CurrentRunId, $ExpectedPublishedInf, $ExpectedRootInstanceId, $ExpectedServiceName,
             $ExpectedSysHash, $ExpectedInfHash, $ExpectedCatHash, $ExpectedHardwareId)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
 
         function Resolve-GuestVerifierDriverStoreImage {
@@ -2132,7 +2172,7 @@ function Remove-GuestVerifierCurrentRunArtifacts {
             $roots = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
                     $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\'
                 })
-            $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+            $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
             $ramsharedDisks = @(Get-Disk -ErrorAction Stop | Where-Object {
                     $_.FriendlyName -match '(?i)ramshare|ramshared|vramdisk' -or
                     $_.SerialNumber -match '(?i)ramshare|ramshared'
@@ -2290,7 +2330,7 @@ function Remove-GuestVerifierCurrentRunArtifacts {
 
         $serviceDeletionDeadline = (Get-Date).ToUniversalTime().AddSeconds(60)
         do {
-            $remainingServices = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+            $remainingServices = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
             if ($remainingServices.Count -eq 0) {
                 break
             }
@@ -2390,6 +2430,16 @@ function Get-GuestVerifierCurrentRunZeroResidueEvidence {
     $expectedPublishedInfCanonical = Normalize-GuestVerifierPublishedInf $PublishedInf "published INF for final zero-residue query"
     $rows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 420 -ScriptBlock {
         param($CurrentRunId, $ExpectedPublishedInf)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
         $packages = @(Get-WindowsDriver -Online -All -ErrorAction Stop | Where-Object {
                 [string]$_.OriginalFileName -match '(?i)(^|\\)ramshared\.inf$'
@@ -2400,7 +2450,7 @@ function Get-GuestVerifierCurrentRunZeroResidueEvidence {
         $roots = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
                 $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\'
             })
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         $ramsharedDisks = @(Get-Disk -ErrorAction Stop | Where-Object {
                 $_.FriendlyName -match '(?i)ramshare|ramshared|vramdisk' -or
                 $_.SerialNumber -match '(?i)ramshare|ramshared'
@@ -2976,8 +3026,18 @@ function Invoke-GuestVerifierPreflight {
 
     [void]$stages.Add((Invoke-GuestVerifierPreflightStage -ProviderCode "system_driver" `
         -TimeoutSeconds 120 -ArtifactPrefix $artifactPrefix -ScriptBlock {
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         [pscustomobject]@{
             schema = [int]1
             service_count = [int]$services.Count
@@ -3238,6 +3298,16 @@ function Get-GuestVerifierPostPublishCleanupState {
     $publishedInf = Normalize-GuestVerifierPublishedInf $ExpectedPublishedInf "post-publish cleanup published INF"
     $rows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 420 -ScriptBlock {
         param($CurrentRunId, $PublishedInf)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
         $packages = @(Get-WindowsDriver -Online -All -ErrorAction Stop | Where-Object {
                 [string]$_.OriginalFileName -match '(?i)(^|\\)ramshared\.inf$'
@@ -3280,7 +3350,7 @@ function Get-GuestVerifierPostPublishCleanupState {
             if ($hardwareIds.Count -ne 1) { throw "post-publish ROOT hardware identity is ambiguous" }
             $hardwareId = [string]($hardwareIds[0])
         }
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         $servicePath = ""
         $serviceHash = ""
         $serviceInfHash = ""
@@ -3356,6 +3426,16 @@ function Remove-GuestVerifierPublishedPackageOnly {
     $catalogHash = Normalize-GuestVerifierSha256 $ExpectedCatalogHash "package-only cleanup catalog hash"
     $deleteRows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 420 -ScriptBlock {
         param($PublishedInf, $ExpectedSysHash, $ExpectedInfFileHash, $ExpectedCatHash)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
         $packages = @(Get-WindowsDriver -Online -All -ErrorAction Stop | Where-Object {
                 [string]$_.OriginalFileName -match '(?i)(^|\\)ramshared\.inf$'
@@ -3364,7 +3444,7 @@ function Remove-GuestVerifierPublishedPackageOnly {
                 ([IO.Path]::GetFileName([string]$_.Driver)).ToLowerInvariant() -ceq $PublishedInf
             })
         $roots = @(Get-PnpDevice -ErrorAction Stop | Where-Object { $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\' })
-        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $services = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         $disks = @(Get-Disk -ErrorAction Stop | Where-Object {
                 $_.FriendlyName -match '(?i)ramshare|ramshared|vramdisk' -or $_.SerialNumber -match '(?i)ramshare|ramshared'
             })
@@ -3551,6 +3631,16 @@ function Create-GuestVerifierRoot {
     $catalogHashCanonical = Normalize-GuestVerifierSha256 $ExpectedCatalogHash "catalog hash for ROOT creation"
     $rows = Invoke-GuestVerifierRemote -Operation invoke -TimeoutSeconds 420 -ScriptBlock {
         param($CurrentRunId, $PublishedInf, $ExpectedSysHash, $ExpectedInfFileHash, $ExpectedCatHash)
+        function Escape-CimString {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory = $true)]
+                [ValidateNotNullOrEmpty()]
+                [string]$Value
+            )
+            $Value -replace '\\', '\\' -replace "'", "\'"
+        }
+
         $ErrorActionPreference = "Stop"
         $workerStage = "package_query"
         $observedPublishedPackageCount = [int]0
@@ -3651,7 +3741,7 @@ function Create-GuestVerifierRoot {
         $rootsBefore = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
                 $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\'
             })
-        $servicesBefore = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $servicesBefore = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         $disksBefore = @(Get-Disk -ErrorAction Stop | Where-Object {
                 $_.FriendlyName -match '(?i)ramshare|ramshared|vramdisk' -or
                 $_.SerialNumber -match '(?i)ramshare|ramshared'
@@ -3718,7 +3808,7 @@ public static class RamSharedGuestRootEnum {
         $rootsAfter = @(Get-PnpDevice -ErrorAction Stop | Where-Object {
                 $_.InstanceId -match '(?i)^ROOT\\RAMSHARED\\'
             })
-        $servicesAfter = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = 'ramshared'" -ErrorAction Stop)
+        $servicesAfter = @(Get-CimInstance -ClassName Win32_SystemDriver -Filter ("Name = '{0}'" -f (Escape-CimString 'ramshared')) -ErrorAction Stop)
         $observedRootCount = [int]$rootsAfter.Count
         $observedRootInstanceId = if ($rootsAfter.Count -eq 1) { [string]$rootsAfter[0].InstanceId } else { "" }
         $observedServiceCount = [int]$servicesAfter.Count
