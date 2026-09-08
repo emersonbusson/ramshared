@@ -1505,6 +1505,7 @@ impl ScopeExecution for SystemScopeExecution {
                     self.unit, status.id
                 ));
             }
+            let exit_status = status.terminal_exit_status();
             match &self.invocation_id {
                 Some(expected) if expected != &status.invocation_id => {
                     return ScopeCompletion::UnsafeContainment(format!(
@@ -1513,9 +1514,9 @@ impl ScopeExecution for SystemScopeExecution {
                     ));
                 }
                 Some(_) => {}
-                None => self.invocation_id = Some(status.invocation_id.clone()),
+                None => self.invocation_id = Some(status.invocation_id),
             }
-            match status.terminal_exit_status() {
+            match exit_status {
                 Ok(Some(exit_status)) => return ScopeCompletion::Terminal(Ok(exit_status)),
                 Ok(None) => std::thread::sleep(SCOPE_STATUS_POLL_INTERVAL),
                 Err(error) => {
