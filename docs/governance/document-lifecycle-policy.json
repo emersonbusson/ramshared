@@ -492,6 +492,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
+      "id": "agent-findings-documents",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-08T08:45:00Z"
     }
   ],
   "exclusions": [
