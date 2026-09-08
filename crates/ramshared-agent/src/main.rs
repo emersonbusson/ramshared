@@ -563,13 +563,12 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    fn parse_config(v: &[&str]) -> Config {
+    fn parse_config(v: &[&str]) -> Result<Config, String> {
         match parse_args(&args(v)) {
             Ok(ParsedArgs::Config(config)) => Ok(config),
             Ok(ParsedArgs::Help) => Err("test expected configuration, not help".to_string()),
             Err(err) => Err(err),
         }
-        .expect("arguments must parse as a configuration")
     }
 
     fn test_config(broker: String, watchdog: Duration) -> Config {
@@ -612,8 +611,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_minimal_agent() {
-        let c = parse_config(&["--broker", "10.0.0.1:7000", "--tenant", "wsl2"]);
+    fn parse_minimal_agent() -> Result<(), String> {
+        let c = parse_config(&["--broker", "10.0.0.1:7000", "--tenant", "wsl2"])?;
         assert_eq!(c.broker, "10.0.0.1:7000");
         assert_eq!(c.tenant, "wsl2");
         assert_eq!(c.nbd_base, "/dev/nbd");
@@ -621,10 +620,11 @@ mod tests {
         assert_eq!(c.watchdog, Duration::from_secs(90));
         assert!(!c.status_only);
         assert!(c.swap_prio.is_none());
+        Ok(())
     }
 
     #[test]
-    fn parse_full_flags() {
+    fn parse_full_flags() -> Result<(), String> {
         let c = parse_config(&[
             "--broker",
             "h:1",
@@ -638,17 +638,19 @@ mod tests {
             "unix",
             "--watchdog-secs",
             "30",
-        ]);
+        ])?;
         assert_eq!(c.swap_prio, Some(-3));
         assert!(matches!(c.transport, TransportKind::NbdUnix));
         assert_eq!(c.watchdog, Duration::from_secs(30));
+        Ok(())
     }
 
     #[test]
-    fn status_mode_needs_no_tenant() {
-        let c = parse_config(&["--broker", "h:1", "--status"]);
+    fn status_mode_needs_no_tenant() -> Result<(), String> {
+        let c = parse_config(&["--broker", "h:1", "--status"])?;
         assert!(c.status_only);
         assert!(c.tenant.is_empty());
+        Ok(())
     }
 
     #[test]
