@@ -6,6 +6,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "❌ Error: git is required but not installed." >&2
+    exit 69
+fi
+
 OUT_DIR="artifacts/lkml-patchset"
 
 EMAIL_AT="@"
@@ -60,8 +66,23 @@ if [ -z "${SMTP_PASS:-}" ]; then
 fi
 
 if [ -z "$SMTP_PASS" ]; then
-    echo "❌ Error: App Password cannot be empty."
-    exit 1
+    echo "❌ Error: App Password cannot be empty." >&2
+    exit 78
+fi
+
+
+# Validate git send-email configuration
+SMTP_SERVER="$(git config --get sendemail.smtpserver || true)"
+SMTP_USER="$(git config --get sendemail.smtpuser || true)"
+
+if [ -z "$SMTP_SERVER" ]; then
+    echo "❌ Error: git config sendemail.smtpserver is missing or empty." >&2
+    exit 78
+fi
+
+if [ -z "$SMTP_USER" ]; then
+    echo "❌ Error: git config sendemail.smtpuser is missing or empty." >&2
+    exit 78
 fi
 
 echo ""
