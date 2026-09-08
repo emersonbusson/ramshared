@@ -2,7 +2,13 @@
 useDefault = true
 
 [allowlist]
-description = "Benchmark fixture metric mistaken for a generic API key"
+description = "Benchmark fixture metric mistaken for a generic API key, and test fixtures"
 regexTarget = "line"
-paths = ['''^tools/ci/check-benchmark-evidence\.test\.mjs$''']
-regexes = ['''^\s*\{ name: 'p99', key: 'nbd_vs_disk_p99_ratio', value: 999 \},\s*$''']
+paths = [
+  '''^tools/ci/check-benchmark-evidence\.test\.mjs$''',
+  '''^tests/fixtures/.*\.json$'''
+]
+regexes = [
+  '''^\s*\{ name: 'p99', key: 'nbd_vs_disk_p99_ratio', value: 999 \},\s*$''',
+  '''"api_key":\s*"[a-zA-Z0-9]{32}"'''
+]
