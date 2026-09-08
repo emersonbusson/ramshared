@@ -171,10 +171,21 @@ pub fn write_msg<W: Write>(w: &mut W, msg: &Msg) -> Result<(), ProtocolError> {
 /// `take(MAX_LINE_BYTES + 1)` ensures we never read/allocate beyond the cap (anti-DoS).
 pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
     let mut buf = Vec::new();
+    read_msg_buf(r, &mut buf)
+}
+
+/// Reads a line into a reusable buffer (up to [`MAX_LINE_BYTES`]) and deserializes it.
+///
+/// Reuses `buf` across calls after clearing it to avoid repeated vector allocations in loops.
+pub fn read_msg_buf<R: BufRead>(
+    r: &mut R,
+    buf: &mut Vec<u8>,
+) -> Result<Option<Msg>, ProtocolError> {
+    buf.clear();
     let n = r
         .by_ref()
         .take(MAX_LINE_BYTES as u64 + 1)
-        .read_until(b'\n', &mut buf)
+        .read_until(b'\n', buf)
         .map_err(ProtocolError::ConnectionClosed)?;
     if n == 0 {
         return Ok(None); // clean EOF
@@ -183,7 +194,7 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
     if !had_newline && buf.len() > MAX_LINE_BYTES {
         return Err(ProtocolError::PayloadTooLarge);
     }
-    let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
+    let line = buf.strip_suffix(b"\n").unwrap_or(buf);
     let msg =
         serde_json::from_slice::<Msg>(line).map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
     Ok(Some(msg))

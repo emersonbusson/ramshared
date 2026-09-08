@@ -6,7 +6,7 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use ramshared_broker::model::{PsiSample, TransportKind};
-use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, read_msg_buf, write_msg};
 
 /// Lease state held by this process after a successful grant.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,8 +147,9 @@ impl BrokerTenant {
         &mut self,
         stream: &mut S,
     ) -> Result<LeaseState, BrokerTenantError> {
+        let mut buf = Vec::new();
         loop {
-            match read_msg(stream).map_err(|e| BrokerTenantError::Io(e.to_string()))? {
+            match read_msg_buf(stream, &mut buf).map_err(|e| BrokerTenantError::Io(e.to_string()))? {
                 Some(Msg::LeaseGranted { lease, bytes }) => {
                     if let Some(need) = self.requested_bytes
                         && bytes != need
