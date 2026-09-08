@@ -1361,11 +1361,24 @@ mod tests {
 
     #[test]
     fn observe_volume_identity_invalid_letter_rejected() {
-        let err = WindowsHostState::observe_volume_identity('C').unwrap_err();
-        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+        for bad_letter in ['A', 'a', 'B', 'b', 'C', 'c', '@', '[', '1', ' ', '{'] {
+            let err = WindowsHostState::observe_volume_identity(bad_letter).unwrap_err();
+            assert!(
+                matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")),
+                "expected rejection for letter {bad_letter}"
+            );
+        }
+    }
 
-        let err = WindowsHostState::observe_volume_identity('A').unwrap_err();
-        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+    #[test]
+    fn observe_volume_identity_valid_letter_proceeds_to_execution() {
+        for valid_letter in ['D', 'd', 'M', 'm', 'Z', 'z'] {
+            let res = WindowsHostState::observe_volume_identity(valid_letter);
+            assert!(
+                matches!(res, Err(HostError::Identity(_))) || res.is_ok(),
+                "expected valid letter {valid_letter} to pass volume letter validation"
+            );
+        }
     }
 
     #[test]
