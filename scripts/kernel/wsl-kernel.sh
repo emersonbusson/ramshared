@@ -86,6 +86,23 @@ validate_environment_contract() {
 	if [[ -n "${KERNEL_PAIR_MANIFEST:-}" ]]; then
 		assert_canonical_path "$KERNEL_PAIR_MANIFEST" KERNEL_PAIR_MANIFEST || return 1
 	fi
+	if [[ -n "${KSRC:-}" ]]; then
+		assert_canonical_path "$KSRC" KSRC || return 64
+		test -d "$KSRC" || {
+			echo 'wsl-kernel: KSRC kernel source checkout is missing' >&2
+			return 69
+		}
+		test -f "$KSRC/.config" || {
+			echo 'wsl-kernel: KSRC kernel .config is missing' >&2
+			return 78
+		}
+	fi
+	if [[ -n "${CC:-}" ]]; then
+		command -v "$CC" >/dev/null 2>&1 || {
+			echo 'wsl-kernel: cross-compilation toolchain is unavailable' >&2
+			return 69
+		}
+	fi
 }
 
 require_no_arguments() {
