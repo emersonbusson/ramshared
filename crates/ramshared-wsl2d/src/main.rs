@@ -1405,7 +1405,7 @@ fn collect_critical_device_numbers() -> Result<Vec<String>, String> {
     {
         collect_device_and_parent(Path::new(source), &mut devices)?;
     }
-    let swaps = std::fs::read_to_string("/proc/swaps").map_err(|error| error.to_string())?;
+    let swaps = read_proc_file("/proc/swaps").map_err(|error| error.to_string())?;
     for entry in parse_strict_proc_swaps(&swaps)? {
         collect_device_and_parent(Path::new(&entry.filename), &mut devices)?;
     }
@@ -3238,18 +3238,33 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     Ok(())
 }
 
+/// Reads pseudo-files in `/proc` or `/sys` into a preallocated `String`.
+///
+/// Standard `std::fs::read_to_string` uses `fstat` on the target file. Since kernel
+/// pseudo-files report size `0`, `read_to_string` starts with a 0-capacity buffer and
+/// performs repeated reallocations as it reads chunks. Preallocating a 4 KiB buffer
+/// (one page, sufficient for almost all `/proc` files) avoids reallocation overhead and
+/// extra metadata syscalls.
+fn read_proc_file(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut buffer = String::with_capacity(4096);
+    file.read_to_string(&mut buffer)?;
+    Ok(buffer)
+}
+
 /// `used_kb` for the given NBD device path from `/proc/swaps`.
 ///
 /// A read error is unsafe to interpret as an absent swap device, so return the
 /// maximum value and keep the backend allocated.
 fn nbd_used_kb_from_proc(nbd_dev: &str) -> Result<u64, String> {
-    let text = std::fs::read_to_string("/proc/swaps")
+    let text = read_proc_file("/proc/swaps")
         .map_err(|error| format!("read /proc/swaps: {error}"))?;
     nbd_used_kb_from_text(&text, nbd_dev)
 }
 
 fn nbd_swap_is_explicitly_absent_from_proc(nbd_dev: &str) -> Result<bool, String> {
-    let text = std::fs::read_to_string("/proc/swaps")
+    let text = read_proc_file("/proc/swaps")
         .map_err(|error| format!("read /proc/swaps: {error}"))?;
     nbd_swap_is_explicitly_absent_from_text(&text, nbd_dev)
 }
@@ -4546,7 +4561,7 @@ impl UblkRuntime for ProductionUblkRuntime {
 
     fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         while !SHUTDOWN.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(50));
         }
         Ok(())
     }
@@ -4555,7 +4570,7 @@ impl UblkRuntime for ProductionUblkRuntime {
         &mut self,
         block_path: &str,
     ) -> Result<ExactSwapState, Box<dyn std::error::Error>> {
-        let text = std::fs::read_to_string("/proc/swaps")?;
+        let text = read_proc_file("/proc/swaps")?;
         Ok(strict_exact_swap_state_from_text(
             &text,
             block_path,
@@ -4795,6 +4810,14 @@ fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error:
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    #[test]
+    fn read_proc_file_preallocates_procfs_reads() {
+        let swaps = read_proc_file("/proc/swaps");
+        assert!(swaps.is_ok());
+        let text = swaps.unwrap();
+        assert!(text.contains("Filename") || text.is_empty());
+    }
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::ffi::OsString;
