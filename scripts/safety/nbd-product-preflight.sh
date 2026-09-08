@@ -37,11 +37,12 @@ declare -A MANIFEST_HASHES=()
 block() {
   printf 'NBD_PRODUCT_STATE=BLOCKED\n'
   printf 'NBD_READINESS_REASON=%s\n' "$1"
-  exit 1
+  local code=${2:-1}
+  exit "$code"
 }
 
 usage() {
-  block UNSUPPORTED_ARGUMENT
+  block UNSUPPORTED_ARGUMENT 64
 }
 
 is_sha256() {
@@ -134,7 +135,7 @@ read_sealed_release() {
 }
 
 verify_manifest() {
-  local manifest line digest marker relative actual listed
+  local manifest line digest relative actual listed
   manifest="$RELEASE/SHA256SUMS"
   [[ -f $manifest && ! -L $manifest ]] || block RELEASE_MANIFEST_MISSING
   require_sealed_file "$manifest"
@@ -196,7 +197,7 @@ verify_manifest() {
   local installed_receipt
   installed_receipt=$(tr -d '[:space:]' <"$RELEASE/INSTALLED_MANIFEST_SHA256")
   is_sha256 "$installed_receipt" || block INSTALLED_MANIFEST_RECEIPT_MISMATCH
-  [[ ${installed_receipt,,} == ${MANIFEST_DIGEST,,} ]] || block INSTALLED_MANIFEST_RECEIPT_MISMATCH
+  [[ ${installed_receipt,,} == "${MANIFEST_DIGEST,,}" ]] || block INSTALLED_MANIFEST_RECEIPT_MISMATCH
 
   SOURCE_COMMIT=$(tr -d '[:space:]' <"$RELEASE/SOURCE_COMMIT")
   SOURCE_BRANCH=$(tr -d '[:space:]' <"$RELEASE/SOURCE_BRANCH")
@@ -205,8 +206,8 @@ verify_manifest() {
   [[ $SOURCE_BRANCH =~ ^[A-Za-z0-9._/-]{1,200}$ && ( $SOURCE_TREE_STATE == clean || $SOURCE_TREE_STATE == dirty ) ]] \
     || block RELEASE_SOURCE_IDENTITY_INVALID
   if (( EXPLICIT_BINDING == 1 )); then
-    [[ ${SOURCE_COMMIT,,} == ${EXPECTED_SOURCE_COMMIT,,} ]] || block REVIEWED_SOURCE_COMMIT_MISMATCH
-    [[ ${MANIFEST_DIGEST,,} == ${EXPECTED_MANIFEST_SHA256,,} ]] || block REVIEWED_MANIFEST_MISMATCH
+    [[ ${SOURCE_COMMIT,,} == "${EXPECTED_SOURCE_COMMIT,,}" ]] || block REVIEWED_SOURCE_COMMIT_MISMATCH
+    [[ ${MANIFEST_DIGEST,,} == "${EXPECTED_MANIFEST_SHA256,,}" ]] || block REVIEWED_MANIFEST_MISMATCH
   fi
 }
 
@@ -228,7 +229,7 @@ config_value() {
 }
 
 verify_installed_provenance() {
-  local values input_digest commit branch tree_state sink identity fs_block available
+  local values input_digest commit branch tree_state sink identity fs_block
   values=$(python3 - "$RELEASE/INSTALL_PROVENANCE.json" <<'PY'
 import json
 import re
@@ -279,7 +280,7 @@ except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
     raise SystemExit(f"installed provenance invalid: {exc}")
 PY
   ) || block INSTALL_PROVENANCE_INVALID
-  IFS=$'\t' read -r input_digest commit branch tree_state sink identity fs_block available <<<"$values"
+  IFS=$'\t' read -r input_digest commit branch tree_state sink identity fs_block _ <<<"$values"
   [[ -n $input_digest && -n $commit && -n $branch && -n $tree_state && -n $sink && -n $identity ]] \
     || block INSTALL_PROVENANCE_INVALID
   [[ $(sha256sum -- "$RELEASE/INPUT_BUNDLE_SHA256SUMS" | awk '{print $1}') == "$input_digest" ]] \
@@ -301,33 +302,33 @@ read_vram_bytes() {
   if [[ -z $configured ]]; then
     configured=$(config_value VRAM_MIB || true)
   fi
-  is_decimal "$configured" || block VRAM_SIZE_INVALID
-  (( configured >= 1 && configured <= 1048576 )) || block VRAM_SIZE_INVALID
+  is_decimal "$configured" || block VRAM_SIZE_INVALID 78
+  (( configured >= 1 && configured <= 1048576 )) || block VRAM_SIZE_INVALID 78
   VRAM_BYTES=$((configured * 1024 * 1024))
 }
 
 check_capacity() {
   local sink configured_sink configured_type configured_identity configured_fs_block configured_binding canonical_sink canonical_mount df_records
   local available_kib mount_point alignment_bytes free_bytes margin required metadata actual_type actual_identity
-  [[ ! -v RAMSHARED_NBD_LOWER_SINK ]] || block LOWER_TIER_ENV_OVERRIDE_FORBIDDEN
-  configured_sink=$(config_value NBD_LOWER_SINK) || block LOWER_TIER_RELEASE_UNBOUND
-  configured_type=$(config_value NBD_LOWER_SINK_TYPE) || block LOWER_TIER_RELEASE_UNBOUND
-  configured_identity=$(config_value NBD_LOWER_SINK_IDENTITY_SHA256) || block LOWER_TIER_RELEASE_UNBOUND
-  configured_fs_block=$(config_value NBD_LOWER_SINK_FS_BLOCK_BYTES) || block LOWER_TIER_RELEASE_UNBOUND
-  configured_binding=$(config_value NBD_LOWER_SINK_BINDING) || block LOWER_TIER_RELEASE_UNBOUND
-  [[ $configured_binding == bound ]] || block LOWER_TIER_RELEASE_UNBOUND
+  [[ ! -v RAMSHARED_NBD_LOWER_SINK ]] || block LOWER_TIER_ENV_OVERRIDE_FORBIDDEN 78
+  configured_sink=$(config_value NBD_LOWER_SINK) || block LOWER_TIER_RELEASE_UNBOUND 78
+  configured_type=$(config_value NBD_LOWER_SINK_TYPE) || block LOWER_TIER_RELEASE_UNBOUND 78
+  configured_identity=$(config_value NBD_LOWER_SINK_IDENTITY_SHA256) || block LOWER_TIER_RELEASE_UNBOUND 78
+  configured_fs_block=$(config_value NBD_LOWER_SINK_FS_BLOCK_BYTES) || block LOWER_TIER_RELEASE_UNBOUND 78
+  configured_binding=$(config_value NBD_LOWER_SINK_BINDING) || block LOWER_TIER_RELEASE_UNBOUND 78
+  [[ $configured_binding == bound ]] || block LOWER_TIER_RELEASE_UNBOUND 78
   sink=$configured_sink
   [[ -n $sink && -d $sink && ! -L $sink ]] || block LOWER_TIER_SINK_UNKNOWN
   canonical_sink=$(readlink -f -- "$sink" 2>/dev/null || true)
   [[ -n $canonical_sink && -d $canonical_sink ]] || block LOWER_TIER_SINK_IDENTITY_INVALID
   actual_type=$($STAT -c '%F' -- "$canonical_sink" 2>/dev/null || true)
-  [[ $actual_type == directory ]] || block LOWER_TIER_TYPE_INVALID
+  [[ $actual_type == directory ]] || block LOWER_TIER_TYPE_INVALID 78
   metadata=$($STAT -c '%d:%i:%u:%g:%a:%F' -- "$canonical_sink" 2>/dev/null || true)
   [[ $metadata =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-7]{3,4}:directory$ ]] || block LOWER_TIER_SINK_IDENTITY_INVALID
   actual_identity=$(printf '%s\0%s\0%s' "$canonical_sink" "$actual_type" "$metadata" | sha256sum | awk '{print $1}')
-  [[ $configured_type == directory ]] || block LOWER_TIER_TYPE_INVALID
+  [[ $configured_type == directory ]] || block LOWER_TIER_TYPE_INVALID 78
   is_sha256 "$configured_identity" || block LOWER_TIER_SINK_IDENTITY_INVALID
-  [[ ${actual_identity,,} == ${configured_identity,,} ]] || block LOWER_TIER_SINK_IDENTITY_INVALID
+  [[ ${actual_identity,,} == "${configured_identity,,}" ]] || block LOWER_TIER_SINK_IDENTITY_INVALID
   set +e
   df_records=$("$DF" -Pk -- "$canonical_sink" 2>/dev/null | awk '
     NR > 1 && $4 ~ /^[0-9]+$/ && NF >= 6 {
@@ -352,9 +353,9 @@ check_capacity() {
   fi
   (( available_kib <= 4398046511104 )) || block LOWER_TIER_CAPACITY_UNKNOWN
   alignment_bytes=$("$STAT" -fc '%s' -- "$sink" 2>/dev/null || true)
-  is_decimal "$alignment_bytes" || block LOWER_TIER_ALIGNMENT_INVALID
-  (( alignment_bytes >= 512 && alignment_bytes <= 1048576 )) || block LOWER_TIER_ALIGNMENT_INVALID
-  [[ $configured_fs_block == "$alignment_bytes" ]] || block LOWER_TIER_ALIGNMENT_INVALID
+  is_decimal "$alignment_bytes" || block LOWER_TIER_ALIGNMENT_INVALID 78
+  (( alignment_bytes >= 512 && alignment_bytes <= 1048576 )) || block LOWER_TIER_ALIGNMENT_INVALID 78
+  [[ $configured_fs_block == "$alignment_bytes" ]] || block LOWER_TIER_ALIGNMENT_INVALID 78
   free_bytes=$((available_kib * 1024))
   free_bytes=$(((free_bytes / alignment_bytes) * alignment_bytes))
   margin=$(((VRAM_BYTES + 9) / 10))
@@ -378,7 +379,7 @@ systemctl_status() {
 
 check_legacy_ublk() {
   local entry active enabled line filename module_state
-  [[ -r $SWAPS_FILE ]] || block SWAPS_UNREADABLE
+  [[ -r $SWAPS_FILE ]] || block SWAPS_UNREADABLE 69
   while IFS= read -r line; do
     read -r filename _ <<<"$line"
     [[ $filename != Filename ]] || continue
@@ -390,7 +391,7 @@ check_legacy_ublk() {
       block ACTIVE_UBLK_SWAP
     fi
   done <"$SWAPS_FILE"
-  [[ -d $SYS_BLOCK_ROOT ]] || block UBLK_INVENTORY_UNAVAILABLE
+  [[ -d $SYS_BLOCK_ROOT ]] || block UBLK_INVENTORY_UNAVAILABLE 69
   while IFS= read -r entry; do
     [[ $entry =~ ^ublkb[0-9]+$ ]] && block ACTIVE_UBLK_DEVICE
   done < <(find "$SYS_BLOCK_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null)
@@ -421,14 +422,14 @@ check_relay() {
   if [[ -z $relay ]]; then
     relay="$RELEASE/scripts/safety/wsl-relay-health.sh"
   fi
-  [[ -x $relay ]] || block RELAY_CHECK_UNAVAILABLE
+  [[ -x $relay ]] || block RELAY_CHECK_UNAVAILABLE 69
   "$relay" --check >/dev/null 2>&1 || block RELAY_CHECK_FAILED
 }
 
 read_nbd_swap() {
   local line filename suffix found=''
   MANAGED_ZRAM_PRESENT=0
-  [[ -r $SWAPS_FILE ]] || block SWAPS_UNREADABLE
+  [[ -r $SWAPS_FILE ]] || block SWAPS_UNREADABLE 69
   while IFS= read -r line; do
     read -r filename _ <<<"$line"
     [[ $filename != Filename ]] || continue
@@ -497,7 +498,8 @@ read_proc_stat_fields() {
 }
 
 read_proc_stat_kthread_flag() {
-  local proc_dir=$1 expected_pid=${proc_dir##*/}
+  local proc_dir=$1
+  local expected_pid=${proc_dir##*/}
   read_proc_stat_fields "$proc_dir" "$expected_pid" || return 2
   if (( PROC_STAT_FLAGS & PROC_STAT_PF_KTHREAD )); then
     printf '1\n'
@@ -665,7 +667,7 @@ find_live_exact_daemon_pids() {
 check_binary_match() {
   local pid raw_exe resolved_exe expected_hash actual_hash
   BINARY_MATCH=NOT_APPLICABLE
-  [[ -d $PROC_ROOT && ! -L $PROC_ROOT ]] || block PROC_ROOT_UNREADABLE
+  [[ -d $PROC_ROOT && ! -L $PROC_ROOT ]] || block PROC_ROOT_UNREADABLE 69
   find_live_exact_daemon_pids
   if [[ ! -f $PID_FILE ]]; then
     case ${#EXACT_DAEMON_PIDS[@]} in
@@ -759,12 +761,12 @@ done
 [[ $ACTION == check ]] || usage
 if (( EXPLICIT_BINDING == 1 )); then
   [[ -n $SEALED_RELEASE_ROOT && -n $EXPECTED_RELEASE_VERSION && -n $EXPECTED_SOURCE_COMMIT && -n $EXPECTED_MANIFEST_SHA256 ]] \
-    || block REVIEWED_RELEASE_BINDING_INCOMPLETE
+    || block REVIEWED_RELEASE_BINDING_INCOMPLETE 78
   is_source_commit "$EXPECTED_SOURCE_COMMIT" || block REVIEWED_SOURCE_COMMIT_INVALID
   is_sha256 "$EXPECTED_MANIFEST_SHA256" || block REVIEWED_MANIFEST_INVALID
 fi
-is_decimal "$EXPECTED_UID" || block RELEASE_OWNER_INVALID
-is_decimal "$EXPECTED_GID" || block RELEASE_OWNER_INVALID
+is_decimal "$EXPECTED_UID" || block RELEASE_OWNER_INVALID 78
+is_decimal "$EXPECTED_GID" || block RELEASE_OWNER_INVALID 78
 
 read_sealed_release
 verify_manifest
