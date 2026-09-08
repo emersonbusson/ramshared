@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# preflight.sh — PORTAO de seguranca (falha-seguro) antes de subir o daemon
-# VRAM/ublk no host WSL2 vivo. RECUSA (exit != 0) em vez de deixar um start perigoso
-# travar a maquina. Roda o snapshot baseline no sucesso.
+# preflight.sh — Security gate (fail-safe) before bringing up the daemon
+# VRAM/ublk on live WSL2 host. REFUSES (exit != 0) instead of allowing a dangerous start
+# to freeze the machine. Runs the baseline snapshot on success.
 #
 # Motivated by the 2026-07-03 incident: a `--backend vram` run with a binary missing the
 # mlockall fix froze the host (kernel BUG). This gate guarantees that only a binary WITH the
 # fix, with a healthy GPU, and without orphaned devices, gets to run.
 #
-# Uso: preflight.sh [caminho_do_binario]
-#   exit 0 = seguro prosseguir (snapshot escrito, coletor armado)
-#   exit 1 = RECUSADO (motivo no stderr) — NAO suba o daemon
-# So LE estado; nao toca GPU/ublk/swap. O unico efeito e escrever o snapshot.
-set -uo pipefail
+# Usage: preflight.sh [binary_path]
+#   exit 0 = safe to proceed (snapshot written, collector armed)
+#   exit != 0 = REFUSED (reason in stderr) — DO NOT start daemon
+# Only READS state; does not touch GPU/ublk/swap. Only effect is writing the snapshot.
+set -euo pipefail
 
 REPO="${RAMSHARED_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="${1:-$REPO/target/debug/ramsharedd}"
@@ -23,45 +23,45 @@ MIN_VRAM_FREE_MIB="${RAMSHARED_MIN_VRAM_FREE_MIB:-256}"
 NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"
 [ -x "$NVSMI" ] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
 
-fail() { echo "PREFLIGHT: RECUSADO — $1" >&2; exit 1; }
+fail() { echo "PREFLIGHT: REFUSED — $1" >&2; exit "${2:-1}"; }
 
-echo "== RamShared preflight (falha-seguro) =="
+echo "== RamShared preflight (fail-safe) =="
 
-# 1. Binario existe e TEM o fix do mlockall (senao = travamento garantido no #1).
-# Materializa `strings` numa var e usa here-string no grep -q: evita o gotcha
-# pipefail+grep-q+SIGPIPE (o pipe `strings | grep -q` retornava o SIGPIPE do strings,
-# nao o sucesso do grep, e recusava o binario bom).
-[ -x "$BIN" ] || fail "binario nao encontrado/executavel: $BIN (rode 'cargo build -p ramshared-wsl2d --bin ramsharedd')"
+# 1. Binary exists and HAS the mlockall fix (otherwise = guaranteed crash in #1).
+# Materializes `strings` in a var and uses here-string in grep -q: avoids the
+# pipefail+grep-q+SIGPIPE gotcha (the pipe `strings | grep -q` returned SIGPIPE from strings,
+# not grep's success, and refused a good binary).
+[ -x "$BIN" ] || fail "[FAIL] Binary not found/executable: $BIN (run 'cargo build -p ramshared-wsl2d --bin ramsharedd')" 69
 BIN_STRINGS="$(strings "$BIN" 2>/dev/null)"
 if ! grep -qF "$FIX_MARKER" <<<"$BIN_STRINGS"; then
-  fail "binario SEM o fix do mlockall ($BIN). Recompile com o fix (arm_future_lock) antes de rodar VRAM+ublk. Rodar assim TRAVA o host."
+  fail "[FAIL] Binary WITHOUT mlockall fix ($BIN). Recompile with fix (arm_future_lock) before running VRAM+ublk. Running as is will FREEZE the host." 78
 fi
-echo "  [ok] binario tem o fix do mlockall"
+echo "  [PASS] Binary has mlockall fix"
 
-# 2. GPU saudavel: nvidia-smi responde e ha VRAM livre suficiente.
-SMI_OUT="$("$NVSMI" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null)"
-[ -n "$SMI_OUT" ] || fail "nvidia-smi nao respondeu — GPU/driver em estado ruim; NAO suba VRAM agora"
+# 2. Healthy GPU: nvidia-smi responds and there is enough free VRAM.
+SMI_OUT="$("$NVSMI" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null || true)"
+[ -n "$SMI_OUT" ] || fail "[FAIL] nvidia-smi unresponsive — GPU/driver in bad state; DO NOT start VRAM now" 69
 VRAM_FREE="$(echo "$SMI_OUT" | head -1 | tr -dc '0-9')"
-[ -n "$VRAM_FREE" ] || fail "nao consegui ler VRAM livre de nvidia-smi"
+[ -n "$VRAM_FREE" ] || fail "[FAIL] Could not read free VRAM from nvidia-smi" 69
 if [ "$VRAM_FREE" -lt "$MIN_VRAM_FREE_MIB" ]; then
-  fail "VRAM livre ${VRAM_FREE} MiB < minimo ${MIN_VRAM_FREE_MIB} MiB — sem folga segura"
+  fail "[FAIL] Free VRAM ${VRAM_FREE} MiB < minimum ${MIN_VRAM_FREE_MIB} MiB — unsafe margin" 74
 fi
-echo "  [ok] GPU responde, VRAM livre=${VRAM_FREE} MiB (>= ${MIN_VRAM_FREE_MIB})"
+echo "  [PASS] GPU responsive, free VRAM=${VRAM_FREE} MiB (>= ${MIN_VRAM_FREE_MIB})"
 
-# 3. Sem /dev/ublkb* orfao (sobra de um crash anterior -> colisao/estado sujo).
+# 3. No orphaned /dev/ublkb* (leftover from a previous crash -> collision/dirty state).
 if ls /dev/ublkb* >/dev/null 2>&1; then
-  fail "existe /dev/ublkb* orfao (sobra de execucao anterior): $(ls /dev/ublkb* 2>/dev/null | tr '\n' ' '). Limpe antes (o coletor postmortem ja deve ter rodado)."
+  fail "[FAIL] Orphaned /dev/ublkb* device exists (from previous run): $(ls /dev/ublkb* 2>/dev/null | tr '\n' ' '). Clean up first." 74
 fi
-echo "  [ok] sem device ublk orfao"
+echo "  [PASS] No orphaned ublk device"
 
-# 4. Modulo ublk carregado (/dev/ublk-control presente).
-[ -e /dev/ublk-control ] || fail "/dev/ublk-control ausente — 'sudo modprobe ublk_drv' primeiro"
-echo "  [ok] ublk_drv carregado (/dev/ublk-control presente)"
+# 4. ublk module loaded (/dev/ublk-control present).
+[ -e /dev/ublk-control ] || fail "[FAIL] /dev/ublk-control missing — run 'sudo modprobe ublk_drv' first" 69
+echo "  [PASS] ublk_drv loaded (/dev/ublk-control present)"
 
-# 5. Tudo ok -> snapshot baseline + arma o coletor.
+# 5. All ok -> baseline snapshot + arm the collector.
 "$REPO/scripts/safety/preflight-snapshot.sh" "${*:-ramsharedd (via preflight)}" >/dev/null 2>&1 \
-  && echo "  [ok] snapshot baseline escrito + coletor armado" \
-  || echo "  [aviso] snapshot falhou (nao-bloqueante), mas checks de seguranca passaram"
+  && echo "  [PASS] Baseline snapshot written + collector armed" \
+  || echo "  [SKIP] Snapshot failed (non-blocking), but security checks passed"
 
-echo "PREFLIGHT: OK — seguro prosseguir."
+echo "PREFLIGHT: OK — safe to proceed."
 exit 0
