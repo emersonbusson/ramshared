@@ -936,132 +936,220 @@ fn run_tui(options: &MonitorOptions) -> Result<(), MonitorError> {
     result
 }
 
-fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
-    let history_limit =
-        ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
-    let mut history = VecDeque::with_capacity(history_limit);
-    let interval = Duration::from_millis(options.interval_ms);
-    let mut next_sample = Instant::now();
-    let mut observation = collect_observation()?;
-    let mut last_io_sample = Some((
-        observation.control_plane.swap_read_bytes,
-        observation.control_plane.swap_write_bytes,
-        observation.control_plane.zram_io.read_bytes,
-        observation.control_plane.zram_io.write_bytes,
-        observation.control_plane.vram_io.read_bytes,
-        observation.control_plane.vram_io.write_bytes,
-        observation.control_plane.disk_io.read_bytes,
-        observation.control_plane.disk_io.write_bytes,
-        Instant::now(),
-    ));
-    let mut last_faults_sample = Some((
-        observation.control_plane.pgfault_total,
-        observation.control_plane.pgmajfault_total,
-    ));
+#[derive(Clone, Copy, Debug)]
+struct IoSnapshot {
+    swap_read_bytes: u64,
+    swap_write_bytes: u64,
+    zram_read_bytes: u64,
+    zram_write_bytes: u64,
+    vram_read_bytes: u64,
+    vram_write_bytes: u64,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
+    timestamp: Instant,
+}
 
-    let mut zram_acc = TierAccumulator::default();
-    let mut vram_acc = TierAccumulator::default();
-    let mut disk_acc = TierAccumulator::default();
-    let mut swap_peak_mbs = 0.0f64;
+impl IoSnapshot {
+    fn from_observation(obs: &Observation, timestamp: Instant) -> Self {
+        Self {
+            swap_read_bytes: obs.control_plane.swap_read_bytes,
+            swap_write_bytes: obs.control_plane.swap_write_bytes,
+            zram_read_bytes: obs.control_plane.zram_io.read_bytes,
+            zram_write_bytes: obs.control_plane.zram_io.write_bytes,
+            vram_read_bytes: obs.control_plane.vram_io.read_bytes,
+            vram_write_bytes: obs.control_plane.vram_io.write_bytes,
+            disk_read_bytes: obs.control_plane.disk_io.read_bytes,
+            disk_write_bytes: obs.control_plane.disk_io.write_bytes,
+            timestamp,
+        }
+    }
+}
 
-    loop {
-        if Instant::now() >= next_sample {
-            if let Ok(new_obs) = collect_observation() {
-                observation = new_obs;
-            }
-            let now = Instant::now();
-            if let Some((
-                last_rb,
-                last_wb,
-                last_z_rb,
-                last_z_wb,
-                last_v_rb,
-                last_v_wb,
-                last_d_rb,
-                last_d_wb,
-                last_t,
-            )) = last_io_sample
-            {
-                let dt = now.duration_since(last_t).as_secs_f64();
-                if (0.05..=10.0).contains(&dt) {
-                    let divisor = dt * 1_048_576.0;
-                    let cp = &mut observation.control_plane;
-                    cp.swap_read_mbs =
-                        (cp.swap_read_bytes.saturating_sub(last_rb) as f64) / divisor;
-                    cp.swap_write_mbs =
-                        (cp.swap_write_bytes.saturating_sub(last_wb) as f64) / divisor;
+#[derive(Clone, Copy, Debug)]
+struct FaultsSnapshot {
+    pgfault_total: u64,
+    pgmajfault_total: u64,
+}
 
-                    cp.zram_io.read_mbs =
-                        (cp.zram_io.read_bytes.saturating_sub(last_z_rb) as f64) / divisor;
-                    cp.zram_io.write_mbs =
-                        (cp.zram_io.write_bytes.saturating_sub(last_z_wb) as f64) / divisor;
+impl FaultsSnapshot {
+    fn from_observation(obs: &Observation) -> Self {
+        Self {
+            pgfault_total: obs.control_plane.pgfault_total,
+            pgmajfault_total: obs.control_plane.pgmajfault_total,
+        }
+    }
+}
 
-                    cp.vram_io.read_mbs =
-                        (cp.vram_io.read_bytes.saturating_sub(last_v_rb) as f64) / divisor;
-                    cp.vram_io.write_mbs =
-                        (cp.vram_io.write_bytes.saturating_sub(last_v_wb) as f64) / divisor;
+#[derive(Default)]
+struct SampleTracker {
+    last_io: Option<IoSnapshot>,
+    last_faults: Option<FaultsSnapshot>,
+    zram_acc: TierAccumulator,
+    vram_acc: TierAccumulator,
+    disk_acc: TierAccumulator,
+    swap_peak_mbs: f64,
+}
 
-                    cp.disk_io.read_mbs =
-                        (cp.disk_io.read_bytes.saturating_sub(last_d_rb) as f64) / divisor;
-                    cp.disk_io.write_mbs =
-                        (cp.disk_io.write_bytes.saturating_sub(last_d_wb) as f64) / divisor;
+impl SampleTracker {
+    fn new(observation: &Observation, now: Instant) -> Self {
+        Self {
+            last_io: Some(IoSnapshot::from_observation(observation, now)),
+            last_faults: Some(FaultsSnapshot::from_observation(observation)),
+            zram_acc: TierAccumulator::default(),
+            vram_acc: TierAccumulator::default(),
+            disk_acc: TierAccumulator::default(),
+            swap_peak_mbs: 0.0,
+        }
+    }
 
-                    let total_swap_speed = cp.swap_read_mbs + cp.swap_write_mbs;
-                    swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
-                    cp.swap_peak_mbs = swap_peak_mbs;
+    fn update(&mut self, observation: &mut Observation, now: Instant) {
+        if let Some(ref last_io) = self.last_io {
+            let dt = now.duration_since(last_io.timestamp).as_secs_f64();
+            if (0.05..=10.0).contains(&dt) {
+                let divisor = dt * 1_048_576.0;
+                let cp = &mut observation.control_plane;
+                cp.swap_read_mbs =
+                    (cp.swap_read_bytes.saturating_sub(last_io.swap_read_bytes) as f64) / divisor;
+                cp.swap_write_mbs =
+                    (cp.swap_write_bytes.saturating_sub(last_io.swap_write_bytes) as f64) / divisor;
 
-                    zram_acc.record(cp.zram_io.read_mbs + cp.zram_io.write_mbs);
-                    zram_acc.apply_to_plane_io(&mut cp.zram_io);
+                cp.zram_io.read_mbs =
+                    (cp.zram_io.read_bytes.saturating_sub(last_io.zram_read_bytes) as f64)
+                        / divisor;
+                cp.zram_io.write_mbs =
+                    (cp.zram_io.write_bytes.saturating_sub(last_io.zram_write_bytes) as f64)
+                        / divisor;
 
-                    vram_acc.record(cp.vram_io.read_mbs + cp.vram_io.write_mbs);
-                    vram_acc.apply_to_plane_io(&mut cp.vram_io);
+                cp.vram_io.read_mbs =
+                    (cp.vram_io.read_bytes.saturating_sub(last_io.vram_read_bytes) as f64)
+                        / divisor;
+                cp.vram_io.write_mbs =
+                    (cp.vram_io.write_bytes.saturating_sub(last_io.vram_write_bytes) as f64)
+                        / divisor;
 
-                    disk_acc.record(cp.disk_io.read_mbs + cp.disk_io.write_mbs);
-                    disk_acc.apply_to_plane_io(&mut cp.disk_io);
+                cp.disk_io.read_mbs =
+                    (cp.disk_io.read_bytes.saturating_sub(last_io.disk_read_bytes) as f64)
+                        / divisor;
+                cp.disk_io.write_mbs =
+                    (cp.disk_io.write_bytes.saturating_sub(last_io.disk_write_bytes) as f64)
+                        / divisor;
 
-                    if let Some((last_pf, last_mpf)) = last_faults_sample {
-                        cp.pgfault_per_sec =
-                            (cp.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
-                        cp.pgmajfault_per_sec =
-                            (cp.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
-                    }
+                let total_swap_speed = cp.swap_read_mbs + cp.swap_write_mbs;
+                self.swap_peak_mbs = self.swap_peak_mbs.max(total_swap_speed);
+                cp.swap_peak_mbs = self.swap_peak_mbs;
+
+                self.zram_acc
+                    .record(cp.zram_io.read_mbs + cp.zram_io.write_mbs);
+                self.zram_acc.apply_to_plane_io(&mut cp.zram_io);
+
+                self.vram_acc
+                    .record(cp.vram_io.read_mbs + cp.vram_io.write_mbs);
+                self.vram_acc.apply_to_plane_io(&mut cp.vram_io);
+
+                self.disk_acc
+                    .record(cp.disk_io.read_mbs + cp.disk_io.write_mbs);
+                self.disk_acc.apply_to_plane_io(&mut cp.disk_io);
+
+                if let Some(ref last_faults) = self.last_faults {
+                    cp.pgfault_per_sec = (cp
+                        .pgfault_total
+                        .saturating_sub(last_faults.pgfault_total)
+                        as f64
+                        / dt) as u64;
+                    cp.pgmajfault_per_sec = (cp
+                        .pgmajfault_total
+                        .saturating_sub(last_faults.pgmajfault_total)
+                        as f64
+                        / dt) as u64;
                 }
             }
+        }
 
-            let cp = &mut observation.control_plane;
-            cp.swap_peak_mbs = swap_peak_mbs;
-            zram_acc.apply_to_plane_io(&mut cp.zram_io);
-            vram_acc.apply_to_plane_io(&mut cp.vram_io);
-            disk_acc.apply_to_plane_io(&mut cp.disk_io);
+        let cp = &mut observation.control_plane;
+        cp.swap_peak_mbs = self.swap_peak_mbs;
+        self.zram_acc.apply_to_plane_io(&mut cp.zram_io);
+        self.vram_acc.apply_to_plane_io(&mut cp.vram_io);
+        self.disk_acc.apply_to_plane_io(&mut cp.disk_io);
 
-            update_tier_latencies(cp, zram_acc.count, vram_acc.count, disk_acc.count);
+        update_tier_latencies(
+            cp,
+            self.zram_acc.count,
+            self.vram_acc.count,
+            self.disk_acc.count,
+        );
 
-            last_io_sample = Some((
-                cp.swap_read_bytes,
-                cp.swap_write_bytes,
-                cp.zram_io.read_bytes,
-                cp.zram_io.write_bytes,
-                cp.vram_io.read_bytes,
-                cp.vram_io.write_bytes,
-                cp.disk_io.read_bytes,
-                cp.disk_io.write_bytes,
-                now,
-            ));
-            last_faults_sample = Some((cp.pgfault_total, cp.pgmajfault_total));
-            if let Ok(flight_line) = serde_json::to_string(&observation) {
+        self.last_io = Some(IoSnapshot::from_observation(observation, now));
+        self.last_faults = Some(FaultsSnapshot::from_observation(observation));
+    }
+}
+
+struct TuiSession {
+    history_limit: usize,
+    history: VecDeque<u64>,
+    interval: Duration,
+    next_sample: Instant,
+    observation: Observation,
+    tracker: SampleTracker,
+}
+
+impl TuiSession {
+    fn new(options: &MonitorOptions) -> Result<Self, MonitorError> {
+        let history_limit =
+            ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
+        let history = VecDeque::with_capacity(history_limit);
+        let interval = Duration::from_millis(options.interval_ms);
+        let now = Instant::now();
+        let observation = collect_observation()?;
+        let tracker = SampleTracker::new(&observation, now);
+
+        Ok(Self {
+            history_limit,
+            history,
+            interval,
+            next_sample: now,
+            observation,
+            tracker,
+        })
+    }
+
+    fn tick(&mut self) {
+        let now = Instant::now();
+        if now >= self.next_sample {
+            if let Ok(new_obs) = collect_observation() {
+                self.observation = new_obs;
+            }
+            self.tracker.update(&mut self.observation, now);
+
+            if let Ok(flight_line) = serde_json::to_string(&self.observation) {
                 let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
             }
-            history.push_back(memory_used_pct(&observation.mem));
-            while history.len() > history_limit {
-                history.pop_front();
+            self.history.push_back(memory_used_pct(&self.observation.mem));
+            while self.history.len() > self.history_limit {
+                self.history.pop_front();
             }
-            next_sample = Instant::now() + interval;
+            self.next_sample = Instant::now() + self.interval;
         }
-        let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
+    }
 
-        let wait = next_sample
+    fn render(&self, terminal: &mut DefaultTerminal) {
+        let _ = terminal.draw(|frame| draw_dashboard(frame, &self.observation, &self.history));
+    }
+
+    fn wait_duration(&self) -> Duration {
+        self.next_sample
             .saturating_duration_since(Instant::now())
-            .min(Duration::from_millis(100));
+            .min(Duration::from_millis(100))
+    }
+}
+
+fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
+    let mut session = TuiSession::new(options)?;
+
+    loop {
+        session.tick();
+        session.render(terminal);
+
+        let wait = session.wait_duration();
         let event_opt = if event::poll(wait).unwrap_or(false) {
             event::read().ok()
         } else {
@@ -1642,6 +1730,7 @@ mod tests {
     use crate::workload;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn observation(ok: bool, with_gpu: bool) -> Observation {
@@ -1724,9 +1813,21 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        #[cfg(unix)]
+        {
+            let mut permissions = fs::metadata(&root).unwrap().permissions();
+            permissions.set_mode(0o700);
+            let _ = fs::set_permissions(&root, permissions);
+        }
         let path = root.join("reservations.json");
         if let Some(contents) = contents {
             fs::write(&path, contents).unwrap();
+            #[cfg(unix)]
+            {
+                let mut file_permissions = fs::metadata(&path).unwrap().permissions();
+                file_permissions.set_mode(0o600);
+                let _ = fs::set_permissions(&path, file_permissions);
+            }
         }
         (root, path)
     }
