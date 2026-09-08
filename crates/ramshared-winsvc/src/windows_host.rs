@@ -1283,6 +1283,7 @@ mod tests {
         let err = WindowsHostState::flush_and_dismount(&vol).unwrap_err();
         assert!(matches!(err, HostError::Volume(_)));
         assert!(err.to_string().contains("FlushFileBuffers"));
+        assert!(err.to_string().contains("volume:"));
     }
 
     #[test]
