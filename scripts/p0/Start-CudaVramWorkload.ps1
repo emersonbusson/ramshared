@@ -23,6 +23,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)) {
+    throw "nvidia-smi not found. CUDA toolkit must be installed."
+}
+
+$nvCudaFound = $false
+$cudaPaths = @(
+    "$env:SystemRoot\System32\nvcuda.dll",
+    "$env:SystemRoot\SysWOW64\nvcuda.dll"
+)
+foreach ($path in $cudaPaths) {
+    if (Test-Path -LiteralPath $path) {
+        $nvCudaFound = $true
+        break
+    }
+}
+
+if (-not $nvCudaFound) {
+    throw "nvcuda.dll missing. CUDA toolkit must be installed."
+}
+
 if (-not ("RamSharedCudaVramWorkload" -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -35,6 +55,9 @@ public static class RamSharedCudaVramWorkload {
 
   [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
   static extern int cuDeviceGet(out int device, int ordinal);
+
+  [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
+  static extern int cuDeviceComputeCapability(out int major, out int minor, int dev);
 
   [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
   static extern int cuCtxCreate_v2(out IntPtr pctx, uint flags, int dev);
@@ -116,6 +139,11 @@ public static class RamSharedCudaVramWorkload {
       Check("cuInit", cuInit(0));
       int dev;
       Check("cuDeviceGet", cuDeviceGet(out dev, ordinal));
+      int major, minor;
+      Check("cuDeviceComputeCapability", cuDeviceComputeCapability(out major, out minor, dev));
+      if (major < 5) {
+          throw new NotSupportedException("CUDA compute capability " + major + "." + minor + " is not supported (requires 5.0+)");
+      }
       Check("cuCtxCreate", cuCtxCreate_v2(out ctx, 0, dev));
       Check("cuMemAlloc", cuMemAlloc_v2(out ptr, new UIntPtr(bytes)));
       Check("cuMemsetD8", cuMemsetD8_v2(ptr, 0xA5, new UIntPtr(bytes)));
