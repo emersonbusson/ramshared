@@ -500,4 +500,12 @@ mod tests {
             .retain(|a| a.role != ArtifactRole::BrokerExe);
         assert!(m_missing.artifact(ArtifactRole::BrokerExe).is_err());
     }
+
+    #[test]
+    fn version_directory_formats_version_and_truncates_commit_to_12_chars() {
+        let mut m = manifest();
+        m.version = "2.0.0-rc1".into();
+        m.commit = "0123456789abcdef0123456789abcdef01234567".into();
+        assert_eq!(m.version_directory(), "2.0.0-rc1-0123456789ab");
+    }
 }
