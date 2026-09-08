@@ -1718,15 +1718,18 @@ mod tests {
     }
 
     fn monitor_ledger_path(name: &str, contents: Option<&str>) -> (PathBuf, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
             "ramshared-monitor-ledger-{name}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let path = root.join("reservations.json");
         if let Some(contents) = contents {
             fs::write(&path, contents).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         }
         (root, path)
     }
@@ -2152,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_diskstats_and_startup_ms() {
+    fn parses_swap_and_per_tier_diskstats() {
         let stats = " 252       0 zram0 10 0 200 0 20 0 400 0 0 0 0\n  43       0 nbd0 5 0 100 0 15 0 300 0 0 0 0\n   8      32 sdc 2 0 40 0 4 0 80 0 0 0 0\n";
         let (tot_r, tot_w) = parse_swap_diskstats(stats);
         assert_eq!(tot_r, (200 + 100 + 40) * 512);
@@ -2165,7 +2168,10 @@ mod tests {
         assert_eq!(v.write_bytes, 300 * 512);
         assert_eq!(d.read_bytes, 40 * 512);
         assert_eq!(d.write_bytes, 80 * 512);
+    }
 
+    #[test]
+    fn parses_startup_ms_and_uptime_seconds() {
         let show_out =
             "InactiveExitTimestampMonotonic=1000000\nActiveEnterTimestampMonotonic=3890000\n";
         assert_eq!(parse_unit_startup_ms(show_out), Some(2890));
@@ -2173,7 +2179,10 @@ mod tests {
 
         assert_eq!(parse_uptime_seconds("1540.25 3080.50"), Some(1540));
         assert_eq!(parse_uptime_seconds("invalid"), None);
+    }
 
+    #[test]
+    fn sanitizes_labels_cgroups_and_counts_scope_dirs() {
         assert_eq!(sanitize_label("my-app_1.0@daemon!", 10), "my-app_1.0");
         assert_eq!(
             sanitize_cgroup("/system.slice/test.service", 20),
@@ -2184,7 +2193,10 @@ mod tests {
         assert_eq!(count_scope_dirs(&temp_empty), 0);
         assert_eq!(read_reservation_totals(&temp_empty), (0, 0));
         let _ = fs::remove_dir_all(&temp_empty);
+    }
 
+    #[test]
+    fn formats_tier_latency_metrics() {
         let io_sample = TierIoStats {
             min_lat_us: 0.04,
             avg_lat_us: 0.08,
@@ -2202,14 +2214,20 @@ mod tests {
         };
         let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "Host VHDX");
         assert_eq!(disk_lat_str, "85..180..1.2ms (Host VHDX)");
+    }
 
+    #[test]
+    fn parses_meminfo_totals_and_swap() {
         let mem_txt = "MemTotal:       20480 kB\nMemAvailable:   16384 kB\nSwapTotal:       4096 kB\nSwapFree:        2048 kB\n";
         let mem = parse_meminfo(mem_txt);
         assert_eq!(mem.total_kib, 20480);
         assert_eq!(mem.available_kib, 16384);
         assert_eq!(mem.swap_total_kib, 4096);
         assert_eq!(mem.swap_free_kib, 2048);
+    }
 
+    #[test]
+    fn manages_rotating_logs_and_heartbeats() {
         let temp_log_dir =
             std::env::temp_dir().join(format!("test-mon-log-{}", std::process::id()));
         let log_file = temp_log_dir.join("test.log");
@@ -2218,7 +2236,10 @@ mod tests {
         assert!(append_rotating(&log_file, "line2_long_string_to_rotate", 10).is_ok());
         assert!(write_atomic(&hb_file, "heartbeat_data").is_ok());
         let _ = fs::remove_dir_all(&temp_log_dir);
+    }
 
+    #[test]
+    fn executes_compact_and_jsonl_monitor_runs() {
         let compact_opts = MonitorOptions {
             compact: true,
             once: true,
