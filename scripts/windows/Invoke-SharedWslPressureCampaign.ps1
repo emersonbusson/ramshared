@@ -28,10 +28,17 @@ param(
     [ValidateRange(0, 120)][int]$ExternalWorkloadDelaySec = 4,
     [ValidateRange(0, 600)][int]$PostCampaignObserveSec = 120,
     [ValidateRange(4096, 2147483647)][int]$HostCommitReserveMiB = 4096,
-    [string[]]$HostDiskLetters = @()
+    [string[]]$HostDiskLetters = @(),
+    [ValidateRange(0, 100)][int]$MemoryHighPercent = 0,
+    [ValidateRange(0, 100)][int]$MemoryMaxPercent = 0
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($MemoryHighPercent -gt 0 -and $MemoryMaxPercent -gt 0 -and $MemoryHighPercent -ge $MemoryMaxPercent) {
+    Write-Error -Message "memory_high percent must be strictly less than memory_max percent when both are specified" -ErrorId "InvalidMemoryThresholds" -ErrorAction Continue
+    throw [System.ArgumentException]::new("memory_high percent must be strictly less than memory_max percent when both are specified")
+}
 Import-Module (Join-Path $PSScriptRoot "SharedWslHostMemoryGate.psm1") -Force
 $hostMemoryGateOk = $false
 $hostCommitHeadroomMiB = $null
@@ -770,7 +777,14 @@ export RAMSHARED_WINDOWS_WATCHDOG_ARMED=1
 export RAMSHARED_FREEZE_WATCHDOG_SEC="$WatchdogSec"
 export RAMSHARED_ACTION_CLEANUP_GRACE_SEC="$ActionCleanupGraceSec"
 export RAMSHARED_PRESSURE_ALLOC_GIB="$PressureAllocGiB"
-export RAMSHARED_PRESSURE_MEM_MAX=1200M
+if [ "$MemoryMaxPercent" -gt 0 ]; then
+    export RAMSHARED_PRESSURE_MEM_MAX="${MemoryMaxPercent}%"
+else
+    export RAMSHARED_PRESSURE_MEM_MAX="1200M"
+fi
+if [ "$MemoryHighPercent" -gt 0 ]; then
+    export RAMSHARED_PRESSURE_MEM_HIGH="${MemoryHighPercent}%"
+fi
 ./scripts/safety/wsl2-freeze-campaign.sh \
   --approve-shared-daily-host \
   --run-shared-daily-host \
