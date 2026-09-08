@@ -32,6 +32,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$mediaContractPath = Join-Path $PSScriptRoot "Win11LabMediaContract.ps1"
+if (-not (Test-Path -LiteralPath $mediaContractPath -PathType Leaf)) {
+    throw "Win11 lab media contract helper is missing"
+}
+. $mediaContractPath
 function Write-Step($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 
 if (-not (Test-Path "R:\")) { throw "R: missing" }
@@ -60,6 +65,8 @@ $IsoUrl = "https://releases.ubuntu.com/24.04.2/ubuntu-24.04.2-live-server-amd64.
 New-Item -ItemType Directory -Force -Path (Split-Path $RunbookPath), $IsoDir | Out-Null
 
 if ($DownloadIso) {
+    Assert-Win11LabMediaDownloadPrerequisite -DownloadDirectory (Split-Path -Parent $IsoPath) -TestUrl $IsoUrl
+
     if (Test-Path $IsoPath -PathType Leaf) {
         Write-Step "ISO exists: $IsoPath"
     } else {

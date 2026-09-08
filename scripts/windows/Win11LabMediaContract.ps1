@@ -1011,6 +1011,56 @@ function Assert-Win11LabWorkerIsoNotAttached {
     }
 }
 
+function Assert-Win11LabMediaDownloadPrerequisite {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$DownloadDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$TestUrl
+    )
+
+    if (-not (Test-Path -LiteralPath $DownloadDirectory -PathType Container)) {
+        Write-Error -Message "Download directory missing: $DownloadDirectory" -ErrorId "win11_lab_media_contract_download_directory_missing"
+        throw [System.IO.DirectoryNotFoundException]::new("win11_lab_media_contract_download_directory_missing")
+    }
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($DownloadDirectory)
+        $drivePath = [System.IO.Path]::GetPathRoot($fullPath)
+        $driveInfo = [System.IO.DriveInfo]::new($drivePath)
+        $freeSpace = $driveInfo.AvailableFreeSpace
+
+        if ($freeSpace -lt 16106127360) {
+            Write-Error -Message "Insufficient disk space. Minimum 15 GB required." -ErrorId "win11_lab_media_contract_insufficient_disk_space"
+            throw [System.IO.IOException]::new("win11_lab_media_contract_insufficient_disk_space")
+        }
+    } catch [System.IO.DirectoryNotFoundException] {
+        throw
+    } catch [System.IO.IOException] {
+        throw
+    } catch {
+        Write-Error -Message "Failed to check disk space." -ErrorId "win11_lab_media_contract_disk_space_check_failed"
+        throw [System.InvalidOperationException]::new("win11_lab_media_contract_disk_space_check_failed", $_.Exception)
+    }
+
+    if (-not $TestUrl.StartsWith("https://", [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Error -Message "HTTPS connectivity is required." -ErrorId "win11_lab_media_contract_insecure_url"
+        throw [System.ArgumentException]::new("win11_lab_media_contract_insecure_url")
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri $TestUrl -UseBasicParsing -Method Head -TimeoutSec 10 -ErrorAction Stop
+        $response | Out-Null
+    } catch {
+        Write-Error -Message "Network connectivity failed." -ErrorId "win11_lab_media_contract_network_connectivity_failed"
+        throw [System.Net.WebException]::new("win11_lab_media_contract_network_connectivity_failed", $_.Exception)
+    }
+}
+
 function Invoke-Win11LabMediaWorkerMode {
     [CmdletBinding()]
     param(

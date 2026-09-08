@@ -13,6 +13,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$mediaContractPath = Join-Path $PSScriptRoot "Win11LabMediaContract.ps1"
+if (-not (Test-Path -LiteralPath $mediaContractPath -PathType Leaf)) {
+    throw "Win11 lab media contract helper is missing"
+}
+. $mediaContractPath
 
 function Write-Step {
     param([string]$Message)
@@ -50,6 +55,8 @@ if ((Test-Path $IsoPath) -and ((Get-Item $IsoPath).Length -gt 1GB)) {
 }
 
 if ($needDownload) {
+    Assert-Win11LabMediaDownloadPrerequisite -DownloadDirectory (Split-Path -Parent $IsoPath) -TestUrl $IsoUrl
+
     Write-Step ("Downloading Ubuntu 24.04.2 live-server to " + $IsoPath)
     if (Test-Path $IsoPath) {
         Remove-Item $IsoPath -Force
