@@ -239,14 +239,19 @@ try {
 
         $pipeNames = @()
         for ($pipeAttempt = 0; $pipeAttempt -lt 60; $pipeAttempt++) {
-            $pipeNames = @([IO.Directory]::GetFiles("\\.\pipe\") | ForEach-Object {
-                    $_.Substring($_.LastIndexOf("\") + 1)
-                })
-            if ($pipeNames -contains $brokerPipe -and $pipeNames -contains $statusPipe) { break }
+            try {
+                $pipeNames = @([IO.Directory]::GetFiles("\\.\pipe\") | ForEach-Object {
+                        $_.Substring($_.LastIndexOf("\") + 1)
+                    })
+                if ($pipeNames -contains $brokerPipe -and $pipeNames -contains $statusPipe) { break }
+            } catch {
+                # Silently continue on access denied during enumeration
+            }
             Start-Sleep -Milliseconds 100
         }
         if ($pipeNames -notcontains $brokerPipe -or $pipeNames -notcontains $statusPipe) {
-            throw "required named pipes are not present"
+            Write-Error "required named pipes are not present" -ErrorId "PipeReadyTimeout" -ErrorAction Continue
+            throw [System.IO.IOException]::new("required named pipes are not present")
         }
         Pass "register_and_lease_over_named_pipe" "pipe boundary ready; product admission tested by consumer case"
 
