@@ -8,29 +8,40 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
     [string]$RepoRoot = "C:\ramshared\src",
+    [ValidateNotNullOrEmpty()]
     [string]$KitVersion = "10.0.26100.0",
     [switch]$CodeAnalysis
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not (Test-Path -Path $RepoRoot -PathType Container)) {
+    Write-Error "RepoRoot not found: $RepoRoot" -ErrorAction Continue
+    throw [System.IO.DirectoryNotFoundException]::new("RepoRoot not found: $RepoRoot")
+}
+
+$driveLetter = (Get-Item -Path $RepoRoot).PSDrive.Name
+$drive = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+if (-not $drive) {
+    Write-Error "Drive not found" -ErrorAction Continue
+    throw [System.Management.Automation.ItemNotFoundException]::new("Drive $driveLetter not found")
+}
+if ($drive.Free -lt 1GB) {
+    Write-Error "Insufficient free space" -ErrorAction Continue
+    throw [System.IO.IOException]::new("Insufficient free space on drive $driveLetter")
+}
+
 Set-Location $RepoRoot
-$log = Join-Path $RepoRoot "artifacts\build-drivers.log"
-New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
-Start-Transcript -Path $log -Force
 
 function Find-VcVars {
     $p = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path $p)) { throw "vcvars64.bat not found: $p" }
+    if (-not (Test-Path $p)) {
+        Write-Error "vcvars64.bat not found" -ErrorAction Continue
+        throw [System.IO.FileNotFoundException]::new("vcvars64.bat not found: $p")
+    }
     return $p
-}
-
-function Invoke-CmdBat {
-    param([string]$Bat, [string]$Extra)
-    $cmd = "`"$Bat`" && $Extra"
-    Write-Output "CMD> $Extra"
-    & cmd.exe /c $cmd
-    if ($LASTEXITCODE -ne 0) { throw "command failed exit=$LASTEXITCODE : $Extra" }
 }
 
 $vcvars = Find-VcVars
@@ -41,8 +52,31 @@ $incKmCrt = "$kit\Include\$KitVersion\km\crt"
 $libKm = "$kit\Lib\$KitVersion\km\x64"
 $libUcrt = "$kit\Lib\$KitVersion\ucrt\x64"
 
-if (-not (Test-Path "$incKm\storport.h")) { throw "storport.h missing under $incKm" }
-if (-not (Test-Path "$libKm\storport.lib")) { throw "storport.lib missing under $libKm" }
+if (-not (Test-Path "$incKm\storport.h")) {
+    Write-Error "storport.h missing" -ErrorAction Continue
+    throw [System.IO.FileNotFoundException]::new("storport.h missing under $incKm")
+}
+if (-not (Test-Path "$libKm\storport.lib")) {
+    Write-Error "storport.lib missing" -ErrorAction Continue
+    throw [System.IO.FileNotFoundException]::new("storport.lib missing under $libKm")
+}
+
+$log = Join-Path $RepoRoot "artifacts\build-drivers.log"
+New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
+Start-Transcript -Path $log -Force
+
+function Invoke-CmdBat {
+    param([string]$Bat, [string]$Extra)
+    $cmd = "`"$Bat`" && $Extra"
+    Write-Output "CMD> $Extra"
+    & cmd.exe /c $cmd
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "command failed exit=$LASTEXITCODE : $Extra" -ErrorAction Continue
+        throw [System.InvalidOperationException]::new("Build command failed exit=$LASTEXITCODE : $Extra")
+    }
+}
+
+try {
 
 $cflags = @(
     "/nologo", "/c", "/kernel", "/GS-", "/W4", "/WX", "/wd4324", "/O2", "/Z7",
@@ -96,4 +130,9 @@ Write-Output "BUILT $psSys"
 Get-Item $psSys | Format-List FullName, Length, LastWriteTime | Out-String | Write-Output
 
 Write-Output "BUILD_DRIVERS_OK"
+} catch {
+    Write-Error "Build failed: $_" -ErrorId "EX_IOERR" -ErrorAction Continue
+    Stop-Transcript
+    [Environment]::Exit(74)
+}
 Stop-Transcript
