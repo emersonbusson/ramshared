@@ -384,6 +384,7 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
         ) &
         wd_pid=$!
         wait "$action_pid" || action_rc=$?
+
         kill "$wd_pid" 2>/dev/null || true
         wait "$wd_pid" 2>/dev/null || true
         trap - SIGALRM
