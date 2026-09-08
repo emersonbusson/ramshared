@@ -62,15 +62,17 @@ pub fn parse_swaps(content: &str) -> Vec<SwapEntry> {
         .lines()
         .skip(1)
         .filter_map(|line| {
-            let f: Vec<&str> = line.split_whitespace().collect();
-            if f.len() < 5 {
-                return None;
-            }
+            let mut it = line.split_whitespace();
+            let dev = it.next()?.to_string();
+            let _typ = it.next()?;
+            let size_kb = it.next()?.parse().ok()?;
+            let used_kb = it.next()?.parse().ok()?;
+            let prio = it.next()?.parse().ok()?;
             Some(SwapEntry {
-                dev: f[0].to_string(),
-                size_kb: f[2].parse().ok()?,
-                used_kb: f[3].parse().ok()?,
-                prio: f[4].parse().ok()?,
+                dev,
+                size_kb,
+                used_kb,
+                prio,
             })
         })
         .collect()
@@ -90,8 +92,10 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
-    let mut file = std::path::PathBuf::from(sysfs_base);
-    for component in std::path::Path::new(path.trim()).components() {
+    let trimmed = path.trim();
+    let mut file = std::path::PathBuf::with_capacity(sysfs_base.len() + trimmed.len() + 20);
+    file.push(sysfs_base);
+    for component in std::path::Path::new(trimmed).components() {
         match component {
             std::path::Component::RootDir => {}
             std::path::Component::Normal(name) => file.push(name),
@@ -113,12 +117,20 @@ pub fn read_memcg_swap() -> Option<u64> {
 pub fn parse_diskstats(content: &str, dev: &str) -> Option<u64> {
     let name = dev.rsplit('/').next().unwrap_or(dev);
     content.lines().find_map(|line| {
-        let f: Vec<&str> = line.split_whitespace().collect();
-        if f.len() < 10 || f[2] != name {
+        let mut it = line.split_whitespace();
+        let _major = it.next()?;
+        let _minor = it.next()?;
+        let dev_name = it.next()?;
+        if dev_name != name {
             return None;
         }
-        let rd: u64 = f[5].parse().ok()?;
-        let wr: u64 = f[9].parse().ok()?;
+        let _reads = it.next()?;
+        let _rd_merged = it.next()?;
+        let rd: u64 = it.next()?.parse().ok()?;
+        let _ms_rd = it.next()?;
+        let _writes = it.next()?;
+        let _wr_merged = it.next()?;
+        let wr: u64 = it.next()?.parse().ok()?;
         Some(rd.saturating_add(wr).saturating_mul(512))
     })
 }
