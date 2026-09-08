@@ -1081,12 +1081,13 @@ fn acquire_reservation_at(
         .next_ordinal
         .checked_add(1)
         .ok_or("reservation ordinal sequence exhausted")?;
+    let unit = format!("ramshared-{}-{}.scope", class.as_str(), id);
     let reservation = Reservation {
-        id: id.clone(),
+        id,
         owner,
         class,
         memory_bytes,
-        unit: format!("ramshared-{}-{}.scope", class.as_str(), id),
+        unit,
         invocation_id: None,
         issued_ordinal,
     };
@@ -1138,12 +1139,13 @@ fn admit_reservation_at(
         .next_ordinal
         .checked_add(1)
         .ok_or("reservation ordinal sequence exhausted")?;
+    let unit = format!("ramshared-{}-{}.scope", class.as_str(), id);
     let reservation = Reservation {
-        id: id.clone(),
+        id,
         owner,
         class,
         memory_bytes,
-        unit: format!("ramshared-{}-{}.scope", class.as_str(), id),
+        unit,
         invocation_id: None,
         issued_ordinal,
     };
@@ -1942,9 +1944,11 @@ mod tests {
             _command: &[String],
         ) -> Result<Box<dyn ScopeExecution>, String> {
             *self.calls.borrow_mut() += 1;
+            let ledger_root = Arc::clone(&self.ledger_root);
+            let supervisor = Arc::clone(&self.supervisor);
             Ok(Box::new(TransitionBlockingExecution {
-                ledger_root: Arc::clone(&self.ledger_root),
-                supervisor: Arc::clone(&self.supervisor),
+                ledger_root,
+                supervisor,
             }))
         }
     }
