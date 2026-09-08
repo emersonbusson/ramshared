@@ -73,6 +73,20 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
 
+      - name: Validate semantic version tag and changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Error: Tag '$RELEASE_TAG' does not match semantic version format"
+            exit 64
+          fi
+          VERSION="${RELEASE_TAG#v}"
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "Error: CHANGELOG.md entry for '$VERSION' not found."
+            exit 69
+          fi
+
       - name: Validate exact publication request identity
         shell: bash
         run: |
@@ -137,6 +151,20 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
+
+      - name: Validate semantic version tag and changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "Error: Tag '$RELEASE_TAG' does not match semantic version format"
+            exit 64
+          fi
+          VERSION="${RELEASE_TAG#v}"
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "Error: CHANGELOG.md entry for '$VERSION' not found."
+            exit 69
+          fi
 
       # The protected dispatch binds target tag, source SHA, and integrity run ID.
       - name: Validate exact protected dispatch identity
