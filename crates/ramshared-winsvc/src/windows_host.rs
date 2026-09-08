@@ -1293,13 +1293,40 @@ mod tests {
         let err = WindowsHostState::lock_product_volume_path(r"\\.\E:", 'D', None).unwrap_err();
         assert!(err.to_string().contains("invalid volume device path"));
 
+        let err = WindowsHostState::lock_product_volume_path(
+            r"Volume{00000000-0000-0000-0000-000000000000}",
+            'D',
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid volume device path"));
+
+        let err = WindowsHostState::lock_product_volume_path(
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000",
+            'D',
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid volume device path"));
+
         let err = WindowsHostState::lock_product_volume_path(r"\\.\D:", 'd', None).unwrap_err();
+        assert!(err.to_string().contains("volume"));
+
+        let err = WindowsHostState::lock_product_volume_path(r"\\.\D:", 'D', Some(1)).unwrap_err();
         assert!(err.to_string().contains("volume"));
 
         let err = WindowsHostState::lock_product_volume_path(
             r"\\?\Volume{00000000-0000-0000-0000-000000000000}",
             'D',
             None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("volume"));
+
+        let err = WindowsHostState::lock_product_volume_path(
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}",
+            'E',
+            Some(2),
         )
         .unwrap_err();
         assert!(err.to_string().contains("volume"));
