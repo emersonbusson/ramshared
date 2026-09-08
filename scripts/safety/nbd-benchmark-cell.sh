@@ -178,6 +178,20 @@ if [[ $ACTION == aggregate || $ACTION == run ]]; then
   [[ $CONDITION == idle || $CONDITION == bounded ]] || refuse CONDITION_INVALID
   [[ $TIER_MIB =~ ^(1024|2048|4096)$ ]] || refuse TIER_SIZE_INVALID
   [[ $RUNS == 3 ]] || refuse RUN_COUNT_INVALID
+
+  if [[ $ACTION == run ]]; then
+    command -v fio >/dev/null || refuse FIO_MISSING
+    shopt -s nullglob
+    nbd_devs=("/dev/nbd"*)
+    shopt -u nullglob
+    (( ${#nbd_devs[@]} > 0 )) || refuse NBD_DEVICE_MISSING
+    if [[ -d $CG_ROOT && -f $CG_ROOT/cgroup.controllers ]] && grep -qw memory "$CG_ROOT/cgroup.controllers"; then
+      :
+    else
+      refuse CGROUP_MEMORY_CONTROLLER_MISSING
+    fi
+  fi
+
   configure_timeout_budget
   ALLOCATE_MIB=$((TIER_MIB + 2560))
   MEMORY_MAX_MIB=$((ALLOCATE_MIB + 512))
