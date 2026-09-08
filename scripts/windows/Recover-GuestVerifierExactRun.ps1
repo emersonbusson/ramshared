@@ -34,6 +34,17 @@ foreach ($path in @($SourcePath, $HelperPath, $PasswordFile)) {
         throw "required recovery input file is missing"
     }
 }
+
+if (-not (Test-Path -LiteralPath "C:\Windows\Minidump" -PathType Container)) {
+    Write-Error -Message "Crash dump directory not found at C:\Windows\Minidump" -ErrorId "MinidumpDirNotFound" -ErrorAction Continue
+    throw [System.IO.DirectoryNotFoundException]::new("Crash dump directory not found at C:\Windows\Minidump")
+}
+
+$windbgPath = "C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\windbg.exe"
+if (-not (Test-Path -LiteralPath $windbgPath -PathType Leaf)) {
+    Write-Error -Message "WinDbg not found at $windbgPath" -ErrorId "WinDbgNotFound" -ErrorAction Continue
+    throw [System.IO.FileNotFoundException]::new("WinDbg not found at $windbgPath")
+}
 . $HelperPath
 
 $source = Get-Content -LiteralPath $SourcePath -Raw -ErrorAction Stop
