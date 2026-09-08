@@ -1,0 +1,23 @@
+--- scripts/safety/wsl2-freeze-campaign.sh
++++ scripts/safety/wsl2-freeze-campaign.sh
+@@ -375,16 +375,18 @@
+       fi
+       if [[ -n "$action_pid" ]]; then
+         watchdog_deadline=$((WATCHDOG_SEC + ACTION_CLEANUP_GRACE_SEC))
++        trap 'echo "ERROR: Watchdog timeout exceeded." >&2; kill -9 "$action_pid" 2>/dev/null || true; echo "action_cleanup_timeout after ${watchdog_deadline}s" >"$rdir/watchdog.txt"; builtin exit 69' SIGALRM
+         (
+           sleep "$watchdog_deadline"
+           if kill -0 "$action_pid" 2>/dev/null; then
+-            echo "action_cleanup_timeout after ${watchdog_deadline}s" >"$rdir/watchdog.txt"
++            kill -ALRM $$ 2>/dev/null || true
+           fi
+         ) &
+         wd_pid=$!
+-        wait "$action_pid"
+-        action_rc=$?
++        wait "$action_pid" || action_rc=$?
+         kill "$wd_pid" 2>/dev/null || true
+         wait "$wd_pid" 2>/dev/null || true
++        trap - SIGALRM
+       fi
+       set -e
