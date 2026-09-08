@@ -19,7 +19,7 @@ usage() {
 	cat <<'EOF'
 Usage: wslconfig-ctl.sh <check|apply|show|selftest|render>
 
-  check     Validate live %UserProfile%\.wslconfig (exit 1 if unsafe escapes)
+  check     Validate live %UserProfile%\.wslconfig (exit 69 if unsafe escapes)
   apply     Write canonical host policy (16G RAM / 4G swap / forward-slash paths)
   show      Print resolved path + file contents
   render    Print canonical body to stdout (no write)
@@ -36,12 +36,18 @@ cmd_check() {
 	local cfg
 	if ! cfg="$(wslconfig_path)"; then
 		echo "CHECK: cannot resolve .wslconfig (set WSL_CONFIG= or WIN_USER=)"
-		exit 2
+		exit 64
 	fi
 	echo "CHECK path=$cfg"
+	local dir
+	dir="$(dirname "$cfg")"
+	if [[ ! -d "$dir" ]]; then
+		echo "CHECK: Windows user directory missing: $dir"
+		exit 72
+	fi
 	if [[ ! -f "$cfg" ]]; then
 		echo "CHECK: MISSING (run: bash scripts/safety/wslconfig-ctl.sh apply)"
-		exit 1
+		exit 69
 	fi
 	if wslconfig_validate_file "$cfg"; then
 		echo "CHECK: OK (no unsafe escapes or unapproved sparse VHD)"
@@ -51,15 +57,25 @@ cmd_check() {
 		fi
 		exit 0
 	fi
-	echo "CHECK: FAIL — fix with: bash scripts/safety/wslconfig-ctl.sh apply"
-	exit 1
+	echo "CHECK: FAIL — existing .wslconfig contains invalid format or unsafe paths"
+	exit 65
 }
 
 cmd_apply() {
 	local cfg
 	if ! cfg="$(wslconfig_path)"; then
 		echo "APPLY: cannot resolve .wslconfig"
-		exit 2
+		exit 64
+	fi
+	local dir
+	dir="$(dirname "$cfg")"
+	if [[ ! -d "$dir" ]]; then
+		echo "APPLY: Windows user directory missing: $dir"
+		exit 72
+	fi
+	if [[ -f "$cfg" ]] && ! wslconfig_validate_file "$cfg" >/dev/null; then
+		echo "APPLY: FAIL — existing .wslconfig contains invalid format or unsafe paths"
+		exit 65
 	fi
 	wslconfig_write_host "$cfg"
 	echo "APPLY: OK — restart WSL when idle to reload memory=/swap= (wsl --shutdown)"
@@ -157,7 +173,7 @@ cmd_selftest() {
 
 	# render must be safe
 	local rendered
-	rendered="$(WSLCONFIG_SWAPFILE= wslconfig_render_host)"
+	rendered="$(WSLCONFIG_SWAPFILE='' wslconfig_render_host)"
 	printf '%s\n' "$rendered" >"$td/rendered.wslconfig"
 	if wslconfig_validate_file "$td/rendered.wslconfig"; then
 		echo "OK render validates"
@@ -165,7 +181,7 @@ cmd_selftest() {
 		echo "FAIL render does not validate"
 		fail=1
 	fi
-	if printf '%s\n' "$rendered" | grep -qE '\\\\'; then
+	if printf '%s\n' "$rendered" | grep -Fq '\\'; then
 		echo "WARN render still contains backslashes (prefer / only)"
 	else
 		echo "OK render has zero backslashes"
@@ -192,7 +208,7 @@ cmd_selftest() {
 	local lab_rendered
 	lab_rendered="$(WSLCONFIG_UNSAFE_LAB_MODE=1 \
 		WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL=I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK \
-		WSLCONFIG_SWAPFILE= wslconfig_render_host)"
+		WSLCONFIG_SWAPFILE='' wslconfig_render_host)"
 	printf '%s\n' "$lab_rendered" >"$td/unsafe-lab-rendered.wslconfig"
 	if printf '%s\n' "$lab_rendered" | grep -Fqx 'sparseVhd=true' \
 		&& WSLCONFIG_UNSAFE_LAB_MODE=1 \
@@ -204,7 +220,7 @@ cmd_selftest() {
 		fail=1
 	fi
 	printf '%s\n' '[wsl2]' 'swapFile=E:/existing/swap.vhdx' >"$td/existing.wslconfig"
-	rendered="$(WSLCONFIG_SWAPFILE= wslconfig_render_host "$td/existing.wslconfig")"
+	rendered="$(WSLCONFIG_SWAPFILE='' wslconfig_render_host "$td/existing.wslconfig")"
 	if printf '%s\n' "$rendered" | grep -Fqx 'swapFile=E:/existing/swap.vhdx'; then
 		echo "OK render preserves the discovered existing swapFile"
 	else
@@ -215,7 +231,7 @@ cmd_selftest() {
 	rm -rf "$td"
 	if [[ "$fail" -ne 0 ]]; then
 		echo "SELFTEST: FAIL"
-		exit 1
+		exit 69
 	fi
 	echo "SELFTEST: PASS"
 	exit 0
@@ -233,7 +249,7 @@ main() {
 	-h | --help | help) usage ;;
 	*)
 		usage >&2
-		exit 2
+		exit 64
 		;;
 	esac
 }
