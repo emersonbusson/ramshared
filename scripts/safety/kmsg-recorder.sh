@@ -6,10 +6,22 @@
 # held before persisting (as happened in #1 — journald only captured the 1st line).
 #
 # Runs as a systemd service (root). Does not touch GPU/ublk/swap.
-set -uo pipefail
+set -euo pipefail # Strict error handling
+
+# Guard clause: Ensure /dev/kmsg is readable
+if [ ! -r "/dev/kmsg" ]; then
+  echo "Error: /dev/kmsg is not readable." >&2
+  exit 69
+fi
 
 FORENSICS_DIR="${RAMSHARED_FORENSICS_DIR:-/mnt/c/wsl-forensics}"
 mkdir -p "$FORENSICS_DIR" 2>/dev/null || FORENSICS_DIR="/var/log"  # fallback guest-local
+
+# Guard clause: Ensure output directory is writable
+if [ ! -w "$FORENSICS_DIR" ]; then
+  echo "Error: Output directory $FORENSICS_DIR is not writable." >&2
+  exit 74
+fi
 LOG="$FORENSICS_DIR/kernel-console.log"
 PREV="$FORENSICS_DIR/kernel-console.prev.log"
 
