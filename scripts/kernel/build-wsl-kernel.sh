@@ -13,31 +13,85 @@
 set -euo pipefail
 
 # SPEC wsl2-custom-kernel-p1: default 6.18.y; override with KTAG=
+
 KTAG="${KTAG:-linux-msft-wsl-6.18.y}"
 KSRC="${KSRC:-$HOME/src/WSL2-Linux-Kernel}"
-JOBS="${JOBS:-2}"; [ "$JOBS" -lt 1 ] && JOBS=1
+
+# Validate numeric inputs
+if ! [[ "${JOBS:-2}" =~ ^[0-9]+$ ]]; then
+  echo "[build] error: JOBS must be a number" >&2
+  exit 64 # EX_USAGE
+fi
+JOBS="${JOBS:-2}"
+MAX_JOBS="$(nproc 2>/dev/null || echo 1)"
+if [ "$JOBS" -lt 1 ]; then
+  JOBS=1
+elif [ "$JOBS" -gt "$MAX_JOBS" ]; then
+  echo "[build] warning: JOBS ($JOBS) exceeds max CPU cores ($MAX_JOBS). limiting."
+  JOBS="$MAX_JOBS"
+fi
+
 CONFIGS=("$@"); [ ${#CONFIGS[@]} -eq 0 ] && CONFIGS=(CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y)
 
 echo "[build] deps..."
 sudo apt-get install -y -q build-essential flex bison libelf-dev libssl-dev bc dwarves cpio python3 >/dev/null
 
+# Validate required build tools
+for tool in make gcc flex bison; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "[build] error: required tool '$tool' not found" >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+done
+
+# Validate file paths exist before operating on them
+mkdir -p "$(dirname "$KSRC")"
+if [ ! -d "$(dirname "$KSRC")" ]; then
+  echo "[build] error: parent directory of KSRC does not exist and could not be created" >&2
+  exit 74 # EX_IOERR
+fi
+
 if [ ! -d "$KSRC/.git" ]; then
   echo "[build] cloning $KTAG -> $KSRC"
   git clone --depth 1 --branch "$KTAG" https://github.com/microsoft/WSL2-Linux-Kernel.git "$KSRC"
 fi
+
+if [ ! -d "$KSRC" ]; then
+  echo "[build] error: KSRC directory '$KSRC' not found after clone attempt" >&2
+  exit 74 # EX_IOERR
+fi
+
 cd "$KSRC"
+
+# Validate kernel source tree integrity
+if [ ! -f "Makefile" ] || [ ! -d "scripts" ] || [ ! -d "Microsoft" ] || [ ! -f "Microsoft/config-wsl" ]; then
+  echo "[build] error: invalid kernel source tree or missing Microsoft/config-wsl in '$KSRC'" >&2
+  exit 74 # EX_IOERR
+fi
 
 echo "[build] base = Microsoft/config-wsl + extra configs"
 cp Microsoft/config-wsl .config
+
+# Validate .config existence
+if [ ! -f ".config" ]; then
+  echo "[build] error: .config was not created" >&2
+  exit 74 # EX_IOERR
+fi
+
 for kv in "${CONFIGS[@]}"; do
+  if ! [[ "$kv" =~ ^[A-Za-z0-9_]+=(y|m|n)$ ]]; then
+    echo "[build] error: invalid config format '$kv'" >&2
+    exit 64 # EX_USAGE
+  fi
   name="${kv%%=*}"; val="${kv##*=}"
   case "$val" in
     y) ./scripts/config --file .config --enable  "$name" ;;
     m) ./scripts/config --file .config --module  "$name" ;;
     n) ./scripts/config --file .config --disable "$name" ;;
-    *) echo "[build] invalid value in $kv (use y|m|n)"; exit 2 ;;
+    *) echo "[build] invalid value in $kv (use y|m|n)"; exit 64 ;; # EX_USAGE
   esac
 done
+
 make olddefconfig >/dev/null
 
 # VERIFY that each config took effect (olddefconfig reverts invalid ones — e.g. bool requested as --module).
@@ -45,7 +99,7 @@ fail=0
 for kv in "${CONFIGS[@]}"; do
   name="${kv%%=*}"; val="${kv##*=}"
   got="$(grep -E "^${name}=" .config | cut -d= -f2 || true)"; [ -z "$got" ] && got="(unset)"
-  want="$val"; [ "$val" = "y" ] && want="y"; [ "$val" = "m" ] && want="m"
+  # want is unused, removed for shellcheck
   if { [ "$val" = "y" ] && [ "$got" = "y" ]; } || { [ "$val" = "m" ] && [ "$got" = "m" ]; } || { [ "$val" = "n" ] && [ "$got" = "(unset)" ]; }; then
     echo "[build]  OK  $name=$got"
   else
