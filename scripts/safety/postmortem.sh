@@ -22,8 +22,27 @@
 #
 # No dangerous side effects: only READS logs and writes report. Safe to run
 # at any time on live host without touching GPU/ublk/swap.
-set -uo pipefail
+set -euo pipefail # Strict error handling
 NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"; [ -x "$NVSMI" ] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
+
+# --- Guard Clauses (Fail-Fast & Early Validation) ---
+if ! command -v journalctl >/dev/null 2>&1; then
+  echo "error: journalctl is missing but required for boot logs." >&2
+  exit 69 # EX_UNAVAILABLE
+fi
+if ! command -v dmesg >/dev/null 2>&1; then
+  echo "error: dmesg is missing but required for kernel diagnostics." >&2
+  exit 69 # EX_UNAVAILABLE
+fi
+
+CRASH_DUMP_DIR="/var/crash"
+if ! test -d "$CRASH_DUMP_DIR"; then
+  echo "warning: $CRASH_DUMP_DIR does not exist. Crash dumps will not be collected." >&2
+  CRASH_DUMP_AVAILABLE=0
+else
+  CRASH_DUMP_AVAILABLE=1
+fi
+
 
 FORENSICS_DIR="${RAMSHARED_FORENSICS_DIR:-/mnt/c/wsl-forensics}"
 PS='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
@@ -99,7 +118,7 @@ fi
 # the pipefail+grep-q+SIGPIPE gotcha that caused false "no crash" reports).
 dump_boot() { # $1 = boot index -> arquivo em $TMPDIR_PM
   local idx="$1" f="$TMPDIR_PM/boot${1}.log"
-  [ -f "$f" ] || journalctl -b "$idx" --no-pager >"$f" 2>/dev/null
+  if [ ! -f "$f" ]; then journalctl -b "$idx" --no-pager >"$f" 2>/dev/null || true; fi
   echo "$f"
 }
 
@@ -245,8 +264,8 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
   echo "## 6. Estado atual (pos-restart): GPU / memoria / swap / dmesg"
   echo '```'
   echo "# nvidia-smi:"; "$NVSMI" --query-gpu=memory.used,memory.free,memory.total --format=csv 2>&1 || echo "(nvidia-smi indisponivel)"
-  echo; echo "# free -h:"; free -h 2>&1
-  echo; echo "# /proc/swaps:"; cat /proc/swaps 2>&1
+  echo; echo "# free -h:"; free -h 2>&1 || true
+  echo; echo "# /proc/swaps:"; cat /proc/swaps 2>&1 || true
   echo; echo "# dmesg (ultimas 20):"; (sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null || echo "(dmesg precisa de root)") | tail -20
   echo '```'
   echo
@@ -267,7 +286,7 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
 
   echo "## 8. Crash dumps do WSL (se houver)"
   echo '```'
-  ls -la /var/crash/ 2>/dev/null | tail -10 || echo "(sem /var/crash)"
+  if [ "$CRASH_DUMP_AVAILABLE" = "1" ]; then ls -la /var/crash/ 2>/dev/null | tail -10 || echo "(sem /var/crash)"; else echo "(/var/crash indisponivel)"; fi
   ls -la /mnt/c/Users/*/AppData/Local/Temp/*.dmp 2>/dev/null | tail -5 || echo "(sem .dmp em Temp)"
   echo '```'
 } > "$REPORT" 2>&1
