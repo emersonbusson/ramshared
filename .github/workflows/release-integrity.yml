@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+    outputs:
+      revision: ${{ steps.identity.outputs.revision }}
     env:
       RELEASE_TARGET_TAG: v0.9.0-beta.1
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -194,3 +196,31 @@ jobs:
           path: tmp/release-integrity-candidate
           if-no-files-found: error
           retention-days: 14
+
+  verify-integrity:
+    name: verify-integrity
+    needs: [release-integrity]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {}
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Download exact integrity candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-integrity-${{ env.RELEASE_TAG }}-${{ needs.release-integrity.outputs.revision }}
+          path: tmp/release-integrity-artifact
+
+      - name: Verify downloaded release artifacts match published checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v sha256sum >/dev/null || exit 69
+          test -d tmp/release-integrity-artifact/artifacts/release || exit 69
+          cd tmp/release-integrity-artifact/artifacts/release
+          archive="ramshared-linux-$RELEASE_TAG.tar.gz"
+          checksum_file="$archive.sha256"
+          test -f "$archive" || exit 69
+          test -f "$checksum_file" || exit 69
+          sha256sum --check "$checksum_file"
