@@ -2554,18 +2554,11 @@ fn plan_nbd_lifecycle(
             actions.push(NbdLifecycleAction::Swapoff(device.clone()));
         }
     }
-    for kind in [ManagedDeviceKind::Zram, ManagedDeviceKind::Nbd] {
-        for device in binding.devices.iter().filter(|device| device.kind == kind) {
-            match kind {
-                ManagedDeviceKind::Zram => {
-                    actions.push(NbdLifecycleAction::ResetZram(device.clone()))
-                }
-                ManagedDeviceKind::Nbd => {
-                    actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()))
-                }
-                ManagedDeviceKind::Ublk => unreachable!("validated NBD binding excludes ublk"),
-            }
-        }
+    for device in binding.devices.iter().filter(|device| device.kind == ManagedDeviceKind::Zram) {
+        actions.push(NbdLifecycleAction::ResetZram(device.clone()));
+    }
+    for device in binding.devices.iter().filter(|device| device.kind == ManagedDeviceKind::Nbd) {
+        actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()));
     }
     actions.push(NbdLifecycleAction::StopDaemon);
     Ok(NbdLifecyclePlan { actions })
