@@ -13,7 +13,7 @@ concurrency:
 jobs:
   cancel-closed-pr:
     name: closed-pr-cancellation
-    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref != 'main' && !startsWith(github.event.pull_request.base.ref, 'release/') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -21,7 +21,6 @@ jobs:
       pull-requests: read
     steps:
       - name: Cancel queued and running checks for the closed pull request
-        if: github.event.pull_request.base.ref != 'main' && !startsWith(github.event.pull_request.base.ref, 'release/')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
