@@ -785,17 +785,23 @@ function Invoke-GuardianWatch {
     $eventPath = Join-Path $runDirectory "guardian-events.jsonl"
     $telemetryPath = Join-Path $ArtifactRoot "windows-telemetry.jsonl"
 
-    [console]::TreatControlCAsInput = $false
-    $cancelHandler = [ConsoleCancelEventHandler]({
-        param($sender, $e)
-        $e.Cancel = $true
-        Write-GuardianEvent -Path $eventPath -Event "guardian_stopped" -Data @{ reason = "CancelKeyPress" }
-        Write-HostTelemetryRing -Path $telemetryPath
-        [Environment]::Exit(0)
-    }.GetNewClosure())
-    [Console]::add_CancelKeyPress($cancelHandler)
+    try {
+        $script:GuardianStopRequested = $false
+        [console]::TreatControlCAsInput = $false
+        $cancelHandler = [ConsoleCancelEventHandler]({
+            param($sender, $e)
+            $e.Cancel = $true
+            # Workaround for runspace corruption: do not execute complex PowerShell cmdlets
+            # on the .NET ThreadPool thread. Signal the main loop to exit gracefully.
+            $script:GuardianStopRequested = $true
+        }.GetNewClosure())
+        [Console]::add_CancelKeyPress($cancelHandler)
+    } catch {
+        # Headless/CI environments may throw IOException when accessing [Console]
+    }
     Write-GuardianEvent -Path $eventPath -Event "guardian_started" -Data @{ heartbeat = $HeartbeatPath; stale_after_seconds = $StaleAfterSec }
-    while ($true) {
+    try {
+        while (-not $script:GuardianStopRequested) {
         # A current heartbeat must be observed before any HEALTHY proof can be
         # published. Never let a boot probe race ahead of stale-heartbeat
         # detection and advertise health during a watchdog incident.
@@ -840,6 +846,13 @@ function Invoke-GuardianWatch {
         if ($tail.action -eq "ERROR") { Write-Error "guardian preserved evidence after terminate failure: $eventPath"; return 2 }
         Start-Sleep -Seconds $PollSec
         continue
+    }
+    } finally {
+        Write-GuardianEvent -Path $eventPath -Event "guardian_stopped" -Data @{ reason = "CancelKeyPress" }
+        Write-HostTelemetryRing -Path $telemetryPath
+        try {
+            [Console]::remove_CancelKeyPress($cancelHandler)
+        } catch { }
     }
 }
 
