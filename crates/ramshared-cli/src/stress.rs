@@ -100,6 +100,35 @@ pub struct StressReport {
     pub status: String,
 }
 
+#[derive(Debug, Clone)]
+struct StressMetrics {
+    total_allocated_mb: u64,
+    max_safe_pct: u64,
+    peak_zram: u64,
+    peak_vram: u64,
+    peak_ssd: u64,
+    peak_total_swap: u64,
+    peak_pressure: f64,
+    readings_count: usize,
+    active_cycles_done: usize,
+}
+
+impl Default for StressMetrics {
+    fn default() -> Self {
+        Self {
+            total_allocated_mb: 0,
+            max_safe_pct: 0,
+            peak_zram: 0,
+            peak_vram: 0,
+            peak_ssd: 0,
+            peak_total_swap: 0,
+            peak_pressure: 1.0,
+            readings_count: 0,
+            active_cycles_done: 0,
+        }
+    }
+}
+
 pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     let mut opts = StressOptions::default();
     let mut i = 0;
@@ -430,31 +459,21 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
     }
 }
 
-pub fn run(opts: &StressOptions) -> Result<(), String> {
-    let term_signal = Arc::new(AtomicBool::new(false));
-    let last_heartbeat = Arc::new(AtomicU64::new(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    ));
-
-    let chunks = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
-
-    // Autonomous Watchdog Thread: If main thread stalls > 3s, clears memory automatically
-    let chunks_watchdog = chunks.clone();
-    let heartbeat_watchdog = last_heartbeat.clone();
-    let term_watchdog = term_signal.clone();
-    let watchdog_handle = thread::spawn(move || {
-        while !term_watchdog.load(Ordering::Relaxed) {
+fn spawn_watchdog_thread(
+    chunks: Arc<Mutex<Vec<Vec<u8>>>>,
+    last_heartbeat: Arc<AtomicU64>,
+    term_signal: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !term_signal.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(500));
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            let last = heartbeat_watchdog.load(Ordering::Relaxed);
+            let last = last_heartbeat.load(Ordering::Relaxed);
             if now.saturating_sub(last) > 4 {
-                if let Ok(mut guard) = chunks_watchdog.lock()
+                if let Ok(mut guard) = chunks.lock()
                     && !guard.is_empty()
                 {
                     guard.clear();
@@ -462,54 +481,54 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 break;
             }
         }
-    });
+    })
+}
 
-    let (ram_total_mb, ram_avail_init) = read_mem_info();
-    let (swap_init_total, _, _, _) = read_swap_tiers();
+fn print_header(
+    opts: &StressOptions,
+    ram_total_mb: u64,
+    ram_avail_init: u64,
+    swap_init_total: u64,
+) {
+    println!("{}", "═".repeat(105));
+    println!(" 🚀 RamShared Native Stress Governor & Multi-Tier Qualification Battery");
+    println!(
+        " Mode: {} │ Range: {}% ➔ {}% (+{}%) │ Safety Floor: >= {} MB │ Log: {}",
+        if opts.battery {
+            "FULL BATTERY (4 Phases)"
+        } else {
+            "Progressive 1%-by-1% Governor"
+        },
+        opts.start_pct,
+        opts.target_pct,
+        opts.step_pct,
+        opts.min_ram_mb,
+        opts.telemetry_log
+    );
+    println!(
+        "[i] Physical Host RAM: {} MB (Available: {} MB) │ Active Swap: {} MB",
+        ram_total_mb, ram_avail_init, swap_init_total
+    );
+    println!("{}", "═".repeat(105));
+    println!(
+        "┌───────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────┬────────┬──────────┬─────────────┬───────────────────────────┐"
+    );
+    println!(
+        "│ Level │ Alloc RAM  │ ZRAM (Tier1) │ VRAM (Tier2) │ SSD (Tier3)  │ Total Swap   │ PSI-F  │ Latency  │ Stress Bar  │ Tier Operating Status     │"
+    );
+    println!(
+        "├───────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┼────────┼──────────┼─────────────┼───────────────────────────┤"
+    );
+}
 
-    if !opts.json {
-        println!("{}", "═".repeat(105));
-        println!(" 🚀 RamShared Native Stress Governor & Multi-Tier Qualification Battery");
-        println!(
-            " Mode: {} │ Range: {}% ➔ {}% (+{}%) │ Safety Floor: >= {} MB │ Log: {}",
-            if opts.battery {
-                "FULL BATTERY (4 Phases)"
-            } else {
-                "Progressive 1%-by-1% Governor"
-            },
-            opts.start_pct,
-            opts.target_pct,
-            opts.step_pct,
-            opts.min_ram_mb,
-            opts.telemetry_log
-        );
-        println!(
-            "[i] Physical Host RAM: {} MB (Available: {} MB) │ Active Swap: {} MB",
-            ram_total_mb, ram_avail_init, swap_init_total
-        );
-        println!("{}", "═".repeat(105));
-        println!(
-            "┌───────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────┬────────┬──────────┬─────────────┬───────────────────────────┐"
-        );
-        println!(
-            "│ Level │ Alloc RAM  │ ZRAM (Tier1) │ VRAM (Tier2) │ SSD (Tier3)  │ Total Swap   │ PSI-F  │ Latency  │ Stress Bar  │ Tier Operating Status     │"
-        );
-        println!(
-            "├───────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┼────────┼──────────┼─────────────┼───────────────────────────┤"
-        );
-    }
-
-    let mut total_allocated_mb = 0u64;
-    let mut max_safe_pct = 0u64;
-    let mut peak_zram = 0u64;
-    let mut peak_vram = 0u64;
-    let mut peak_ssd = 0u64;
-    let mut peak_total_swap = 0u64;
-    let mut peak_pressure = 1.0f64;
-    let mut readings_count = 0usize;
-    let mut active_cycles_done = 0usize;
-
-    // Phase 1: 1%-by-1% Micro-Step Ramp
+fn run_ramp_phase(
+    opts: &StressOptions,
+    term_signal: &AtomicBool,
+    last_heartbeat: &AtomicU64,
+    chunks: &Mutex<Vec<Vec<u8>>>,
+    ram_total_mb: u64,
+    metrics: &mut StressMetrics,
+) {
     let effective_target = if opts.tier3_target_pct.is_some() {
         1000
     } else {
@@ -534,10 +553,15 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let lat_ms = probe_allocation_latency_ms();
         let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
 
-        let reading =
-            compute_telemetry_reading(lat_ms, psi_full, total_allocated_mb, ram_total_mb, tot_swap);
-        peak_pressure = peak_pressure.max(reading.pressure_index);
-        readings_count += 1;
+        let reading = compute_telemetry_reading(
+            lat_ms,
+            psi_full,
+            metrics.total_allocated_mb,
+            ram_total_mb,
+            tot_swap,
+        );
+        metrics.peak_pressure = metrics.peak_pressure.max(reading.pressure_index);
+        metrics.readings_count += 1;
         append_telemetry_log(&opts.telemetry_log, &reading);
 
         let sysctl_min_free_mb = read_sysctl_min_free_mb();
@@ -567,18 +591,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
                     current_target,
-                    total_allocated_mb,
-                    peak_zram,
-                    peak_vram,
-                    peak_ssd,
-                    peak_total_swap,
+                    metrics.total_allocated_mb,
+                    metrics.peak_zram,
+                    metrics.peak_vram,
+                    metrics.peak_ssd,
+                    metrics.peak_total_swap,
                     psi_full,
                     lat_ms,
                     reading.gauge
                 );
                 println!(
                     "\n[🛑 SAFETY FLOOR REACHED] Available RAM reached floor ({} MB <= {} MB). Halted at {}% (Zero Hang Protection).",
-                    avail_mb, hard_floor, max_safe_pct
+                    avail_mb, hard_floor, metrics.max_safe_pct
                 );
             }
             break;
@@ -604,18 +628,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                         println!(
                             "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
                             current_target,
-                            total_allocated_mb,
-                            peak_zram,
-                            peak_vram,
-                            peak_ssd,
-                            peak_total_swap,
+                            metrics.total_allocated_mb,
+                            metrics.peak_zram,
+                            metrics.peak_vram,
+                            metrics.peak_ssd,
+                            metrics.peak_total_swap,
                             psi_full,
                             lat_ms,
                             reading.gauge
                         );
                         println!(
                             "\n[⚠️  PRESSURE DAMPING] PSI Full pressure sustained ({:.1}%) >= {:.1}%. Halted at {}%.",
-                            psi_full, opts.max_psi_full, max_safe_pct
+                            psi_full, opts.max_psi_full, metrics.max_safe_pct
                         );
                     }
                     break;
@@ -625,18 +649,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                     println!(
                         "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
                         current_target,
-                        total_allocated_mb,
-                        peak_zram,
-                        peak_vram,
-                        peak_ssd,
-                        peak_total_swap,
+                        metrics.total_allocated_mb,
+                        metrics.peak_zram,
+                        metrics.peak_vram,
+                        metrics.peak_ssd,
+                        metrics.peak_total_swap,
                         psi_full,
                         lat_ms,
                         reading.gauge
                     );
                     println!(
                         "\n[⚠️  PRESSURE DAMPING] PSI Full pressure ({:.1}%) >= {:.1}%. Halted at {}%.",
-                        psi_full, opts.max_psi_full, max_safe_pct
+                        psi_full, opts.max_psi_full, metrics.max_safe_pct
                     );
                 }
                 break;
@@ -648,18 +672,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⏱️  LATENCY SPIKE DAMP    │",
                     current_target,
-                    total_allocated_mb,
-                    peak_zram,
-                    peak_vram,
-                    peak_ssd,
-                    peak_total_swap,
+                    metrics.total_allocated_mb,
+                    metrics.peak_zram,
+                    metrics.peak_vram,
+                    metrics.peak_ssd,
+                    metrics.peak_total_swap,
                     psi_full,
                     lat_ms,
                     reading.gauge
                 );
                 println!(
                     "\n[⏱️  LATENCY SPIKE DAMPING] Memory latency spiked to {:.2} ms >= {:.2} ms. Halted at {}%.",
-                    lat_ms, opts.max_latency_ms, max_safe_pct
+                    lat_ms, opts.max_latency_ms, metrics.max_safe_pct
                 );
             }
             break;
@@ -717,20 +741,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         if let Ok(mut guard) = chunks.lock() {
             guard.push(slice);
         }
-        total_allocated_mb += safe_alloc_mb;
+        metrics.total_allocated_mb += safe_alloc_mb;
 
-        peak_zram = peak_zram.max(z_mb);
-        peak_vram = peak_vram.max(v_mb);
-        peak_ssd = peak_ssd.max(s_mb);
-        peak_total_swap = peak_total_swap.max(tot_swap);
+        metrics.peak_zram = metrics.peak_zram.max(z_mb);
+        metrics.peak_vram = metrics.peak_vram.max(v_mb);
+        metrics.peak_ssd = metrics.peak_ssd.max(s_mb);
+        metrics.peak_total_swap = metrics.peak_total_swap.max(tot_swap);
 
-        max_safe_pct = current_target;
+        metrics.max_safe_pct = current_target;
 
         if !opts.json {
             println!(
                 "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ {:<25} │",
                 current_target,
-                total_allocated_mb,
+                metrics.total_allocated_mb,
                 z_mb,
                 v_mb,
                 s_mb,
@@ -745,126 +769,133 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         thread::sleep(Duration::from_millis(opts.interval_ms));
         current_target += opts.step_pct;
     }
+}
 
-    // Phase 2 & 3: Active Page Swapper & Cycler (Only in Battery Mode or when hold_sec > 0)
-    if opts.battery || opts.hold_sec > 0 {
-        if !opts.json {
-            println!("{}", "═".repeat(105));
-            println!(
-                " 🌊 PHASE 2 & 3: ACTIVE PAGE CYCLER & TIER TRAFFIC (Holding Peak {}% for {}s)",
-                max_safe_pct, opts.hold_sec
-            );
-            println!(
-                " (Cycling dirty pages between RAM, ZRAM, and GPU VRAM to animate live speedometer graphs)"
-            );
-            println!("{}", "═".repeat(105));
+fn run_active_cycler_phase(
+    opts: &StressOptions,
+    term_signal: &AtomicBool,
+    last_heartbeat: &AtomicU64,
+    chunks: &Mutex<Vec<Vec<u8>>>,
+    ram_total_mb: u64,
+    metrics: &mut StressMetrics,
+) {
+    if !(opts.battery || opts.hold_sec > 0) {
+        return;
+    }
+
+    if !opts.json {
+        println!("{}", "═".repeat(105));
+        println!(
+            " 🌊 PHASE 2 & 3: ACTIVE PAGE CYCLER & TIER TRAFFIC (Holding Peak {}% for {}s)",
+            metrics.max_safe_pct, opts.hold_sec
+        );
+        println!(
+            " (Cycling dirty pages between RAM, ZRAM, and GPU VRAM to animate live speedometer graphs)"
+        );
+        println!("{}", "═".repeat(105));
+    }
+
+    let hold_end = Instant::now() + Duration::from_secs(opts.hold_sec);
+    let mut cycle: usize = 0;
+    while Instant::now() < hold_end && !term_signal.load(Ordering::Relaxed) {
+        cycle += 1;
+        last_heartbeat.store(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            Ordering::Relaxed,
+        );
+
+        // Modify chunk pages smoothly to stimulate active tier traffic without saturating kernel queues
+        if let Ok(mut guard) = chunks.lock()
+            && !guard.is_empty()
+        {
+            let len = guard.len();
+            let idx = (cycle.wrapping_mul(7)) % len;
+            let target_chunk = &mut guard[idx];
+            let chunk_len = target_chunk.len();
+            let limit = chunk_len.min(16 * 1024 * 1024);
+            for offset in (0..limit).step_by(16384) {
+                target_chunk[offset] = (cycle as u8).wrapping_add((offset & 0xFF) as u8);
+            }
         }
 
-        let hold_end = Instant::now() + Duration::from_secs(opts.hold_sec);
-        let mut cycle: usize = 0;
-        while Instant::now() < hold_end && !term_signal.load(Ordering::Relaxed) {
-            cycle += 1;
-            last_heartbeat.store(
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                Ordering::Relaxed,
-            );
+        let (_, free_mb) = read_mem_info();
+        let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
+        metrics.peak_zram = metrics.peak_zram.max(z_mb);
+        metrics.peak_vram = metrics.peak_vram.max(v_mb);
+        metrics.peak_ssd = metrics.peak_ssd.max(s_mb);
+        metrics.peak_total_swap = metrics.peak_total_swap.max(tot_swap);
+        let psi_full = read_psi_full();
+        let lat_ms = probe_allocation_latency_ms();
 
-            // Modify chunk pages smoothly to stimulate active tier traffic without saturating kernel queues
-            if let Ok(mut guard) = chunks.lock()
-                && !guard.is_empty()
-            {
-                let len = guard.len();
-                let idx = (cycle.wrapping_mul(7)) % len;
-                let target_chunk = &mut guard[idx];
-                let chunk_len = target_chunk.len();
-                let limit = chunk_len.min(16 * 1024 * 1024);
-                for offset in (0..limit).step_by(16384) {
-                    target_chunk[offset] = (cycle as u8).wrapping_add((offset & 0xFF) as u8);
-                }
-            }
+        let reading = compute_telemetry_reading(
+            lat_ms,
+            psi_full,
+            metrics.total_allocated_mb,
+            ram_total_mb,
+            tot_swap,
+        );
+        metrics.peak_pressure = metrics.peak_pressure.max(reading.pressure_index);
+        metrics.readings_count += 1;
+        metrics.active_cycles_done += 1;
+        append_telemetry_log(&opts.telemetry_log, &reading);
 
-            let (_, free_mb) = read_mem_info();
-            let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
-            peak_zram = peak_zram.max(z_mb);
-            peak_vram = peak_vram.max(v_mb);
-            peak_ssd = peak_ssd.max(s_mb);
-            peak_total_swap = peak_total_swap.max(tot_swap);
-            let psi_full = read_psi_full();
-            let lat_ms = probe_allocation_latency_ms();
-
-            let reading = compute_telemetry_reading(
-                lat_ms,
-                psi_full,
-                total_allocated_mb,
-                ram_total_mb,
+        if !opts.json {
+            print!(
+                " [🌊 Cycle #{:>2}] Idx: {:>4.1} {} Swap: {:>5} MB │ Free RAM: {:>5} MB │ PSI: {:>4.1}% │ Lat: {:.2}ms\r",
+                cycle,
+                reading.pressure_index,
+                reading.gauge,
                 tot_swap,
+                free_mb,
+                psi_full,
+                lat_ms
             );
-            peak_pressure = peak_pressure.max(reading.pressure_index);
-            readings_count += 1;
-            active_cycles_done += 1;
-            append_telemetry_log(&opts.telemetry_log, &reading);
-
-            if !opts.json {
-                print!(
-                    " [🌊 Cycle #{:>2}] Idx: {:>4.1} {} Swap: {:>5} MB │ Free RAM: {:>5} MB │ PSI: {:>4.1}% │ Lat: {:.2}ms\r",
-                    cycle,
-                    reading.pressure_index,
-                    reading.gauge,
-                    tot_swap,
-                    free_mb,
-                    psi_full,
-                    lat_ms
-                );
-                let _ = io::stdout().flush();
-            }
-            thread::sleep(Duration::from_millis(500));
+            let _ = io::stdout().flush();
         }
-        if !opts.json {
-            println!();
-        }
+        thread::sleep(Duration::from_millis(500));
     }
-
-    // Phase 4: Atomic Flash-Reclaim Benchmark Phase
-    let t_reclaim_start = Instant::now();
-    if let Ok(mut guard) = chunks.lock() {
-        guard.clear();
+    if !opts.json {
+        println!();
     }
-    let reclaim_duration = t_reclaim_start.elapsed();
-    let reclaim_sec = reclaim_duration.as_secs_f64().max(0.001);
-    let reclaim_speed_gbs = ((total_allocated_mb as f64 / 1024.0) / reclaim_sec).min(100.0);
+}
 
-    term_signal.store(true, Ordering::Relaxed);
-    let _ = watchdog_handle.join();
-
+fn print_and_archive_report(
+    opts: &StressOptions,
+    metrics: &StressMetrics,
+    reclaim_duration: Duration,
+) -> Result<(), String> {
     thread::sleep(Duration::from_millis(500));
     let (_, post_free_ram) = read_mem_info();
     let (post_swap, _, _, _) = read_swap_tiers();
     let (cap1, cap2, cap3) = read_swap_tier_capacities();
 
+    let reclaim_sec = reclaim_duration.as_secs_f64().max(0.001);
+    let reclaim_speed_gbs = ((metrics.total_allocated_mb as f64 / 1024.0) / reclaim_sec).min(100.0);
+
     let report = StressReport {
         battery_mode: opts.battery,
         cascade_mode: opts.cascade,
-        max_safe_pct,
-        total_allocated_mb,
-        peak_swap_mb: peak_total_swap,
-        tier1_zram_mb: peak_zram,
-        tier1_zram_pct: (peak_zram * 100)
+        max_safe_pct: metrics.max_safe_pct,
+        total_allocated_mb: metrics.total_allocated_mb,
+        peak_swap_mb: metrics.peak_total_swap,
+        tier1_zram_mb: metrics.peak_zram,
+        tier1_zram_pct: (metrics.peak_zram * 100)
             .checked_div(cap1.total_mb)
             .unwrap_or(cap1.pct),
-        tier2_vram_mb: peak_vram,
-        tier2_vram_pct: (peak_vram * 100)
+        tier2_vram_mb: metrics.peak_vram,
+        tier2_vram_pct: (metrics.peak_vram * 100)
             .checked_div(cap2.total_mb)
             .unwrap_or(cap2.pct),
-        tier3_ssd_mb: peak_ssd,
-        tier3_ssd_pct: (peak_ssd * 100)
+        tier3_ssd_mb: metrics.peak_ssd,
+        tier3_ssd_pct: (metrics.peak_ssd * 100)
             .checked_div(cap3.total_mb)
             .unwrap_or(cap3.pct),
-        peak_pressure_index: peak_pressure,
-        telemetry_readings_count: readings_count,
-        active_io_cycles_completed: active_cycles_done,
+        peak_pressure_index: metrics.peak_pressure,
+        telemetry_readings_count: metrics.readings_count,
+        active_io_cycles_completed: metrics.active_cycles_done,
         reclaim_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
         reclaim_speed_gbs,
         post_reclaim_free_ram_mb: post_free_ram,
@@ -944,6 +975,66 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     archive_and_compare_benchmark(&report, opts.json);
 
     Ok(())
+}
+
+pub fn run(opts: &StressOptions) -> Result<(), String> {
+    let term_signal = Arc::new(AtomicBool::new(false));
+    let last_heartbeat = Arc::new(AtomicU64::new(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    ));
+
+    let chunks = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+
+    // Autonomous Watchdog Thread: If main thread stalls > 3s, clears memory automatically
+    let watchdog_handle = spawn_watchdog_thread(
+        chunks.clone(),
+        last_heartbeat.clone(),
+        term_signal.clone(),
+    );
+
+    let (ram_total_mb, ram_avail_init) = read_mem_info();
+    let (swap_init_total, _, _, _) = read_swap_tiers();
+
+    if !opts.json {
+        print_header(opts, ram_total_mb, ram_avail_init, swap_init_total);
+    }
+
+    let mut metrics = StressMetrics::default();
+
+    // Phase 1: 1%-by-1% Micro-Step Ramp
+    run_ramp_phase(
+        opts,
+        &term_signal,
+        &last_heartbeat,
+        &chunks,
+        ram_total_mb,
+        &mut metrics,
+    );
+
+    // Phase 2 & 3: Active Page Swapper & Cycler
+    run_active_cycler_phase(
+        opts,
+        &term_signal,
+        &last_heartbeat,
+        &chunks,
+        ram_total_mb,
+        &mut metrics,
+    );
+
+    // Phase 4: Atomic Flash-Reclaim Benchmark Phase
+    let t_reclaim_start = Instant::now();
+    if let Ok(mut guard) = chunks.lock() {
+        guard.clear();
+    }
+    let reclaim_duration = t_reclaim_start.elapsed();
+
+    term_signal.store(true, Ordering::Relaxed);
+    let _ = watchdog_handle.join();
+
+    print_and_archive_report(opts, &metrics, reclaim_duration)
 }
 
 fn format_system_time(st: SystemTime) -> String {
