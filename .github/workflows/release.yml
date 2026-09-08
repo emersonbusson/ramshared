@@ -68,3 +68,45 @@ jobs:
           token: ${{ steps.release-app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Generate Checksums and Signatures
+        if: ${{ steps.target.outputs.run == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+          RELEASE_TAG: ${{ env.RELEASE_TARGET_TAG }}
+        run: |
+          set -euo pipefail
+
+          # Prerequisite checks
+          command -v gh >/dev/null 2>&1 || exit 69
+          command -v sha256sum >/dev/null 2>&1 || exit 69
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release download "$RELEASE_TAG" --dir artifacts/release || true
+          fi
+          if [ -d "artifacts/release" ]; then
+            cd artifacts/release
+            find . -type f -not -name "SHA256SUMS.txt" -exec sha256sum {} + > SHA256SUMS.txt
+            if command -v gpg >/dev/null 2>&1; then
+              for file in *.tar.gz *.deb *.rpm; do
+                if [ -f "$file" ]; then
+                   if [ -f "$file.sig" ]; then
+                     if ! gpg --verify "$file.sig" "$file"; then
+                       echo "Signature verification failed for $file" >&2
+                       exit 65 # EX_DATAERR
+                     fi
+                   elif [ -f "$file.asc" ]; then
+                     if ! gpg --verify "$file.asc" "$file"; then
+                       echo "Signature verification failed for $file" >&2
+                       exit 65 # EX_DATAERR
+                     fi
+                   else
+                     echo "No signature found for $file"
+                   fi
+                fi
+              done
+            fi
+            cd -
+            gh release upload "$RELEASE_TAG" "artifacts/release/SHA256SUMS.txt" --clobber || true
+          fi
