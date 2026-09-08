@@ -502,7 +502,7 @@ canonical slice gate:
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-uring,ramshared-wsl2d \
-  --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs \
+  --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs,crates/ramshared-wsl2d/src/uring_smoke.rs \
   --min 80 \
   --report-json tmp/memory-broker-ublk-safety-cov.json
 ```
