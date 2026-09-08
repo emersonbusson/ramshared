@@ -399,6 +399,14 @@ if (($LogicalCapacityMiB % 1024) -ne 0) { throw "logical capacity must be whole 
 if (($PhysicalCacheCapMiB % 1024) -ne 0 -or $PhysicalCacheCapMiB -gt $LogicalCapacityMiB) { throw "physical cache cap must be whole GiB and no larger than logical capacity" }
 if ($Action -eq "install" -and $PARTUUID -cne "00000000-0000-0000-0000-000000000000") { throw "Windows assigns the GPT PARTUUID; seal the generated value from the mounted origin VHDX" }
 
+if ($Action -eq "install" -or $Action -eq "uninstall") {
+    $svc = Get-Service -Name "RamSharedWinSvc" -ErrorAction SilentlyContinue
+    if ($null -ne $svc -and $svc.Status -ne 'Stopped') {
+        Write-Error "Service RamSharedWinSvc is in state $($svc.Status); it must be stopped before origin $Action." -ErrorAction Continue -ErrorId "ServiceNotStopped"
+        throw [System.InvalidOperationException]::new("Service RamSharedWinSvc is in state $($svc.Status); it must be stopped before origin $Action.")
+    }
+}
+
 switch ($Action) {
     "install" {
         $transaction = New-OriginInstallTransaction
