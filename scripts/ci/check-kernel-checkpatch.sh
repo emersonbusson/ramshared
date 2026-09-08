@@ -14,8 +14,22 @@ CHECKPATCH="$CACHE_DIR/checkpatch.pl"
 SPELLING="$CACHE_DIR/spelling.txt"
 CONST_STRUCTS="$CACHE_DIR/const_structs.checkpatch"
 
+KERNEL_SRC="${KERNEL_SRC:-}"
+
+if [[ -n "$KERNEL_SRC" ]]; then
+  if [[ ! -d "$KERNEL_SRC" ]]; then
+    echo "FAIL: KERNEL_SRC directory not found at $KERNEL_SRC" >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+  if [[ ! -x "$KERNEL_SRC/scripts/checkpatch.pl" ]]; then
+    echo "FAIL: checkpatch.pl not found or not executable at $KERNEL_SRC/scripts/checkpatch.pl" >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+  CHECKPATCH="$KERNEL_SRC/scripts/checkpatch.pl"
+fi
+
 # Download checkpatch.pl from torvalds/linux if not cached
-if [[ ! -x "$CHECKPATCH" ]]; then
+if [[ -z "$KERNEL_SRC" ]] && [[ ! -x "$CHECKPATCH" ]]; then
   mkdir -p "$CACHE_DIR"
   echo "  Downloading checkpatch.pl from torvalds/linux..."
   curl -sSfL "https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl" -o "$CHECKPATCH" || {
