@@ -32,12 +32,15 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Formatting
+        timeout-minutes: 15
         run: cargo fmt --all -- --check
 
       - name: Clippy (-D warnings)
+        timeout-minutes: 15
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests (ignored cases require GPU/root)
+        timeout-minutes: 15
         run: cargo test --workspace -- --test-threads=1
 
   docs:
@@ -57,15 +60,19 @@ jobs:
           node-version: "22"
 
       - name: Workflow lint
+        timeout-minutes: 15
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
 
       - name: Committed public artifact hygiene
+        timeout-minutes: 15
         run: node tools/ci/check-public-hygiene.mjs --candidate
 
       - name: Docs check
+        timeout-minutes: 15
         run: ./scripts/docs-check.sh
 
       - name: Governance change ratchet
+        timeout-minutes: 15
         if: github.event_name == 'pull_request'
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -76,6 +83,7 @@ jobs:
           node tools/ci/check-campaign-evidence-lifecycle.mjs --check --base "$PR_BASE_SHA"
 
       - name: Documentation governance coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/ci/check-documentation-governance.mjs
@@ -84,6 +92,7 @@ jobs:
           tools/ci/check-documentation-governance.test.mjs
 
       - name: Documentation index coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/generate-docs-index.mjs
@@ -92,6 +101,7 @@ jobs:
           tools/generate-docs-index.test.mjs
 
       - name: Validation schema coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/ci/check-validation-schema.mjs
@@ -100,6 +110,7 @@ jobs:
           tools/ci/check-validation-schema.test.mjs
 
       - name: Public repository hygiene coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/ci/check-public-hygiene.mjs
@@ -108,6 +119,7 @@ jobs:
           tools/ci/check-public-hygiene.test.mjs
 
       - name: Documentation localization coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/ci/check-documentation-localization.mjs
@@ -116,6 +128,7 @@ jobs:
           tools/ci/check-documentation-localization.test.mjs
 
       - name: Capability observation coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/ci/generate-capability-observations.mjs
@@ -124,6 +137,7 @@ jobs:
           tools/ci/generate-capability-observations.test.mjs
 
       - name: Campaign evidence lifecycle coverage
+        timeout-minutes: 15
         run: >-
           node --test --experimental-test-coverage
           --test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs
@@ -141,6 +155,7 @@ jobs:
       contents: read
     steps:
       - name: Require completed CI core gates
+        timeout-minutes: 15
         env:
           RUST_RESULT: ${{ needs.rust.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
