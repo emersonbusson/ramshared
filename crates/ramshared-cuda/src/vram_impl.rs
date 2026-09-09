@@ -64,6 +64,136 @@ mod tests {
     use super::*;
     use crate::Cuda;
 
+
+    pub mod mock {
+        use crate::ffi::*;
+        use crate::Cuda;
+        use core::ffi::{c_char, c_int, c_uint, c_void};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        pub static ALLOC_CALLED: AtomicUsize = AtomicUsize::new(0);
+        pub static FREE_CALLED: AtomicUsize = AtomicUsize::new(0);
+        pub static FORCE_OOM: AtomicBool = AtomicBool::new(false);
+        pub static DOUBLE_FREE: AtomicBool = AtomicBool::new(false);
+        pub static FREED_PTR: AtomicUsize = AtomicUsize::new(0); // non-zero if freed
+
+        pub fn reset() {
+            ALLOC_CALLED.store(0, Ordering::SeqCst);
+            FREE_CALLED.store(0, Ordering::SeqCst);
+            FORCE_OOM.store(false, Ordering::SeqCst);
+            DOUBLE_FREE.store(false, Ordering::SeqCst);
+            FREED_PTR.store(0, Ordering::SeqCst);
+        }
+
+        unsafe extern "C" fn mock_init(_: c_uint) -> CuResult { CUDA_SUCCESS }
+        unsafe extern "C" fn mock_device_get_count(count: *mut c_int) -> CuResult { unsafe { *count = 1 }; CUDA_SUCCESS }
+        unsafe extern "C" fn mock_device_get(device: *mut CuDevice, _: c_int) -> CuResult { unsafe { *device = 0 }; CUDA_SUCCESS }
+        unsafe extern "C" fn mock_device_get_name(name: *mut c_char, _: c_int, _: CuDevice) -> CuResult { unsafe { *name = 0 }; CUDA_SUCCESS }
+        unsafe extern "C" fn mock_ctx_create(ctx: *mut CuContext, _: c_uint, _: CuDevice) -> CuResult { unsafe { *ctx = 1 as CuContext }; CUDA_SUCCESS }
+        unsafe extern "C" fn mock_ctx_destroy(_: CuContext) -> CuResult { CUDA_SUCCESS }
+        unsafe extern "C" fn mock_ctx_synchronize() -> CuResult { CUDA_SUCCESS }
+        unsafe extern "C" fn mock_mem_alloc(ptr: *mut CuDevicePtr, _: usize) -> CuResult {
+            if FORCE_OOM.load(Ordering::SeqCst) {
+                return 2; // CUDA_ERROR_OUT_OF_MEMORY
+            }
+            ALLOC_CALLED.fetch_add(1, Ordering::SeqCst);
+            unsafe { *ptr = 0x1000 }; // fake ptr
+            CUDA_SUCCESS
+        }
+        unsafe extern "C" fn mock_mem_free(ptr: CuDevicePtr) -> CuResult {
+            FREE_CALLED.fetch_add(1, Ordering::SeqCst);
+            let prev = FREED_PTR.swap(ptr as usize, Ordering::SeqCst);
+            if prev == ptr as usize {
+                DOUBLE_FREE.store(true, Ordering::SeqCst);
+            }
+            CUDA_SUCCESS
+        }
+        unsafe extern "C" fn mock_memcpy_htod(_: CuDevicePtr, _: *const c_void, _: usize) -> CuResult { CUDA_SUCCESS }
+        unsafe extern "C" fn mock_memcpy_dtoh(_: *mut c_void, _: CuDevicePtr, _: usize) -> CuResult { CUDA_SUCCESS }
+        unsafe extern "C" fn mock_memset_d8(_: CuDevicePtr, _: u8, _: usize) -> CuResult { CUDA_SUCCESS }
+        unsafe extern "C" fn mock_mem_get_info(free: *mut usize, total: *mut usize) -> CuResult {
+            unsafe { *free = 1024 };
+            unsafe { *total = 1024 };
+            CUDA_SUCCESS
+        }
+
+        pub fn get_mock_cuda() -> Cuda {
+            Cuda::mock(Syms {
+                init: mock_init,
+                device_get_count: mock_device_get_count,
+                device_get: mock_device_get,
+                device_get_name: mock_device_get_name,
+                ctx_create: mock_ctx_create,
+                ctx_destroy: mock_ctx_destroy,
+                ctx_synchronize: mock_ctx_synchronize,
+                mem_alloc: mock_mem_alloc,
+                mem_free: mock_mem_free,
+                memcpy_htod: mock_memcpy_htod,
+                memcpy_dtoh: mock_memcpy_dtoh,
+                memset_d8: mock_memset_d8,
+                mem_get_info: mock_mem_get_info,
+                get_error_string: None,
+            })
+        }
+    }
+
+    #[test]
+    fn test_vram_alloc_success() {
+        mock::reset();
+        let cuda = mock::get_mock_cuda();
+        let dev = cuda.device(0).unwrap();
+        let ctx = cuda.create_context(&dev).unwrap();
+
+        {
+            let mut mem = VramProvider::alloc(&ctx, 1024).unwrap();
+            assert_eq!(VramMemory::len(&mem), 1024);
+            assert!(!VramMemory::is_empty(&mem));
+
+            // test VramMemory methods
+            VramMemory::zero(&mut mem).unwrap();
+            VramMemory::write_at(&mut mem, 0, b"hi").unwrap();
+            let mut buf = [0u8; 2];
+            VramMemory::read_at(&mem, 0, &mut buf).unwrap();
+
+            // test VramProvider mem_info
+            let (free, total) = VramProvider::mem_info(&ctx).unwrap();
+            assert_eq!(free, 1024);
+            assert_eq!(total, 1024);
+
+            assert_eq!(mock::ALLOC_CALLED.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(mock::FREE_CALLED.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+
+        // Ensure free was called
+        assert_eq!(mock::FREE_CALLED.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_vram_oom_failure() {
+        mock::reset();
+        mock::FORCE_OOM.store(true, std::sync::atomic::Ordering::SeqCst);
+        let cuda = mock::get_mock_cuda();
+        let dev = cuda.device(0).unwrap();
+        let ctx = cuda.create_context(&dev).unwrap();
+
+        let res = VramProvider::alloc(&ctx, 1024);
+        assert!(matches!(res, Err(VramError::Provider(_))));
+    }
+
+    #[test]
+    fn test_vram_double_free_guard() {
+        mock::reset();
+        let cuda = mock::get_mock_cuda();
+        let dev = cuda.device(0).unwrap();
+        let ctx = cuda.create_context(&dev).unwrap();
+
+        let mem = VramProvider::alloc(&ctx, 1024).unwrap();
+
+        drop(mem);
+        assert_eq!(mock::FREE_CALLED.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(mock::DOUBLE_FREE.load(std::sync::atomic::Ordering::SeqCst), false);
+    }
+
     #[test]
     fn test_vram_error_conversion_out_of_range() {
         let cuda_err = CudaError::OutOfRange {

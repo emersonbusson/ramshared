@@ -79,6 +79,14 @@ const CANDIDATES: &[&CStr] = &[
 const CANDIDATES: &[&CStr] = &[c"nvcuda.dll"];
 
 impl Cuda {
+
+    #[cfg(test)]
+    pub fn mock(syms: crate::ffi::Syms) -> Self {
+        Self {
+            _lib: Lib(core::ptr::null_mut()),
+            syms,
+        }
+    }
     /// Loads the CUDA driver library (using OS-specific candidates) and runs `cuInit(0)`.
     pub fn load() -> Result<Self, CudaError> {
         let mut handle: *mut c_void = core::ptr::null_mut();
