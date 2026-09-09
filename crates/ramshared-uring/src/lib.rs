@@ -821,6 +821,36 @@ mod tests {
         fs::remove_file(path).expect("remove fixture");
     }
     #[test]
+    fn test_ublkserver_new_validates_queue_depth() {
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-new-queue-depth", page);
+
+        // valid
+        let server = UblkServer::new(file.as_raw_fd(), 2, page);
+        assert!(server.is_ok());
+
+        // queue depth 0 fails because it attempts to mmap a size of 0
+        let server_zero = UblkServer::new(file.as_raw_fd(), 0, page);
+        assert!(server_zero.is_err());
+        assert_eq!(server_zero.err().unwrap().kind(), io::ErrorKind::InvalidInput);
+
+        drop(file);
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn test_ublk_get_features_handles_kernel_version_and_flags() {
+        let (path, file) = regular_file_fixture("ublk-get-features", 4096);
+        let fd = file.as_raw_fd();
+
+        let err = ublk_get_features(fd).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+
+        drop(file);
+        std::fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
     fn ublk_server_push_guard_clause_rejects_full_ring() {
         let page = page_size();
         let (path, file) = regular_file_fixture("ublk-full-ring", page);
