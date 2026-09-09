@@ -156,6 +156,28 @@ export function validateManifest(manifest, root = ROOT) {
     if (!safeRelative(entry.canonical_source) || !safeRelative(entry.localized_path)) {
       findings.push(finding(MANIFEST_PATH, line, 'UNSAFE_PATH', 'manifest-path-must-be-relative'))
     }
+    let locale = null
+    if (safeRelative(entry.canonical_source) && safeRelative(entry.localized_path)) {
+      const canonical = entry.canonical_source
+      const localizedPath = entry.localized_path
+      if (localizedPath.startsWith('docs/') && localizedPath.endsWith(`/${canonical}`)) {
+        locale = localizedPath.slice(5, -canonical.length - 1)
+      } else if (canonical.endsWith('.md') && localizedPath.startsWith(canonical.slice(0, -3) + '.') && localizedPath.endsWith('.md')) {
+        locale = localizedPath.slice(canonical.length - 2, -3)
+      }
+      if (!locale || locale.includes('/')) {
+        findings.push(finding(MANIFEST_PATH, line, 'LOCALIZATION_PAIRING', 'invalid-translation-file-pairing'))
+      } else {
+        try {
+          const canonicalLocales = Intl.getCanonicalLocales(locale)
+          if (!canonicalLocales || canonicalLocales.length === 0 || canonicalLocales[0] !== locale) {
+            findings.push(finding(MANIFEST_PATH, line, 'LOCALE_CODE', 'invalid-bcp47-locale-code'))
+          }
+        } catch {
+          findings.push(finding(MANIFEST_PATH, line, 'LOCALE_CODE', 'invalid-bcp47-locale-code'))
+        }
+      }
+    }
     if (localized.has(entry.localized_path)) findings.push(finding(MANIFEST_PATH, line, 'DUPLICATE_LOCALIZED_PATH', 'localized-path-is-duplicated'))
     localized.add(entry.localized_path)
     if (!REQUIRED_LOCALIZED.has(entry.localized_path)) findings.push(finding(MANIFEST_PATH, line, 'UNEXPECTED_LOCALIZATION', 'path-is-not-required'))

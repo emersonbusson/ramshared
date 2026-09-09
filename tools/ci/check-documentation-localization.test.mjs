@@ -227,6 +227,12 @@ test('manifest_schema_and_path_guards_fail', () => {
   const unsafeEntry = { ...manifest.entries[0], canonical_source: '../README.md', localized_path: '/tmp/translated.md', source_sha256: 'bad', translation_sha256: 'bad', state: 'unknown', policy: 'normative' }
   const unsafeFindings = JSON.stringify(validateManifest({ ...manifest, entries: [unsafeEntry, manifest.entries[1]] }, root))
   assert.match(unsafeFindings, /UNSAFE_PATH|SOURCE_HASH|STATE|POLICY|UNEXPECTED_LOCALIZATION/)
+  const badLocaleEntry1 = { ...manifest.entries[0], canonical_source: 'README.md', localized_path: 'README.pt_BR.md' }
+  const badLocaleFindings1 = JSON.stringify(validateManifest({ ...manifest, entries: [badLocaleEntry1, manifest.entries[1]] }, root))
+  assert.match(badLocaleFindings1, /invalid-bcp47-locale-code/)
+  const badLocaleEntry2 = { ...manifest.entries[0], canonical_source: 'README.md', localized_path: 'README.md' }
+  const badLocaleFindings2 = JSON.stringify(validateManifest({ ...manifest, entries: [badLocaleEntry2, manifest.entries[1]] }, root))
+  assert.match(badLocaleFindings2, /invalid-translation-file-pairing/)
   assert.equal(loadManifest(path.join(root, 'missing')), null)
 })
 
