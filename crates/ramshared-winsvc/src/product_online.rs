@@ -59,6 +59,29 @@ fn simple_hash(bytes: &[u8]) -> u64 {
 }
 
 /// Run product Online until `stop` is set or fatal error.
+
+/// Product online readiness check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProductOnlineReadiness {
+    pub satisfied: bool,
+    pub score: u8,
+}
+
+pub fn check_product_online_readiness(deps: &[&str]) -> ProductOnlineReadiness {
+    let required = ["cuda", "vram", "broker"];
+    let mut present = 0;
+    for req in required.iter() {
+        if deps.contains(req) {
+            present += 1;
+        }
+    }
+    let score = (present * 100 / required.len()) as u8;
+    ProductOnlineReadiness {
+        satisfied: present == required.len(),
+        score,
+    }
+}
+
 pub fn run_product_online(
     cfg: &WinDriveConfig,
     mode: RunMode,
@@ -1511,4 +1534,29 @@ mod tests {
         resume_online_stop(&stop, None);
         assert!(!stop.load(Ordering::Acquire));
     }
+
+    #[test]
+    fn test_product_online_readiness_all_deps_satisfied_full_score() {
+        let deps = vec!["cuda", "vram", "broker"];
+        let result = check_product_online_readiness(&deps);
+        assert_eq!(result.satisfied, true);
+        assert_eq!(result.score, 100);
+    }
+
+    #[test]
+    fn test_product_online_readiness_missing_deps_zero_score() {
+        let deps: Vec<&str> = vec![];
+        let result = check_product_online_readiness(&deps);
+        assert_eq!(result.satisfied, false);
+        assert_eq!(result.score, 0);
+    }
+
+    #[test]
+    fn test_product_online_readiness_partial_deps_partial_score() {
+        let deps = vec!["cuda"];
+        let result = check_product_online_readiness(&deps);
+        assert_eq!(result.satisfied, false);
+        assert_eq!(result.score, 33);
+    }
+
 }
