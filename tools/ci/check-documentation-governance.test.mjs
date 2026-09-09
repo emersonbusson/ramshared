@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -199,6 +199,46 @@ test('governance_cli_check_aliases_all_and_unknown_options_refuse', () => {
   const all = spawnSync(process.execPath, [cli, '--all'], { encoding: 'utf8' })
   const check = spawnSync(process.execPath, [cli, '--check'], { encoding: 'utf8' })
   assert.equal(check.status, all.status)
+})
+
+test('governance_handles_missing_rule_files', () => {
+  const root = rootFixture()
+  const result = runGovernance({ root })
+  assert.equal(result.ok, false)
+  const findings = result.findings.map((f) => f.rule)
+  assert.ok(findings.includes('MISSING_GOVERNANCE_FILE'))
+})
+
+test('governance_handles_invalid_json', () => {
+  const root = rootFixture()
+  mkdirSync(path.join(root, 'docs/governance'), { recursive: true })
+  writeFileSync(path.join(root, 'docs/governance/claims.json'), '{invalid')
+  const result = runGovernance({ root })
+  assert.equal(result.ok, false)
+  const findings = result.findings.map((f) => f.rule)
+  assert.ok(findings.includes('INVALID_JSON'))
+})
+
+test('governance_handles_permission_denied', () => {
+  const root = rootFixture()
+  mkdirSync(path.join(root, 'docs/governance'), { recursive: true })
+  const claimsPath = path.join(root, 'docs/governance/claims.json')
+  writeFileSync(claimsPath, '{}')
+  try {
+    chmodSync(claimsPath, 0o000)
+    const result = runGovernance({ root })
+    assert.equal(result.ok, false)
+    const findings = result.findings.map((f) => f.rule)
+    assert.ok(findings.includes('MISSING_GOVERNANCE_FILE'))
+  } finally {
+    chmodSync(claimsPath, 0o644)
+  }
+})
+
+test('governance_cli_check_aliases_all_and_unknown_options_refuse_extended', () => {
+  const cli = fileURLToPath(new URL('./check-documentation-governance.mjs', import.meta.url))
+  const all = spawnSync(process.execPath, [cli, '--all'], { encoding: 'utf8' })
+  const check = spawnSync(process.execPath, [cli, '--check'], { encoding: 'utf8' })
   assert.equal(check.stdout, all.stdout)
   assert.equal(check.stderr, all.stderr)
   assert.equal(spawnSync(process.execPath, [cli, '--not-a-mode'], { encoding: 'utf8' }).status, 2)

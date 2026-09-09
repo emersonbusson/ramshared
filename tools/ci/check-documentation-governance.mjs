@@ -320,33 +320,91 @@ function structuralFiles(root) {
     if (!(rel === 'README.md' || rel === 'README.pt-BR.md' || rel === 'ARCHITECTURE.md' || rel === 'CLAUDE.md' || rel === 'AGENTS.md' || rel === 'validation.md' || rel.startsWith('.claude/rules/') || rel.startsWith('docs/') || rel === 'scripts/docs-check.sh')) continue
     const stat = statSync(full)
     if (stat.size > MAX_FILE_BYTES) { files.push({ path: rel, text: '', oversize: true }); continue }
-    files.push({ path: rel, text: readFileSync(full, 'utf8') })
+    try {
+      files.push({ path: rel, text: readFileSync(full, 'utf8') })
+    } catch (err) {
+      if (err.code !== 'ENOENT' && err.code !== 'EACCES') throw err
+      files.push({ path: rel, text: '', unreadable: true })
+    }
     if (files.length > MAX_FILES) break
   }
   return files
 }
 
 function readJson(root, rel) {
-  return JSON.parse(readFileSync(path.join(root, rel), 'utf8'))
+  try {
+    return JSON.parse(readFileSync(path.join(root, rel), 'utf8'))
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EACCES') return null
+    return { _parseError: true }
+  }
+}
+
+function tryReadFileSync(root, rel) {
+  try {
+    return readFileSync(path.join(root, rel), 'utf8')
+  } catch {
+    return null
+  }
 }
 
 export function run({ root = ROOT } = {}) {
   const findings = []
-  const parity = readFileSync(path.join(root, 'docs/DOCUMENTATION-PARITY.md'), 'utf8')
-  const reference = readFileSync(path.join(root, 'docs/reference/REFERENCE-INDEX.md'), 'utf8')
-  const governance = readFileSync(path.join(root, 'docs/governance/README.md'), 'utf8')
-  findings.push(...validateParityDocument(parity, root), ...validateReferenceIndex(reference, root))
-  findings.push(...validateRouterConsistency(parity, reference, governance))
+  const parity = tryReadFileSync(root, 'docs/DOCUMENTATION-PARITY.md')
+  const reference = tryReadFileSync(root, 'docs/reference/REFERENCE-INDEX.md')
+  const governance = tryReadFileSync(root, 'docs/governance/README.md')
+
+  if (parity === null) findings.push(finding('docs/DOCUMENTATION-PARITY.md', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/DOCUMENTATION-PARITY.md'))
+  if (reference === null) findings.push(finding('docs/reference/REFERENCE-INDEX.md', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/reference/REFERENCE-INDEX.md'))
+  if (governance === null) findings.push(finding('docs/governance/README.md', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/governance/README.md'))
+
+  if (parity !== null) findings.push(...validateParityDocument(parity, root))
+  if (reference !== null) findings.push(...validateReferenceIndex(reference, root))
+  if (parity !== null && reference !== null && governance !== null) findings.push(...validateRouterConsistency(parity, reference, governance))
+
   const claims = readJson(root, 'docs/governance/claims.json')
-  findings.push(...validateClaims(claims, root))
-  const closureResult = evaluateClaimClosures(claims, loadClaimClosures(root), { root })
-  for (const reason of closureResult.findings) findings.push(finding('docs/governance/claim-closures.json', 1, 'CLAIM_CLOSURE', reason))
+  if (claims === null) {
+    findings.push(finding('docs/governance/claims.json', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/governance/claims.json'))
+  } else if (claims?._parseError) {
+    findings.push(finding('docs/governance/claims.json', 1, 'INVALID_JSON', 'docs/governance/claims.json is not valid JSON'))
+  } else {
+    findings.push(...validateClaims(claims, root))
+
+    const closureRegistry = loadClaimClosures(root)
+    if (closureRegistry === null) {
+        findings.push(finding('docs/governance/claim-closures.json', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/governance/claim-closures.json'))
+    } else if (closureRegistry?._parseError) {
+        findings.push(finding('docs/governance/claim-closures.json', 1, 'INVALID_JSON', 'docs/governance/claim-closures.json is not valid JSON'))
+    } else {
+        const closureResult = evaluateClaimClosures(claims, closureRegistry, { root })
+        for (const reason of closureResult.findings) findings.push(finding('docs/governance/claim-closures.json', 1, 'CLAIM_CLOSURE', reason))
+    }
+  }
   const files = structuralFiles(root)
   for (const file of files.filter((item) => item.oversize)) findings.push(finding(file.path, 1, 'FILE_LIMIT', 'file-size-limit'))
-  findings.push(...scanProvenance(files, readJson(root, 'docs/governance/provenance-allowlist.json'), readJson(root, 'docs/governance/provenance-baseline.json')))
+
+  const allowlist = readJson(root, 'docs/governance/provenance-allowlist.json')
+  const baseline = readJson(root, 'docs/governance/provenance-baseline.json')
+
+  if (allowlist === null) findings.push(finding('docs/governance/provenance-allowlist.json', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/governance/provenance-allowlist.json'))
+  else if (allowlist?._parseError) findings.push(finding('docs/governance/provenance-allowlist.json', 1, 'INVALID_JSON', 'docs/governance/provenance-allowlist.json is not valid JSON'))
+
+  if (baseline === null) findings.push(finding('docs/governance/provenance-baseline.json', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/governance/provenance-baseline.json'))
+  else if (baseline?._parseError) findings.push(finding('docs/governance/provenance-baseline.json', 1, 'INVALID_JSON', 'docs/governance/provenance-baseline.json is not valid JSON'))
+
+  if (allowlist !== null && !allowlist?._parseError && baseline !== null && !baseline?._parseError) {
+    findings.push(...scanProvenance(files, allowlist, baseline))
+  }
+
   findings.push(...validateReadmeHygiene(files))
   const journey = readJson(root, 'docs/governance/journeys/documentation-governance-smoke.json')
-  for (const reason of validateJourneyManifest(journey, root)) findings.push(finding('docs/governance/journeys/documentation-governance-smoke.json', 1, 'JOURNEY', reason))
+  if (journey === null) {
+    findings.push(finding('docs/governance/journeys/documentation-governance-smoke.json', 1, 'MISSING_GOVERNANCE_FILE', 'missing docs/governance/journeys/documentation-governance-smoke.json'))
+  } else if (journey?._parseError) {
+    findings.push(finding('docs/governance/journeys/documentation-governance-smoke.json', 1, 'INVALID_JSON', 'docs/governance/journeys/documentation-governance-smoke.json is not valid JSON'))
+  } else {
+    for (const reason of validateJourneyManifest(journey, root)) findings.push(finding('docs/governance/journeys/documentation-governance-smoke.json', 1, 'JOURNEY', reason))
+  }
   for (const file of files.filter((item) => item.path.startsWith('docs/postmortems/') && item.path.endsWith('.md'))) for (const reason of validatePostmortemEffectiveness(file.text, file.path)) findings.push(finding(file.path, 1, 'POSTMORTEM', reason))
   return { ok: findings.length === 0, findings: sorted(findings), counts: { files: files.length, findings: findings.length } }
 }

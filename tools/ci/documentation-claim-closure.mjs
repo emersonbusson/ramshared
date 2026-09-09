@@ -127,11 +127,11 @@ export function computeClosureDigest(closure) {
 
 export function loadClaimClosures(root) {
   const absolute = path.join(root, CLAIM_CLOSURE_PATH)
-  if (!existsSync(absolute)) return null
   try {
     return JSON.parse(readFileSync(absolute, 'utf8'))
-  } catch {
-    return null
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EACCES') return null
+    return { _parseError: true }
   }
 }
 
