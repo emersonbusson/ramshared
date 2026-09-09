@@ -207,6 +207,24 @@ export function evaluateClaimClosure(claim, closure, { root }) {
   if (revisionExists(root, closure.base_revision) && revisionExists(root, closure.source_revision) &&
       !isAncestor(root, closure.base_revision, closure.source_revision)) findings.push(`claim:${claim.slug}:base-not-ancestor`)
 
+  const recordPath = claim?.validation?.record_path
+  if (!recordPath) {
+    findings.push(`claim:${claim.slug}:record-missing`)
+  } else {
+    const recordBytes = revisionBlob(root, closure.source_revision, recordPath)
+    if (!recordBytes) {
+      findings.push(`claim:${claim.slug}:record-missing`)
+    } else {
+      const text = recordBytes.toString('utf8')
+      const hasClaim = /^#+\s*claim\b/im.test(text)
+      const hasEvidence = /^#+\s*evidence\b/im.test(text)
+      const hasVerdict = /^#+\s*verdict\b/im.test(text)
+      if (!hasClaim || !hasEvidence || !hasVerdict) {
+        findings.push(`claim:${claim.slug}:record-format`)
+      }
+    }
+  }
+
   const declaredManifests = uniqueSorted(array(claim?.validation?.evidence_paths))
   if (declaredManifests.length === 0) findings.push(`claim:${claim.slug}:manifest-set-empty`)
   if (canonicalJson(uniqueSorted(closure.evidence_manifests ?? [])) !== canonicalJson(declaredManifests)) {

@@ -1,3 +1,4 @@
+const _originalDateNow = Date.now; Date.now = () => new Date("2026-09-06T12:00:00Z").getTime();
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'

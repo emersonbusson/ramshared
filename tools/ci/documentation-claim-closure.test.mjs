@@ -55,7 +55,7 @@ function closureFixture({ manifestSlug = 'fixture', manifestStatus = 'DONE' } = 
   write(root, implPath, 'export const implemented = true\n')
   write(root, testPath, "test('fixture_test', () => {})\n")
   write(root, summaryPath, summary)
-  write(root, 'validation.md', '**Verdict:** PASS\n')
+  write(root, 'validation.md', '## Claim\n\n## Evidence\n\n## Verdict\n**Verdict:** PASS\n')
   const manifest = {
     schema_version: 'ramshared-spec-evidence/v1',
     slug: manifestSlug,
@@ -200,6 +200,56 @@ test('done_without_closure_is_unqualified_and_partial_without_closure_stays_hone
   const result = evaluateClaimClosure(partial, null, { root })
   assert.equal(result.status, 'PARTIAL')
   assert.deepEqual(result.findings, [])
+})
+
+test('claim_record_validation_requires_claim_evidence_and_verdict_sections', () => {
+  const cases = [
+    ['missing_claim', '## Evidence\n\n## Verdict\n**Verdict:** PASS\n'],
+    ['missing_evidence', '## Claim\n\n## Verdict\n**Verdict:** PASS\n'],
+    ['missing_verdict', '## Claim\n\n## Evidence\n'],
+    ['missing_all', 'Just some text without headers.'],
+  ]
+  for (const [name, content] of cases) {
+    const { root, claim, closure } = closureFixture()
+    const absolute = path.join(root, 'validation.md')
+    writeFileSync(absolute, content)
+
+    // We need to commit and update source_revision in closure and claim
+    git(root, ['add', 'validation.md'])
+    const newSource = commit(root, name)
+    closure.source_revision = newSource
+    claim.validation.source_commit = newSource
+
+    // We also need to update the closure's files sha256 for validation.md
+    const file = closure.files.find(f => f.path === 'validation.md')
+    if (file) {
+      file.sha256 = sha256(content)
+    }
+
+    closure.claim_sha256 = computeClaimDigest(claim)
+    closure.closure_sha256 = computeClosureDigest(closure)
+
+    const result = evaluateClaimClosure(claim, closure, { root })
+    assert.equal(result.qualified, false, name)
+    assert.match(result.findings.join('\n'), /record-format/, name)
+  }
+})
+
+test('claim_record_missing_entirely_is_rejected', () => {
+  const { root, claim, closure } = closureFixture()
+
+  // Remove record_path
+  claim.validation.record_path = null
+
+  // Also remove from closure files
+  closure.files = closure.files.filter(f => f.path !== 'validation.md')
+
+  closure.claim_sha256 = computeClaimDigest(claim)
+  closure.closure_sha256 = computeClosureDigest(closure)
+
+  const result = evaluateClaimClosure(claim, closure, { root })
+  assert.equal(result.qualified, false)
+  assert.match(result.findings.join('\n'), /record-missing/)
 })
 
 test('closure_registry_rejects_invalid_duplicate_and_orphan_entries', () => {
