@@ -73,6 +73,35 @@ pub fn current_build() -> Result<OsBuild, PagefileError> {
 /// Create a secondary pagefile on `volume` if the build is allow-listed.
 ///
 /// `volume` is a root like `V:\` or a path to the target volume.
+
+/// Calculate NT pagefile size based on RAM size
+pub fn calculate_pagefile_size(ram_size_bytes: u64) -> Result<(u64, u64), PagefileError> {
+    if ram_size_bytes == 0 {
+        return Err(PagefileError::Api("RAM size cannot be 0".into()));
+    }
+
+    let min_size: u64;
+    let max_size: u64;
+
+    const GB: u64 = 1024 * 1024 * 1024;
+
+    if ram_size_bytes < 4 * GB {
+        min_size = 256 * 1024 * 1024; // 256 MB
+        max_size = ram_size_bytes * 2;
+    } else if ram_size_bytes < 8 * GB {
+        min_size = 1 * GB;
+        max_size = ram_size_bytes;
+    } else if ram_size_bytes <= 16 * GB {
+        min_size = 2 * GB;
+        max_size = 16 * GB;
+    } else {
+        min_size = 4 * GB;
+        max_size = 32 * GB; // Cap max at 32 GB for large RAM
+    }
+
+    Ok((min_size, max_size))
+}
+
 pub fn create_secondary(
     volume: &Path,
     min_bytes: u64,
@@ -151,6 +180,98 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn test_ntpagefile_create_secondary_min_greater_than_max() {
+        let vol = PathBuf::from("V:\\");
+        let e = create_secondary(
+            &vol,
+            1024,
+            512,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert_eq!(e, PagefileError::Api("min/max pagefile sizes invalid".into()));
+    }
+
+    #[test]
+    fn test_ntpagefile_create_secondary_invalid_path() {
+        let vol = PathBuf::from("");
+        let e = create_secondary(
+            &vol,
+            256,
+            1024,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert_eq!(e, PagefileError::InvalidPath);
+    }
+
+    #[test]
+    fn test_ntpagefile_remove_secondary_invalid_path() {
+        let vol = PathBuf::from("");
+        let e = remove_secondary(
+            &vol,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert_eq!(e, PagefileError::InvalidPath);
+    }
+
+    #[test]
+    fn test_ntpagefile_remove_secondary_unsupported_build() {
+        let vol = PathBuf::from("V:\\");
+        let e = remove_secondary(
+            &vol,
+            Some(OsBuild { major: 10, minor: 0, build: 22631 }),
+        ).unwrap_err();
+        assert_eq!(e, PagefileError::UnsupportedBuild { build: 22631 });
+    }
+
+    #[test]
+    fn test_ntpagefile_size_under_4gb() {
+        let (min, max) = calculate_pagefile_size(2 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(min, 256 * 1024 * 1024);
+        assert_eq!(max, 4 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ntpagefile_size_at_4gb() {
+        let (min, max) = calculate_pagefile_size(4 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(min, 1024 * 1024 * 1024);
+        assert_eq!(max, 4 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ntpagefile_size_under_8gb() {
+        let (min, max) = calculate_pagefile_size(6 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(min, 1024 * 1024 * 1024);
+        assert_eq!(max, 6 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ntpagefile_size_at_8gb() {
+        let (min, max) = calculate_pagefile_size(8 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(min, 2 * 1024 * 1024 * 1024);
+        assert_eq!(max, 16 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ntpagefile_size_at_16gb() {
+        let (min, max) = calculate_pagefile_size(16 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(min, 2 * 1024 * 1024 * 1024);
+        assert_eq!(max, 16 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ntpagefile_size_over_16gb() {
+        let (min, max) = calculate_pagefile_size(32 * 1024 * 1024 * 1024).unwrap();
+        assert_eq!(min, 4 * 1024 * 1024 * 1024);
+        assert_eq!(max, 32 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_ntpagefile_size_zero_ram() {
+        let e = calculate_pagefile_size(0).unwrap_err();
+        assert_eq!(e, PagefileError::Api("RAM size cannot be 0".into()));
+    }
+
+#[test]
     fn allow_list_26200_only() {
         assert!(is_supported_build(26200));
         assert!(!is_supported_build(26100));
