@@ -223,6 +223,11 @@ impl BrokerStream for NamedPipeBrokerStream {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
+    use std::io::Cursor;
+    use ramshared_broker::protocol::{Msg, read_msg, write_msg};
+    use ramshared_broker::model::TransportKind;
+
     #[test]
     fn only_not_found_and_busy_retry() {
         assert!(retryable_pipe_error(2));
@@ -251,5 +256,48 @@ mod tests {
             result,
             Err(BrokerConnectError::Deadline) | Err(BrokerConnectError::NonTransient(_))
         ));
+    }
+
+    #[test]
+    fn test_ipc_serialization_roundtrips_all_message_types() {
+        let msgs = vec![
+            Msg::Register {
+                proto: 1,
+                tenant: "test_tenant".into(),
+                transport: TransportKind::WinDrive,
+            },
+            Msg::LeaseRequest { bytes: 4096 },
+            Msg::LeaseRelease { lease: 1 },
+            Msg::Status,
+            Msg::Ack,
+        ];
+        for original in msgs {
+            let mut buf = Vec::new();
+            write_msg(&mut buf, &original).unwrap();
+            let mut cursor = Cursor::new(buf);
+            let roundtrip = read_msg(&mut cursor).unwrap().unwrap();
+            assert_eq!(original, roundtrip);
+        }
+    }
+
+    #[test]
+    fn test_ipc_serialization_malformed_payload_error() {
+        let malformed = b"{ \"type\": \"unknown\" }\n";
+        let mut cursor = Cursor::new(malformed.to_vec());
+        let result = read_msg(&mut cursor);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ipc_serialization_truncated_message_eof() {
+        let msg = Msg::Ack;
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &msg).unwrap();
+        // Truncate
+        buf.truncate(buf.len() / 2);
+
+        let mut cursor = Cursor::new(buf);
+        let result = read_msg(&mut cursor);
+        assert!(result.is_err());
     }
 }
