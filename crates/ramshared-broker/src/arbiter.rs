@@ -613,4 +613,30 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn test_arbiter_lease_conflict_other_tenant_returns_error() {
+        let mut arb = Arbiter::new(cfg());
+        let t0 = Instant::now();
+        let tenants = [tv(1, 0.0, 0), tv(9, 0.0, 0)];
+        let slices = [
+            slice(0, Some(1), SliceState::Leased),
+        ];
+        let err = arb.tick(t0, &tenants, &slices, Some((9, 64))).unwrap_err();
+        assert_eq!(err, ArbiterError::LeaseConflict);
+    }
+
+    #[test]
+    fn test_arbiter_parallel_grant_requests_no_double_allocation() {
+        let mut arb = Arbiter::new(cfg());
+        let t0 = Instant::now();
+        let tenants = [tv(1, 0.0, 0), tv(2, 0.0, 0)];
+
+        let slices = [slice(0, None, SliceState::Free), slice(1, None, SliceState::Free)];
+
+        let a1 = arb.tick(t0, &tenants, &slices, Some((1, 64))).unwrap();
+        let a2 = arb.tick(t0, &tenants, &slices, Some((2, 64))).unwrap();
+
+        assert_ne!(a1, a2);
+    }
 }

@@ -108,6 +108,7 @@ function parseArgs(argv) {
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean);
+      if (out.packages.length === 0) throw usageError(`missing value after ${argument}`);
     } else if (argument === "--files") {
       out.files.push(
         ...next()
@@ -115,6 +116,7 @@ function parseArgs(argv) {
           .map((value) => value.trim())
           .filter(Boolean),
       );
+      if (out.files.length === 0) throw usageError(`missing value after ${argument}`);
     } else if (argument === "--files-from") out.filesFrom = next();
     else if (argument === "--min") out.min = Number(next());
     else if (argument === "--report-json") out.reportJson = next();
