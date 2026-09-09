@@ -398,9 +398,14 @@ mod tests {
         registered: bool,
         destroy_calls: u32,
         unreg_calls: u32,
+        create_fail: bool,
+        register_fail: bool,
     }
     impl DiskControl for MemDisk {
         fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
+            if self.create_fail {
+                return Err("mock create error".into());
+            }
             self.created = true;
             Ok(())
         }
@@ -410,6 +415,9 @@ mod tests {
             Ok(())
         }
         fn register_queue(&mut self) -> Result<(), String> {
+            if self.register_fail {
+                return Err("mock register error".into());
+            }
             self.registered = true;
             Ok(())
         }
@@ -1009,5 +1017,67 @@ mod tests {
                 .verify_unique(&[matching.clone(), matching])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_service_create_disk_error_fails() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk {
+            create_fail: true,
+            ..Default::default()
+        };
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Disk(_)));
+        assert!(!disk.created);
+        assert!(!disk.registered);
+        assert!(!state.disk_created);
+        assert!(!state.registered_queue);
+        assert!(!state.online);
+    }
+
+    #[test]
+    fn test_service_register_queue_error_fails() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk {
+            register_fail: true,
+            ..Default::default()
+        };
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Disk(_)));
+        assert!(disk.created);
+        assert!(!disk.registered);
+        assert!(state.disk_created);
+        assert!(!state.registered_queue);
+        assert!(!state.online);
     }
 }
