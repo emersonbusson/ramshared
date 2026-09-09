@@ -261,7 +261,7 @@ export function run({ root = process.cwd() } = {}) {
 }
 
 function main(argv) {
-  if (argv.length !== 1 || argv[0] !== '--candidate') {
+  if (argv.length !== 1 || (argv[0] && argv[0].startsWith('--') && argv[0] !== '--candidate') || argv[0] !== '--candidate') {
     process.stderr.write('usage: check-legacy-preallocation-removal.mjs --candidate\n')
     return 2
   }

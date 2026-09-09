@@ -152,6 +152,12 @@ test('legacy_preallocation_removed_before_day0_deadline', () => {
     result.findings.some((finding) => finding.rule === 'LEGACY_ENV_SELECTOR'),
     true,
   )
+
+  try {
+    run({ root: '/path/does/not/exist' })
+  } catch (err) {
+    assert.equal(err.message, 'invalid-root-directory')
+  }
 })
 
 test('candidate_path_and_cli_fail_closed', () => {
@@ -180,15 +186,4 @@ test('candidate_path_and_cli_fail_closed', () => {
   assert.equal(scanText('fixture.rs', 'clean\n').length, 0)
   const bad = spawnSync(process.execPath, [CLI, '--wrong'], { cwd: root, encoding: 'utf8' })
   assert.equal(bad.status, 2)
-})
-
-test('test_scan_missing_root_throws_invalid_directory', () => {
-  let thrown = false
-  try {
-    run({ root: '/path/does/not/exist' })
-  } catch (err) {
-    assert.equal(err.message, 'invalid-root-directory')
-    thrown = true
-  }
-  assert.equal(thrown, true)
 })
