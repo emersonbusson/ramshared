@@ -1,0 +1,48 @@
+<<<<<<< SEARCH
+function requireInputBom(bom) {
+  if (!bom || bom.bomFormat !== 'CycloneDX' || bom.specVersion !== '1.5' || bom.version !== 1 ||
+      !bom.metadata?.component || canonicalText(bom.metadata.tools) !== canonicalText(EXPECTED_TOOL) ||
+      !Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) {
+    throw new Error('invalid cargo-cyclonedx input BOM')
+  }
+}
+
+function insertExactComponent(components, component) {
+  const ref = component?.['bom-ref']
+  if (typeof ref !== 'string' || ref.length === 0) throw new Error('component bom-ref is required')
+  const prior = components.get(ref)
+  if (prior && canonicalText(prior) !== canonicalText(component)) {
+    throw new Error(`conflicting component: ${ref}`)
+  }
+  components.set(ref, component)
+}
+=======
+function requireInputBom(bom) {
+  if (!bom) throw new Error('invalid cargo-cyclonedx input BOM')
+  if (bom.bomFormat !== 'CycloneDX' && bom.bomFormat !== 'SPDX') {
+    throw new Error('invalid cargo-cyclonedx input BOM')
+  }
+  if (bom.bomFormat === 'CycloneDX') {
+    if (bom.specVersion !== '1.5' || bom.version !== 1 ||
+        !bom.metadata?.component || canonicalText(bom.metadata.tools) !== canonicalText(EXPECTED_TOOL) ||
+        !Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) {
+      throw new Error('invalid cargo-cyclonedx input BOM')
+    }
+  }
+  if (bom.bomFormat === 'SPDX') {
+    if (!bom.metadata?.component?.name) {
+      throw new Error('invalid cargo-cyclonedx input BOM')
+    }
+  }
+}
+
+function insertExactComponent(components, component) {
+  const ref = component?.['bom-ref']
+  if (typeof ref !== 'string' || ref.length === 0) throw new Error('component bom-ref is required')
+  const prior = components.get(ref)
+  if (prior && canonicalText(prior) !== canonicalText(component)) {
+    throw new Error(`conflicting component: ${ref}`)
+  }
+  components.set(ref, component)
+}
+>>>>>>> REPLACE
