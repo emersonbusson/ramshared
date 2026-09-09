@@ -139,7 +139,7 @@ def main():
             time.sleep(0.5)
 
     def sig_handler(signum, frame):
-        print("\n\n[!] SIGINT/SIGTERM Signal/Interrupt received! Instant atomic memory release...")
+        print("\n\n[!] Signal/Interrupt received! Instant atomic memory release...")
         nonlocal shutdown_requested
         shutdown_requested = True
         atomic_reclaim()
