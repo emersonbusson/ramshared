@@ -81,6 +81,7 @@ pub trait VramProvider {
     fn mem_info(&self) -> Result<(u64, u64), VramError>;
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +107,94 @@ mod tests {
             "vram invalid alignment"
         );
         assert_eq!(VramError::Busy.to_string(), "vram busy");
+    }
+
+    #[derive(Debug)]
+    struct MockMem {
+        len: usize,
+    }
+
+    impl VramMemory for MockMem {
+        fn len(&self) -> usize {
+            self.len
+        }
+        fn zero(&mut self) -> Result<(), VramError> {
+            Ok(())
+        }
+        fn read_at(&self, _off: u64, _dst: &mut [u8]) -> Result<(), VramError> {
+            Ok(())
+        }
+        fn write_at(&mut self, _off: u64, _src: &[u8]) -> Result<(), VramError> {
+            Ok(())
+        }
+    }
+
+    struct MockProvider {
+        capacity: u64,
+    }
+
+    impl VramProvider for MockProvider {
+        type Mem<'p> = MockMem where Self: 'p;
+
+        fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+            if bytes as u64 > self.capacity {
+                return Err(VramError::OutOfMemory);
+            }
+            if bytes % 4096 != 0 {
+                return Err(VramError::InvalidAlignment);
+            }
+            Ok(MockMem { len: bytes })
+        }
+
+        fn mem_info(&self) -> Result<(u64, u64), VramError> {
+            Ok((self.capacity, self.capacity))
+        }
+    }
+
+    #[test]
+    fn test_vram_alloc_zero_success() {
+        let provider = MockProvider { capacity: 8192 };
+        let mem = provider.alloc(0).unwrap();
+        assert_eq!(mem.len(), 0);
+        assert!(mem.is_empty());
+    }
+
+    #[test]
+    fn test_vram_alloc_page_boundary_success() {
+        let provider = MockProvider { capacity: 8192 };
+        let mem = provider.alloc(4096).unwrap();
+        assert_eq!(mem.len(), 4096);
+        assert!(!mem.is_empty());
+    }
+
+    #[test]
+    fn test_vram_alloc_max_capacity_error() {
+        let provider = MockProvider { capacity: 8192 };
+        let err = provider.alloc(16384).unwrap_err();
+        assert!(matches!(err, VramError::OutOfMemory));
+    }
+
+    #[test]
+    fn test_vram_alloc_misaligned_error() {
+        let provider = MockProvider { capacity: 8192 };
+        let err = provider.alloc(4097).unwrap_err();
+        assert!(matches!(err, VramError::InvalidAlignment));
+    }
+
+    #[test]
+    fn test_vram_mem_methods() {
+        let mut mem = MockMem { len: 4096 };
+        assert!(mem.zero().is_ok());
+        let mut buf = [0u8; 10];
+        assert!(mem.read_at(0, &mut buf).is_ok());
+        assert!(mem.write_at(0, &buf).is_ok());
+    }
+
+    #[test]
+    fn test_vram_provider_mem_info() {
+        let provider = MockProvider { capacity: 8192 };
+        let (free, total) = provider.mem_info().unwrap();
+        assert_eq!(free, 8192);
+        assert_eq!(total, 8192);
     }
 }
