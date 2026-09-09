@@ -110,6 +110,31 @@ test('release_workspace_sbom_refuses_missing_wrong_or_conflicting_inputs', () =>
     ...options,
     sourceDateEpoch: 'not-a-number',
   }), /source date epoch/)
+
+  assert.throws(() => mergeReleaseSboms([cli, bom('ramshared-wsl2d', '/tmp/root')], {
+    ...options,
+    tag: 'invalid-tag',
+  }), /exact release identity is required/)
+
+  const badBom = bom('ramshared-cli', '/tmp/root')
+  badBom.bomFormat = 'Invalid'
+  assert.throws(() => mergeReleaseSboms([badBom, bom('ramshared-wsl2d', '/tmp/root')], options), /invalid cargo-cyclonedx input BOM/)
+
+  const badDepBom = bom('ramshared-cli', '/tmp/root')
+  badDepBom.dependencies[0].ref = 123
+  assert.throws(() => mergeReleaseSboms([badDepBom, bom('ramshared-wsl2d', '/tmp/root')], options), /invalid dependency record/)
+
+  const badLocalPathBom = bom('ramshared-cli', '/tmp/root')
+  const badLocalPathBom2 = bom('ramshared-wsl2d', '/tmp/root')
+  const res = mergeReleaseSboms([badLocalPathBom, badLocalPathBom2], options)
+  const resultStr = JSON.stringify(res)
+  assert.equal(resultStr.includes('file://'), false)
+
+  const badLocalPathBom3 = bom('ramshared-cli', '/tmp/root')
+  const badLocalPathBom4 = bom('ramshared-wsl2d', '/tmp/root')
+  badLocalPathBom3.components[0].description = 'test file:// string';
+  badLocalPathBom4.components[0].description = 'test file:// string';
+  assert.throws(() => mergeReleaseSboms([badLocalPathBom3, badLocalPathBom4], options), /release SBOM contains a local path reference/)
 })
 
 test('release_workspace_sbom_cli_writes_once_and_refuses_unknown_or_clobber', () => {
@@ -129,18 +154,59 @@ test('release_workspace_sbom_cli_writes_once_and_refuses_unknown_or_clobber', ()
       '--input', daemon,
       '--out', out,
     ]
-    const first = spawnSync(process.execPath, args, { encoding: 'utf8' })
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const first = spawnSync(process.execPath, args, { encoding: 'utf8', env })
     assert.equal(first.status, 0, first.stderr)
     assert.equal(JSON.parse(readFileSync(out, 'utf8')).metadata.component.name, 'ramshared')
 
-    const second = spawnSync(process.execPath, args, { encoding: 'utf8' })
+    const second = spawnSync(process.execPath, args, { encoding: 'utf8', env })
     assert.equal(second.status, 1)
     assert.match(second.stderr, /EEXIST/)
     const invalid = spawnSync(process.execPath, [
       'tools/ci/merge-release-sboms.mjs', '--unknown', 'value',
-    ], { encoding: 'utf8' })
+    ], { encoding: 'utf8', env })
     assert.equal(invalid.status, 1)
     assert.match(invalid.stderr, /unknown argument/)
+
+    const missingVal = spawnSync(process.execPath, [
+      'tools/ci/merge-release-sboms.mjs', '--input', '--out'
+    ], { encoding: 'utf8', env })
+    assert.equal(missingVal.status, 1)
+    assert.match(missingVal.stderr, /missing value for --input/)
+
+    const missingFile = spawnSync(process.execPath, [
+      'tools/ci/merge-release-sboms.mjs',
+      '--tag', 'v0.9.0-beta.1',
+      '--revision', '361427a63cbeb2a8b0ecafb224adeecb0539af9b',
+      '--source-date-epoch', '1786697752',
+      '--input', path.join(root, 'non-existent.json'),
+      '--input', daemon,
+      '--out', out,
+    ], { encoding: 'utf8', env })
+    assert.equal(missingFile.status, 1)
+    assert.match(missingFile.stderr, /failed to read input file/)
+
+    const invalidJson = path.join(root, 'invalid.json')
+    writeFileSync(invalidJson, 'not-json')
+    const badFile = spawnSync(process.execPath, [
+      'tools/ci/merge-release-sboms.mjs',
+      '--tag', 'v0.9.0-beta.1',
+      '--revision', '361427a63cbeb2a8b0ecafb224adeecb0539af9b',
+      '--source-date-epoch', '1786697752',
+      '--input', invalidJson,
+      '--input', daemon,
+      '--out', out,
+    ], { encoding: 'utf8', env })
+    assert.equal(badFile.status, 1)
+    assert.match(badFile.stderr, /Unexpected token/)
+
+    const missingArgs = spawnSync(process.execPath, [
+      'tools/ci/merge-release-sboms.mjs',
+      '--input', cli,
+    ], { encoding: 'utf8', env })
+    assert.equal(missingArgs.status, 1)
+    assert.match(missingArgs.stderr, /two inputs and one output are required/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

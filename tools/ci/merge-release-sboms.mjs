@@ -163,7 +163,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index]
     const value = argv[index + 1]
-    if (!value) throw new Error(`missing value for ${flag}`)
+    if (value === undefined || value.startsWith('--')) throw new Error(`missing value for ${flag}`)
     if (flag === '--input') options.inputs.push(value)
     else if (flag === '--tag') options.tag = value
     else if (flag === '--revision') options.revision = value
@@ -179,13 +179,26 @@ function parseArgs(argv) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2))
-  const boms = options.inputs.map((input) => JSON.parse(readFileSync(input, 'utf8')))
+  let boms
+  try {
+    boms = options.inputs.map((input) => JSON.parse(readFileSync(input, 'utf8')))
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EACCES') {
+      throw new Error(`failed to read input file: ${err.message}`)
+    }
+    throw err
+  }
   const merged = mergeReleaseSboms(boms, options)
   mkdirSync(path.dirname(options.out), { recursive: true })
   writeFileSync(options.out, `${JSON.stringify(merged, null, 2)}\n`, { flag: 'wx' })
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href &&
+  typeof process.env.NODE_TEST_CONTEXT === 'undefined' &&
+  !process.argv.includes('--test')
+) {
   try {
     main()
   } catch (error) {
