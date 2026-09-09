@@ -4,7 +4,14 @@
 //! hardware path is E2E evidence; pure offset planning lives in `ramshared_cuda::probe`.
 
 use crate::config::WinDriveConfig;
+
+#[cfg(not(test))]
 use ramshared_cuda::Cuda;
+
+#[cfg(test)]
+use tests::mock::Cuda;
+
+
 use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
 
 /// Result of a successful probe-cuda run.
@@ -129,11 +136,64 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
     })
 }
 
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use std::path::PathBuf;
+
+    pub mod mock {
+        #[derive(Debug)]
+        pub enum CudaError {
+            NoDevice,
+        }
+        impl std::fmt::Display for CudaError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    CudaError::NoDevice => write!(f, "NoDevice"),
+                }
+            }
+        }
+        impl std::error::Error for CudaError {}
+
+        pub struct Cuda;
+        impl Cuda {
+            pub fn load() -> Result<Self, CudaError> { Err(CudaError::NoDevice) }
+            pub fn device_count(&self) -> Result<i32, CudaError> { Ok(0) }
+            pub fn device(&self, _ordinal: i32) -> Result<Device, CudaError> { Err(CudaError::NoDevice) }
+            pub fn create_context<'a>(&'a self, _dev: &Device) -> Result<Context<'a>, CudaError> { Err(CudaError::NoDevice) }
+        }
+        pub struct Device;
+        impl Device {
+            pub fn ordinal(&self) -> i32 { 0 }
+            pub fn name(&self) -> &str { "mock" }
+        }
+        pub struct Context<'a> { _cuda: &'a Cuda }
+        impl<'a> Context<'a> {
+            pub fn mem_info(&self) -> Result<(usize, usize), CudaError> { Ok((0, 0)) }
+            pub fn alloc(&self, _bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> { Err(CudaError::NoDevice) }
+        }
+        pub struct DeviceMem<'c, 'a> { _ctx: &'c Context<'a> }
+        impl DeviceMem<'_, '_> {
+            pub fn zero(&mut self) -> Result<(), CudaError> { Ok(()) }
+            pub fn write_at(&mut self, _off: usize, _src: &[u8]) -> Result<(), CudaError> { Ok(()) }
+            pub fn read_at(&self, _off: usize, _dst: &mut [u8]) -> Result<(), CudaError> { Ok(()) }
+        }
+    }
+
+    #[test]
+    fn test_cuda_probe_nodevice_graceful() {
+        let cfg = cfg_64m();
+        let res = super::probe_cuda_allocates_roundtrips_and_restores(&cfg);
+        assert!(res.is_err());
+        if let Err(ProbeCudaError::Cuda(msg)) = res {
+            assert_eq!(msg, "NoDevice");
+        } else {
+            panic!("Expected ProbeCudaError::Cuda, got {:?}", res);
+        }
+    }
+
 
     fn cfg_64m() -> WinDriveConfig {
         WinDriveConfig {
