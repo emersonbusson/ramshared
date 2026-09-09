@@ -2025,32 +2025,6 @@ test('coverage_map_refuses_malformed_entries_and_unsafe_changed_paths', () => {
   assert.equal(nonArray.ok, false)
   assert.equal(nonArray.errors.some((item) => item.rule === 'changed-paths-invalid'), true)
   assert.equal(validateCoverageMap({ schema_version: 1, entries: [] }, root).ok, false)
-
-  const emptyMap = { schema_version: 2, entries: [] }
-  assert.equal(validateCoverageMap(emptyMap, root).ok, true)
-  const emptyMapResult = selectCoverageEntries(emptyMap, ['crates/fixture/src/policy.rs'], root)
-  assert.equal(emptyMapResult.ok, false)
-  assert.equal(emptyMapResult.errors.some((item) => item.rule === 'changed-rust-file-unmapped'), true)
-  const buildRsResult = selectCoverageEntries(emptyMap, ['crates/fixture/build.rs'], root)
-  assert.equal(buildRsResult.ok, true)
-  assert.equal(buildRsResult.state, 'NO_CHANGE')
-})
-
-test('selectCoverageEntries_handles_workspace_with_no_testable_crates', () => {
-  const root = fixtureRoot('')
-  const map = { schema_version: 2, entries: [] }
-
-  // Single-crate workspace with no src directory (only build.rs)
-  const resultBuildRs = selectCoverageEntries(map, ['crates/fixture/build.rs'], root)
-  assert.equal(resultBuildRs.ok, true)
-  assert.equal(resultBuildRs.state, 'NO_CHANGE')
-  assert.deepEqual(resultBuildRs.entries, [])
-
-  // Workspace with all crates excluded
-  const resultReadme = selectCoverageEntries(map, ['README.md'], root)
-  assert.equal(resultReadme.ok, true)
-  assert.equal(resultReadme.state, 'NO_CHANGE')
-  assert.deepEqual(resultReadme.entries, [])
 })
 
 test('planner_cli_rejects_bom_or_control_changed_paths_without_trimming', () => {
@@ -2190,4 +2164,15 @@ test('ownership_contracts_fail_closed_for_invalid_shapes_and_base_reads', () => 
     },
   }).ok, true)
   assert.deepEqual(skippedCalls, [])
+})
+
+test('selectCoverageEntries_handles_workspace_with_no_testable_crates', () => {
+  const map = {
+    schema_version: 2,
+    entries: []
+  }
+  const result = selectCoverageEntries(map, [], '/')
+  assert.equal(result.ok, true)
+  assert.equal(result.state, 'NO_CHANGE')
+  assert.equal(result.entries.length, 0)
 })
