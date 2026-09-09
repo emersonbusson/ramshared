@@ -322,6 +322,64 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn test_package_valid_manifest_parses_successfully() {
+        let candidate = manifest();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert_eq!(parse_manifest(&bytes).unwrap(), candidate);
+    }
+
+    #[test]
+    fn test_package_missing_required_fields_rejects() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value.as_object_mut().unwrap().remove("version");
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_schema_rejects() {
+        let mut candidate = manifest();
+        candidate.schema = 2;
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_architecture_rejects() {
+        let mut candidate = manifest();
+        candidate.architecture = "x86_64-unknown-linux-gnu".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+
+    #[test]
+    fn test_package_invalid_version_rejects() {
+        let mut candidate = manifest();
+        candidate.version = "".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_duplicate_artifact_role_rejects() {
+        let mut candidate = manifest();
+        let dup_artifact = candidate.artifacts[0].clone();
+        candidate.artifacts.push(dup_artifact);
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_missing_artifact_role_rejects() {
+        let mut candidate = manifest();
+        candidate.artifacts.pop();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
     #[test]
     fn manifest_rejects_unknown_and_over_64k() {
         let mut value = serde_json::to_value(manifest()).unwrap();
