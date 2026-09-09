@@ -196,4 +196,126 @@ mod tests {
         let mem = be.into_inner();
         assert_eq!(mem.len(), 4096);
     }
+
+
+
+    #[test]
+    fn vram_backend_write_partial_error() {
+        let mut be = VramBackend::new(FakeVram::new(8192), 4096);
+        let payload = vec![0x11u8; 4097];
+
+        // This fails because it's not block aligned (via validate function in serve)
+        let w = serve(
+            &Request {
+                flags: 0,
+                cmd: Command::Write,
+                handle: 1,
+                offset: 0,
+                len: 4097,
+            },
+            &payload,
+            &mut be,
+        );
+        assert_ne!(errno(&w), 0, "Unaligned length must fail before backend");
+    }
+
+    #[test]
+    fn vram_backend_read_error() {
+        let mut be = VramBackend::new(FakeVram::new(4096), 4096);
+        let r = serve(
+            &Request {
+                flags: 0,
+                cmd: Command::Read,
+                handle: 1,
+                offset: 0,
+                len: 8192,
+            },
+            &[],
+            &mut be,
+        );
+        assert_ne!(errno(&r), 0, "OOB read length must fail");
+    }
+
+
+    #[test]
+    fn vram_backend_write_error() {
+        let mut be = VramBackend::new(FakeVram::new(4096), 4096);
+        let payload = vec![0x11u8; 8192];
+        let w = serve(
+            &Request {
+                flags: 0,
+                cmd: Command::Write,
+                handle: 1,
+                offset: 0,
+                len: 8192,
+            },
+            &payload,
+            &mut be,
+        );
+        assert_ne!(errno(&w), 0, "OOB write must fail");
+    }
+
+    #[test]
+    fn vram_backend_write_partial_ok() {
+        let mut be = VramBackend::new(FakeVram::new(8192), 4096);
+        // Writing 4096 bytes is block-aligned, which bypasses `validate` failure in `serve`
+        // We will simulate a partial overwrite by writing at offset 0 and offset 4096 separately
+        let mut buf = [0u8; 8192];
+
+        let payload1 = vec![0x11u8; 4096];
+        be.write_at(0, &payload1).unwrap();
+
+        be.read_at(0, &mut buf).unwrap();
+
+        for i in 0..4096 {
+            assert_eq!(buf[i], 0x11);
+        }
+        for i in 4096..8192 {
+            assert_eq!(buf[i], 0);
+        }
+
+        let payload2 = vec![0x22u8; 4096];
+        be.write_at(4096, &payload2).unwrap();
+
+        be.read_at(0, &mut buf).unwrap();
+        for i in 0..4096 {
+            assert_eq!(buf[i], 0x11);
+        }
+        for i in 4096..8192 {
+            assert_eq!(buf[i], 0x22);
+        }
+    }
+
+    #[test]
+    fn vram_backend_flush_is_ok() {
+        let mut be = VramBackend::new(FakeVram::new(4096), 4096);
+        let w = serve(
+            &Request {
+                flags: 0,
+                cmd: Command::Flush,
+                handle: 1,
+                offset: 0,
+                len: 0,
+            },
+            &[],
+            &mut be,
+        );
+        assert_eq!(errno(&w), 0, "FLUSH must succeed");
+    }
+
+    #[test]
+    fn vram_backend_mem_accessors() {
+        let mut be = VramBackend::new(FakeVram::new(4096), 4096);
+        assert_eq!(be.mem().len(), 4096);
+        assert_eq!(be.mem_mut().len(), 4096);
+    }
+
+    #[test]
+    fn vram_backend_size_bytes_and_block_size() {
+        let be = VramBackend::new(FakeVram::new(8192), 4096);
+        assert_eq!(be.size_bytes(), 8192);
+        assert_eq!(be.block_size(), 4096);
+    }
+
+
 }
