@@ -214,23 +214,29 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
   return { ok: violations.length === 0, violations }
 }
 
-function main(argv = process.argv.slice(2)) {
+export function main(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr, root = undefined } = {}) {
   const all = argv.includes('--all')
   const diffIndex = argv.indexOf('--diff')
   const baseRef = diffIndex === -1 ? null : argv[diffIndex + 1]
-  if (!all && !baseRef) {
-    process.stderr.write('usage: check-task-log.mjs (--all | --diff <baseRef>)\n')
+  if ((!all && diffIndex === -1) || (diffIndex !== -1 && (!baseRef || baseRef.startsWith('--')))) {
+    stderr.write('usage: check-task-log.mjs (--all | --diff <baseRef>)\n')
     return 2
   }
-  const result = run({ all, baseRef })
+  const result = run({ all, baseRef, root: root ?? ROOT })
   if (result.ok) {
-    process.stdout.write(`✓ ${TARGET} schema OK (${all ? 'all records' : `diff vs ${baseRef}`})\n`)
+    stdout.write(`✓ ${TARGET} schema OK (${all ? 'all records' : `diff vs ${baseRef}`})\n`)
     return 0
   }
   for (const violation of result.violations) {
-    process.stdout.write(`${TARGET}:${violation.line} — ${violation.rule}: ${violation.message}\n`)
+    stdout.write(`${TARGET}:${violation.line} — ${violation.rule}: ${violation.message}\n`)
   }
   return 1
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exitCode = main()
+if (
+  import.meta.url === `file://${process.argv[1]}` &&
+  typeof process.env.NODE_TEST_CONTEXT === 'undefined' &&
+  !process.argv.includes('--test')
+) {
+  process.exitCode = main()
+}
