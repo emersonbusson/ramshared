@@ -1,0 +1,5 @@
+test: add comprehensive test coverage for check-release-integrity.mjs
+
+Hardens CI tooling and achieves test coverage goals by adding boundary and error-path tests for check-release-integrity.mjs and check-ci-artifacts.mjs. Fixes fixture issues resolving TypeErrors during CI runs.
+
+Rollback trigger: Revert if tests fail randomly in CI or cause the pipeline to break on valid release artifacts.

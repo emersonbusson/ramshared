@@ -146,3 +146,9 @@ test('artifact_cli_rejects_invalid_arguments_and_unreadable_manifest', () => {
   }), 1)
   assert.deepEqual(unreadable, ['CI_ARTIFACT_ERROR=manifest-read-failed'])
 })
+
+test('artifact_cli_rejects_invalid_arguments_with_invalid_root', () => {
+  const invalidRootArgs = []
+  assert.equal(main(['--check', 'path/to/manifest.json', '--root'], { print: () => {}, error: (line) => invalidRootArgs.push(line) }), 2)
+  assert.equal(invalidRootArgs[0].startsWith('usage:'), true)
+})

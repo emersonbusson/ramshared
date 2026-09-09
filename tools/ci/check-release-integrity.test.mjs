@@ -344,3 +344,126 @@ test('release_manifest_cli_rejects_bad_arguments_and_unreadable_input', () => {
   assert.deepEqual(errors, ['RELEASE_INTEGRITY_ERROR=manifest-read-failed'])
   assert.equal(readFileSync(fixture().manifestPath, 'utf8').includes('release-evidence'), true)
 })
+
+test('release_manifest_rejects_missing_sbom_and_invalid_paths', () => {
+  const invalidCommand = fixture()
+  invalidCommand.manifest.linux_bundle.command = 'invalid'
+  const resultCommand = validateReleaseManifest(invalidCommand.manifest, { root: invalidCommand.root })
+  assert.equal(resultCommand.ok, false)
+  assert.equal(resultCommand.errors.includes('linux-bundle-invalid'), true)
+
+  const invalidStatus = fixture()
+  invalidStatus.manifest.windows_driver_status = 'invalid'
+  const resultStatus = validateReleaseManifest(invalidStatus.manifest, { root: invalidStatus.root })
+  assert.equal(resultStatus.ok, false)
+  assert.equal(resultStatus.errors.includes('windows-driver-status-invalid'), true)
+
+  const notIncludedButPresent = fixture()
+  notIncludedButPresent.manifest.windows_driver_status = 'not-included'
+  notIncludedButPresent.manifest.windows_drivers = [{ component: 'a', signing: 'test-signed', attested: false, public_eligible: false }]
+  const resultNotIncluded = validateReleaseManifest(notIncludedButPresent.manifest, { root: notIncludedButPresent.root })
+  assert.equal(resultNotIncluded.ok, false)
+  assert.equal(resultNotIncluded.errors.includes('windows-driver-status-invalid'), true)
+
+  const unsafePath = fixture()
+  unsafePath.manifest.linux_bundle.path = '../escape.tar.gz'
+  const resultPath = validateReleaseManifest(unsafePath.manifest, { root: unsafePath.root })
+  assert.equal(resultPath.ok, false)
+  assert.equal(resultPath.errors.includes('release-file-record-invalid'), true)
+
+  const absolutePath = fixture()
+  absolutePath.manifest.linux_bundle.path = path.join(absolutePath.root, 'artifacts/dir.tar.gz')
+  const resultAbsolute = validateReleaseManifest(absolutePath.manifest, { root: absolutePath.root })
+  assert.equal(resultAbsolute.ok, false)
+  assert.equal(resultAbsolute.errors.includes('release-file-record-invalid'), true)
+
+  const escapingRoot = fixture()
+  escapingRoot.manifest.linux_bundle.path = '../../escape.tar.gz'
+  const resultEscaping = validateReleaseManifest(escapingRoot.manifest, { root: '/' })
+  assert.equal(resultEscaping.ok, false)
+  assert.equal(resultEscaping.errors.includes('release-file-path-unsafe'), true)
+
+  const missingFile = fixture()
+  missingFile.manifest.linux_bundle.path = 'artifacts/missing.tar.gz'
+  const resultMissingFile = validateReleaseManifest(missingFile.manifest, { root: missingFile.root })
+  assert.equal(resultMissingFile.ok, false)
+  assert.equal(resultMissingFile.errors.includes('release-file-missing'), true)
+
+  const invalidRecord = fixture()
+  invalidRecord.manifest.linux_bundle.bytes = 'string'
+  const resultRecord = validateReleaseManifest(invalidRecord.manifest, { root: invalidRecord.root })
+  assert.equal(resultRecord.ok, false)
+  assert.equal(resultRecord.errors.includes('release-file-record-invalid'), true)
+
+  const notFile = fixture()
+  mkdirSync(path.join(notFile.root, 'artifacts/dir.tar.gz'), { recursive: true })
+  notFile.manifest.linux_bundle.path = 'artifacts/dir.tar.gz'
+  const resultNotFile = validateReleaseManifest(notFile.manifest, { root: notFile.root })
+  assert.equal(resultNotFile.ok, false)
+  assert.equal(resultNotFile.errors.includes('release-file-invalid'), true)
+
+  const sizeMismatch = fixture()
+  sizeMismatch.manifest.linux_bundle.bytes = 1234
+  const resultSize = validateReleaseManifest(sizeMismatch.manifest, { root: sizeMismatch.root })
+  assert.equal(resultSize.ok, false)
+  assert.equal(resultSize.errors.includes('release-file-size-mismatch'), true)
+
+  const badSbom2 = fixture()
+  badSbom2.manifest.sbom = null
+  const sbomResult2 = validateReleaseManifest(badSbom2.manifest, { root: badSbom2.root })
+  assert.equal(sbomResult2.ok, false)
+  assert.equal(sbomResult2.errors.includes('sbom-invalid'), true)
+
+  const badSbomFormat = fixture()
+  badSbomFormat.manifest.sbom.format = 'invalid'
+  const sbomResultFormat = validateReleaseManifest(badSbomFormat.manifest, { root: badSbomFormat.root })
+  assert.equal(sbomResultFormat.ok, false)
+  assert.equal(sbomResultFormat.errors.includes('sbom-format-invalid'), true)
+
+  const badSbomSource = fixture()
+  badSbomSource.manifest.sbom.source_sha = 'invalid'
+  const sbomResultSource = validateReleaseManifest(badSbomSource.manifest, { root: badSbomSource.root })
+  assert.equal(sbomResultSource.ok, false)
+  assert.equal(sbomResultSource.errors.includes('sbom-source-binding-mismatch'), true)
+
+  const invalidRollback = fixture()
+  invalidRollback.manifest.rollback.trigger = 'a'.repeat(300)
+  const resultRollback = validateReleaseManifest(invalidRollback.manifest, { root: invalidRollback.root })
+  assert.equal(resultRollback.ok, false)
+  assert.equal(resultRollback.errors.includes('rollback-invalid'), true)
+
+  const invalidAssets = fixture()
+  invalidAssets.manifest.linux_bundle.path = 'artifacts/wrong.tar.gz'
+  let buf = Buffer.from('dummy')
+  writeFileSync(path.join(invalidAssets.root, 'artifacts/wrong.tar.gz'), buf)
+  invalidAssets.manifest.linux_bundle.bytes = buf.length
+  invalidAssets.manifest.linux_bundle.sha256 = sha256(buf)
+  let str = `${invalidAssets.manifest.linux_bundle.sha256}  wrong.tar.gz\n`
+  writeFileSync(path.join(invalidAssets.root, 'artifacts/wrong.tar.gz.sha256'), str)
+  invalidAssets.manifest.detached_checksum.sha256 = sha256(Buffer.from(str))
+  invalidAssets.manifest.detached_checksum.bytes = str.length
+  invalidAssets.manifest.detached_checksum.archive = 'artifacts/wrong.tar.gz'
+  invalidAssets.manifest.detached_checksum.path = 'artifacts/wrong.tar.gz.sha256'
+  const resultAssets = validateReleaseManifest(invalidAssets.manifest, { root: invalidAssets.root })
+  assert.equal(resultAssets.ok, false)
+  assert.equal(resultAssets.errors.includes('release-public-assets-invalid'), true)
+
+  const untrusted = fixture({ manifest: {
+    windows_driver_status: 'present',
+    windows_drivers: [{
+      component: 'ramshared.sys',
+      signing: 'untrusted',
+      attested: false,
+      public_eligible: true,
+    }],
+  } })
+  const resultUntrusted = validateReleaseManifest(untrusted.manifest, { root: untrusted.root })
+  assert.equal(resultUntrusted.ok, false)
+  assert.equal(resultUntrusted.errors.includes('windows-driver-untrusted-public'), true)
+
+  const unattested = fixture()
+  unattested.manifest.windows_drivers = [{ component: 'ramshared.sys', signing: 'production-trusted', attested: false, public_eligible: true }]
+  const resultUnattested = validateReleaseManifest(unattested.manifest, { root: unattested.root })
+  assert.equal(resultUnattested.ok, false)
+  assert.equal(resultUnattested.errors.includes('windows-driver-unattested-public'), true)
+})
