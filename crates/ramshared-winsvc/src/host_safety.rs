@@ -57,6 +57,26 @@ pub enum LockWaitDecision {
     ResumeOnline,
 }
 
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SafetyFailure {
+    pub check_name: String,
+    pub threshold: u64,
+    pub actual_value: u64,
+}
+
+pub fn check_safety(check_name: &str, threshold: u64, actual_value: u64) -> Result<(), SafetyFailure> {
+    if actual_value > threshold {
+        Err(SafetyFailure {
+            check_name: check_name.to_string(),
+            threshold,
+            actual_value,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 pub fn lock_wait_decision(
     elapsed: Duration,
     deadline: Duration,
@@ -108,6 +128,40 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use std::time::Duration;
+
+
+    #[test]
+    fn test_host_safety_exceeds_threshold_returns_error() {
+        let err = check_safety("max_latency", 100, 150).unwrap_err();
+        assert_eq!(err.check_name, "max_latency");
+        assert_eq!(err.threshold, 100);
+        assert_eq!(err.actual_value, 150);
+    }
+
+    #[test]
+    fn test_host_safety_meets_threshold_returns_ok() {
+        assert!(check_safety("max_latency", 100, 50).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_boundary_exact_threshold_returns_ok() {
+        assert!(check_safety("max_latency", 100, 100).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_boundary_zero_threshold_returns_error() {
+        let err = check_safety("min_capacity", 0, 1).unwrap_err();
+        assert_eq!(err.actual_value, 1);
+    }
+
+    #[test]
+    fn test_host_safety_boundary_max_value_returns_error() {
+        let err = check_safety("max_value", u64::MAX - 1, u64::MAX).unwrap_err();
+        assert_eq!(err.actual_value, u64::MAX);
+    }
+
+
+
 
     #[test]
     fn pagefile_sources_are_unioned() {
