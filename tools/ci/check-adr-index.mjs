@@ -160,8 +160,8 @@ export function validateAdrIndex(indexText, files) {
   return unique(errors)
 }
 
-export function readAdrFiles(root, { lstat = lstatSync, read = readFileSync, list = readdirSync } = {}) {
-  const directory = path.join(root, DECISIONS)
+export function readAdrFiles(root, { lstat = lstatSync, read = readFileSync, list = readdirSync, dir } = {}) {
+  const directory = dir || path.join(root, DECISIONS)
   const errors = []
   const files = []
   let names = []
@@ -180,8 +180,23 @@ export function readAdrFiles(root, { lstat = lstatSync, read = readFileSync, lis
   return { files, errors }
 }
 
-export function run({ root = ROOT } = {}) {
-  const indexPath = path.join(root, DECISIONS, 'README.md')
+export function run({ root = ROOT, dir } = {}) {
+  const directory = dir || path.join(root, DECISIONS)
+
+  try {
+    const stat = lstatSync(directory)
+    if (!stat.isDirectory()) {
+      return { ok: false, records: 0, errors: [`adr-directory-invalid:${directory}`] }
+    }
+    const files = readdirSync(directory)
+    if (!files.some(f => f.endsWith('.md'))) {
+      return { ok: false, records: 0, errors: [`adr-directory-empty:${directory}`] }
+    }
+  } catch {
+    return { ok: false, records: 0, errors: [`adr-directory-unreadable:${directory}`] }
+  }
+
+  const indexPath = path.join(directory, 'README.md')
   let indexText = ''
   const errors = []
   try {
@@ -189,18 +204,42 @@ export function run({ root = ROOT } = {}) {
     if (!stat.isFile() || stat.isSymbolicLink()) errors.push('adr-index-unsafe')
     else indexText = readFileSync(indexPath, 'utf8')
   } catch { errors.push('adr-index-unreadable') }
-  const scanned = readAdrFiles(root)
+  const scanned = readAdrFiles(root, { dir: directory })
   errors.push(...scanned.errors)
   if (indexText) errors.push(...validateAdrIndex(indexText, scanned.files))
   return { ok: errors.length === 0, records: scanned.files.length, errors: unique(errors) }
 }
 
 export function main(argv = process.argv.slice(2)) {
-  if (argv.length !== 1 || !['--check', '--all'].includes(argv[0])) {
-    process.stderr.write('usage: node tools/ci/check-adr-index.mjs --check\n')
+  let mode = null
+  let dirPath = null
+
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--check' || arg === '--all') {
+      mode = arg
+    } else if (arg === '--dir') {
+      const value = argv[i + 1]
+      if (value === undefined || value.startsWith('--')) {
+        process.stderr.write('usage: node tools/ci/check-adr-index.mjs --check [--dir <path>]\n')
+        return 2
+      }
+      dirPath = value
+      i++
+    } else if (arg && !arg.startsWith('--') && !dirPath && mode) {
+        dirPath = arg;
+    } else {
+      process.stderr.write('usage: node tools/ci/check-adr-index.mjs --check [--dir <path>]\n')
+      return 2
+    }
+  }
+
+  if (!mode) {
+    process.stderr.write('usage: node tools/ci/check-adr-index.mjs --check [--dir <path>]\n')
     return 2
   }
-  const result = run()
+
+  const result = run({ dir: dirPath })
   if (result.ok) {
     process.stdout.write(`ADR_INDEX PASS records=${result.records}\n`)
     return 0

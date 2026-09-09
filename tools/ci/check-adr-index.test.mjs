@@ -108,3 +108,29 @@ test('ADR checker stays read-only', async () => {
   const result = run({ root })
   assert.equal(result.ok, true)
 })
+
+test('ADR checker validates --dir argument correctly', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-adr-check-dir-'))
+  mkdirSync(path.join(root, 'custom-decisions'), { recursive: true })
+  const canonical = adr('0008', 'fixture')
+  writeFileSync(path.join(root, 'custom-decisions', canonical.filename), canonical.text)
+  writeFileSync(path.join(root, 'custom-decisions', 'README.md'), index({ canonical: [{ number: '0008', filename: canonical.filename, profile: 'governed-v1' }] }))
+
+  const result = run({ dir: path.join(root, 'custom-decisions') })
+  assert.equal(result.ok, true)
+  assert.equal(result.records, 1)
+
+  const missingResult = run({ dir: path.join(root, 'missing-dir') })
+  assert.equal(missingResult.ok, false)
+  assert.equal(missingResult.records, 0)
+  assert.equal(missingResult.errors.length, 1)
+  assert.match(missingResult.errors[0], /adr-directory-unreadable/)
+
+  const emptyDir = path.join(root, 'empty-dir')
+  mkdirSync(emptyDir)
+  const emptyResult = run({ dir: emptyDir })
+  assert.equal(emptyResult.ok, false)
+  assert.equal(emptyResult.records, 0)
+  assert.equal(emptyResult.errors.length, 1)
+  assert.match(emptyResult.errors[0], /adr-directory-empty/)
+})
