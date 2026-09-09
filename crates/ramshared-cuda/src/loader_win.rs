@@ -85,4 +85,31 @@ mod tests {
         unsafe { SetLastError(0) };
         assert_eq!(error(), "Windows error code: 0x00000000");
     }
+
+    #[test]
+    fn test_loader_win_open_missing_dll() {
+        let ptr = unsafe { open(c"nonexistent_gpu_lib.dll".as_ptr()) };
+        assert!(ptr.is_null());
+        let err = error();
+        assert!(err.starts_with("Windows error code: "));
+    }
+
+    #[test]
+    fn test_loader_win_open_invalid_utf8() {
+        let bad_str: &[u8] = b"bad\\xFFstr\\0";
+        let ptr = unsafe { open(bad_str.as_ptr() as *const c_char) };
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn test_loader_win_sym_null_handle() {
+        let ptr = unsafe { sym(core::ptr::null_mut(), c"some_symbol".as_ptr()) };
+        assert!(ptr.is_null());
+    }
+
+    #[test]
+    fn test_loader_win_close_null_handle() {
+        let res = unsafe { close(core::ptr::null_mut()) };
+        assert_eq!(res, 0);
+    }
 }
