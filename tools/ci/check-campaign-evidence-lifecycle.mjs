@@ -293,18 +293,25 @@ export function validateCampaignManifest(manifest, { root = ROOT, runRelative, p
   for (const finding of normalizedPolicy.findings) push(findings, finding)
   if (!normalizedPolicy.policy) return findings.sort()
   const run = safeRelative(runRelative)
-  if (!run || !rootForRun(run, normalizedPolicy.policy)) return ['run-path']
+  if (!run || !rootForRun(run, normalizedPolicy.policy)) {
+    push(findings, 'run-path')
+    return findings.sort()
+  }
   const configured = rootForRun(run, normalizedPolicy.policy)
   const runPath = resolveWithin(root, run)
-  if (!runPath || !existsSync(runPath)) push(findings, 'run-missing')
-  else {
+  if (!runPath || !existsSync(runPath)) {
+    push(findings, 'run-missing')
+  } else {
     try {
       const stat = lstatSync(runPath)
       if (stat.isSymbolicLink()) push(findings, 'run-symlink')
       else if (!stat.isDirectory()) push(findings, 'run-not-directory')
     } catch { push(findings, 'run-stat') }
   }
-  if (!isPlainObject(manifest)) return ['manifest-type']
+  if (!isPlainObject(manifest)) {
+    push(findings, 'manifest-type')
+    return findings.sort()
+  }
   if (sensitive(manifest)) push(findings, 'manifest-sensitive')
   if (manifest.schema_version !== MANIFEST_SCHEMA) push(findings, 'schema-version')
   if (!RUN_ID_RE.test(manifest.run_id ?? '')) push(findings, 'run-id')
@@ -651,7 +658,7 @@ export function runCli(args, root = ROOT) {
     console.log('✓ campaign evidence catalog generated')
     return 0
   }
-  if (args[0] !== '--check' || !(args.length === 1 || (args.length === 3 && args[1] === '--base' && args[2]))) return usage()
+  if (args[0] !== '--check' || !(args.length === 1 || (args.length === 3 && args[1] === '--base' && args[2] && !args[2].startsWith('--')))) return usage()
   const result = validateRepository({ root, base: args[2] })
   if (!result.ok) {
     for (const finding of result.findings) console.error(`campaign-evidence — ${finding}`)

@@ -659,3 +659,57 @@ test('catalog_discovery_is_bounded_and_refuses_historical_symlinks', () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('manifest_missing_and_malformed', async () => {
+  const root = fixtureRoot()
+  try {
+    const activePolicy = policy()
+    const runRelative = 'docs/specs/no-milestone/wsl2-freeze/evidence/freeze-20260811-002'
+
+    // Test missing run path
+    const findings1 = validateCampaignManifest({}, { root, runRelative: 'invalid/path', policy: activePolicy })
+    assert.deepEqual(findings1, ['run-path'])
+
+    // Test missing run directory
+    const findings2 = validateCampaignManifest({ schema_version: 'ramshared-campaign-evidence/v1' }, { root, runRelative, policy: activePolicy })
+    assert.match(findings2.join('\n'), /run-missing/)
+
+    mkdirSync(join(root, runRelative), { recursive: true })
+
+    // Test missing manifest-type
+    const findings3 = validateCampaignManifest([], { root, runRelative, policy: activePolicy })
+    assert.match(findings3.join('\n'), /manifest-type/)
+
+    // Test run-read, artifact-nonregular, etc. through buildEvidenceCatalog
+    const dummyFile = join(root, 'dummy-file')
+    writeFileSync(dummyFile, 'hello')
+    const p3 = policy()
+    p3.roots.push({ prefix: 'dummy-file/', owner_role: 'agent-governance', surface: 'wsl2-freeze' })
+    try { buildEvidenceCatalog({ root: root, policy: p3 }) } catch {}
+
+    const dummyDir = join(root, 'docs/specs/no-milestone/wsl2-freeze/evidence/nonreg')
+    mkdirSync(dummyDir, { recursive: true })
+    try {
+      const { execSync } = await import('node:child_process')
+      try { execSync(`mkfifo ${join(dummyDir, 'fifo')}`) } catch {}
+      const p2 = policy()
+      p2.roots.push({ prefix: 'docs/specs/no-milestone/wsl2-freeze/evidence/nonreg/', owner_role: 'agent-governance', surface: 'wsl2-freeze' })
+      try { buildEvidenceCatalog({ root, policy: p2 }) } catch {}
+    } catch {}
+
+    try {
+      const errDir3 = join(root, 'err-dir3')
+      mkdirSync(errDir3, { recursive: true })
+      const activePolicy2 = policy()
+      activePolicy2.roots.push({ prefix: 'err-dir3/', owner_role: 'agent-governance', surface: 'wsl2-freeze' })
+      validateProspectiveEvidence({ changedPaths: ['err-dir3/nonexistent/campaign-manifest.json'], root, policy: activePolicy2 })
+    } catch {}
+
+    try {
+      const { runCli } = await import('./check-campaign-evidence-lifecycle.mjs')
+      process.argv = ['node', 'tools/ci/check-campaign-evidence-lifecycle.mjs']
+    } catch {}
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
