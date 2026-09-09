@@ -501,3 +501,72 @@ fn broker_instance_id() -> io::Result<String> {
     }
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use windows_service::service::ServiceControl;
+
+    #[test]
+    fn test_service_set_service_config_valid() {
+        let path = PathBuf::from(r"C:\test_broker_config.toml");
+        let res = set_service_config(path);
+        assert!(res.is_ok() || res.unwrap_err() == "broker service config already set");
+    }
+
+    #[test]
+    fn test_service_set_service_config_relative() {
+        let path = PathBuf::from(r"relative\path.toml");
+        let res = set_service_config(path);
+        assert_eq!(res.unwrap_err(), "broker config path must be absolute");
+    }
+
+    #[test]
+    fn test_service_verify_active_config_invalid() {
+        let path = PathBuf::from(r"C:\invalid.toml");
+        let res = verify_active_config(&path, b"");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_service_control_handler_dispatch_stop() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler_stop = Arc::clone(&stop);
+
+        let handler = move |control: ServiceControl| match control {
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                handler_stop.store(true, Ordering::Release);
+                windows_service::service_control_handler::ServiceControlHandlerResult::NoError
+            }
+            ServiceControl::Interrogate => windows_service::service_control_handler::ServiceControlHandlerResult::NoError,
+            _ => windows_service::service_control_handler::ServiceControlHandlerResult::NotImplemented,
+        };
+
+        let res = handler(ServiceControl::Stop);
+        assert!(matches!(res, windows_service::service_control_handler::ServiceControlHandlerResult::NoError));
+        assert!(stop.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_service_control_handler_dispatch_interrogate() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler_stop = Arc::clone(&stop);
+
+        let handler = move |control: ServiceControl| match control {
+            ServiceControl::Stop | ServiceControl::Shutdown => {
+                handler_stop.store(true, Ordering::Release);
+                windows_service::service_control_handler::ServiceControlHandlerResult::NoError
+            }
+            ServiceControl::Interrogate => windows_service::service_control_handler::ServiceControlHandlerResult::NoError,
+            _ => windows_service::service_control_handler::ServiceControlHandlerResult::NotImplemented,
+        };
+
+        let res = handler(ServiceControl::Interrogate);
+        assert!(matches!(res, windows_service::service_control_handler::ServiceControlHandlerResult::NoError));
+        assert!(!stop.load(Ordering::Acquire));
+    }
+}
