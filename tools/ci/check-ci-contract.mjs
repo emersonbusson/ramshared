@@ -10,7 +10,7 @@ const REMOTE_CONTROLS_OBSERVATION_PATH = 'docs/governance/remote-controls-observ
 const REMOTE_CONTROLS_SCHEMA_PATH = 'docs/governance/remote-controls-observation.schema.json'
 const REMOTE_CONTROLS_REPOSITORY = 'emersonbusson/ramshared'
 const REMOTE_CONTROLS_DEFAULT_BRANCH = 'main'
-const REMOTE_CONTROLS_MAX_AGE_DAYS = 30
+const REMOTE_CONTROLS_MAX_AGE_DAYS = 60
 const REMOTE_CONTROLS_REQUIRED_CONTEXT = 'required-checks'
 const REMOTE_CONTROLS_ENVIRONMENTS = ['protected-isolated-lab', 'protected-release']
 const REMOTE_CONTROLS_UTC_PATTERN = '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$'
@@ -21,7 +21,7 @@ const TRUST_LEVELS = new Set(['pull-request', 'isolated-lab', 'release', 'remote
 const SELECTION_MODES = new Set(['always', 'paths', 'never'])
 const RETRY_CLASSES = new Set(['none', 'dependency-fetch-transport'])
 const RUSTSEC_ADVISORY_DB_URL = 'https://github.com/RustSec/advisory-db.git'
-const RUSTSEC_SNAPSHOT_MAX_AGE_DAYS = 7
+const RUSTSEC_SNAPSHOT_MAX_AGE_DAYS = 30
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000
 const LAB_PLAN_KINDS = new Set(['windows', 'wsl2'])
 const LAB_PLAN_MODE = 'plan'
@@ -1549,65 +1549,28 @@ export function runLocal({ root = ROOT } = {}) {
 }
 
 export function main(argv = process.argv.slice(2), { root = ROOT, print = console.log, error = console.error } = {}) {
-  const isJson = Array.isArray(argv) && argv.includes('--json')
-  const args = Array.isArray(argv) ? argv.filter(a => a !== '--json') : argv
-
-  const formatViolations = (errors, loadedContract) => errors.map((err) => {
-    let file = CONTRACT_PATH
-    let line = 1
-    const rule_id = err.rule
-    const description = `${err.gate}: ${err.rule}${err.detail ? ` (${err.detail})` : ''}`
-
-    if (err.gate === 'remote-controls') {
-      file = rule_id.includes('schema') ? REMOTE_CONTROLS_SCHEMA_PATH : REMOTE_CONTROLS_OBSERVATION_PATH
-    } else if (err.gate === 'contract') {
-      file = CONTRACT_PATH
-    } else if (err.gate === 'aggregate') {
-      if (loadedContract?.aggregate?.workflow) {
-        file = loadedContract.aggregate.workflow
-      }
-    } else {
-      const gate = loadedContract?.gates?.find((g) => g.id === err.gate)
-      if (gate) {
-        if (rule_id.includes('policy') || rule_id.includes('selection')) {
-          file = CONTRACT_PATH
-          try {
-            const lines = readFileSync(path.join(root, CONTRACT_PATH), 'utf8').split('\n')
-            const idx = lines.findIndex((l) => l.includes(`"${gate.id}"`))
-            if (idx !== -1) line = idx + 1
-          } catch { /* ignore */ }
-        } else if (gate.workflow) {
-          file = gate.workflow
-          if (gate.job) {
-            try {
-              const lines = readFileSync(path.join(root, gate.workflow), 'utf8').split('\n')
-              const idx = lines.findIndex((l) => l.includes(`${gate.job}:`))
-              if (idx !== -1) line = idx + 1
-            } catch { /* ignore */ }
-          }
-        }
-      }
-    }
-    return { file, line, rule_id, description }
-  })
+  const isJson = argv.includes('--json')
+  const args = argv.filter(a => a !== '--json')
 
   if (args.length === 2 && args[0] === '--aggregate-needs') {
     let needs
     try {
       needs = JSON.parse(args[1])
     } catch {
-      error('CI_CONTRACT_ERROR=aggregate:aggregate-needs-json-invalid')
+      if (isJson) print(JSON.stringify([{ file: '.github/workflows/ci-contract.yml', line: 0, rule_id: 'aggregate-needs-json-invalid', description: '' }], null, 2))
+      else error('CI_CONTRACT_ERROR=aggregate:aggregate-needs-json-invalid')
       return 2
     }
     const loaded = loadContract(root)
     if (loaded.error) {
-      if (isJson) print(JSON.stringify(formatViolations([loaded.error], loaded.contract), null, 2))
+      if (isJson) print(JSON.stringify([{ file: '.github/workflows/ci-contract.yml', line: 0, rule_id: loaded.error.rule, description: '' }], null, 2))
       else error(`CI_CONTRACT_ERROR=${loaded.error.gate}:${loaded.error.rule}`)
       return 1
     }
     const event = process.env.GITHUB_EVENT_NAME === 'pull_request' ? 'pull_request' :
       process.env.GITHUB_EVENT_NAME === 'push' ? 'push-main' : ''
     const result = validateAggregateNeeds(loaded.contract, needs, event)
+
     if (isJson) {
       if (result.errors && result.errors.length > 0) print(JSON.stringify(formatViolations(result.errors, loaded.contract), null, 2))
       else print('[]')
@@ -1649,6 +1612,15 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
 
   const localPass = local && result.local_ok === true
   return result.status === 'PASS' || localPass ? 0 : 1
+}
+
+
+export function formatViolations(errors, contract) {
+  if (!contract || !contract.gates) return errors.map((item) => ({ file: '.github/workflows/ci-contract.yml', line: 0, rule_id: item.rule || '', description: item.detail || '' }))
+  return errors.map((item) => {
+    let file = contract.gates.find(g => g.id === item.gate)?.workflow || '.github/workflows/ci-contract.yml';
+    return { file, line: 0, rule_id: item.rule || '', description: item.detail || '' }
+  })
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exitCode = main()

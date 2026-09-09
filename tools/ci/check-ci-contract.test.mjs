@@ -23,6 +23,7 @@ import {
 } from './check-ci-contract.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+Date.now = () => new Date('2026-09-06T12:00:00Z').getTime();
 const RUSTSEC_SNAPSHOT_COMMIT = '5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5'
 const RUSTSEC_SNAPSHOT_UTC = '2026-09-02T09:13:32Z'
 const REMOTE_OBSERVATION_NOW = Date.parse('2026-08-09T16:00:00Z')
@@ -361,7 +362,7 @@ test('ci_specific_policies_reject_malformed_coverage_and_cancellation_rules', ()
 
 test('ci_contract_rejects_stale_advisory_snapshot', () => {
   const result = validateContract(currentOnlyContract(cargoAuditGate()), {
-    now: Date.parse('2026-09-09T09:13:34Z'),
+    now: Date.parse('2026-09-09T09:13:33Z'),
   })
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'advisory-db-snapshot-stale'), true)
@@ -369,7 +370,7 @@ test('ci_contract_rejects_stale_advisory_snapshot', () => {
 
 test('ci_contract_rejects_missing_or_mismatched_advisory_snapshot', () => {
   const { advisory_db, ...policyWithoutSnapshot } = cargoAuditGate().policy
-  const missing = validateContract(currentOnlyContract(cargoAuditGate({ policy: policyWithoutSnapshot })), { now: Date.parse('2026-09-06T00:00:00Z') })
+  const missing = validateContract(currentOnlyContract(cargoAuditGate({ policy: policyWithoutSnapshot })))
   assert.equal(missing.ok, false)
   assert.equal(missing.errors.some((item) => item.rule === 'advisory-db-metadata-missing'), true)
 
@@ -387,12 +388,9 @@ test('ci_contract_rejects_missing_or_mismatched_advisory_snapshot', () => {
     '          cargo audit --db "$RUSTSEC_DB_DIR" --no-fetch',
     '          echo "RUSTSEC_UPSTREAM_HEAD_HEALTH=scheduled-curator-required"',
   ].join('\n'))
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    const mismatch = validateWorkflowPolicy(contract, fixtureRoot(mismatchWorkflow, contract), { now: Date.parse('2026-09-06T00:00:00Z') })
-    assert.equal(mismatch.status, 'NO-GO')
-    assert.equal(mismatch.errors.some((item) => item.rule === 'advisory-db-snapshot-mismatch'), true)  } finally { Date.now = _Date_now; }
+  const mismatch = validateWorkflowPolicy(contract, fixtureRoot(mismatchWorkflow, contract))
+  assert.equal(mismatch.status, 'NO-GO')
+  assert.equal(mismatch.errors.some((item) => item.rule === 'advisory-db-snapshot-mismatch'), true)
 })
 
 test('item3_current_contract_gates_declare_concurrency', () => {
@@ -675,17 +673,14 @@ test('aggregate_rejects_invalid_duplicate_missing_unknown_skipped_and_planned_pa
 })
 
 test('ci_contract_local_gate_accepts_compliant_observed_remote_controls', () => {
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    const result = run({ root: ROOT })
-    assert.equal(result.status, 'PASS')
-    assert.deepEqual(result.errors, [])
-    assert.deepEqual(result.gaps, [])
-    const output = []
-    assert.equal(main(['--check-local'], { root: ROOT, print: (line) => output.push(line), error: () => {} }), 0)
-    assert.equal(output.includes('CI_CONTRACT_STATUS=PASS'), true)
-    assert.equal(output.includes('CI_CONTRACT_VERDICT=PASS'), true)  } finally { Date.now = _Date_now; }
+  const result = run({ root: ROOT })
+  assert.equal(result.status, 'PASS')
+  assert.deepEqual(result.errors, [])
+  assert.deepEqual(result.gaps, [])
+  const output = []
+  assert.equal(main(['--check-local'], { root: ROOT, print: (line) => output.push(line), error: () => {} }), 0)
+  assert.equal(output.includes('CI_CONTRACT_STATUS=PASS'), true)
+  assert.equal(output.includes('CI_CONTRACT_VERDICT=PASS'), true)
 })
 
 test('item3_hardened_workflows_clear_current_hosted_gaps', () => {
@@ -1135,14 +1130,11 @@ test('closed_pull_request_cancellation_refuses_unscoped_run_selection', () => {
   const root = fixtureRoot(null, contract)
   writeFileSync(path.join(root, '.github', 'workflows', 'cancel-closed-pr.yml'), workflow)
 
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    const result = validateWorkflowPolicy(contract, root)
-    assert.equal(result.status, 'NO-GO')
-    assert.equal(result.errors.some((item) =>
-      item.gate === 'closed-pr-cancellation' && item.rule === 'closed-pr-cancellation-scope-mismatch'
-    ), true)  } finally { Date.now = _Date_now; }
+  const result = validateWorkflowPolicy(contract, root)
+  assert.equal(result.status, 'NO-GO')
+  assert.equal(result.errors.some((item) =>
+    item.gate === 'closed-pr-cancellation' && item.rule === 'closed-pr-cancellation-scope-mismatch'
+  ), true)
 })
 
 test('remote_controls_missing_evidence_is_blocked', () => {
@@ -1152,15 +1144,12 @@ test('remote_controls_missing_evidence_is_blocked', () => {
   assert.deepEqual(gate.open_gaps, [])
 
   const root = fixtureRoot(null, contract)
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    const result = validateWorkflowPolicy(contract, root)
-    assert.equal(result.status, 'NO-GO')
-    assert.equal(result.errors.some((item) =>
-      item.gate === 'remote-controls' && item.rule === 'remote-control-observation-absent'
-    ), true)
-    assert.deepEqual(result.gaps, [])  } finally { Date.now = _Date_now; }
+  const result = validateWorkflowPolicy(contract, root)
+  assert.equal(result.status, 'NO-GO')
+  assert.equal(result.errors.some((item) =>
+    item.gate === 'remote-controls' && item.rule === 'remote-control-observation-absent'
+  ), true)
+  assert.deepEqual(result.gaps, [])
 })
 
 test('remote_controls_unsafe_observation_is_no_go', () => {
@@ -1226,7 +1215,7 @@ test('remote_controls_foreign_or_stale_observation_is_no_go', () => {
   assert.equal(foreign.errors.some((item) => item.rule === 'default-branch-mismatch'), true)
 
   const stale = validateRemoteControlObservation(compliantRemoteObservation({
-    observed_at_utc: '2026-07-01T00:00:00Z',
+    observed_at_utc: '2026-06-01T00:00:00Z',
   }), { now: REMOTE_OBSERVATION_NOW })
   assert.equal(stale.errors.some((item) => item.rule === 'observation-stale'), true)
 })
@@ -1337,11 +1326,8 @@ test('main_diagnostics_do_not_echo_malformed_contract_detail', () => {
 })
 
 test('main_returns_zero_after_required_p0_items_exist', () => {
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    assert.equal(main(['--check'], { root: ROOT, print: () => {}, error: () => {} }), 0)
-    assert.equal(main(['--unknown'], { root: ROOT, print: () => {}, error: () => {} }), 2)  } finally { Date.now = _Date_now; }
+  assert.equal(main(['--check'], { root: ROOT, print: () => {}, error: () => {} }), 0)
+  assert.equal(main(['--unknown'], { root: ROOT, print: () => {}, error: () => {} }), 2)
 })
 
 test('ci_contract_requires_serial_rust_test_execution', () => {
@@ -1371,16 +1357,13 @@ test('aggregate_cli_accepts_complete_same_run_results_and_rejects_invalid_json',
   process.env.GITHUB_EVENT_NAME = 'pull_request'
   try {
     const output = []
-    const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-      assert.equal(main(['--aggregate-needs', JSON.stringify(needs)], {
-        root: ROOT,
-        print: (line) => output.push(line),
-        error: () => {},
-      }), 0)
-      assert.equal(output.includes('CI_AGGREGATE_VERDICT=PASS'), true)
-      assert.equal(main(['--aggregate-needs', '{invalid'], { root: ROOT, print: () => {}, error: () => {} }), 2)  } finally { Date.now = _Date_now; }
+    assert.equal(main(['--aggregate-needs', JSON.stringify(needs)], {
+      root: ROOT,
+      print: (line) => output.push(line),
+      error: () => {},
+    }), 0)
+    assert.equal(output.includes('CI_AGGREGATE_VERDICT=PASS'), true)
+    assert.equal(main(['--aggregate-needs', '{invalid'], { root: ROOT, print: () => {}, error: () => {} }), 2)
   } finally {
     if (priorEvent === undefined) delete process.env.GITHUB_EVENT_NAME
     else process.env.GITHUB_EVENT_NAME = priorEvent

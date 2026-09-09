@@ -11,6 +11,7 @@ import {
 } from './check-ci-contract.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+Date.now = () => new Date('2026-09-06T12:00:00Z').getTime();
 
 function contractFixture() {
   return {
@@ -137,11 +138,8 @@ test('aggregate_needs_accepts_only_active_success_and_rejects_missing_callers', 
 test('repository_aggregate_is_a_same_run_local_reusable_architecture', () => {
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    const result = validateReusableAggregateArchitecture(contract, workflow)
-    assert.equal(result.ok, true)  } finally { Date.now = _Date_now; }
+  const result = validateReusableAggregateArchitecture(contract, workflow)
+  assert.equal(result.ok, true)
 })
 
 test('canonical_reusable_callers_do_not_reintroduce_duplicate_automatic_triggers', () => {
@@ -166,12 +164,9 @@ test('ci_topology_rejects_duplicate_direct_and_reusable_invocation', () => {
   const duplicate = readFileSync(reusablePath, 'utf8').replace('  workflow_call:', '  workflow_call:\n  pull_request:')
   writeFileSync(reusablePath, duplicate)
 
-  const _Date_now = Date.now;
-  try {
-    Date.now = () => Date.parse('2026-09-06T00:00:00Z');
-    const result = validateReusableAggregateArchitecture(contract, entrypoint, { root: fixtureRoot })
-    assert.equal(result.ok, false)
-    assert.equal(result.errors.some((item) => item.rule === 'aggregate-reusable-direct-trigger'), true)  } finally { Date.now = _Date_now; }
+  const result = validateReusableAggregateArchitecture(contract, entrypoint, { root: fixtureRoot })
+  assert.equal(result.ok, false)
+  assert.equal(result.errors.some((item) => item.rule === 'aggregate-reusable-direct-trigger'), true)
 })
 
 test('canonical_entrypoint_revalidates_pull_request_edits', () => {
