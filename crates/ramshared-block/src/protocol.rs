@@ -183,4 +183,78 @@ mod tests {
         assert_eq!(Command::from_u16(2), Command::Disc);
         assert_eq!(Command::from_u16(99), Command::Unknown(99));
     }
+    #[test]
+    fn test_protocol_parse_read_request_valid() {
+        let raw = build_request(0, 0x1122_3344_5566_7788, 1024, 2048);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Read);
+        assert_eq!(r.handle, 0x1122_3344_5566_7788);
+        assert_eq!(r.offset, 1024);
+        assert_eq!(r.len, 2048);
+    }
+
+    #[test]
+    fn test_protocol_parse_write_request_valid() {
+        let raw = build_request(1, 0xdead_beef, 4096, 8192);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Write);
+        assert_eq!(r.handle, 0xdead_beef);
+        assert_eq!(r.offset, 4096);
+        assert_eq!(r.len, 8192);
+    }
+
+    #[test]
+    fn test_protocol_parse_flush_request_valid() {
+        let raw = build_request(3, 0x9988_7766_5544_3322, 0, 0);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Flush);
+        assert_eq!(r.handle, 0x9988_7766_5544_3322);
+    }
+
+    #[test]
+    fn test_protocol_parse_discard_request_valid() {
+        let raw = build_request(4, 0xabcd_ef01_2345_6789, 4096, 512);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Trim);
+        assert_eq!(r.handle, 0xabcd_ef01_2345_6789);
+        assert_eq!(r.offset, 4096);
+        assert_eq!(r.len, 512);
+    }
+
+    #[test]
+    fn test_protocol_parse_request_boundary_zero_offset_and_len() {
+        let raw = build_request(1, 1, 0, 0);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.offset, 0);
+        assert_eq!(r.len, 0);
+    }
+
+    #[test]
+    fn test_protocol_parse_request_boundary_max_offset_and_len() {
+        let raw = build_request(1, 1, u64::MAX, u32::MAX);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.offset, u64::MAX);
+        assert_eq!(r.len, u32::MAX);
+    }
+
+    #[test]
+    fn test_protocol_error_truncated_payload() {
+        let raw = [0u8; 10];
+        let err = parse_request(&raw).unwrap_err();
+        assert!(matches!(err, ProtocolError::TruncatedPayload { got: 10, need: 28 }));
+    }
+
+    #[test]
+    fn test_protocol_error_invalid_header() {
+        let mut raw = build_request(0, 1, 0, 4096);
+        raw[0] = 0xff;
+        let err = parse_request(&raw).unwrap_err();
+        assert!(matches!(err, ProtocolError::InvalidHeader(_)));
+    }
+
+    #[test]
+    fn test_protocol_error_format_checksum_mismatch() {
+        let err = ProtocolError::ChecksumMismatch;
+        assert_eq!(err.to_string(), "checksum mismatch");
+    }
 }

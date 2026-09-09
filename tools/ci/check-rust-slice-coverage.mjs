@@ -528,6 +528,9 @@ function runLlvmCov(
   cargoTargetDir,
   { repoRoot = REPO_ROOT, env = process.env, spawnCommand = spawnSync, error = console.error } = {},
 ) {
+  if (typeof repoRoot !== 'string' || !repoRoot.trim()) {
+    throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "repoRoot must be a non-empty string", 2);
+  }
   if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "Cargo.toml not found at repository root", 2);
   }
@@ -633,6 +636,9 @@ function reportError(error) {
 function main(argv = process.argv, { print = console.log, error = console.error } = {}) {
   try {
     const options = parseArgs(argv);
+    if (options.packages.some(pkg => typeof pkg !== 'string' || pkg.startsWith('-'))) {
+      throw usageError("invalid package name in --packages");
+    }
     if (options.help) {
       print(usageText());
       return 0;
