@@ -1,0 +1,34 @@
+## Summary
+Produce a FINDING_ONLY artifact regarding the missing Lease duration and TTL limits in `crates/ramshared-broker/src/lease.rs` because they are unsupported by the current struct definitions.
+
+## Commits
+| Commit | What was done | Why it was done | Details |
+|---|---|---|---|
+| fb9534f97775df83e625d0130c3cce5b6cd7db84 | Create FINDING_ONLY document for missing TTL/duration in lease | Document missing functionality requested for testing | The `lease.rs` structs (`PendingLease`, `LogicalLease`, `LeaseBook`) do not have duration or TTL fields.
+
+## Issue
+None
+
+## Owner
+TestCov100/2026-09-06/test-broker/039
+
+## Labels
+type:test
+area:ramshared-broker
+
+## Validation
+cargo test --package ramshared-broker
+
+## Rollback trigger
+Revert if tests fail on CI or cause regressions.
+RULES:
+1. Read README.md, AGENTS.md, CLAUDE.md, and all pertinent .claude/rules/.
+2. Baseline git SHA is 24531803029a7ecbc8b884ac9d5c77178e58036e on origin/main.
+3. Implement only the smallest safe orthogonal slice. Run cargo test (or node --test for .mjs) and open 1 PR strictly against jules/inbox.
+4. If safe code modification is not possible, produce FINDING_ONLY with evidence in docs/jules/findings/.
+5. Do not read, write, print, or persist credentials/secrets.
+6. PRs remain unmerged on jules/inbox; human consolidation will merge verified gains into main.
+7. English only for all source code, comments, identifiers, commits, and PR descriptions.
+8. Follow Conventional Commits format (<=72 chars title, body explaining rationale and rollback trigger).
+9. Format PR body with: ## Summary, ## Commits, ## Labels, ## Validation, ## Rollback trigger.
+10. All 10 contractual blocks MUST be generated in the plan before modifying any file.

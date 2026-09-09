@@ -515,6 +515,13 @@
       "owner": "release-engineering",
       "reason": "Review template is governed as repository process metadata.",
       "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "finding-only-documents",
+      "pattern": "docs/jules/findings/*.md",
+      "owner": "documentation-governance",
+      "reason": "FINDING_ONLY docs do not need reviewable lifecycle.",
+      "registeredAt": "2026-09-06T00:00:00Z"
     }
   ]
 }

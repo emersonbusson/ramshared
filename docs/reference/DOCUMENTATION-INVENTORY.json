@@ -2,9 +2,9 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 273,
+    "total": 274,
     "classified": 270,
-    "excluded": 3,
+    "excluded": 4,
     "unclassified": 0,
     "ambiguous": 0
   },
@@ -784,6 +784,16 @@
       "canonicalSource": "docs/governance/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/missing-lease-ttl.md",
+      "disposition": "excluded",
+      "ruleId": "finding-only-documents",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "documentation-governance",
+      "reason": "FINDING_ONLY docs do not need reviewable lifecycle."
     },
     {
       "path": "docs/labs/EVIDENCE-RETENTION.md",
