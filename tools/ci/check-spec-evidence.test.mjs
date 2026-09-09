@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { validateClaimManifest, validateRepositoryClaims } from './check-spec-evidence.mjs'
+import { validateClaimManifest, validateRepositoryClaims, main } from './check-spec-evidence.mjs'
 
 function hash(text) {
   return createHash('sha256').update(text).digest('hex')
@@ -156,4 +156,135 @@ test('rejects_traversal_and_malformed_repository_manifests', () => {
 
   writeFileSync(path.join(ctx.dir, 'evidence-manifest.json'), '{not-json')
   assert.match(validateRepositoryClaims({ root: ctx.root }).findings.join('\n'), /manifest-parse/)
+})
+
+test('test_ci_tooling_spec_missing_rejects', () => {
+  const ctx = fixture()
+  rmSync(path.join(ctx.dir, 'SPEC.md'))
+  const result = validateRepositoryClaims({ root: ctx.root })
+  assert.match(result.findings.join('\n'), /spec-missing/)
+})
+
+test('test_ci_tooling_evidence_dir_missing_rejects', () => {
+  const ctx = fixture()
+  rmSync(path.join(ctx.dir, 'evidence', 'result.json'))
+  rmSync(path.join(ctx.dir, 'evidence'), { recursive: true, force: true })
+  const result = validateRepositoryClaims({ root: ctx.root })
+  assert.match(result.findings.join('\n'), /evidence-dir-missing/)
+})
+
+test('test_ci_tooling_invalid_root_rejects', () => {
+  assert.match(validateRepositoryClaims({ root: '--invalid' }).findings.join('\n'), /invalid-root/)
+  assert.match(validateRepositoryClaims({ root: '' }).findings.join('\n'), /invalid-root/)
+  assert.match(validateRepositoryClaims({ root: null }).findings.join('\n'), /invalid-root/)
+})
+
+test('test_ci_tooling_specs_dir_missing_rejects', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-spec-evidence-empty-'))
+  const result = validateRepositoryClaims({ root })
+  assert.match(result.findings.join('\n'), /specs-dir-missing/)
+})
+
+test('test_ci_tooling_broken_evidence_link_rejects', () => {
+  const ctx = fixture()
+  const evidence = path.join(ctx.dir, 'evidence', 'result.json')
+  const target = path.join(ctx.dir, 'evidence', 'target.json')
+  writeFileSync(target, '{}')
+  rmSync(evidence)
+  symlinkSync(target, evidence)
+  rmSync(target)
+  const manifest = path.join(ctx.dir, 'evidence-manifest.json')
+  symlinkSync(target, manifest)
+  const result = validateRepositoryClaims({ root: ctx.root })
+  assert.match(result.findings.join('\n'), /broken-evidence-link/)
+})
+
+test('test_ci_tooling_specs_dir_error_rejects', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-spec-evidence-err-'))
+  mkdirSync(path.join(root, 'docs'))
+  writeFileSync(path.join(root, 'docs', 'specs'), '')
+  const result = validateRepositoryClaims({ root })
+  assert.match(result.findings.join('\n'), /specs-dir-missing/)
+})
+
+test('test_ci_tooling_main_help', () => {
+  const originalArgv = process.argv;
+  const originalError = console.error;
+  let errorMsg = '';
+  process.argv = ['node', 'script.js', '--help'];
+  console.error = (msg) => { errorMsg += msg; };
+  const code = main();
+  process.argv = originalArgv;
+  console.error = originalError;
+  assert.equal(code, 64);
+  assert.match(errorMsg, /usage/);
+})
+
+test('test_ci_tooling_main_error', () => {
+  const originalArgv = process.argv;
+  const originalError = console.error;
+  let errorMsg = '';
+  process.argv = ['node', 'script.js', '--check'];
+  console.error = (msg) => { errorMsg += msg; };
+  process.argv = originalArgv;
+  console.error = originalError;
+})
+
+test('test_ci_tooling_main_success', () => {
+  const originalArgv = process.argv;
+  const originalExit = process.exit;
+  const originalError = console.error;
+  const originalLog = console.log;
+  let exitCode;
+  let errorMsg = '';
+  let logMsg = '';
+  process.argv = ['node', 'tools/ci/check-spec-evidence.mjs', '--check'];
+  process.exit = (code) => { exitCode = code; };
+  console.error = (msg) => { errorMsg += msg; };
+  console.log = (msg) => { logMsg += msg; };
+
+  const code = main();
+
+  process.argv = originalArgv;
+  process.exit = originalExit;
+  console.error = originalError;
+  console.log = originalLog;
+  assert.equal(code, 1);
+})
+
+test('test_ci_tooling_main_execution_mock', () => {
+  const originalArgv = process.argv;
+  const originalExit = process.exit;
+  const originalError = console.error;
+  let exitCode;
+  let errorMsg = '';
+  process.argv = ['node', 'tools/ci/check-spec-evidence.mjs', '--invalid'];
+  process.exit = (code) => { exitCode = code; };
+  console.error = (msg) => { errorMsg += msg; };
+
+  const code = main();
+
+  process.argv = originalArgv;
+  process.exit = originalExit;
+  console.error = originalError;
+  assert.equal(code, 64);
+})
+
+test('test_ci_tooling_main_not_ok', () => {
+  const originalArgv = process.argv;
+  const originalExit = process.exit;
+  const originalError = console.error;
+  let exitCode;
+  let errorMsg = '';
+  process.argv = ['node', 'tools/ci/check-spec-evidence.mjs', '--check'];
+  process.exit = (code) => { exitCode = code; };
+  console.error = (msg) => { errorMsg += msg; };
+
+  const code = main();
+
+  process.argv = originalArgv;
+  process.exit = originalExit;
+  console.error = originalError;
+  assert.equal(code, 1);
+  assert.match(errorMsg, /spec-evidence —/);
 })

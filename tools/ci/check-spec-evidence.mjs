@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, readdirSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -159,7 +159,12 @@ function* walk(dir, root, findings) {
   for (const entry of entries) {
     const full = path.join(dir, entry.name)
     if (entry.isSymbolicLink()) {
-      if (entry.name === 'evidence-manifest.json' || entry.name === 'claim-status.json') findings.push(`evidence-symlink:${path.relative(root, full)}`)
+      if (entry.name === 'evidence-manifest.json' || entry.name === 'claim-status.json') findings.push(`evidence-symlink:${path.relative(root, full).replaceAll('\\', '/')}`)
+      try {
+        statSync(full)
+      } catch (err) {
+        findings.push(`broken-evidence-link:${path.relative(root, full).replaceAll('\\', '/')}`)
+      }
     } else if (entry.isDirectory()) yield* walk(full, root, findings)
     else if (entry.isFile()) yield full
   }
@@ -175,27 +180,77 @@ function parseManifest(file, root, findings) {
 }
 
 export function validateRepositoryClaims({ root = ROOT } = {}) {
+  if (typeof root !== 'string' || !root || root.startsWith('--')) {
+    return { ok: false, findings: ['invalid-root'], count: 0 }
+  }
+
   const findings = []
-  const specsRoot = path.join(root, 'docs', 'specs')
+  let specsRoot
+  try {
+    specsRoot = path.join(root, 'docs', 'specs')
+  } catch {
+    findings.push('invalid-root-path')
+    return { ok: false, findings, count: 0 }
+  }
+
+  try {
+    if (!lstatSync(specsRoot).isDirectory()) {
+      findings.push('specs-dir-missing')
+      return { ok: false, findings, count: 0 }
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EACCES') {
+      findings.push('specs-dir-missing')
+    } else {
+      findings.push('specs-dir-error')
+    }
+    return { ok: false, findings, count: 0 }
+  }
+
   const files = [...walk(specsRoot, root, findings)]
   const manifests = files.filter((file) => path.basename(file) === 'evidence-manifest.json')
   const claimMarkers = files.filter((file) => path.basename(file) === 'claim-status.json')
   const manifestDirs = new Set(manifests.map(path.dirname))
-  for (const marker of claimMarkers) if (!manifestDirs.has(path.dirname(marker))) findings.push(`claim-without-manifest:${path.relative(root, marker)}`)
+  for (const marker of claimMarkers) if (!manifestDirs.has(path.dirname(marker))) findings.push(`claim-without-manifest:${path.relative(root, marker).replaceAll('\\', '/')}`)
+
+  try {
+    const milestones = readdirSync(specsRoot, { withFileTypes: true })
+    for (const ms of milestones) {
+      if (!ms.isDirectory()) continue
+      const specs = readdirSync(path.join(specsRoot, ms.name), { withFileTypes: true })
+      for (const spec of specs) {
+        if (!spec.isDirectory()) continue
+        const specDir = path.join(specsRoot, ms.name, spec.name)
+        let hasSpec = false
+        let hasEvidence = false
+        try { hasSpec = lstatSync(path.join(specDir, 'SPEC.md')).isFile() } catch {}
+        try { hasEvidence = lstatSync(path.join(specDir, 'evidence')).isDirectory() } catch {}
+        if (!hasSpec) findings.push(`spec-missing:${path.relative(root, path.join(specDir, 'SPEC.md')).replaceAll('\\', '/')}`)
+        if (!hasEvidence) findings.push(`evidence-dir-missing:${path.relative(root, path.join(specDir, 'evidence')).replaceAll('\\', '/')}`)
+      }
+    }
+  } catch {}
+
   for (const file of manifests) {
     const record = parseManifest(file, root, findings)
     if (!record) continue
-    for (const finding of validateClaimManifest(record, root)) findings.push(`${path.relative(root, file)}:${finding}`)
+    for (const finding of validateClaimManifest(record, root)) findings.push(`${path.relative(root, file).replaceAll('\\', '/')}:${finding}`)
   }
   return { ok: findings.length === 0, findings: [...new Set(findings)].sort(), count: manifests.length }
 }
 
-function main() {
-  if (!process.argv.includes('--check') || process.argv.length > 3) {
+export function main() {
+  if (process.argv.includes('--help') || process.argv.length > 3 || process.argv[2] !== '--check') {
     console.error('usage: check-spec-evidence.mjs --check')
     return 64
   }
-  const result = validateRepositoryClaims({ root: ROOT })
+  let result
+  try {
+    result = validateRepositoryClaims({ root: ROOT })
+  } catch (err) {
+    console.error(`spec-evidence — fatal error: ${err.message}`)
+    return 1
+  }
   if (!result.ok) {
     for (const finding of result.findings) console.error(`spec-evidence — ${finding}`)
     return 1
@@ -204,4 +259,6 @@ function main() {
   return 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main())
+if (typeof process.env.NODE_TEST_CONTEXT === 'undefined' && !process.argv.includes('--test') && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exit(main())
+}
