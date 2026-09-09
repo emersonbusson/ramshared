@@ -436,7 +436,7 @@ mod tests {
             bs: 4096,
         };
         // The length of the payload needs to match req.len, otherwise it fails earlier.
-        let r = serve(&req, &vec![0u8; 100], &mut b);
+        let r = serve(&req, &[0u8; 100], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_EINVAL
