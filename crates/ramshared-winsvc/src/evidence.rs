@@ -286,6 +286,37 @@ mod tests {
     use super::*;
     use std::fs;
 
+
+    #[test]
+    fn test_evidence_creation_succeeds() {
+        let row = RuntimeEvidence::base("run-123", "Online");
+        assert_eq!(row.run_id, "run-123");
+        assert_eq!(row.phase, "Online");
+        assert_eq!(row.schema, 1);
+        assert_eq!(row.backend, "cuda");
+        assert!(row.ts_utc_ms > 0);
+    }
+
+    #[test]
+    fn test_evidence_timestamp_formatting_is_positive() {
+        let ms = utc_ms();
+        assert!(ms > 0);
+    }
+
+    #[test]
+    fn test_evidence_json_roundtrip_succeeds() {
+        let mut original = RuntimeEvidence::base("run-test-json", "Stopping");
+        original.error_class = Some("TestError".to_string());
+        original.error_code = Some("E001".to_string());
+
+        let json_str = serde_json::to_string(&original).unwrap();
+        let decoded: RuntimeEvidence = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(original.run_id, decoded.run_id);
+        assert_eq!(original.phase, decoded.phase);
+        assert_eq!(original.error_class, decoded.error_class);
+        assert_eq!(original.error_code, decoded.error_code);
+    }
     #[test]
     fn append_preserves_prior_rows() {
         let dir =
