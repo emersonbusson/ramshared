@@ -369,4 +369,84 @@ mod tests {
             NBD_ERANGE
         );
     }
+
+    #[test]
+    fn test_request_validate_command_flags_write_unknown_flags_einval() {
+        let mut req = req(Command::Write, 0, 4096);
+        req.flags = NBD_CMD_FLAG_FUA | 0x0002;
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 };
+        let r = serve(&req, &vec![0u8; 4096], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn test_request_validate_command_flags_read_any_flags_einval() {
+        let mut req = req(Command::Read, 0, 4096);
+        req.flags = NBD_CMD_FLAG_FUA;
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 };
+        let r = serve(&req, &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn test_request_validate_command_flags_read_no_flags_ok() {
+        let req = req(Command::Read, 0, 4096);
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 };
+        let r = serve(&req, &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_OK
+        );
+    }
+
+    #[test]
+    fn test_request_validate_alignment_read_unaligned_offset_einval() {
+        let req = req(Command::Read, 100, 4096);
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 };
+        let r = serve(&req, &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn test_request_validate_alignment_write_unaligned_length_einval() {
+        let req = req(Command::Write, 0, 100);
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 };
+        // The length of the payload needs to match req.len, otherwise it fails earlier.
+        let r = serve(&req, &vec![0u8; 100], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn test_request_validate_bounds_read_out_of_bounds_erange() {
+        let req = req(Command::Read, 4096, 8192); // end = 12288
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 }; // max = 8192
+        let r = serve(&req, &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_ERANGE
+        );
+    }
+
+    #[test]
+    fn test_request_validate_bounds_write_overflow_erange() {
+        let req = req(Command::Write, u64::MAX - 4095, 8192);
+        let mut b = MemBackend { data: vec![0u8; 8192], bs: 4096 };
+        let r = serve(&req, &vec![0u8; 8192], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_ERANGE
+        );
+    }
 }
