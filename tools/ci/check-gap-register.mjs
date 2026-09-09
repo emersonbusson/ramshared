@@ -48,7 +48,11 @@ function tableRows(sectionText) {
     .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()))
 }
 
-function main() {
+export function main(argv = process.argv.slice(2)) {
+  if (argv.length > 0 && argv[0] !== '--check') {
+    console.error('Usage: check-gap-register.mjs [--check]')
+    return 1
+  }
   const findings = []
   const register = read(REGISTER)
 
@@ -61,15 +65,22 @@ function main() {
       findings.push(`${REGISTER}:1 — Current Open Gates table is empty`)
     }
     for (const row of rows) {
-      const [gate, status, why, evidence] = row
-      const line = lineOf(register, `| ${gate} | ${status} |`)
-      if (row.length !== 4) {
-        findings.push(`${REGISTER}:${line} — open gate row must have 4 cells`)
+      const [id, gate, severity, status, why, evidence] = row
+      const line = lineOf(register, `| ${id} | ${gate} | ${severity} | ${status} |`)
+      if (row.length !== 6) {
+        findings.push(`${REGISTER}:${line} — open gate row must have 6 cells`)
         continue
       }
-      if (!gate || !status || !why || !evidence) {
+      if (!id || !severity || !status || !gate || !why || !evidence) {
         findings.push(`${REGISTER}:${line} — open gate row has an empty cell`)
       }
+      if (!/^GAP-\d{3,}$/.test(id)) {
+        findings.push(`${REGISTER}:${line} — open gate id must match GAP-NNN`)
+      }
+      if (!['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(severity)) {
+        findings.push(`${REGISTER}:${line} — open gate severity must be LOW, MEDIUM, HIGH, or CRITICAL`)
+      }
+      // status already bound
       if (!OPEN_STATUSES.has(status)) {
         findings.push(
           `${REGISTER}:${line} — open gate status must be PARTIAL, DEFERRED, or BLOCKED`
@@ -107,9 +118,12 @@ function main() {
 
   if (findings.length > 0) {
     for (const f of findings) console.error(f)
-    process.exit(1)
+    return 1
   }
   console.log('✓ gap register OK')
+  return 0
 }
 
-main()
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main()
+}
