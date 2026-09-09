@@ -1682,17 +1682,29 @@ export function run({ root, mode = 'candidate', asOf = new Date(), afterGitSnaps
 
 /* node:coverage disable */
 function main(argv = process.argv.slice(2)) {
-  if (argv.length > 1 || (argv.length === 1 && !/^--(?:candidate|tracked|staged|check)$/.test(argv[0]))) {
-    console.error('usage: check-public-hygiene.mjs [--candidate|--tracked|--staged|--check]')
+  const isJson = argv.includes('--json')
+  const modeArgs = argv.filter(a => a !== '--json')
+  if (modeArgs.length > 1 || (modeArgs.length === 1 && !/^--(?:candidate|tracked|staged|check)$/.test(modeArgs[0]))) {
+    console.error('usage: check-public-hygiene.mjs [--candidate|--tracked|--staged|--check] [--json]')
     return 2
   }
-  const mode = argv.length === 0 || argv[0] === '--check' ? 'candidate' : argv[0].slice(2)
+  const mode = modeArgs.length === 0 || modeArgs[0] === '--check' ? 'candidate' : modeArgs[0].slice(2)
   try {
     const result = run({ root: process.cwd(), mode })
-    console.log(`MODE=${mode}`)
-    console.log(`FILES=${result.files}`)
-    for (const item of result.findings) console.error(`${item.path}:${item.line} — ${item.rule}: ${item.reason}`)
-    console.log(`PUBLIC_HYGIENE_STATUS=${result.ok ? 'PASS' : 'NO-GO'}`)
+    if (isJson) {
+      const formattedFindings = result.findings.map(finding => ({
+        violation_type: finding.rule,
+        file: finding.path,
+        line: finding.line,
+        suggested_fix: finding.reason
+      }))
+      console.log(JSON.stringify(formattedFindings, null, 2))
+    } else {
+      console.log(`MODE=${mode}`)
+      console.log(`FILES=${result.files}`)
+      for (const item of result.findings) console.error(`${item.path}:${item.line} — ${item.rule}: ${item.reason}`)
+      console.log(`PUBLIC_HYGIENE_STATUS=${result.ok ? 'PASS' : 'NO-GO'}`)
+    }
     return result.ok ? 0 : 1
   } catch (error) {
     const reason = error instanceof HygieneError ? error.message : 'unexpected-error'

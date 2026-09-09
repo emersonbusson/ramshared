@@ -1159,6 +1159,18 @@ test('diagnostic_never_contains_sensitive_match_and_cli_errors_are_stable', () =
   assert.doesNotMatch(`${proc.stdout}${proc.stderr}`, new RegExp(secret.replaceAll('/', '\\/')))
   assert.match(`${proc.stdout}${proc.stderr}`, /unsafe\.md:1 .* PRIVATE_UNIX_PATH/)
   assert.equal(spawnSync(process.execPath, [CLI, '--unknown'], { cwd: ROOT, encoding: 'utf8' }).status, 2)
+  const jsonProc = spawnSync(process.execPath, [CLI, '--candidate', '--json'], { cwd: ROOT, encoding: 'utf8' })
+  assert.equal(typeof jsonProc.status, 'number')
+  let findings = []
+  try { findings = JSON.parse(jsonProc.stdout) } catch {}
+  assert.ok(Array.isArray(findings))
+  if (findings.length > 0) {
+    assert.equal(typeof findings[0].violation_type, 'string')
+    assert.equal(typeof findings[0].file, 'string')
+    assert.equal(typeof findings[0].line, 'number')
+    assert.equal(typeof findings[0].suggested_fix, 'string')
+  }
+
   assert.equal(spawnSync(process.execPath, [CLI, '--candidate'], { cwd: tmpdir(), encoding: 'utf8' }).status, 2)
 })
 
