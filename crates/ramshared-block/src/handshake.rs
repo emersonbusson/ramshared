@@ -246,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn greeting_then_export_name_no_zeroes() {
+    fn test_handshake_greeting_no_zeroes_ok() {
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_EXPORT_NAME, b"");
         let mut out = Vec::new();
         server_handshake(&mut r, &mut out, &one(1 << 20), 1).unwrap();
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn export_name_with_zeroes_pads_124() {
+    fn test_handshake_export_name_zeroes_pads124_ok() {
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, b"");
         let mut out = Vec::new();
         server_handshake(&mut r, &mut out, &one(4096), 1).unwrap();
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn info_known_name_replies_info_and_continues() {
+    fn test_handshake_info_known_name_info_continues() {
         let exports = vec![Export {
             name: "s1".to_string(),
             size: 8192,
@@ -298,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn go_replies_info_then_ack_and_transitions() {
+    fn test_handshake_go_replies_info_ack_transitions() {
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &go_data(b""));
         let mut out = Vec::new();
         server_handshake(&mut r, &mut out, &one(4096), 1).unwrap();
@@ -310,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn abort_returns_err() {
+    fn test_handshake_abort_returns_err() {
         let mut r = client_stream(0, NBD_OPT_ABORT, b"");
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
@@ -318,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_opt_magic() {
+    fn test_handshake_rejects_invalid_opt_magic_incompatibleversion() {
         let mut v = Vec::new();
         v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
         v.extend_from_slice(&0xbad_u64.to_be_bytes()); // bad magic
@@ -329,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_oversized_option_len() {
+    fn test_handshake_rejects_oversized_option_len_unsupportedfeature() {
         // option with giant len must fail BEFORE allocating (M4 anti-DoS).
         let mut v = Vec::new();
         v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
@@ -343,7 +343,7 @@ mod tests {
     }
 
     #[test]
-    fn go_named_export_returns_index_and_size() {
+    fn test_handshake_go_named_export_ok() {
         let exports = vec![
             Export {
                 name: "s0".to_string(),
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn go_unknown_name_replies_err_unknown_and_continues() {
+    fn test_handshake_go_unknown_name_err_unknown() {
         // GO with non-existent name ⇒ ERR_UNKNOWN and does NOT transition; continues until ABORT.
         let mut r = stream_opts(
             0,
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn export_name_unknown_closes() {
+    fn test_handshake_export_name_unknown_closes_unsupportedfeature() {
         // EXPORT_NAME has no error reply: unknown name ⇒ closes (Io).
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, b"nope");
         let mut out = Vec::new();
@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn export_name_non_utf8_errors() {
+    fn test_handshake_export_name_non_utf8_invalidformat() {
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, &[0xff, 0xfe]);
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
@@ -393,7 +393,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_name_resolves_first_export() {
+    fn test_handshake_empty_name_resolves_first_ok() {
         let exports = vec![
             Export {
                 name: "s0".to_string(),
@@ -409,5 +409,28 @@ mod tests {
         let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
+    }
+
+    #[test]
+    fn test_handshake_go_data_too_short_invalidformat() {
+        let res = go_export_name(&[0, 0, 0]); // length 3, needs at least 4
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
+    }
+
+    #[test]
+    fn test_handshake_go_data_overflow_invalidformat() {
+        // [name_len=u32::MAX] + some data, leading to overflow in name_end
+        let mut data = vec![0xff, 0xff, 0xff, 0xff];
+        data.extend_from_slice(b"abc");
+        let res = go_export_name(&data);
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
+    }
+
+    #[test]
+    fn test_handshake_go_data_missing_n_info_invalidformat() {
+        // [name_len=3] + 3 bytes name (a, b, c), missing n_info (2 bytes)
+        let data = vec![0, 0, 0, 3, b'a', b'b', b'c'];
+        let res = go_export_name(&data);
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
     }
 }
