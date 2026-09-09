@@ -183,4 +183,76 @@ mod tests {
         assert_eq!(Command::from_u16(2), Command::Disc);
         assert_eq!(Command::from_u16(99), Command::Unknown(99));
     }
+
+    #[test]
+    fn test_protocol_request_boundary_zero_length() {
+        let raw = build_request(0, 0x1, 0, 0);
+        let r = parse_request(&raw).expect("must parse zero length");
+        assert_eq!(r.len, 0);
+    }
+
+    #[test]
+    fn test_protocol_request_boundary_max_length() {
+        let raw = build_request(0, 0x1, 0, u32::MAX);
+        let r = parse_request(&raw).expect("must parse max length");
+        assert_eq!(r.len, u32::MAX);
+    }
+
+    #[test]
+    fn test_protocol_request_boundary_max_offset() {
+        let raw = build_request(0, 0x1, u64::MAX, 1024);
+        let r = parse_request(&raw).expect("must parse max offset");
+        assert_eq!(r.offset, u64::MAX);
+    }
+
+    #[test]
+    fn test_protocol_request_boundary_max_handle() {
+        let raw = build_request(0, u64::MAX, 0, 1024);
+        let r = parse_request(&raw).expect("must parse max handle");
+        assert_eq!(r.handle, u64::MAX);
+    }
+
+    #[test]
+    fn test_protocol_request_invalid_opcode() {
+        let raw = build_request(99, 0x1, 0, 1024);
+        let r = parse_request(&raw).expect("must parse unknown opcode");
+        assert_eq!(r.cmd, Command::Unknown(99));
+    }
+
+    #[test]
+    fn test_protocol_request_invalid_flags() {
+        let mut raw = build_request(1, 0x1, 0, 1024);
+        raw[4..6].copy_from_slice(&0xffffu16.to_be_bytes()); // invalid flags
+        let r = parse_request(&raw).expect("must parse with invalid flags");
+        assert_eq!(r.flags, 0xffff);
+    }
+
+    #[test]
+    fn test_protocol_format_error_invalid_header() {
+        let err = ProtocolError::InvalidHeader(0xdeadbeef);
+        let s = format!("{}", err);
+        assert_eq!(s, "invalid request magic (header): 0xdeadbeef");
+    }
+
+    #[test]
+    fn test_protocol_request_invalid_checksum_mock() {
+        // Since there is no actual checksum logic in protocol.rs, we test the error format
+        let err = ProtocolError::ChecksumMismatch;
+        let s = format!("{}", err);
+        assert_eq!(s, "checksum mismatch");
+    }
+
+    #[test]
+    fn test_protocol_request_truncated_payload_parser() {
+        let raw = build_request(1, 0x1, 0, 1024);
+        // Truncate to 10 bytes
+        let truncated = &raw[..10];
+        let err = parse_request(truncated).unwrap_err();
+        assert!(matches!(
+            err,
+            ProtocolError::TruncatedPayload { got: 10, need: 28 }
+        ));
+    }
+
+
 }
