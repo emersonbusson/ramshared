@@ -203,6 +203,48 @@ test('repository checker rejects duplicate IDs, malformed JSONL, and a missing s
   assert.match(validateReceipt(missing, { root: fixtureRepo() }).join('\n'), /source-document-missing/)
 })
 
+test('repository checker rejects oversized receipts file', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-space-cleanup-'))
+  mkdirSync(path.join(root, 'docs', 'governance'), { recursive: true })
+  const file = path.join(root, 'docs', 'governance', 'space-cleanup-receipts.jsonl')
+  writeFileSync(file, 'x'.repeat(1024 * 1024 + 1))
+  const { ok, findings } = validateRepository({ root })
+  assert.equal(ok, false)
+  assert.match(findings.join('\n'), /receipt-file-size/)
+})
+
+test('repository checker rejects when too many records are present', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-space-cleanup-'))
+  mkdirSync(path.join(root, 'docs', 'governance'), { recursive: true })
+  const file = path.join(root, 'docs', 'governance', 'space-cleanup-receipts.jsonl')
+  const content = '{"schema_version":"ramshared-space-cleanup-receipt/v1"}\n'.repeat(1001)
+  writeFileSync(file, content)
+  const { ok, receipts, findings } = validateRepository({ root })
+  assert.equal(ok, false)
+  assert.equal(receipts, 1001)
+  assert.match(findings.join('\n'), /receipt-count-limit/)
+})
+
+test('rejects targets array that is empty or has missing keys', () => {
+  const root = fixtureRepo()
+  const receipt = historicalReceipt()
+  receipt.targets = []
+  assert.match(validateReceipt(receipt, { root }).join('\n'), /targets/)
+
+  receipt.targets = [{ class: 'wrong' }]
+  assert.match(validateReceipt(receipt, { root }).join('\n'), /target-keys/)
+})
+
+test('repository checker catches error on missing or unreadable receipts file', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-space-cleanup-'))
+  mkdirSync(path.join(root, 'docs', 'governance'), { recursive: true })
+  const file = path.join(root, 'docs', 'governance', 'space-cleanup-receipts.jsonl')
+  mkdirSync(file)
+  const { ok, findings } = validateRepository({ root })
+  assert.equal(ok, false)
+  assert.match(findings.join('\n'), /EISDIR|EACCES|receipt-file-size/)
+})
+
 test('checker remains a read-only validator and has no process-launch or write primitive', () => {
   const source = readFileSync(new URL('./check-space-cleanup-receipts.mjs', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /node:child_process|\bexecFile\b|\bspawn\b|\bwriteFile\b|\bunlink\b|\brmSync\b/)

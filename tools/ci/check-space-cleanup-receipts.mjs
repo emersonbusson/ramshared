@@ -189,7 +189,12 @@ export function validateRepository({ root = ROOT } = {}) {
   try {
     lines = readBounded(file).split(/\r?\n/).filter((line) => line.trim())
   } catch (error) {
-    return { ok: false, receipts: 0, findings: [error.message] }
+    if (error.code === 'ENOENT' || error.code === 'EACCES' || error.code === 'EISDIR' || error.message === 'receipt-file-size') {
+      return { ok: false, receipts: 0, findings: [error.message] }
+    }
+    /* node:coverage disable */
+    throw error
+    /* node:coverage enable */
   }
   if (lines.length > MAX_RECORDS) return { ok: false, receipts: lines.length, findings: ['receipt-count-limit'] }
   const ids = new Set()
@@ -197,9 +202,14 @@ export function validateRepository({ root = ROOT } = {}) {
     let receipt
     try {
       receipt = JSON.parse(line)
-    } catch {
-      findings.push(`jsonl-parse:${index + 1}`)
-      continue
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        findings.push(`jsonl-parse:${index + 1}`)
+        continue
+      }
+      /* node:coverage disable */
+      throw error
+      /* node:coverage enable */
     }
     const receiptFindings = validateReceipt(receipt, { root })
     for (const finding of receiptFindings) findings.push(`receipt:${index + 1}:${finding}`)
