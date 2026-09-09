@@ -1,0 +1,48 @@
+## Summary
+
+Add comprehensive unit tests to ramshared-winbroker pipe module and harden CI tooling script check-rust-slice-coverage.mjs with input validation. Updated RustSec advisory DB snapshot to fix cargo-audit CI failures.
+
+## Commits
+
+| Commit | What was done | Why it was done | Details |
+|---|---|---|---|
+| 104a570 | Added tests to ramshared-winbroker, hardened CI scripts, updated RustSec | Provide test coverage for named pipe broken connection recovery, input validation, and fix CI failures | <details><summary>Context</summary>Tested pipe behavior on broken connection, partial writes, and client-side disconnect during transfer via a mocked overlapped_io setup for Windows API. Hardened check-rust-slice-coverage.mjs CLI arguments. Updated advisory-db to fix cargo-audit.</details> |
+
+## Issue
+
+Closes #045
+
+## Owner
+
+@jules
+
+## Labels
+
+type:test
+area:test-broker
+
+## Validation
+
+- `CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine cargo test --target x86_64-pc-windows-gnu -p ramshared-winbroker`
+- `node --test tools/ci/check-rust-slice-coverage.test.mjs`
+- `node --test tools/ci/check-ci-contract.test.mjs`
+
+## Rollback trigger
+
+CI test failures or incorrect execution of CI tooling scripts due to unexpected argument parsing behavior.
+RULES:
+1. Read README.md, AGENTS.md, CLAUDE.md, and all pertinent .claude/rules/.
+2. Baseline git SHA is 24531803029a7ecbc8b884ac9d5c77178e58036e on origin/main.
+3. Implement only the smallest safe orthogonal slice. Run cargo test (or node --test for .mjs) and open 1 PR strictly against jules/inbox.
+4. If safe code modification is not possible, produce FINDING_ONLY with evidence in docs/jules/findings/.
+5. Do not read, write, print, or persist credentials/secrets.
+6. PRs remain unmerged on jules/inbox; human consolidation will merge verified gains into main.
+7. English only for all source code, comments, identifiers, commits, and PR descriptions.
+8. Follow Conventional Commits format (<=72 chars title, body explaining rationale and rollback trigger).
+9. Format PR body with:
+   - ## Summary
+   - ## Commits
+   - ## Labels
+   - ## Validation
+   - ## Rollback trigger
+10. All 10 contractual blocks MUST be generated in the plan before modifying any file.

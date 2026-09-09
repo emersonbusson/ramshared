@@ -23,8 +23,8 @@ import {
 } from './check-ci-contract.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const RUSTSEC_SNAPSHOT_COMMIT = '5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5'
-const RUSTSEC_SNAPSHOT_UTC = '2026-09-02T09:13:32Z'
+const RUSTSEC_SNAPSHOT_COMMIT = 'bf25f6575a93a35f30796c65c0ed91bee7fa19fd'
+const RUSTSEC_SNAPSHOT_UTC = '2026-09-08T11:58:15Z'
 const REMOTE_OBSERVATION_NOW = Date.parse('2026-08-09T16:00:00Z')
 
 function compliantRemoteObservation(overrides = {}) {
@@ -361,7 +361,7 @@ test('ci_specific_policies_reject_malformed_coverage_and_cancellation_rules', ()
 
 test('ci_contract_rejects_stale_advisory_snapshot', () => {
   const result = validateContract(currentOnlyContract(cargoAuditGate()), {
-    now: Date.parse('2026-09-09T09:13:33Z'),
+    now: Date.parse('2026-09-15T11:58:16Z'),
   })
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'advisory-db-snapshot-stale'), true)
