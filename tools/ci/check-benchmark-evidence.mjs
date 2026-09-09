@@ -514,6 +514,15 @@ export function validateRecord(record, { root = ROOT } = {}) {
     artifactContents.set(artifact.path, bytes)
     if (!SHA256_RE.test(artifact.sha256 ?? '') || sha256(bytes) !== artifact.sha256.toLowerCase()) findings.push('artifact-hash')
     if (sensitiveRule(bytes.toString('utf8'))) findings.push('artifact-sensitive-content')
+
+    if (artifact.path.toLowerCase().endsWith('.json')) {
+      try { JSON.parse(bytes.toString('utf8')) } catch { findings.push('artifact-format-json') }
+    } else if (artifact.path.toLowerCase().endsWith('.csv')) {
+      const text = bytes.toString('utf8');
+      if (text.includes('\0') || (!text.includes(',') && !text.includes(';'))) {
+         findings.push('artifact-format-csv')
+      }
+    }
   }
 
   if (record.surface === 'wsl2-nbd' && record.slug === 'wsl2-nbd-product-readiness') {
@@ -699,6 +708,19 @@ export function scanPublicBenchmarkClaims({ root = ROOT, registry, mappings = []
 
 export function validateRepository({ root = ROOT } = {}) {
   const findings = []
+
+  if (!root || typeof root !== 'string') {
+    return { ok: false, findings: ['invalid-root-path'] }
+  }
+
+  try {
+    if (!lstatSync(root).isDirectory()) {
+      return { ok: false, findings: ['missing-root-directory'] }
+    }
+  } catch (error) {
+    return { ok: false, findings: ['missing-root-directory'] }
+  }
+
   const docs = path.join(root, 'docs')
   const bench = path.join(docs, 'benchmarks')
   const required = {
@@ -762,10 +784,17 @@ export function validateRepository({ root = ROOT } = {}) {
 }
 
 function main() {
-  if (!process.argv.includes('--check') || process.argv.length > 3) {
+  const args = process.argv.slice(2)
+  if (args.length !== 1 || args[0] !== '--check') {
     console.error('usage: check-benchmark-evidence.mjs --check')
     return 64
   }
+
+  if (!ROOT || typeof ROOT !== 'string') {
+    console.error('benchmark-evidence — invalid root directory')
+    return 1
+  }
+
   const result = validateRepository({ root: ROOT })
   if (!result.ok) {
     for (const finding of result.findings) console.error(`benchmark-evidence — ${finding}`)
@@ -775,4 +804,6 @@ function main() {
   return 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main())
+// Allow importing in tests without executing main
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) && !process.argv.includes('--test');
+if (isMain && typeof process.env.NODE_TEST_CONTEXT === 'undefined') process.exit(main());

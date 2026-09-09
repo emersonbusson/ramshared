@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 import {
@@ -1073,4 +1074,87 @@ test('public_pair_baseline_verdict_requires_the_exact_public_decision_mapping', 
       rmSync(fixture.root, { recursive: true, force: true })
     }
   }
+})
+
+test('test_validateRepository_invalid_state_invalid_root', () => {
+  const result = validateRepository({ root: null })
+  assert.deepEqual(result, { ok: false, findings: ['invalid-root-path'] })
+})
+
+test('test_validateRepository_missing_deps_missing_root_directory', () => {
+  const result = validateRepository({ root: '/nonexistent/path/for/sure' })
+  assert.deepEqual(result, { ok: false, findings: ['missing-root-directory'] })
+})
+
+test('test_validateRepository_permission_denied_file_as_root', () => {
+  const result = validateRepository({ root: fileURLToPath(import.meta.url) })
+  assert.deepEqual(result, { ok: false, findings: ['missing-root-directory'] })
+})
+
+test('test_computeStats_boundary_empty_array', () => {
+  assert.throws(() => computeStats([]), /must be a non-empty finite-number array/)
+})
+
+test('test_computeStats_error_path_non_numeric', () => {
+  assert.throws(() => computeStats([1, 'a', 3]), /must be a non-empty finite-number array/)
+})
+
+test('test_computeStats_error_path_non_finite', () => {
+  assert.throws(() => computeStats([1, Infinity]), /must be a non-empty finite-number array/)
+})
+
+test('test_validateRecord_json_format', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'evidence-'))
+  try {
+    writeFileSync(path.join(root, 'test.json'), '{ invalid json')
+    const record = {
+      schema_version: 'ramshared-evidence/v1',
+      run_id: 'test-run-123',
+      utc: {}, // Must be an object according to requiredObject
+      source: { commit: '156355c4427b6e00321ebc68c7de9288dbf72e09', dirty: false, dirty_entry_count: 0, invocation: 'test', harness_revision: 'v1' },
+      platform: { fingerprint: 'mock' },
+      candidate: {},
+      workload: { runs: 3 },
+      comparison: { platform_fingerprint: 'mock', baseline_fingerprint: 'mock' },
+      metrics: {},
+      lifecycle: { binary_match: true, legitimate: { verdict: 'PASS' }, refusals: ['none'], cleanup: { complete: true }, residue: 0 },
+      decision: { verdict: 'INCOMPARABLE', promotable: false, rollback_trigger: 'always', gaps: [] },
+      artifacts: [{ path: 'test.json', bytes: 14, sha256: '72545d17dd4bd4c8ddb6cf1c817349916ab4025d625d88686e08ddf18ea98ba0' }]
+    }
+    const findings = validateRecord(record, { root })
+    assert.ok(findings.includes('artifact-format-json'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('test_validateRecord_csv_format', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'evidence-'))
+  try {
+    writeFileSync(path.join(root, 'test.csv'), 'invalid csv string without commas or semicolons\n')
+    const record = {
+      schema_version: 'ramshared-evidence/v1',
+      run_id: 'test-run-123',
+      utc: {}, // Must be an object according to requiredObject
+      source: { commit: '156355c4427b6e00321ebc68c7de9288dbf72e09', dirty: false, dirty_entry_count: 0, invocation: 'test', harness_revision: 'v1' },
+      platform: { fingerprint: 'mock' },
+      candidate: {},
+      workload: { runs: 3 },
+      comparison: { platform_fingerprint: 'mock', baseline_fingerprint: 'mock' },
+      metrics: {},
+      lifecycle: { binary_match: true, legitimate: { verdict: 'PASS' }, refusals: ['none'], cleanup: { complete: true }, residue: 0 },
+      decision: { verdict: 'INCOMPARABLE', promotable: false, rollback_trigger: 'always', gaps: [] },
+      artifacts: [{ path: 'test.csv', bytes: 49, sha256: '64d4b1a4bbab8dcc71da928236173a0e10cc106d7d24f0c4cfad4c000e318cf1' }]
+    }
+    const findings = validateRecord(record, { root })
+    assert.ok(findings.includes('artifact-format-csv'))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('test_validateRepository_happy_path_valid_root', () => {
+  const result = validateRepository({ root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..') })
+  // We just want to ensure it doesn't fail on missing-root-directory
+  assert.ok(!result.findings.includes('missing-root-directory'))
 })
