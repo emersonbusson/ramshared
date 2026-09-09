@@ -1,0 +1,7 @@
+test(ci): harden generate-documentation-inventory.mjs with io validation
+
+- Validates that the 'docs' directory exists before attempting any operation.
+- Validates that the output directory for the inventory is writable.
+- Adds test cases checking empty docs directory handling and unclassified common fields.
+
+Rollback trigger: Revert if the script crashes on valid environments or test pipeline blocks execution.

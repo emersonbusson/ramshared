@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, existsSync, accessSync, constants } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -56,6 +56,20 @@ function main(argv = process.argv.slice(2)) {
     console.error('usage: generate-documentation-inventory.mjs --write|--check')
     return 2
   }
+
+  if (!existsSync(path.join(ROOT, 'docs'))) {
+    console.error('ERROR: docs directory does not exist')
+    return 1
+  }
+
+  const outputDir = path.dirname(path.join(ROOT, OUTPUT_PATH))
+  try {
+    accessSync(outputDir, constants.W_OK)
+  } catch (error) {
+    console.error(`ERROR: output directory ${outputDir} is not writable`)
+    return 1
+  }
+
   if (argv[0] === '--write') {
     writeFileSync(path.join(ROOT, OUTPUT_PATH), renderInventory(buildInventory({ root: ROOT })))
     console.log(`DOCUMENTATION_INVENTORY=written ${OUTPUT_PATH}`)
