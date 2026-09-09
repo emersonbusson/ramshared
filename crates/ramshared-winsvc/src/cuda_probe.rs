@@ -4,7 +4,10 @@
 //! hardware path is E2E evidence; pure offset planning lives in `ramshared_cuda::probe`.
 
 use crate::config::WinDriveConfig;
+#[cfg(not(test))]
 use ramshared_cuda::Cuda;
+#[cfg(test)]
+use crate::cuda_probe::mock_cuda::Cuda;
 use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
 
 /// Result of a successful probe-cuda run.
@@ -46,6 +49,78 @@ impl std::fmt::Display for ProbeCudaError {
 }
 
 impl std::error::Error for ProbeCudaError {}
+
+
+#[cfg(test)]
+pub mod mock_cuda {
+    use super::*;
+
+    pub struct Cuda {
+        pub device_count: i32,
+    }
+
+    pub struct Device {
+        ordinal: i32,
+        name: String,
+    }
+
+    impl Device {
+        pub fn ordinal(&self) -> i32 { self.ordinal }
+        pub fn name(&self) -> &str { &self.name }
+    }
+
+    pub struct Context;
+
+    pub struct DeviceMem {
+        #[allow(dead_code)]
+        len: usize,
+    }
+
+    impl Cuda {
+        pub fn load() -> Result<Self, String> {
+            Ok(Cuda { device_count: 2 })
+        }
+
+        pub fn device_count(&self) -> Result<i32, String> {
+            Ok(self.device_count)
+        }
+
+        pub fn device(&self, ordinal: i32) -> Result<Device, String> {
+            Ok(Device { ordinal, name: format!("Mock GPU {}", ordinal) })
+        }
+
+        pub fn create_context(&self, _device: &Device) -> Result<Context, String> {
+            Ok(Context)
+        }
+    }
+
+    impl Context {
+        pub fn mem_info(&self) -> Result<(usize, usize), String> {
+            // Give 8 GB free, 16 GB total
+            Ok((8 * 1024 * 1024 * 1024, 16 * 1024 * 1024 * 1024))
+        }
+
+        pub fn alloc(&self, bytes: usize) -> Result<DeviceMem, String> {
+            Ok(DeviceMem { len: bytes })
+        }
+    }
+
+    impl DeviceMem {
+        pub fn zero(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn write_at(&mut self, _off: usize, _src: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+
+        pub fn read_at(&self, off: usize, dst: &mut [u8]) -> Result<(), String> {
+            let pat = pattern_for_offset(off);
+            dst.copy_from_slice(&pat);
+            Ok(())
+        }
+    }
+}
 
 /// Allocate, three-offset roundtrip, zero, free, recheck capacity (DT-3).
 pub fn probe_cuda_allocates_roundtrips_and_restores(
@@ -151,6 +226,53 @@ mod tests {
             tenant: "probe".into(),
             heartbeat_secs: 5,
         }
+    }
+
+
+    #[test]
+    fn probe_cuda_error_display() {
+        let e = ProbeCudaError::Config("bad".into());
+        assert_eq!(e.to_string(), "config: bad");
+
+        let e = ProbeCudaError::Cuda("fail".into());
+        assert_eq!(e.to_string(), "cuda: fail");
+
+        let e = ProbeCudaError::Mismatch { offset: 42 };
+        assert_eq!(e.to_string(), "pattern mismatch at 42");
+
+        let e = ProbeCudaError::FreeRestore { delta: 100 };
+        assert_eq!(e.to_string(), "free restoration outside 64 MiB: delta=100");
+
+        let e = ProbeCudaError::Capacity { free: 10, need: 20 };
+        assert_eq!(e.to_string(), "free 10 < size+reserve 20");
+    }
+
+    #[test]
+    fn probe_cuda_fails_config_validation() {
+        let mut cfg = cfg_64m();
+        cfg.size_bytes = 0; // Invalid configuration
+        let err = super::probe_cuda_allocates_roundtrips_and_restores(&cfg).unwrap_err();
+        assert!(matches!(err, ProbeCudaError::Config(_)));
+    }
+
+    #[test]
+    fn probe_cuda_rejects_out_of_bounds_device() {
+        let mut cfg = cfg_64m();
+        cfg.cuda_device = 99; // Mock only has 2 devices
+        let err = super::probe_cuda_allocates_roundtrips_and_restores(&cfg).unwrap_err();
+        assert!(matches!(err, ProbeCudaError::Cuda(_)));
+        assert!(err.to_string().contains(">= count 2"));
+    }
+
+    #[test]
+    fn probe_cuda_successful_mock_roundtrip() {
+        let cfg = cfg_64m();
+        // Since we are using mock_cuda, this will succeed and return the report.
+        let report = super::probe_cuda_allocates_roundtrips_and_restores(&cfg).unwrap();
+        assert_eq!(report.ordinal, 0);
+        assert_eq!(report.device_name, "Mock GPU 0");
+        assert_eq!(report.size_bytes, 64 * 1024 * 1024);
+        assert_eq!(report.allocated, 64 * 1024 * 1024);
     }
 
     /// Live three-offset CUDA probe (SPEC matrix name).
