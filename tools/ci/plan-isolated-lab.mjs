@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 
@@ -29,6 +29,17 @@ export function validateLabPlanInput(input) {
   if (!input || input.target !== REQUIRED_TARGET) add(errors, 'lab-target-invalid')
   if (!input || typeof input.revision !== 'string' || !/^[0-9a-f]{40}$/.test(input.revision)) add(errors, 'lab-revision-invalid')
   if (!input || input.environment !== REQUIRED_ENVIRONMENT) add(errors, 'lab-environment-invalid')
+  if (!input || typeof input.config !== 'string') {
+    add(errors, 'lab-config-invalid')
+  } else {
+    // very basic toml check
+    const hasDevices = input.config.includes('device') || input.config.includes('cuda_device') || input.config.includes('size_bytes')
+    if (!hasDevices) add(errors, 'lab-config-missing-resources')
+
+    // conflicting allocations?
+    const ports = [...input.config.matchAll(/port\s*=\s*(\d+)/g)].map(m => m[1])
+    if (new Set(ports).size !== ports.length) add(errors, 'lab-config-conflicting-allocations')
+  }
   return { ok: errors.length === 0, errors: errors.sort() }
 }
 
@@ -79,11 +90,11 @@ function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index]
     const value = argv[index + 1]
-    if (!['--kind', '--out', '--manifest'].includes(key) || typeof value !== 'string' || values.has(key)) return null
+    if (!['--kind', '--out', '--manifest', '--config'].includes(key) || typeof value !== 'string' || value.startsWith('--') || values.has(key)) return null
     values.set(key, value)
   }
-  if (argv.length !== 6 || values.size !== 3) return null
-  return { kind: values.get('--kind'), out: values.get('--out'), manifest: values.get('--manifest') }
+  if (argv.length !== 8 || values.size !== 4) return null
+  return { kind: values.get('--kind'), out: values.get('--out'), manifest: values.get('--manifest'), config: values.get('--config') }
 }
 
 function resolveOutput(cwd, value) {
@@ -101,14 +112,25 @@ export function main(argv = process.argv.slice(2), {
 } = {}) {
   const args = parseArguments(argv)
   if (!args) {
-    error('usage: plan-isolated-lab.mjs --kind <windows|wsl2> --out <path> --manifest <path>')
+    error('usage: plan-isolated-lab.mjs --kind <windows|wsl2> --out <path> --manifest <path> --config <path>')
     return 2
   }
   const outPath = resolveOutput(cwd, args.out)
   const manifestPath = resolveOutput(cwd, args.manifest)
-  if (!outPath || !manifestPath || path.dirname(outPath) !== path.dirname(manifestPath)) {
+  const configPath = resolveOutput(cwd, args.config)
+  if (!outPath || !manifestPath || !configPath || path.dirname(outPath) !== path.dirname(manifestPath)) {
     error('LAB_PLAN_ERROR=lab-output-path-invalid')
     return 1
+  }
+  let configStr;
+  try {
+    configStr = readFileSync(configPath, 'utf8')
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EACCES') {
+      error('LAB_PLAN_ERROR=lab-config-missing')
+      return 1
+    }
+    throw err
   }
   const input = {
     kind: args.kind,
@@ -116,6 +138,7 @@ export function main(argv = process.argv.slice(2), {
     target: env.LAB_TARGET,
     revision: env.LAB_REVISION,
     environment: env.LAB_ENVIRONMENT,
+    config: configStr,
   }
   const checked = validateLabPlanInput(input)
   if (!checked.ok) {
