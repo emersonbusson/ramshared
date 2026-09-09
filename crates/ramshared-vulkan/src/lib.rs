@@ -92,6 +92,52 @@ impl ResGuard {
     }
 }
 
+pub trait ProviderMock {
+    fn alloc_mock(&self, bytes: usize) -> Result<MockMem<'_>, VramError>;
+    fn mem_info_mock(&self) -> Result<(u64, u64), VramError>;
+}
+
+pub struct MockProvider {
+    pub total: u64,
+    pub allocated: std::sync::atomic::AtomicU64,
+}
+
+impl ProviderMock for MockProvider {
+    fn alloc_mock(&self, bytes: usize) -> Result<MockMem<'_>, VramError> {
+        if bytes == 0 {
+            return Ok(MockMem {
+                provider: self,
+                len: 0,
+            });
+        }
+        let current = self.allocated.load(std::sync::atomic::Ordering::Relaxed);
+        if current.saturating_add(bytes as u64) > self.total {
+             return Err(VramError::OutOfMemory);
+        }
+        self.allocated.fetch_add(bytes as u64, std::sync::atomic::Ordering::Relaxed);
+        Ok(MockMem {
+            provider: self,
+            len: bytes,
+        })
+    }
+
+    fn mem_info_mock(&self) -> Result<(u64, u64), VramError> {
+        let used = self.allocated.load(std::sync::atomic::Ordering::Relaxed);
+        Ok((self.total.saturating_sub(used), self.total))
+    }
+}
+
+pub struct MockMem<'p> {
+    provider: &'p MockProvider,
+    pub len: usize,
+}
+
+impl Drop for MockMem<'_> {
+    fn drop(&mut self) {
+        self.provider.allocated.fetch_sub(self.len as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl Drop for ResGuard {
     fn drop(&mut self) {
         if !self.armed {
@@ -488,12 +534,16 @@ pub struct VulkanMem<'p> {
 impl VulkanMem<'_> {
     /// `off + len <= self.len`, otherwise `OutOfRange` (mirrors CUDA's bounds check).
     fn check_bounds(&self, off: u64, len: usize) -> Result<(), VramError> {
+        Self::check_bounds_impl(self.len, off, len)
+    }
+
+    fn check_bounds_impl(size: usize, off: u64, len: usize) -> Result<(), VramError> {
         match off.checked_add(len as u64) {
-            Some(end) if end <= self.len as u64 => Ok(()),
+            Some(end) if end <= size as u64 => Ok(()),
             _ => Err(VramError::OutOfRange {
                 off,
                 len: len as u64,
-                size: self.len as u64,
+                size: size as u64,
             }),
         }
     }
@@ -588,6 +638,84 @@ impl Drop for VulkanMem<'_> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vulkan_mem_check_bounds_zero_length() {
+        assert!(VulkanMem::check_bounds_impl(0, 0, 0).is_ok());
+        assert!(matches!(
+            VulkanMem::check_bounds_impl(0, 0, 1),
+            Err(VramError::OutOfRange { off: 0, len: 1, size: 0 })
+        ));
+    }
+
+    #[test]
+    fn test_vulkan_mem_check_bounds_valid_range() {
+        assert!(VulkanMem::check_bounds_impl(1024, 0, 1024).is_ok());
+        assert!(VulkanMem::check_bounds_impl(1024, 512, 512).is_ok());
+        assert!(VulkanMem::check_bounds_impl(1024, 1023, 1).is_ok());
+    }
+
+    #[test]
+    fn test_vulkan_mem_check_bounds_out_of_range() {
+        let err = VulkanMem::check_bounds_impl(1024, 0, 1025).unwrap_err();
+        assert!(matches!(err, VramError::OutOfRange { off: 0, len: 1025, size: 1024 }));
+
+        let err2 = VulkanMem::check_bounds_impl(1024, 1024, 1).unwrap_err();
+        assert!(matches!(err2, VramError::OutOfRange { off: 1024, len: 1, size: 1024 }));
+    }
+
+    #[test]
+    fn test_vulkan_mem_check_bounds_overflow() {
+        let err = VulkanMem::check_bounds_impl(1024, u64::MAX, 1).unwrap_err();
+        assert!(matches!(err, VramError::OutOfRange { off: u64::MAX, len: 1, size: 1024 }));
+
+        let max_half_off = u64::MAX / 2 + 1;
+        let max_half_len = (usize::MAX / 2 + 1) as u64;
+        let err2 = VulkanMem::check_bounds_impl(1024, max_half_off, max_half_len as usize).unwrap_err();
+        assert!(matches!(err2, VramError::OutOfRange { off: _, len: _, size: 1024 }));
+    }
+
+    #[test]
+    fn test_mock_mem_zero_bytes_true() {
+        let p = MockProvider { total: 100, allocated: std::sync::atomic::AtomicU64::new(0) };
+        let m = p.alloc_mock(0).unwrap();
+        assert_eq!(m.len, 0);
+    }
+
+    #[test]
+    fn test_mock_mem_max_allocation_true() {
+        let p = MockProvider { total: 100, allocated: std::sync::atomic::AtomicU64::new(0) };
+        let m = p.alloc_mock(100).unwrap();
+        assert_eq!(m.len, 100);
+    }
+
+    #[test]
+    fn test_mock_mem_heap_exhaustion_false() {
+        let p = MockProvider { total: 100, allocated: std::sync::atomic::AtomicU64::new(0) };
+        let res = p.alloc_mock(101);
+        assert!(matches!(res, Err(VramError::OutOfMemory)));
+    }
+
+    #[test]
+    fn test_mock_mem_overflow_false() {
+        let p = MockProvider { total: 100, allocated: std::sync::atomic::AtomicU64::new(0) };
+        let res = p.alloc_mock(usize::MAX);
+        assert!(matches!(res, Err(VramError::OutOfMemory)));
+    }
+
+    #[test]
+    fn test_mock_mem_underflow_false() {
+        let p = MockProvider { total: 100, allocated: std::sync::atomic::AtomicU64::new(0) };
+        let res = p.alloc_mock(usize::MAX - 1);
+        assert!(matches!(res, Err(VramError::OutOfMemory)));
+    }
+
+    #[test]
+    fn test_mock_mem_out_of_bounds_false() {
+        let p = MockProvider { total: 0, allocated: std::sync::atomic::AtomicU64::new(0) };
+        let res = p.alloc_mock(10);
+        assert!(matches!(res, Err(VramError::OutOfMemory)));
+    }
 
     #[test]
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
