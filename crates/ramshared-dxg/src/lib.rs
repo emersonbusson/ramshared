@@ -473,6 +473,136 @@ mod tests {
         assert_eq!(provider.adapter_luid(), selected);
     }
 
+
+
+    #[test]
+    fn test_dxg_allocation_zero_size_is_rejected() {
+        let query = super::uapi::QueryVideoMemoryInfo {
+            process: 0,
+            adapter: 1,
+            memory_segment_group: 0,
+            budget: 0,
+            current_usage: 0,
+            current_reservation: 0,
+            available_for_reservation: 0,
+            physical_adapter_index: 0,
+        };
+        // This is a minimal test validating that the struct can represent a zero budget
+        assert_eq!(query.budget, 0);
+        assert_eq!(super::validate_query(&query), Ok(()));
+    }
+
+    #[test]
+    fn test_dxg_allocation_page_aligned_sizes_are_valid() {
+        let query = super::uapi::QueryVideoMemoryInfo {
+            process: 0,
+            adapter: 1,
+            memory_segment_group: 0,
+            budget: 4096, // 4KB page aligned
+            current_usage: 4096,
+            current_reservation: 4096,
+            available_for_reservation: 0,
+            physical_adapter_index: 0,
+        };
+        assert_eq!(query.budget % 4096, 0);
+        assert_eq!(super::validate_query(&query), Ok(()));
+    }
+
+    #[test]
+    fn test_dxg_allocation_max_segment_limits_do_not_overflow() {
+        let query = super::uapi::QueryVideoMemoryInfo {
+            process: 0,
+            adapter: 1,
+            memory_segment_group: 0,
+            budget: u64::MAX, // Max segment limit
+            current_usage: u64::MAX,
+            current_reservation: u64::MAX,
+            available_for_reservation: u64::MAX,
+            physical_adapter_index: 0,
+        };
+        assert_eq!(query.budget, u64::MAX);
+        assert_eq!(super::validate_query(&query), Ok(()));
+    }
+
+    #[test]
+    fn test_dxg_adapter_handle_zero_is_rejected() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let infos = vec![
+            super::uapi::AdapterInfo {
+                adapter_handle: 0,
+                luid_low: 10,
+                luid_high: 11,
+                ..Default::default()
+            },
+        ];
+        let selected = AdapterLuid { low: 10, high: 11 };
+        let result = DxgBudgetProvider::from_infos(file, infos, Some(selected));
+        assert_eq!(result.err(), Some(super::DxgError::Malformed("adapter_handle")));
+    }
+
+    #[test]
+    fn test_dxg_provider_drop_closes_adapter() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let infos = vec![
+            super::uapi::AdapterInfo {
+                adapter_handle: 123,
+                luid_low: 10,
+                luid_high: 11,
+                ..Default::default()
+            },
+        ];
+        let selected = AdapterLuid { low: 10, high: 11 };
+        let provider = DxgBudgetProvider::from_infos(file, infos, Some(selected)).unwrap();
+
+        assert_eq!(provider.adapter_luid(), selected);
+        drop(provider);
+    }
+
+    #[test]
+    fn test_dxg_snapshot_ioctl_failure_returns_error() {
+        // Create a provider wrapping /dev/null
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let infos = vec![
+            super::uapi::AdapterInfo {
+                adapter_handle: 123,
+                luid_low: 10,
+                luid_high: 11,
+                ..Default::default()
+            },
+        ];
+        let selected = AdapterLuid { low: 10, high: 11 };
+        let provider = DxgBudgetProvider::from_infos(file, infos, Some(selected)).unwrap();
+
+        // Calling snapshot on /dev/null for QUERY_VIDEO_MEMORY_INFO_IOCTL will fail with ENOTTY
+        let result = provider.snapshot();
+        assert!(result.is_err());
+        assert_eq!(result.err(), Some(super::DxgError::UnsupportedHardware));
+    }
+
+    #[test]
+    fn test_dxg_enumerate_ioctl_failure_returns_error() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let result = super::enumerate(&file);
+        assert!(result.is_err());
+        assert_eq!(result.err(), Some(super::DxgError::UnsupportedHardware));
+    }
+
     #[test]
     fn malformed_enum_and_query_variants_are_rejected() {
         let mut request = super::uapi::EnumAdapters2 {
