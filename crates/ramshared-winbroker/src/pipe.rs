@@ -432,6 +432,7 @@ impl Drop for AuthenticatedPipe {
     }
 }
 
+#[cfg(not(test))]
 fn overlapped_io(
     handle: HANDLE,
     buffer: *mut u8,
@@ -500,4 +501,167 @@ fn overlapped_io(
         return Err(io::Error::last_os_error());
     }
     Ok(transferred as usize)
+}
+
+#[cfg(test)]
+pub mod mock_state {
+    use std::collections::VecDeque;
+    use std::io;
+
+    pub struct MockPipeState {
+        pub write_results: VecDeque<io::Result<usize>>,
+        pub read_results: VecDeque<io::Result<usize>>,
+        pub wait_time: std::time::Duration,
+    }
+
+    impl Default for MockPipeState {
+        fn default() -> Self {
+            Self {
+                write_results: VecDeque::new(),
+                read_results: VecDeque::new(),
+                wait_time: std::time::Duration::from_millis(0),
+            }
+        }
+    }
+
+    thread_local! {
+        pub static MOCK_STATE: std::cell::RefCell<MockPipeState> = std::cell::RefCell::new(MockPipeState::default());
+    }
+
+    pub fn reset() {
+        MOCK_STATE.with(|state| {
+            *state.borrow_mut() = MockPipeState::default();
+        });
+    }
+
+    pub fn push_write_result(res: io::Result<usize>) {
+        MOCK_STATE.with(|state| {
+            state.borrow_mut().write_results.push_back(res);
+        });
+    }
+
+    pub fn push_read_result(res: io::Result<usize>) {
+        MOCK_STATE.with(|state| {
+            state.borrow_mut().read_results.push_back(res);
+        });
+    }
+
+    pub fn set_wait_time(d: std::time::Duration) {
+        MOCK_STATE.with(|state| {
+            state.borrow_mut().wait_time = d;
+        });
+    }
+}
+
+#[cfg(test)]
+fn overlapped_io(
+    _handle: HANDLE,
+    _buffer: *mut u8,
+    _len: usize,
+    write: bool,
+    stop: Option<&AtomicBool>,
+) -> io::Result<usize> {
+    use std::sync::atomic::Ordering;
+
+    let mut wait_time = std::time::Duration::from_millis(0);
+    let mut res = Ok(0);
+
+    mock_state::MOCK_STATE.with(|state| {
+        let mut s = state.borrow_mut();
+        wait_time = s.wait_time;
+        if write {
+            res = s.write_results.pop_front().unwrap_or(Ok(0));
+        } else {
+            res = s.read_results.pop_front().unwrap_or(Ok(0));
+        }
+    });
+
+    if wait_time > std::time::Duration::from_millis(0) {
+        std::thread::sleep(wait_time);
+    }
+
+    if let Some(stop_flag) = stop {
+        if stop_flag.load(Ordering::Acquire) {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "named-pipe operation stopped",
+            ));
+        }
+    }
+
+    res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    fn create_mock_pipe() -> AuthenticatedPipe {
+        AuthenticatedPipe {
+            handle: 0 as HANDLE,
+            expected_sid: None,
+        }
+    }
+
+    #[test]
+    fn test_pipe_broken_connection_read_error() {
+        mock_state::reset();
+        mock_state::push_read_result(Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "pipe broken",
+        )));
+
+        let pipe = create_mock_pipe();
+        let mut buf = [0u8; 10];
+        let res = pipe.read_frame_deadline(&mut buf);
+
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn test_pipe_partial_write_success() {
+        mock_state::reset();
+        mock_state::push_write_result(Ok(5));
+
+        let pipe = create_mock_pipe();
+        let buf = [0u8; 10];
+        let res = pipe.write_frame_deadline(&buf);
+
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 5);
+    }
+
+    #[test]
+    fn test_pipe_client_side_disconnect_during_transfer() {
+        mock_state::reset();
+        mock_state::push_read_result(Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "client disconnected",
+        )));
+
+        let pipe = create_mock_pipe();
+        let stop_flag = AtomicBool::new(false);
+        let mut buf = [0u8; 10];
+        let res = pipe.read_frame_stoppable(&mut buf, &stop_flag);
+
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::ConnectionAborted);
+    }
+
+    #[test]
+    fn test_pipe_stop_signal_interrupts_transfer() {
+        mock_state::reset();
+        mock_state::push_read_result(Ok(10));
+
+        let pipe = create_mock_pipe();
+        let stop_flag = AtomicBool::new(true);
+        let mut buf = [0u8; 10];
+        let res = pipe.read_frame_stoppable(&mut buf, &stop_flag);
+
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    }
 }

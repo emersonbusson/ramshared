@@ -528,6 +528,9 @@ function runLlvmCov(
   cargoTargetDir,
   { repoRoot = REPO_ROOT, env = process.env, spawnCommand = spawnSync, error = console.error } = {},
 ) {
+  if (!Array.isArray(packages) || packages.some(p => typeof p !== 'string' || p.trim().length === 0)) {
+    throw new CoverageGateError("COVERAGE_USAGE_ERROR", "invalid or empty package names provided", 2);
+  }
   if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "Cargo.toml not found at repository root", 2);
   }
@@ -644,8 +647,13 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       throw usageError("--metric must be lines|regions|functions");
     }
 
-    let files = options.files.map((file) => normRepoPath(file));
-    if (options.filesFrom) files.push(...loadFilesFrom(options.filesFrom).map((file) => normRepoPath(file)));
+    let files = (options.files || []).filter(f => typeof f === 'string' && f.trim().length > 0).map((file) => normRepoPath(file));
+    if (options.filesFrom) {
+      if (typeof options.filesFrom !== 'string' || options.filesFrom.trim().length === 0) {
+        throw usageError("--files-from must not be empty");
+      }
+      files.push(...loadFilesFrom(options.filesFrom).filter(f => typeof f === 'string' && f.trim().length > 0).map((file) => normRepoPath(file)));
+    }
     files = [...new Set(files)];
     if (files.length === 0) throw usageError("provide --files and/or --files-from (production paths to gate)");
 
