@@ -302,9 +302,93 @@ mod tests {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.slices = 1000;
         cfg.broker.slice_mib = 1024 * 1024 * 1024; // 1 PB slice
-        if std::fs::read_to_string("/proc/meminfo").is_ok() {
-            let err = cfg.validate().expect_err("should reject excessive ram");
-            assert!(matches!(err, ConfigError::OutOfRange(_)));
+        if let Ok(m) = std::fs::read_to_string("/proc/meminfo") {
+            if parse_meminfo(&m).is_some() {
+                let err = cfg.validate().expect_err("should reject excessive ram");
+                assert!(matches!(err, ConfigError::OutOfRange(_)));
+            }
         }
+    }
+
+    #[test]
+    fn test_config_parse_meminfo_valid() {
+        let meminfo = "MemTotal:       16393392 kB\nMemFree:          123456 kB";
+        let bytes = parse_meminfo(meminfo);
+        assert_eq!(bytes, Some(16393392 * 1024));
+    }
+
+    #[test]
+    fn test_config_parse_meminfo_invalid() {
+        let meminfo = "MemFree:          123456 kB";
+        let bytes = parse_meminfo(meminfo);
+        assert_eq!(bytes, None);
+    }
+
+    #[test]
+    fn test_config_parse_meminfo_malformed() {
+        let meminfo = "MemTotal: abc kB";
+        let bytes = parse_meminfo(meminfo);
+        assert_eq!(bytes, None);
+    }
+
+    #[test]
+    fn test_config_validate_zero_broker_slices() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slices = 0;
+        let err = cfg.validate().expect_err("should reject 0 broker slices");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.slices" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn test_config_validate_zero_broker_slice_mib() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slice_mib = 0;
+        let err = cfg.validate().expect_err("should reject 0 broker slice_mib");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.slice_mib" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn test_config_validate_zero_agent_watchdog_secs() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.agent.watchdog_secs = 0;
+        let err = cfg.validate().expect_err("should reject 0 agent watchdog_secs");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "agent.watchdog_secs" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn test_config_parse_unknown_field_ignored() {
+        let cfg = Config::parse("[broker]\nunknown_field = 'test'\nlisten='127.0.0.1:8888'\n").expect("parse");
+        assert_eq!(cfg.broker.listen, "127.0.0.1:8888");
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_parse_span_empty_text() {
+        let err = Config::parse("broker = [").unwrap_err();
+        assert!(matches!(err, ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn test_config_parse_type_mismatch() {
+        let err = Config::parse("[broker]\nslices = 'invalid'").expect_err("should fail to parse");
+        assert!(matches!(err, ConfigError::Parse { .. }));
     }
 }
