@@ -172,7 +172,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_rejects_exceeding_max_slices() {
+    fn test_slices_max_slices_error() {
         assert!(matches!(
             SliceMap::new(MAX_SLICES + 1, 64, u64::MAX),
             Err(SliceError::TooManySlices {
@@ -183,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_exceeding_capacity() {
+    fn test_slices_capacity_error() {
         assert!(matches!(
             SliceMap::new(2, 64, 127),
             Err(SliceError::CapacityExceeded {
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn new_creates_k_free_disjoint_slices() {
+    fn test_slices_new_ok() {
         let m = SliceMap::new(3, 64, 192).unwrap();
         assert_eq!(m.slices().len(), 3);
         assert_eq!(m.total_bytes(), 192);
@@ -208,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn exports_are_named_s0_s1() {
+    fn test_slices_exports_ok() {
         let m = SliceMap::new(2, 64, 128).unwrap();
         assert_eq!(
             m.exports(),
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn assign_drain_release_cycle() {
+    fn test_slices_assign_drain_release_ok() {
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         m.assign(0, 7).unwrap();
         assert_eq!(m.get(0).unwrap().state, SliceState::Active);
@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn assign_on_active_is_rejected() {
+    fn test_slices_assign_active_error() {
         // Atomicity boundary: an Active slice cannot be re-assigned.
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         m.assign(0, 1).unwrap();
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn assign_on_leased_is_rejected() {
+    fn test_slices_assign_leased_error() {
         // DT-19: slice reserved for lease does not return to round-robin via assign.
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         m.lease(0).unwrap();
@@ -246,7 +246,14 @@ mod tests {
     }
 
     #[test]
-    fn lease_unlease_cycle() {
+    fn test_slices_lease_nonfree_error() {
+        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        m.assign(0, 1).unwrap();
+        assert_eq!(m.lease(0), Err(SliceError::AlreadyAllocated));
+    }
+
+    #[test]
+    fn test_slices_lease_unlease_ok() {
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         m.lease(0).unwrap();
         assert_eq!(m.get(0).unwrap().state, SliceState::Leased);
@@ -255,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn illegal_jumps_rejected() {
+    fn test_slices_illegal_jump_error() {
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         // Free cannot drain, release, or unlease.
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
@@ -267,10 +274,38 @@ mod tests {
     }
 
     #[test]
-    fn unknown_slice_is_error() {
+    fn test_slices_unknown_error() {
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         assert_eq!(m.assign(9, 1), Err(SliceError::UnknownSlice));
         assert_eq!(m.drain(9), Err(SliceError::UnknownSlice));
         assert!(m.get(9).is_none());
+    }
+
+    #[test]
+    fn test_slices_display_ok() {
+        assert_eq!(
+            SliceError::UnknownSlice.to_string(),
+            "unknown slice"
+        );
+        assert_eq!(
+            SliceError::IndexOutOfRange.to_string(),
+            "slice index out of range"
+        );
+        assert_eq!(
+            SliceError::BadState { have: SliceState::Free }.to_string(),
+            "slice bad state: Free"
+        );
+        assert_eq!(
+            SliceError::TooManySlices { requested: 300, max: 256 }.to_string(),
+            "too many slices requested (300 > 256)"
+        );
+        assert_eq!(
+            SliceError::CapacityExceeded { required: 100, available: 50 }.to_string(),
+            "slice capacity exceeded (required 100 > available 50)"
+        );
+        assert_eq!(
+            SliceError::AlreadyAllocated.to_string(),
+            "slice is already allocated"
+        );
     }
 }
