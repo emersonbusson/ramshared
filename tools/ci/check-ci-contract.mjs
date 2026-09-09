@@ -1549,38 +1549,105 @@ export function runLocal({ root = ROOT } = {}) {
 }
 
 export function main(argv = process.argv.slice(2), { root = ROOT, print = console.log, error = console.error } = {}) {
-  if (argv.length === 2 && argv[0] === '--aggregate-needs') {
+  const isJson = Array.isArray(argv) && argv.includes('--json')
+  const args = Array.isArray(argv) ? argv.filter(a => a !== '--json') : argv
+
+  const formatViolations = (errors, loadedContract) => errors.map((err) => {
+    let file = CONTRACT_PATH
+    let line = 1
+    const rule_id = err.rule
+    const description = `${err.gate}: ${err.rule}${err.detail ? ` (${err.detail})` : ''}`
+
+    if (err.gate === 'remote-controls') {
+      file = rule_id.includes('schema') ? REMOTE_CONTROLS_SCHEMA_PATH : REMOTE_CONTROLS_OBSERVATION_PATH
+    } else if (err.gate === 'contract') {
+      file = CONTRACT_PATH
+    } else if (err.gate === 'aggregate') {
+      if (loadedContract?.aggregate?.workflow) {
+        file = loadedContract.aggregate.workflow
+      }
+    } else {
+      const gate = loadedContract?.gates?.find((g) => g.id === err.gate)
+      if (gate) {
+        if (rule_id.includes('policy') || rule_id.includes('selection')) {
+          file = CONTRACT_PATH
+          try {
+            const lines = readFileSync(path.join(root, CONTRACT_PATH), 'utf8').split('\n')
+            const idx = lines.findIndex((l) => l.includes(`"${gate.id}"`))
+            if (idx !== -1) line = idx + 1
+          } catch { /* ignore */ }
+        } else if (gate.workflow) {
+          file = gate.workflow
+          if (gate.job) {
+            try {
+              const lines = readFileSync(path.join(root, gate.workflow), 'utf8').split('\n')
+              const idx = lines.findIndex((l) => l.includes(`${gate.job}:`))
+              if (idx !== -1) line = idx + 1
+            } catch { /* ignore */ }
+          }
+        }
+      }
+    }
+    return { file, line, rule_id, description }
+  })
+
+  if (args.length === 2 && args[0] === '--aggregate-needs') {
     let needs
     try {
-      needs = JSON.parse(argv[1])
+      needs = JSON.parse(args[1])
     } catch {
       error('CI_CONTRACT_ERROR=aggregate:aggregate-needs-json-invalid')
       return 2
     }
     const loaded = loadContract(root)
     if (loaded.error) {
-      error(`CI_CONTRACT_ERROR=${loaded.error.gate}:${loaded.error.rule}`)
+      if (isJson) print(JSON.stringify(formatViolations([loaded.error], loaded.contract), null, 2))
+      else error(`CI_CONTRACT_ERROR=${loaded.error.gate}:${loaded.error.rule}`)
       return 1
     }
     const event = process.env.GITHUB_EVENT_NAME === 'pull_request' ? 'pull_request' :
       process.env.GITHUB_EVENT_NAME === 'push' ? 'push-main' : ''
     const result = validateAggregateNeeds(loaded.contract, needs, event)
-    print(`CI_AGGREGATE_STATUS=${result.status}`)
-    for (const item of result.errors ?? []) error(`CI_AGGREGATE_ERROR=${item.gate}:${item.rule}`)
-    print(`CI_AGGREGATE_VERDICT=${result.status === 'PASS' ? 'PASS' : 'NO-GO'}`)
+    if (isJson) {
+      if (result.errors && result.errors.length > 0) print(JSON.stringify(formatViolations(result.errors, loaded.contract), null, 2))
+      else print('[]')
+    } else {
+      print(`CI_AGGREGATE_STATUS=${result.status}`)
+      for (const item of result.errors ?? []) error(`CI_AGGREGATE_ERROR=${item.gate}:${item.rule}`)
+      print(`CI_AGGREGATE_VERDICT=${result.status === 'PASS' ? 'PASS' : 'NO-GO'}`)
+    }
     return result.status === 'PASS' ? 0 : 1
   }
-  if (!(argv.length === 1 && (argv[0] === '--check' || argv[0] === '--check-local'))) {
-    error('usage: check-ci-contract.mjs --check | --check-local | --aggregate-needs <json>')
+
+  if (!(args.length === 1 && (args[0] === '--check' || args[0] === '--check-local'))) {
+    if (isJson) error('usage: check-ci-contract.mjs [--json] --check | --check-local | --aggregate-needs <json>')
+    else error('usage: check-ci-contract.mjs --check | --check-local | --aggregate-needs <json>')
     return 2
   }
-  const local = argv[0] === '--check-local'
+
+  const local = args[0] === '--check-local'
   const result = local ? runLocal({ root }) : run({ root })
-  print(`CI_CONTRACT_STATUS=${result.status}`)
-  for (const item of result.gaps ?? []) print(`CI_CONTRACT_GAP=${item}`)
-  for (const item of result.errors ?? []) error(`CI_CONTRACT_ERROR=${item.gate}:${item.rule}`)
+
+  if (isJson) {
+    const loaded = loadContract(root)
+    let errs = []
+    if (result.errors) errs.push(...result.errors)
+    if (result.gaps) errs.push(...result.gaps.map(g => {
+      const parts = g.split(':')
+      return { gate: parts[0], rule: parts[1], detail: '' }
+    }))
+
+    if (errs.length > 0) print(JSON.stringify(formatViolations(errs, loaded.contract), null, 2))
+    else print('[]')
+  } else {
+    print(`CI_CONTRACT_STATUS=${result.status}`)
+    for (const item of result.gaps ?? []) print(`CI_CONTRACT_GAP=${item}`)
+    for (const item of result.errors ?? []) error(`CI_CONTRACT_ERROR=${item.gate}:${item.rule}`)
+    const localPass = local && result.local_ok === true
+    print(`CI_CONTRACT_VERDICT=${result.status === 'PASS' ? 'PASS' : localPass ? 'PARTIAL' : 'NO-GO'}`)
+  }
+
   const localPass = local && result.local_ok === true
-  print(`CI_CONTRACT_VERDICT=${result.status === 'PASS' ? 'PASS' : localPass ? 'PARTIAL' : 'NO-GO'}`)
   return result.status === 'PASS' || localPass ? 0 : 1
 }
 
