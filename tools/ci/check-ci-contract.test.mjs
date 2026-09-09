@@ -123,7 +123,7 @@ function cargoAuditGate(overrides = {}) {
         url: 'https://github.com/RustSec/advisory-db.git',
         commit: RUSTSEC_SNAPSHOT_COMMIT,
         commit_utc: RUSTSEC_SNAPSHOT_UTC,
-        max_age_days: 7,
+        max_age_days: 14,
         upstream_head_health: {
           mode: 'scheduled-curator',
           cannot_override_snapshot_age: true,
@@ -361,7 +361,7 @@ test('ci_specific_policies_reject_malformed_coverage_and_cancellation_rules', ()
 
 test('ci_contract_rejects_stale_advisory_snapshot', () => {
   const result = validateContract(currentOnlyContract(cargoAuditGate()), {
-    now: Date.parse('2026-09-09T09:13:33Z'),
+    now: Date.parse('2026-09-17T09:13:33Z'),
   })
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'advisory-db-snapshot-stale'), true)
@@ -381,7 +381,7 @@ test('ci_contract_rejects_missing_or_mismatched_advisory_snapshot', () => {
     '          RUSTSEC_DB_URL: https://github.com/RustSec/advisory-db.git',
     `          RUSTSEC_DB_COMMIT: ${'0'.repeat(40)}`,
     `          RUSTSEC_DB_COMMIT_UTC: "${RUSTSEC_SNAPSHOT_UTC}"`,
-    '          RUSTSEC_DB_MAX_AGE_DAYS: "7"',
+    '          RUSTSEC_DB_MAX_AGE_DAYS: "14"',
     '        run: |',
     '          git -C "$RUSTSEC_DB_DIR" fetch --depth=1 origin "$RUSTSEC_DB_COMMIT"',
     '          cargo audit --db "$RUSTSEC_DB_DIR" --no-fetch',
@@ -1214,7 +1214,7 @@ test('remote_controls_foreign_or_stale_observation_is_no_go', () => {
   assert.equal(foreign.errors.some((item) => item.rule === 'default-branch-mismatch'), true)
 
   const stale = validateRemoteControlObservation(compliantRemoteObservation({
-    observed_at_utc: '2026-07-01T00:00:00Z',
+    observed_at_utc: '2025-01-01T00:00:00Z',
   }), { now: REMOTE_OBSERVATION_NOW })
   assert.equal(stale.errors.some((item) => item.rule === 'observation-stale'), true)
 })
