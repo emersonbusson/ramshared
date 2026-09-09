@@ -117,19 +117,37 @@ mod tests {
     }
 
     #[test]
+    fn test_pattern_error_display_formats_correctly() {
+        let err_corr = IntegrityError::CorruptedMemory {
+            offset: 42,
+            bit_flip_mask: 0xab,
+        };
+        assert_eq!(
+            err_corr.to_string(),
+            "corrupted memory at offset 42: bit flip mask 0xab"
+        );
+
+        let err_stride = IntegrityError::InvalidStride {
+            stride: 123,
+            page_size: 4096,
+        };
+        assert_eq!(
+            err_stride.to_string(),
+            "pattern scanning stride (123) does not evenly divide memory page size (4096)"
+        );
+    }
+
+    #[test]
     fn corruption_breaks_verify() {
         let mut buf = vec![0u8; 4096];
         fill_block(&mut buf, 7, Pattern::Random);
         buf[1234] ^= 0x01;
-        let Err(err) = verify_block(&buf, 7, Pattern::Random) else {
-            panic!("Expected an error for corrupted buffer");
-        };
         assert_eq!(
-            err,
-            IntegrityError::CorruptedMemory {
+            verify_block(&buf, 7, Pattern::Random),
+            Err(IntegrityError::CorruptedMemory {
                 offset: 1234,
                 bit_flip_mask: 0x01,
-            }
+            })
         );
     }
 
@@ -141,5 +159,49 @@ mod tests {
         fill_block(&mut b, 2, Pattern::Random);
         assert_ne!(a, b); // pattern differs by block index
         assert!(verify_block(&a, 2, Pattern::Random).is_err()); // wrong index verification fails
+    }
+
+    #[test]
+    fn test_pattern_generation_known_seed_ok() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, 0, Pattern::Sequential);
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 1);
+        assert_eq!(buf[255], 255);
+        assert_eq!(buf[256], 0); // wraps around
+    }
+
+    #[test]
+    fn test_pattern_boundary_zero_ok() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, 0, Pattern::Zero);
+        assert!(buf.iter().all(|&b| b == 0));
+        assert!(verify_block(&buf, 0, Pattern::Zero).is_ok());
+    }
+
+    #[test]
+    fn test_pattern_boundary_max_ok() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, u64::MAX, Pattern::Random);
+        assert!(verify_block(&buf, u64::MAX, Pattern::Random).is_ok());
+
+        let mut buf_seq = vec![0u8; 4096];
+        fill_block(&mut buf_seq, u64::MAX, Pattern::Sequential);
+        assert!(verify_block(&buf_seq, u64::MAX, Pattern::Sequential).is_ok());
+        assert_eq!(buf_seq[0], 255);
+        assert_eq!(buf_seq[1], 0);
+    }
+
+    #[test]
+    fn test_pattern_misaligned_err() {
+        // page_size % stride != 0
+        let odd_buf = vec![0u8; 123];
+        assert_eq!(
+            verify_block(&odd_buf, 42, Pattern::Zero),
+            Err(IntegrityError::InvalidStride {
+                stride: 123,
+                page_size: 4096
+            })
+        );
     }
 }
