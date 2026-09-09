@@ -817,4 +817,51 @@ mod tests {
             assert!(commit_cap_bytes_from_env() > 1 << 30);
         }
     }
+
+    #[test]
+    fn test_sparse_vram_allocation_exactly_capacity_passes() {
+        let p = FakeProvider::new();
+        let chunk = 256 * 1024;
+        let capacity = 4 * chunk;
+        let mut be = SparseVramBackend::new(&p, capacity, chunk, 4096).unwrap();
+
+        let payload = vec![0xABu8; 4096];
+        be.write_at(capacity - 4096, &payload).unwrap();
+        assert_eq!(p.allocs.get(), 1);
+
+        let mut buf = vec![0u8; 4096];
+        be.read_at(capacity - 4096, &mut buf).unwrap();
+        assert_eq!(buf, payload);
+    }
+
+    #[test]
+    fn test_sparse_vram_allocation_capacity_plus_one_rejection() {
+        let p = FakeProvider::new();
+        let chunk = 256 * 1024;
+        let capacity = 4 * chunk;
+        let mut be = SparseVramBackend::new(&p, capacity, chunk, 4096).unwrap();
+
+        let payload = vec![0xABu8; 4096];
+        let err = be.write_at(capacity, &payload).unwrap_err();
+        assert!(err.0.contains("oob") || err.0.contains("capacity"));
+    }
+
+    #[test]
+    fn test_sparse_vram_double_free_returns_zero() {
+        let p = FakeProvider::new();
+        let chunk = 256 * 1024;
+        let capacity = 4 * chunk;
+        let mut be = SparseVramBackend::new(&p, capacity, chunk, 4096).unwrap();
+
+        let payload = vec![0xABu8; 4096];
+        be.write_at(0, &payload).unwrap();
+        assert_eq!(be.chunks_live(), 1);
+
+        let freed1 = be.free_all_live();
+        assert_eq!(freed1, chunk);
+        assert_eq!(be.chunks_live(), 0);
+
+        let freed2 = be.free_all_live();
+        assert_eq!(freed2, 0);
+    }
 }
