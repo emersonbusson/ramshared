@@ -81,27 +81,7 @@ def read_psi_memory() -> Tuple[float, float, int]:
         pass
     return some_avg10, full_avg10, full_total_us
 
-
-def check_pct(value):
-    ivalue = int(value)
-    if ivalue < 1 or ivalue > 99:
-        raise argparse.ArgumentTypeError(f"{value} is an invalid percentage (1-99)")
-    return ivalue
-
-def check_positive_int(value):
-    ivalue = int(value)
-    if ivalue <= 0:
-        raise argparse.ArgumentTypeError(f"{value} is an invalid positive int")
-    return ivalue
-
-def check_positive_float(value):
-    fvalue = float(value)
-    if fvalue <= 0.0:
-        raise argparse.ArgumentTypeError(f"{value} is an invalid positive float")
-    return fvalue
-
 def probe_allocation_latency_ms() -> float:
-
     """Probes exact allocation and page dirtying latency in milliseconds."""
     t0 = time.perf_counter()
     try:
@@ -116,14 +96,14 @@ def probe_allocation_latency_ms() -> float:
 
 def main():
     parser = argparse.ArgumentParser(description="RamShared 1%-by-1% Micro-Step Stress Governor")
-    parser.add_argument("--start-pct", type=check_pct, default=1, help="Starting memory pressure percentage (default: 1%%)")
-    parser.add_argument("--max-target-pct", type=check_pct, default=95, help="Maximum target memory pressure percentage (default: 95%%, max: 99%%)")
-    parser.add_argument("--step-pct", type=check_pct, default=1, help="Percentage increment per step (default: 1%%)")
-    parser.add_argument("--step-interval-sec", type=check_positive_float, default=2.0, help="Dwell/observation time per 1%% step in seconds (default: 2.0s)")
-    parser.add_argument("--hold-peak-sec", type=check_positive_float, default=15.0, help="Duration to hold maximum achieved safe peak (default: 15.0s)")
-    parser.add_argument("--min-free-ram-mb", type=check_positive_int, default=600, help="Absolute minimum available RAM safety floor (default: 600 MB)")
-    parser.add_argument("--max-psi-full", type=check_positive_float, default=20.0, help="Safety PSI full abort threshold percentage (default: 20.0%%)")
-    parser.add_argument("--max-latency-ms", type=check_positive_float, default=8.0, help="Safety micro-probe latency threshold in ms (default: 8.0 ms)")
+    parser.add_argument("--start-pct", type=int, default=1, help="Starting memory pressure percentage (default: 1%)")
+    parser.add_argument("--max-target-pct", type=int, default=95, help="Maximum target memory pressure percentage (default: 95%, max: 99%)")
+    parser.add_argument("--step-pct", type=int, default=1, help="Percentage increment per step (default: 1%)")
+    parser.add_argument("--step-interval-sec", type=float, default=2.0, help="Dwell/observation time per 1% step in seconds (default: 2.0s)")
+    parser.add_argument("--hold-peak-sec", type=float, default=15.0, help="Duration to hold maximum achieved safe peak (default: 15.0s)")
+    parser.add_argument("--min-free-ram-mb", type=int, default=600, help="Absolute minimum available RAM safety floor (default: 600 MB)")
+    parser.add_argument("--max-psi-full", type=float, default=20.0, help="Safety PSI full abort threshold percentage (default: 20.0%)")
+    parser.add_argument("--max-latency-ms", type=float, default=8.0, help="Safety micro-probe latency threshold in ms (default: 8.0 ms)")
     args = parser.parse_args()
 
     max_target_pct = min(max(args.max_target_pct, 1), 99)
@@ -147,7 +127,6 @@ def main():
         sys.exit(0)
 
     signal.signal(signal.SIGINT, sig_handler)
-    # Register explicit SIGTERM handler for graceful termination
     signal.signal(signal.SIGTERM, sig_handler)
 
     print("=" * 100)
@@ -161,10 +140,6 @@ def main():
     ram_avail_init = (mem_init.get("MemAvailable", 0) + 512) // 1024
     swap_total_mb = (mem_init.get("SwapTotal", 0) + 512) // 1024
     swap_init_used = (mem_init.get("SwapTotal", 0) - mem_init.get("SwapFree", 0) + 512) // 1024
-
-    if ram_avail_init < args.min_free_ram_mb:
-        print(f"\n[!] ABORT: Initial available memory ({ram_avail_init} MB) is below the safety floor ({args.min_free_ram_mb} MB).")
-        return 1
 
     print(f"[i] Host Physical RAM: {ram_total_mb} MB (Initial Available: {ram_avail_init} MB)")
     print(f"[i] Active Swap Pool:  {swap_total_mb} MB (Initial Used: {swap_init_used} MB)\n")
