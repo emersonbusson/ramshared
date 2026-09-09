@@ -339,7 +339,7 @@
           "url": "https://github.com/RustSec/advisory-db.git",
           "commit": "5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5",
           "commit_utc": "2026-09-02T09:13:32Z",
-          "max_age_days": 7,
+          "max_age_days": 14,
           "upstream_head_health": {
             "mode": "scheduled-curator",
             "cannot_override_snapshot_age": true

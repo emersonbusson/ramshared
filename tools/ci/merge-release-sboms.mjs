@@ -63,20 +63,18 @@ function deterministicUuid(tag, revision) {
 
 function requireInputBom(bom) {
   if (!bom) throw new Error('invalid cargo-cyclonedx input BOM')
-  if (bom.bomFormat !== 'CycloneDX' && bom.bomFormat !== 'SPDX') {
-    throw new Error('invalid cargo-cyclonedx input BOM')
-  }
   if (bom.bomFormat === 'CycloneDX') {
     if (bom.specVersion !== '1.5' || bom.version !== 1 ||
         !bom.metadata?.component || canonicalText(bom.metadata.tools) !== canonicalText(EXPECTED_TOOL) ||
         !Array.isArray(bom.components) || !Array.isArray(bom.dependencies)) {
       throw new Error('invalid cargo-cyclonedx input BOM')
     }
-  }
-  if (bom.bomFormat === 'SPDX') {
-    if (!bom.metadata?.component?.name) {
+  } else if (bom.spdxVersion) {
+    if (!bom.name || !Array.isArray(bom.packages) || !Array.isArray(bom.relationships)) {
       throw new Error('invalid cargo-cyclonedx input BOM')
     }
+  } else {
+    throw new Error('invalid cargo-cyclonedx input BOM')
   }
 }
 
@@ -105,21 +103,16 @@ export function mergeReleaseSboms(inputBoms, { tag, revision, sourceDateEpoch })
 
   for (const bom of inputBoms) requireInputBom(bom)
   const normalized = inputBoms.map((bom) => normalize(bom))
-  normalized.sort((left, right) => (left.metadata?.component?.name ?? '').localeCompare(right.metadata?.component?.name ?? ''))
-  if (canonicalText(normalized.map((bom) => bom.metadata?.component?.name)) !== canonicalText(EXPECTED_ROOTS)) {
+  normalized.sort((left, right) => left.metadata.component.name.localeCompare(right.metadata.component.name))
+  if (canonicalText(normalized.map((bom) => bom.metadata.component.name)) !== canonicalText(EXPECTED_ROOTS)) {
     throw new Error('exact release SBOM roots are required')
   }
 
   const components = new Map()
   const dependencies = new Map()
   for (const bom of normalized) {
-    if (bom.metadata?.component) {
-      insertExactComponent(components, bom.metadata.component)
-    }
-    if (Array.isArray(bom.components)) {
-      for (const component of bom.components) insertExactComponent(components, component)
-    }
-    if (!Array.isArray(bom.dependencies)) continue
+    insertExactComponent(components, bom.metadata.component)
+    for (const component of bom.components) insertExactComponent(components, component)
     for (const dependency of bom.dependencies) {
       const dependsOn = dependency.dependsOn ?? []
       if (typeof dependency.ref !== 'string' || !Array.isArray(dependsOn)) {
@@ -179,7 +172,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 2) {
     const flag = argv[index]
     const value = argv[index + 1]
-    if (!value) throw new Error(`missing value for ${flag}`)
+    if (value === undefined || value.startsWith('--')) throw new Error(`missing value for ${flag}`)
     if (flag === '--input') options.inputs.push(value)
     else if (flag === '--tag') options.tag = value
     else if (flag === '--revision') options.revision = value
@@ -195,13 +188,26 @@ function parseArgs(argv) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2))
-  const boms = options.inputs.map((input) => JSON.parse(readFileSync(input, 'utf8')))
+  let boms
+  try {
+    boms = options.inputs.map((input) => JSON.parse(readFileSync(input, 'utf8')))
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'EACCES') {
+      throw new Error(`failed to read input file: ${err.message}`)
+    }
+    throw err
+  }
   const merged = mergeReleaseSboms(boms, options)
   mkdirSync(path.dirname(options.out), { recursive: true })
   writeFileSync(options.out, `${JSON.stringify(merged, null, 2)}\n`, { flag: 'wx' })
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href &&
+  typeof process.env.NODE_TEST_CONTEXT === 'undefined' &&
+  !process.argv.includes('--test')
+) {
   try {
     main()
   } catch (error) {
