@@ -422,6 +422,8 @@ mod tests {
         let mut r = TimeoutReader;
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
-        assert!(matches!(res, Err(HandshakeError::Io(ref e)) if e.kind() == io::ErrorKind::TimedOut));
+        assert!(
+            matches!(res, Err(HandshakeError::Io(ref e)) if e.kind() == io::ErrorKind::TimedOut)
+        );
     }
 }
