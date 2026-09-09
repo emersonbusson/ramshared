@@ -369,4 +369,56 @@ mod tests {
             NBD_ERANGE
         );
     }
+
+    #[test]
+    fn test_request_sector_0_ok() {
+        let mut b = MemBackend {
+            data: vec![0u8; 8192],
+            bs: 4096,
+        };
+        let r = serve(&req(Command::Read, 0, 4096), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_OK
+        );
+    }
+
+    #[test]
+    fn test_request_max_sector_ok() {
+        let mut b = MemBackend {
+            data: vec![0u8; 8192],
+            bs: 4096,
+        };
+        let r = serve(&req(Command::Read, 4096, 4096), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_OK
+        );
+    }
+
+    #[test]
+    fn test_request_cross_boundary_erange() {
+        let mut b = MemBackend {
+            data: vec![0u8; 8192],
+            bs: 4096,
+        };
+        let r = serve(&req(Command::Read, 4096, 8192), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_ERANGE
+        );
+    }
+
+    #[test]
+    fn test_request_zero_length_ok() {
+        let mut b = MemBackend {
+            data: vec![0u8; 8192],
+            bs: 4096,
+        };
+        let r = serve(&req(Command::Read, 4096, 0), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_OK
+        );
+    }
 }
