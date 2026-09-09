@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -102,6 +102,44 @@ test('release_manifest_writer_rejects_unsafe_output_or_revision', () => {
   assert.throws(() => buildReleaseManifest({ ...valid.input, clean_tree: false }, { root: valid.root }), /release-manifest-input-invalid/)
 })
 
+test('test_write_release_manifest_symlink_invalid', () => {
+  const valid = fixture()
+  const symlinkPath = path.join(valid.root, 'Cargo.lock')
+  rmSync(symlinkPath)
+  symlinkSync('artifacts', symlinkPath)
+  assert.throws(() => buildReleaseManifest(valid.input, { root: valid.root }), /release-manifest-input-invalid/)
+})
+
+test('test_write_release_manifest_directory_invalid', () => {
+  const valid = fixture()
+  const dirPath = path.join(valid.root, 'Cargo.lock')
+  rmSync(dirPath)
+  mkdirSync(dirPath)
+  assert.throws(() => buildReleaseManifest(valid.input, { root: valid.root }), /release-manifest-input-invalid/)
+})
+
+test('test_write_release_manifest_invalid_sbom_tools', () => {
+  const valid = fixture()
+  writeFileSync(path.join(valid.root, valid.input.sbom_path), JSON.stringify({
+    bomFormat: 'CycloneDX',
+    specVersion: '1.5',
+    metadata: {
+      tools: [{ name: 'invalid-tool', version: '0.5.9' }]
+    }
+  }))
+  assert.throws(() => buildReleaseManifest(valid.input, { root: valid.root }), /release-manifest-input-invalid/)
+})
+
+test('test_write_release_manifest_wrong_asset_names', () => {
+  const valid = fixture()
+  const invalidName = 'artifacts/release/wrong-name.tar.gz'
+  writeFileSync(path.join(valid.root, invalidName), 'bundle\n')
+  writeFileSync(path.join(valid.root, `${invalidName}.sha256`), `${sha256('bundle\n')}  wrong-name.tar.gz\n`)
+  valid.input.bundle_path = invalidName
+  valid.input.checksum_path = `${invalidName}.sha256`
+  assert.throws(() => buildReleaseManifest(valid.input, { root: valid.root }), /release-manifest-input-invalid/)
+})
+
 test('release_manifest_writer_rejects_missing_invalid_and_unwritable_artifacts', () => {
   const valid = fixture()
   writeFileSync(path.join(valid.root, valid.input.sbom_path), 'not-json\n')
@@ -159,6 +197,32 @@ test('release_manifest_writer_cli_writes_only_verified_relative_output', () => {
   }), 1)
   assert.equal(errors.every((line) => !line.includes(privateValue)), true)
   assert.equal(errors.includes('RELEASE_MANIFEST_ERROR=release-manifest-output-invalid'), true)
+})
+
+test('test_write_release_manifest_cli_duplicate_arg', () => {
+  const valid = fixture()
+  const usage = []
+  assert.equal(main([
+    '--tag', valid.input.tag,
+    '--tag', valid.input.tag,
+    '--clean-tree'
+  ], { print: () => {}, error: (line) => usage.push(line) }), 2)
+  assert.equal(usage[0].startsWith('usage:'), true)
+})
+
+test('test_write_release_manifest_duplicate_clean_tree', () => {
+  const usage = []
+  assert.equal(main(['--clean-tree', '--clean-tree'], { print: () => {}, error: (line) => usage.push(line) }), 2)
+  assert.equal(usage[0].startsWith('usage:'), true)
+})
+
+test('test_write_release_manifest_cli_missing_arg_value', () => {
+  const usage = []
+  assert.equal(main(['--tag'], { print: () => {}, error: (line) => usage.push(line) }), 2)
+  assert.equal(usage[0].startsWith('usage:'), true)
+  const usage2 = []
+  assert.equal(main(['--tag', '--revision'], { print: () => {}, error: (line) => usage2.push(line) }), 2)
+  assert.equal(usage2[0].startsWith('usage:'), true)
 })
 
 test('release_manifest_writer_cli_rejects_usage_and_invalid_manifest_input', () => {

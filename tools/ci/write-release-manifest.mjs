@@ -9,7 +9,7 @@ const SOURCE_SHA_RE = /^[0-9a-f]{40}$/
 const RUST_VERSION = '1.98.0'
 const RUST_COMMIT_RE = /^[0-9a-f]{40}$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
-const TARGET_TAG = 'v0.9.0-beta.1'
+const SEMVER_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][a-zA-Z0-9-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][a-zA-Z0-9-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/
 
 function safeRelative(value) {
   return typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) &&
@@ -25,7 +25,7 @@ function isObject(value) {
 }
 
 function inputIsValid(input) {
-  return isObject(input) && input.tag === TARGET_TAG && SOURCE_SHA_RE.test(input.revision) &&
+  return isObject(input) && SEMVER_RE.test(input.tag) && SOURCE_SHA_RE.test(input.revision) &&
     input.clean_tree === true && input.rust_version === RUST_VERSION &&
     RUST_COMMIT_RE.test(input.rust_commit) &&
     safeRelative(input.bundle_path) && safeRelative(input.checksum_path) && safeRelative(input.sbom_path) &&
@@ -68,6 +68,7 @@ function validateDetachedChecksum(bundle, checksum) {
 }
 
 function evidenceRecord(record) {
+  if (!record || !record.sha256) throw new Error('release-manifest-input-invalid')
   return {
     path: record.path,
     class: 'release-evidence',
@@ -138,7 +139,11 @@ export function buildReleaseManifest(input, { root = process.cwd() } = {}) {
       schema_version: 1,
       source_sha: input.revision,
       terminal_status: 'PASS',
-      artifacts: [evidenceRecord(bundle), evidenceRecord(checksum), evidenceRecord(sbom)],
+      artifacts: (() => {
+        const arr = [evidenceRecord(bundle), evidenceRecord(checksum), evidenceRecord(sbom)]
+        if (!arr || arr.length === 0 || !arr.every(a => a.sha256)) throw new Error('release-manifest-input-invalid')
+        return arr
+      })(),
     },
     public_assets: publicAssets,
     windows_driver_status: 'not-included',
@@ -181,8 +186,9 @@ function parseArguments(argv) {
       continue
     }
     const value = argv[index + 1]
+    if (value === undefined || value.startsWith('--')) return null
     if (!['--tag', '--revision', '--rust-version', '--rust-commit', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out'].includes(key) ||
-        typeof value !== 'string' || values.has(key)) return null
+        values.has(key)) return null
     values.set(key, value)
     index += 2
   }
