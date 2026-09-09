@@ -9,9 +9,15 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::Instant;
 
+#[cfg(not(test))]
 unsafe extern "C" {
     fn ioctl(fd: i32, request: u64, ...) -> i32;
 }
+
+#[cfg(test)]
+unsafe fn ioctl(fd: i32, request: u64, value: *mut std::ffi::c_void) -> i32 { unsafe {
+    tests::mock_ioctl(fd, request, value)
+}}
 
 pub mod uapi {
     pub const ENUM_ADAPTERS2_IOCTL: u64 = 0xc010_4714;
@@ -283,7 +289,8 @@ fn close_adapter(file: &File, handle: u32) {
 fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError> {
     // SAFETY: `value` points to the exact repr(C) layout for `request` and stays
     // alive for the synchronous ioctl. The kernel validates nested pointers.
-    let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T) };
+    #[allow(clippy::useless_conversion)]
+    let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T as *mut std::ffi::c_void) };
     if result < 0 {
         Err(DxgError::from_sys_error(std::io::Error::last_os_error()))
     } else {
@@ -292,10 +299,45 @@ fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{
         AdapterLuid, BudgetSnapshot, DxgBudgetProvider, GpuBudgetProvider, select_adapter,
     };
+    use std::sync::Mutex;
+
+    pub static MOCK_IOCTL_STATE: Mutex<Option<MockState>> = Mutex::new(None);
+    pub static TEST_MUTEX: Mutex<()> = Mutex::new(());
+
+    #[derive(Default)]
+    pub struct MockState {
+        pub closed_handles: Vec<u32>,
+        pub error_next_close: bool,
+    }
+
+    unsafe extern "C" {
+        #[link_name = "ioctl"]
+        fn sys_ioctl(fd: i32, request: u64, ...) -> i32;
+    }
+
+    pub unsafe fn mock_ioctl(fd: i32, request: u64, value: *mut std::ffi::c_void) -> i32 { unsafe {
+        if request == super::uapi::CLOSE_ADAPTER_IOCTL {
+            let mut guard = MOCK_IOCTL_STATE.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                let handle = *(value as *const u32);
+                state.closed_handles.push(handle);
+                if state.error_next_close {
+                    state.error_next_close = false;
+                    // For a mock, setting errno reliably across threads is tricky.
+                    // We can just return -1 and rely on standard `last_os_error`.
+                    return -1;
+                }
+            }
+            return 0;
+        }
+
+        // Forward other ioctls to the actual ioctl so that live tests still work
+        sys_ioctl(fd, request, value)
+    }}
 
     #[test]
     fn official_uapi_layouts_and_ioctl_numbers_match_wsl_618() {
@@ -471,6 +513,68 @@ mod tests {
         let provider = DxgBudgetProvider::from_infos(file, infos, Some(selected))
             .unwrap_or_else(|error| panic!("from_infos: {error}"));
         assert_eq!(provider.adapter_luid(), selected);
+    }
+
+    #[test]
+    fn test_adapter_normal_close_success() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        *MOCK_IOCTL_STATE.lock().unwrap() = Some(MockState::default());
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap();
+        super::close_adapter(&file, 1);
+
+        let state = MOCK_IOCTL_STATE.lock().unwrap().take().unwrap();
+        assert_eq!(state.closed_handles, vec![1]);
+    }
+
+    #[test]
+    fn test_adapter_forced_close_ignores_error() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        *MOCK_IOCTL_STATE.lock().unwrap() = Some(MockState {
+            closed_handles: vec![],
+            error_next_close: true,
+        });
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap();
+
+        // This will simulate an error from ioctl, but drop/close_adapter ignores it.
+        super::close_adapter(&file, 0);
+
+        // Now do max without error
+        super::close_adapter(&file, u32::MAX);
+
+        let state = MOCK_IOCTL_STATE.lock().unwrap().take().unwrap();
+        assert_eq!(state.closed_handles, vec![0, u32::MAX]);
+    }
+
+    #[test]
+    fn test_adapter_close_with_pending_allocations_does_not_panic() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        *MOCK_IOCTL_STATE.lock().unwrap() = Some(MockState::default());
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap();
+        let infos = vec![super::uapi::AdapterInfo {
+            adapter_handle: 999,
+            luid_low: 10,
+            luid_high: 11,
+            ..Default::default()
+        }];
+        let provider = super::DxgBudgetProvider::from_infos(file, infos, None).unwrap();
+
+        // Dropping the provider should automatically close adapter 999
+        drop(provider);
+
+        let state = MOCK_IOCTL_STATE.lock().unwrap().take().unwrap();
+        assert_eq!(state.closed_handles, vec![999]);
     }
 
     #[test]
