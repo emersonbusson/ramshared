@@ -125,7 +125,7 @@ function isMachineOnly(text) {
 }
 
 function addUnit(units, line, text, scope, ext) {
-  const cleaned = text.replace(/^\s*\*+\s?/, '').trim()
+  const cleaned = text.trim().replace(/^\s*\*+\s?/, '').trim()
   if (!cleaned || isMachineOnly(cleaned) || (scope === 'comment' && DIRECTIVE_RE.test(cleaned))) return
   units.push({ line, text: cleaned, scope, ext })
 }
@@ -323,7 +323,7 @@ export function scanText(relative, text, lineNumbers = null) {
 export function scanBuffer(relative, buffer, lineNumbers = null) {
   if (!Buffer.isBuffer(buffer)) throw new LanguageError('invalid-buffer')
   if (buffer.length > MAX_FILE_BYTES) throw new LanguageError('file-size-limit')
-  if (buffer.includes(0)) return []
+  if (buffer.indexOf(0) !== -1) return []
   let text
   try {
     text = UTF8.decode(buffer)

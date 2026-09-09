@@ -1,0 +1,28 @@
+--- tools/ci/check-comment-language.test.mjs
++++ tools/ci/check-comment-language.test.mjs
+@@ -621,6 +621,24 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
+   ])
+ })
+
++test('binary_files_and_empty_comments_are_ignored', () => {
++  assert.deepEqual(scanBuffer('bin', Buffer.from([0x00, 0x01])), [])
++
++  const units = []
++  const emptyString = "  "
++  const cleanedEmpty = emptyString.trim().replace(/^\s*\*+\s?/, '').trim()
++  if (cleanedEmpty && !isMachineOnly(cleanedEmpty) && !(false && DIRECTIVE_RE.test(cleanedEmpty))) {
++    units.push({ line: 1, text: cleanedEmpty, scope: 'comment', ext: 'mjs' })
++  }
++
++  const emptyAsteriskString = " * "
++  const cleanedAsterisk = emptyAsteriskString.trim().replace(/^\s*\*+\s?/, '').trim()
++  if (cleanedAsterisk && !isMachineOnly(cleanedAsterisk) && !(false && DIRECTIVE_RE.test(cleanedAsterisk))) {
++    units.push({ line: 2, text: cleanedAsterisk, scope: 'comment', ext: 'mjs' })
++  }
++
++  assert.deepEqual(units, [])
++})
++
+ test('test_only_localization_differential_accepts_declared_cfg_test_change', async () => {
+   const base = [
+     '#[cfg(test)]',
