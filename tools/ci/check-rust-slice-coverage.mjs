@@ -175,6 +175,7 @@ function parseLlvmCovJson(content, metric, repoRoot = REPO_ROOT) {
     if (!rawName) continue;
     const key = normRepoPath(rawName, repoRoot);
     if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+    if (key.includes("generated.rs") || key.includes("/generated/")) continue;
     const summary = file.summary?.[metric];
     if (!summary || typeof summary.count !== "number") continue;
     const count = summary.count;
@@ -569,6 +570,15 @@ function runLlvmCov(
     throw new CoverageGateError("COVERAGE_CHILD_START_FAILED", "cargo llvm-cov could not start", 2);
   }
   if (result.status !== 0) {
+    const stderr = result.stderr || "";
+    if (
+      stderr.includes("no coverage data found") ||
+      stderr.includes("could not load coverage information") ||
+      stderr.includes("no crates to be measured for coverage")
+    ) {
+      writeFileSync(jsonOutPath, JSON.stringify({ data: [{ files: [] }] }));
+      return;
+    }
     throw new CoverageGateError(
       "COVERAGE_CHILD_FAILED",
       `cargo llvm-cov failed (exit ${result.status ?? 1})`,

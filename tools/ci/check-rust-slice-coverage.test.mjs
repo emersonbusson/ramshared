@@ -631,3 +631,31 @@ test("coverage_child_deadline_terminates_descendant_process_tree", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("coverage_child_empty_crate_or_workspace_returns_empty_json", () => {
+  const runLlvmCov = checkerApi("runLlvmCov");
+  const root = mkdtempSync(join(tmpdir(), "ramshared-cov-empty-"));
+  try {
+    const cargoRoot = join(root, "cargo-root");
+    mkdirSync(cargoRoot);
+    writeFileSync(join(cargoRoot, "Cargo.toml"), "[workspace]\n");
+    const reportPath = join(root, "result.json");
+    const targetPath = join(root, "private-target");
+
+    runLlvmCov(["ramshared-empty"], reportPath, targetPath, {
+      repoRoot: cargoRoot,
+      error: () => {},
+      spawnCommand: () => ({ status: 1, stderr: "error: no coverage data found", stdout: "" }),
+    });
+    assert.deepEqual(JSON.parse(readFileSync(reportPath, "utf8")), { data: [{ files: [] }] });
+
+    runLlvmCov(["ramshared-empty"], reportPath, targetPath, {
+      repoRoot: cargoRoot,
+      error: () => {},
+      spawnCommand: () => ({ status: 101, stderr: "error: no crates to be measured for coverage", stdout: "" }),
+    });
+    assert.deepEqual(JSON.parse(readFileSync(reportPath, "utf8")), { data: [{ files: [] }] });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
