@@ -946,7 +946,10 @@ mod tests {
         let err = RuntimeError::new(RuntimeErrorClass::Internal, 42, "test message");
         assert_eq!(err.to_string(), "runtime Internal code=42: test message");
         let std_err: &dyn std::error::Error = &err;
-        assert_eq!(std_err.to_string(), "runtime Internal code=42: test message");
+        assert_eq!(
+            std_err.to_string(),
+            "runtime Internal code=42: test message"
+        );
     }
 
     #[test]
@@ -1041,17 +1044,39 @@ mod tests {
         state.phase = RuntimePhase::Online;
         struct ErrOps;
         impl RuntimeOps for ErrOps {
-            fn acquire_lease(&mut self, _: u64) -> Result<u32, RuntimeError> { Ok(1) }
-            fn release_lease(&mut self, _: u32) -> Result<(), RuntimeError> { Ok(()) }
-            fn cuda_alloc(&mut self, _: u64) -> Result<(), RuntimeError> { Ok(()) }
-            fn cuda_free(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn create_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn destroy_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn register_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn unregister_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn drain_io(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn acquire_lease(&mut self, _: u64) -> Result<u32, RuntimeError> {
+                Ok(1)
+            }
+            fn release_lease(&mut self, _: u32) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn cuda_alloc(&mut self, _: u64) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn cuda_free(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn create_disk(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn destroy_disk(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn register_queue(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn unregister_queue(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn drain_io(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
             fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> {
-                Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "gate err"))
+                Err(RuntimeError::new(
+                    RuntimeErrorClass::Internal,
+                    99,
+                    "gate err",
+                ))
             }
         }
         let mut ops = ErrOps;
@@ -1065,18 +1090,40 @@ mod tests {
         state.phase = RuntimePhase::Online;
         struct ErrOps;
         impl RuntimeOps for ErrOps {
-            fn acquire_lease(&mut self, _: u64) -> Result<u32, RuntimeError> { Ok(1) }
-            fn release_lease(&mut self, _: u32) -> Result<(), RuntimeError> { Ok(()) }
-            fn cuda_alloc(&mut self, _: u64) -> Result<(), RuntimeError> { Ok(()) }
-            fn cuda_free(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn create_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn destroy_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn register_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn unregister_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
-            fn drain_io(&mut self) -> Result<(), RuntimeError> {
-                Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "drain err"))
+            fn acquire_lease(&mut self, _: u64) -> Result<u32, RuntimeError> {
+                Ok(1)
             }
-            fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> { Ok(true) }
+            fn release_lease(&mut self, _: u32) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn cuda_alloc(&mut self, _: u64) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn cuda_free(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn create_disk(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn destroy_disk(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn register_queue(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn unregister_queue(&mut self) -> Result<(), RuntimeError> {
+                Ok(())
+            }
+            fn drain_io(&mut self) -> Result<(), RuntimeError> {
+                Err(RuntimeError::new(
+                    RuntimeErrorClass::Internal,
+                    99,
+                    "drain err",
+                ))
+            }
+            fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> {
+                Ok(true)
+            }
         }
         let mut ops = ErrOps;
         let err = stop_runtime(&mut state, &mut ops).unwrap_err();
@@ -1099,7 +1146,8 @@ mod tests {
 
     #[test]
     fn parse_product_cli_empty_flag_value() {
-        let err = parse_product_cli(&["probe-cuda".into(), "--config".into(), "".into()]).unwrap_err();
+        let err =
+            parse_product_cli(&["probe-cuda".into(), "--config".into(), "".into()]).unwrap_err();
         assert_eq!(err.class, RuntimeErrorClass::Config);
         assert!(err.message.contains("path must be absolute"));
     }
@@ -1120,7 +1168,12 @@ mod tests {
 
     #[test]
     fn parse_product_cli_console_without_storage_only() {
-        let err = parse_product_cli(&["console".into(), "--config".into(), r"C:\config.toml".into()]).unwrap_err();
+        let err = parse_product_cli(&[
+            "console".into(),
+            "--config".into(),
+            r"C:\config.toml".into(),
+        ])
+        .unwrap_err();
         assert_eq!(err.class, RuntimeErrorClass::Config);
         assert!(err.message.contains("console requires --storage-only"));
     }
@@ -1141,14 +1194,34 @@ mod tests {
 
     #[test]
     fn parse_product_cli_install_cmd() {
-        let cmd = parse_product_cli(&["install".into(), "--manifest".into(), r"C:\manifest.json".into()]).unwrap();
-        assert_eq!(cmd, ProductCommand::Install { manifest: r"C:\manifest.json".into() });
+        let cmd = parse_product_cli(&[
+            "install".into(),
+            "--manifest".into(),
+            r"C:\manifest.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd,
+            ProductCommand::Install {
+                manifest: r"C:\manifest.json".into()
+            }
+        );
     }
 
     #[test]
     fn parse_product_cli_repair_cmd() {
-        let cmd = parse_product_cli(&["repair".into(), "--manifest".into(), r"C:\manifest.json".into()]).unwrap();
-        assert_eq!(cmd, ProductCommand::Repair { manifest: r"C:\manifest.json".into() });
+        let cmd = parse_product_cli(&[
+            "repair".into(),
+            "--manifest".into(),
+            r"C:\manifest.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd,
+            ProductCommand::Repair {
+                manifest: r"C:\manifest.json".into()
+            }
+        );
     }
 
     #[test]
@@ -1159,8 +1232,18 @@ mod tests {
 
     #[test]
     fn parse_product_cli_probe_cuda_cmd() {
-        let cmd = parse_product_cli(&["probe-cuda".into(), "--config".into(), r"C:\config.toml".into()]).unwrap();
-        assert_eq!(cmd, ProductCommand::ProbeCuda { config: r"C:\config.toml".into() });
+        let cmd = parse_product_cli(&[
+            "probe-cuda".into(),
+            "--config".into(),
+            r"C:\config.toml".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            cmd,
+            ProductCommand::ProbeCuda {
+                config: r"C:\config.toml".into()
+            }
+        );
     }
 
     #[test]
