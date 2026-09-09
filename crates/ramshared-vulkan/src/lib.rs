@@ -16,6 +16,12 @@
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(not(test))]
+use ash;
+
+#[cfg(test)]
+pub use tests::mock_ash as ash;
+
 use ash::vk;
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
@@ -588,6 +594,296 @@ impl Drop for VulkanMem<'_> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    pub mod mock_ash {
+        use std::sync::Mutex;
+        pub use ::ash::vk;
+
+        // Mock state to control enumeration
+        pub static TEST_MUTEX: Mutex<()> = Mutex::new(());
+        pub static MOCK_DEVICES: Mutex<Option<Vec<vk::PhysicalDevice>>> = Mutex::new(None);
+        pub static MOCK_DEVICE_PROPERTIES: Mutex<Option<vk::PhysicalDeviceProperties>> = Mutex::new(None);
+
+        pub struct Entry;
+        impl Entry {
+            pub unsafe fn load() -> Result<Self, ::ash::LoadingError> {
+                Ok(Self)
+            }
+            pub unsafe fn create_instance(
+                &self,
+                _create_info: &vk::InstanceCreateInfo,
+                _allocation_callbacks: Option<&vk::AllocationCallbacks>,
+            ) -> Result<Instance, vk::Result> {
+                Ok(Instance)
+            }
+        }
+
+        #[derive(Clone)]
+        pub struct Instance;
+        impl Instance {
+            pub unsafe fn enumerate_physical_devices(&self) -> Result<Vec<vk::PhysicalDevice>, vk::Result> {
+                let guard = MOCK_DEVICES.lock().unwrap();
+                if let Some(devs) = &*guard {
+                    Ok(devs.clone())
+                } else {
+                    Ok(vec![])
+                }
+            }
+            pub unsafe fn get_physical_device_properties(&self, _phys: vk::PhysicalDevice) -> vk::PhysicalDeviceProperties {
+                let guard = MOCK_DEVICE_PROPERTIES.lock().unwrap();
+                if let Some(props) = &*guard {
+                    *props
+                } else {
+                    let mut props = vk::PhysicalDeviceProperties::default();
+                    props.device_name[0] = b'M' as std::os::raw::c_char;
+                    props.device_name[1] = b'o' as std::os::raw::c_char;
+                    props.device_name[2] = b'c' as std::os::raw::c_char;
+                    props.device_name[3] = b'k' as std::os::raw::c_char;
+                    props.device_name[4] = 0;
+                    props
+                }
+            }
+            pub unsafe fn get_physical_device_queue_family_properties(&self, _phys: vk::PhysicalDevice) -> Vec<vk::QueueFamilyProperties> {
+                vec![vk::QueueFamilyProperties::default().queue_flags(vk::QueueFlags::TRANSFER)]
+            }
+            pub unsafe fn create_device(
+                &self,
+                _physical_device: vk::PhysicalDevice,
+                _create_info: &vk::DeviceCreateInfo,
+                _allocation_callbacks: Option<&vk::AllocationCallbacks>,
+            ) -> Result<Device, vk::Result> {
+                Ok(Device)
+            }
+            pub unsafe fn get_physical_device_memory_properties(&self, _phys: vk::PhysicalDevice) -> vk::PhysicalDeviceMemoryProperties {
+                let mut props = vk::PhysicalDeviceMemoryProperties::default();
+                props.memory_type_count = 1;
+                props.memory_types[0] = vk::MemoryType {
+                    property_flags: vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                    heap_index: 0,
+                };
+                props.memory_heap_count = 1;
+                props.memory_heaps[0] = vk::MemoryHeap {
+                    size: 1024 * 1024 * 1024,
+                    flags: vk::MemoryHeapFlags::DEVICE_LOCAL,
+                };
+                props
+            }
+            pub unsafe fn destroy_instance(&self, _allocation_callbacks: Option<&vk::AllocationCallbacks>) {}
+        }
+
+        #[derive(Clone)]
+        pub struct Device;
+        impl Device {
+            pub unsafe fn get_device_queue(&self, _queue_family_index: u32, _queue_index: u32) -> vk::Queue {
+                vk::Queue::null()
+            }
+            pub unsafe fn create_command_pool(
+                &self,
+                _create_info: &vk::CommandPoolCreateInfo,
+                _allocation_callbacks: Option<&vk::AllocationCallbacks>,
+            ) -> Result<vk::CommandPool, vk::Result> {
+                Ok(vk::CommandPool::null())
+            }
+            pub unsafe fn allocate_command_buffers(
+                &self,
+                _allocate_info: &vk::CommandBufferAllocateInfo,
+            ) -> Result<Vec<vk::CommandBuffer>, vk::Result> {
+                Ok(vec![vk::CommandBuffer::null()])
+            }
+            pub unsafe fn create_fence(
+                &self,
+                _create_info: &vk::FenceCreateInfo,
+                _allocation_callbacks: Option<&vk::AllocationCallbacks>,
+            ) -> Result<vk::Fence, vk::Result> {
+                Ok(vk::Fence::null())
+            }
+            pub unsafe fn create_buffer(
+                &self,
+                _create_info: &vk::BufferCreateInfo,
+                _allocation_callbacks: Option<&vk::AllocationCallbacks>,
+            ) -> Result<vk::Buffer, vk::Result> {
+                Ok(vk::Buffer::null())
+            }
+            pub unsafe fn get_buffer_memory_requirements(&self, _buffer: vk::Buffer) -> vk::MemoryRequirements {
+                vk::MemoryRequirements::default().memory_type_bits(1)
+            }
+            pub unsafe fn allocate_memory(
+                &self,
+                _allocate_info: &vk::MemoryAllocateInfo,
+                _allocation_callbacks: Option<&vk::AllocationCallbacks>,
+            ) -> Result<vk::DeviceMemory, vk::Result> {
+                Ok(vk::DeviceMemory::null())
+            }
+            pub unsafe fn bind_buffer_memory(
+                &self,
+                _buffer: vk::Buffer,
+                _memory: vk::DeviceMemory,
+                _memory_offset: vk::DeviceSize,
+            ) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn map_memory(
+                &self,
+                _memory: vk::DeviceMemory,
+                _offset: vk::DeviceSize,
+                _size: vk::DeviceSize,
+                _flags: vk::MemoryMapFlags,
+            ) -> Result<*mut std::ffi::c_void, vk::Result> {
+                Ok(std::ptr::null_mut())
+            }
+            pub unsafe fn unmap_memory(&self, _memory: vk::DeviceMemory) {}
+            pub unsafe fn free_memory(&self, _memory: vk::DeviceMemory, _allocation_callbacks: Option<&vk::AllocationCallbacks>) {}
+            pub unsafe fn destroy_buffer(&self, _buffer: vk::Buffer, _allocation_callbacks: Option<&vk::AllocationCallbacks>) {}
+            pub unsafe fn destroy_fence(&self, _fence: vk::Fence, _allocation_callbacks: Option<&vk::AllocationCallbacks>) {}
+            pub unsafe fn destroy_command_pool(&self, _command_pool: vk::CommandPool, _allocation_callbacks: Option<&vk::AllocationCallbacks>) {}
+            pub unsafe fn destroy_device(&self, _allocation_callbacks: Option<&vk::AllocationCallbacks>) {}
+            pub unsafe fn device_wait_idle(&self) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn reset_command_buffer(
+                &self,
+                _command_buffer: vk::CommandBuffer,
+                _flags: vk::CommandBufferResetFlags,
+            ) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn begin_command_buffer(
+                &self,
+                _command_buffer: vk::CommandBuffer,
+                _begin_info: &vk::CommandBufferBeginInfo,
+            ) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn end_command_buffer(&self, _command_buffer: vk::CommandBuffer) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn cmd_fill_buffer(
+                &self,
+                _command_buffer: vk::CommandBuffer,
+                _dst_buffer: vk::Buffer,
+                _dst_offset: vk::DeviceSize,
+                _size: vk::DeviceSize,
+                _data: u32,
+            ) {}
+            pub unsafe fn cmd_copy_buffer(
+                &self,
+                _command_buffer: vk::CommandBuffer,
+                _src_buffer: vk::Buffer,
+                _dst_buffer: vk::Buffer,
+                _regions: &[vk::BufferCopy],
+            ) {}
+            pub unsafe fn queue_submit(
+                &self,
+                _queue: vk::Queue,
+                _submits: &[vk::SubmitInfo],
+                _fence: vk::Fence,
+            ) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn wait_for_fences(
+                &self,
+                _fences: &[vk::Fence],
+                _wait_all: bool,
+                _timeout: u64,
+            ) -> Result<(), vk::Result> {
+                Ok(())
+            }
+            pub unsafe fn reset_fences(&self, _fences: &[vk::Fence]) -> Result<(), vk::Result> {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn test_vulkan_instance_zero_devices_error() {
+        let _guard = mock_ash::TEST_MUTEX.lock().unwrap();
+        // Reset state
+        *mock_ash::MOCK_DEVICES.lock().unwrap() = Some(vec![]);
+
+        let res = VulkanProvider::open(0);
+        assert!(matches!(res, Err(VramError::Provider(msg)) if msg.contains("no Vulkan physical device")));
+    }
+
+    #[test]
+    fn test_vulkan_instance_n_devices_success() {
+        let _guard = mock_ash::TEST_MUTEX.lock().unwrap();
+        use crate::ash::vk;
+        // Mock 2 devices
+        *mock_ash::MOCK_DEVICES.lock().unwrap() = Some(vec![
+            vk::PhysicalDevice::null(),
+            vk::PhysicalDevice::null(),
+        ]);
+
+        let mut props = vk::PhysicalDeviceProperties::default();
+        props.device_name[0] = b'T' as std::os::raw::c_char;
+        props.device_name[1] = b'e' as std::os::raw::c_char;
+        props.device_name[2] = b's' as std::os::raw::c_char;
+        props.device_name[3] = b't' as std::os::raw::c_char;
+        props.device_name[4] = 0;
+        props.device_type = vk::PhysicalDeviceType::DISCRETE_GPU;
+
+        *mock_ash::MOCK_DEVICE_PROPERTIES.lock().unwrap() = Some(props);
+
+        let p = VulkanProvider::open(0).expect("should open mocked Vulkan successfully");
+        assert_eq!(p.device_name(), "Test");
+    }
+
+    #[test]
+    fn test_vulkan_mem_check_bounds_success() {
+        let _guard = mock_ash::TEST_MUTEX.lock().unwrap();
+        // We only test check_bounds for boundaries, so we can mock the VulkanMem directly since it's pub(crate).
+        // Wait, VulkanMem is a struct that holds `&'p VulkanProvider`. So we need a mocked provider.
+        use crate::ash::vk;
+        *mock_ash::MOCK_DEVICES.lock().unwrap() = Some(vec![vk::PhysicalDevice::null()]);
+        let mut props = vk::PhysicalDeviceProperties::default();
+        props.device_name[0] = 0;
+        props.device_type = vk::PhysicalDeviceType::DISCRETE_GPU;
+        *mock_ash::MOCK_DEVICE_PROPERTIES.lock().unwrap() = Some(props);
+
+        let p = VulkanProvider::open(0).unwrap();
+        let mem = VulkanMem {
+            provider: &p,
+            buffer: vk::Buffer::null(),
+            memory: vk::DeviceMemory::null(),
+            len: 1024,
+        };
+
+        // Zero
+        assert!(mem.check_bounds(0, 0).is_ok());
+        // Max valid
+        assert!(mem.check_bounds(512, 512).is_ok());
+        // Exact end
+        assert!(mem.check_bounds(1024, 0).is_ok());
+
+        // Let memory leak during test to avoid destruction of null pointers if it triggers drop.
+        // Actually, Drop for VulkanMem will just call mock_ash::Device::destroy_buffer, which is a no-op!
+    }
+
+    #[test]
+    fn test_vulkan_mem_check_bounds_error() {
+        let _guard = mock_ash::TEST_MUTEX.lock().unwrap();
+        use crate::ash::vk;
+        *mock_ash::MOCK_DEVICES.lock().unwrap() = Some(vec![vk::PhysicalDevice::null()]);
+        let mut props = vk::PhysicalDeviceProperties::default();
+        props.device_name[0] = 0;
+        props.device_type = vk::PhysicalDeviceType::DISCRETE_GPU;
+        *mock_ash::MOCK_DEVICE_PROPERTIES.lock().unwrap() = Some(props);
+
+        let p = VulkanProvider::open(0).unwrap();
+        let mem = VulkanMem {
+            provider: &p,
+            buffer: vk::Buffer::null(),
+            memory: vk::DeviceMemory::null(),
+            len: 1024,
+        };
+
+        // Past end
+        assert!(matches!(mem.check_bounds(1024, 1), Err(VramError::OutOfRange { .. })));
+        // Start past end
+        assert!(matches!(mem.check_bounds(2048, 0), Err(VramError::OutOfRange { .. })));
+        // Overflow
+        assert!(matches!(mem.check_bounds(u64::MAX, 2), Err(VramError::OutOfRange { .. })));
+    }
 
     #[test]
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
