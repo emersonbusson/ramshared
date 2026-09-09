@@ -63,6 +63,29 @@ pub trait VramMemory {
     fn write_at(&mut self, off: u64, src: &[u8]) -> Result<(), VramError>;
 }
 
+/// Represents VRAM capacity reporting and free space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VramCapacity {
+    pub free: u64,
+    pub total: u64,
+}
+
+impl VramCapacity {
+    /// Creates a new VRAM capacity instance.
+    pub fn new(free: u64, total: u64) -> Result<Self, VramError> {
+        if free > total {
+            return Err(VramError::Provider("free capacity cannot exceed total".to_string()));
+        }
+        Ok(Self { free, total })
+    }
+}
+
+impl fmt::Display for VramCapacity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "VRAM: {}/{} bytes free", self.free, self.total)
+    }
+}
+
 /// VRAM Provider (representing an initialized thread-affinity context): Allocates regions and reports capacity metrics.
 ///
 /// The driver lifecycle (driver load, device selection, and context creation) is the responsibility
@@ -106,5 +129,110 @@ mod tests {
             "vram invalid alignment"
         );
         assert_eq!(VramError::Busy.to_string(), "vram busy");
+    }
+
+    #[test]
+    fn test_vram_capacity_new_valid() {
+        let cap = VramCapacity::new(100, 200).unwrap();
+        assert_eq!(cap.free, 100);
+        assert_eq!(cap.total, 200);
+    }
+
+    #[test]
+    fn test_vram_capacity_zero_bounds_valid() {
+        let cap = VramCapacity::new(0, 0).unwrap();
+        assert_eq!(cap.free, 0);
+        assert_eq!(cap.total, 0);
+    }
+
+    #[test]
+    fn test_vram_capacity_max_bounds_valid() {
+        let cap = VramCapacity::new(u64::MAX, u64::MAX).unwrap();
+        assert_eq!(cap.free, u64::MAX);
+        assert_eq!(cap.total, u64::MAX);
+    }
+
+    #[test]
+    fn test_vram_capacity_invalid_state_error() {
+        let err = VramCapacity::new(200, 100).unwrap_err();
+        assert!(matches!(err, VramError::Provider(_)));
+    }
+
+    #[test]
+    fn test_vram_capacity_formatting_valid() {
+        let cap = VramCapacity::new(1024, 2048).unwrap();
+        assert_eq!(cap.to_string(), "VRAM: 1024/2048 bytes free");
+    }
+
+    #[derive(Debug)]
+    struct MockVramMemory {
+        size: usize,
+    }
+
+    impl VramMemory for MockVramMemory {
+        fn len(&self) -> usize {
+            self.size
+        }
+        fn zero(&mut self) -> Result<(), VramError> {
+            Ok(())
+        }
+        fn read_at(&self, _off: u64, _dst: &mut [u8]) -> Result<(), VramError> {
+            Ok(())
+        }
+        fn write_at(&mut self, _off: u64, _src: &[u8]) -> Result<(), VramError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_mock_vram_memory_methods() {
+        let mut mem = MockVramMemory { size: 10 };
+        assert_eq!(mem.len(), 10);
+        assert!(mem.zero().is_ok());
+        let mut dst = [0u8; 10];
+        assert!(mem.read_at(0, &mut dst).is_ok());
+        assert!(mem.write_at(0, &[0u8; 10]).is_ok());
+    }
+
+    struct MockVramProvider {
+        free: u64,
+        total: u64,
+    }
+
+    impl VramProvider for MockVramProvider {
+        type Mem<'p> = MockVramMemory where Self: 'p;
+
+        fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+            if bytes as u64 > self.free {
+                return Err(VramError::OutOfMemory);
+            }
+            Ok(MockVramMemory { size: bytes })
+        }
+
+        fn mem_info(&self) -> Result<(u64, u64), VramError> {
+            Ok((self.free, self.total))
+        }
+    }
+
+    #[test]
+    fn test_vram_provider_alloc_valid() {
+        let provider = MockVramProvider { free: 100, total: 200 };
+        let (f, t) = provider.mem_info().unwrap();
+        assert_eq!(f, 100);
+        assert_eq!(t, 200);
+
+        let mem = provider.alloc(50).unwrap();
+        assert_eq!(mem.len(), 50);
+        assert!(!mem.is_empty());
+
+        let empty_mem = provider.alloc(0).unwrap();
+        assert!(empty_mem.is_empty());
+    }
+
+    #[test]
+    fn test_vram_provider_alloc_outofmemory_error() {
+        let provider = MockVramProvider { free: 50, total: 100 };
+        let err = provider.alloc(100).unwrap_err();
+        assert!(matches!(err, VramError::OutOfMemory));
     }
 }
