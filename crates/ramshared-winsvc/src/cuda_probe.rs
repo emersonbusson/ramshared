@@ -112,7 +112,7 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
 
     mem.zero()
         .map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
-    drop(mem);
+    let _ = mem;
 
     let (free_after, _) = ctx
         .mem_info()
