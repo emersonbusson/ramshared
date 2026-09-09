@@ -46,14 +46,22 @@ where
 }
 
 fn main() {
-    let command = parse_cli(std::env::args().skip(1));
+    std::process::exit(run_cli(std::env::args().skip(1)));
+}
+
+fn run_cli<I, S>(args: I) -> i32
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let command = parse_cli(args);
     match command {
         Ok(Command::Service { config }) => {
             #[cfg(windows)]
             {
                 let Some(config) = config else {
                     eprintln!("SCM entry requires --config <absolute>");
-                    std::process::exit(2);
+                    return 2;
                 };
                 if let Err(error) = ramshared_winbroker::service::set_service_config(config)
                     .and_then(|()| {
@@ -61,14 +69,15 @@ fn main() {
                     })
                 {
                     eprintln!("SCM dispatch failed: {error}");
-                    std::process::exit(2);
+                    return 2;
                 }
+                0
             }
             #[cfg(not(windows))]
             {
                 let _ = config;
                 eprintln!("RamSharedBroker SCM entry requires Windows");
-                std::process::exit(2);
+                return 2;
             }
         }
         Ok(Command::Console { config }) => {
@@ -76,14 +85,14 @@ fn main() {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     eprintln!("config read failed: {error}");
-                    std::process::exit(2);
+                    return 2;
                 }
             };
             let config = match ramshared_winbroker::BrokerConfigV1::from_toml(&bytes) {
                 Ok(config) => config,
                 Err(error) => {
                     eprintln!("config invalid: {error}");
-                    std::process::exit(2);
+                    return 2;
                 }
             };
             #[cfg(windows)]
@@ -91,19 +100,20 @@ fn main() {
                 let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 if let Err(error) = ramshared_winbroker::service::run_console(config, stop) {
                     eprintln!("console failed: {error}");
-                    std::process::exit(3);
+                    return 3;
                 }
+                0
             }
             #[cfg(not(windows))]
             {
                 let _ = config;
                 eprintln!("RamSharedBroker console entry requires Windows");
-                std::process::exit(2);
+                return 2;
             }
         }
         Err(error) => {
             eprintln!("{error}");
-            std::process::exit(2);
+            return 2;
         }
     }
 }
@@ -111,6 +121,41 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::parse_cli;
+
+
+    #[test]
+    fn run_cli_tests() {
+        use super::run_cli;
+        assert_eq!(run_cli(vec!["unknown_cmd"]), 2);
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(run_cli(vec!["--config", "/absolute.toml"]), 2);
+            assert_eq!(run_cli(vec!["console", "--config", "/absolute.toml"]), 2);
+        }
+    }
+
+    #[test]
+    fn cli_accepts_absolute_config() {
+        #[cfg(windows)]
+        let valid = "C:\\broker.toml";
+        #[cfg(not(windows))]
+        let valid = "/broker.toml";
+
+        assert_eq!(
+            parse_cli(vec!["--config", valid]).unwrap(),
+            super::Command::Service { config: Some(std::path::PathBuf::from(valid)) }
+        );
+        assert_eq!(
+            parse_cli(vec!["console", "--config", valid]).unwrap(),
+            super::Command::Console { config: std::path::PathBuf::from(valid) }
+        );
+        assert_eq!(
+            parse_cli(std::iter::empty::<&str>()).unwrap(),
+            super::Command::Service { config: None }
+        );
+        assert!(parse_cli(vec!["unknown_cmd"]).is_err());
+    }
 
     #[test]
     fn cli_rejects_relative_config() {

@@ -315,6 +315,47 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn winbrokererror_debug_and_display() {
+        use super::WinBrokerError;
+        use std::io;
+
+        let e1 = WinBrokerError::PipeBusy;
+        assert_eq!(format!("{e1:?}"), "PipeBusy");
+        assert_eq!(format!("{e1}"), "Pipe is busy (-EBUSY)");
+        use std::error::Error;
+        assert!(e1.source().is_none());
+
+        let e2 = WinBrokerError::NoData;
+        assert_eq!(format!("{e2:?}"), "NoData");
+        assert_eq!(format!("{e2}"), "No data available (-ENODATA)");
+
+        let e3 = WinBrokerError::BrokenPipe;
+        assert_eq!(format!("{e3:?}"), "BrokenPipe");
+        assert_eq!(format!("{e3}"), "Broken pipe (-EPIPE)");
+
+        let err = io::Error::new(io::ErrorKind::Other, "test error");
+        let e4 = WinBrokerError::Other(err);
+        assert_eq!(format!("{e4}"), "Broker I/O error: test error");
+        assert!(e4.source().is_some());
+    }
+
+    #[test]
+    fn is_absolute_windows_or_native_test() {
+        use super::is_absolute_windows_or_native;
+        use std::path::Path;
+
+        assert!(is_absolute_windows_or_native(Path::new(r"C:\path")));
+        assert!(is_absolute_windows_or_native(Path::new(r"\\server\share")));
+        #[cfg(not(windows))]
+        assert!(is_absolute_windows_or_native(Path::new("/absolute/path")));
+        assert!(!is_absolute_windows_or_native(Path::new("relative/path")));
+        assert!(!is_absolute_windows_or_native(Path::new("")));
+    }
+
+
+
     #[test]
     fn winbrokererror_mapping() {
         use super::WinBrokerError;
