@@ -72,8 +72,7 @@ pub mod mock_cuda {
     pub struct Context;
 
     pub struct DeviceMem {
-        #[allow(dead_code)]
-        len: usize,
+        pub len: usize,
     }
 
     impl Cuda {
