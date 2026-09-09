@@ -253,6 +253,4 @@ mod tests {
             ProtocolError::TruncatedPayload { got: 10, need: 28 }
         ));
     }
-
-
 }
