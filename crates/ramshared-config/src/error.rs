@@ -100,4 +100,33 @@ mod tests {
         let e6 = ConfigError::UnsupportedBackend("directx".into());
         assert_eq!(e6.to_string(), "unsupported backend: directx");
     }
+
+    #[test]
+    fn test_error_display_parse_with_location_empty_key() {
+        let e = ConfigError::Parse {
+            message: "invalid syntax".into(),
+            line: Some(5),
+            column: Some(10),
+            key_path: "".into(),
+        };
+        assert_eq!(e.to_string(), "parse error at line 5, col 10: invalid syntax");
+    }
+
+    #[test]
+    fn test_error_display_parse_no_location_with_key() {
+        let e = ConfigError::Parse {
+            message: "invalid value".into(),
+            line: None,
+            column: None,
+            key_path: "storage.path".into(),
+        };
+        assert_eq!(e.to_string(), "parse error for key 'storage.path': invalid value");
+    }
+
+    #[test]
+    fn test_error_source_is_none() {
+        use std::error::Error;
+        let e = ConfigError::InvalidInput("test".into());
+        assert!(e.source().is_none());
+    }
 }
