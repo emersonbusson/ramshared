@@ -298,6 +298,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::collapsible_if)]
     fn rejects_excessive_ram() {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.slices = 1000;
@@ -382,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_config_parse_span_empty_text() {
-        let err = Config::parse("broker = [").unwrap_err();
+        let err = Config::parse("broker = [").expect_err("expected error");
         assert!(matches!(err, ConfigError::Parse { .. }));
     }
 
