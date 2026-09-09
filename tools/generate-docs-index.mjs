@@ -21,7 +21,7 @@
  *   node tools/generate-docs-index.mjs --check
  */
 
-import { readFileSync, readdirSync, existsSync, writeFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync, statSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -185,7 +185,12 @@ function listSpecEntries(root = REPO_ROOT) {
   const docsDir = join(root, "docs");
 
   function push(name, dir) {
-    const key = resolve(dir);
+    let key;
+    try {
+      key = realpathSync(resolve(dir));
+    } catch {
+      key = resolve(dir);
+    }
     if (seen.has(key)) return;
     seen.add(key);
     entries.push({ slug: name, dir });
@@ -218,8 +223,13 @@ function listSpecEntries(root = REPO_ROOT) {
 
   const specsDir = join(docsDir, "specs");
   if (existsSync(specsDir)) {
-    // docs/specs/<slug>/ or docs/specs/<group>/<slug>/
-    visit(specsDir, 1, 2);
+    try {
+      const stat = statSync(specsDir);
+      if (stat.isDirectory()) {
+        // docs/specs/<slug>/ or docs/specs/<group>/<slug>/
+        visit(specsDir, 1, 2);
+      }
+    } catch {}
   }
 
   // Legacy flat: docs/<slug>/ with PRD/SPEC

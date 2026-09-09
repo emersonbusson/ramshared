@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -136,4 +137,59 @@ test('index_output_is_deterministic', () => {
     { slug: 'a', title: 'A', milestone: '—', issues: [], status: 'PRD', dir: '/repo/docs/a' },
   ]
   assert.equal(renderIndex(rows, '/repo/docs/INDEX.md'), renderIndex(structuredClone(rows), '/repo/docs/INDEX.md'))
+})
+
+test('test_generate_docs_index_guard_clause_missing_docs', () => {
+  const root = rootFixture()
+  // remove the docs dir created by rootFixture
+  fs.rmSync(path.join(root, 'docs'), { recursive: true, force: true })
+  assert.deepEqual(buildRows(root), [])
+})
+
+test('test_generate_docs_index_guard_clause_empty_docs', () => {
+  const root = rootFixture()
+  fs.rmSync(path.join(root, 'docs'), { recursive: true, force: true })
+  mkdirSync(path.join(root, 'docs'))
+  assert.deepEqual(buildRows(root), [])
+})
+
+test('test_generate_docs_index_circular_symlinks', () => {
+  const root = rootFixture()
+  const docsDir = path.join(root, 'docs')
+
+  const specsDir = path.join(docsDir, 'specs')
+  mkdirSync(specsDir, { recursive: true })
+
+  const validSpec = path.join(specsDir, 'valid-spec')
+  mkdirSync(validSpec, { recursive: true })
+  writeFileSync(path.join(validSpec, 'PRD.md'), '---\ntitle: Valid Spec\nslug: valid-spec\n---\n# Valid Spec')
+
+  const linkPath = path.join(specsDir, 'circular')
+  try {
+    fs.symlinkSync(specsDir, linkPath, 'dir')
+  } catch (e) {
+    // skip if symlinks not supported
+  }
+
+  const rows = buildRows(root)
+  // because rootFixture creates docs/specs/no-milestone, there might be other valid rows if you created them
+  const valid = rows.find(r => r.slug === 'valid-spec')
+  // Circular symlinks might not resolve if 'seen' is used effectively. We check length is at most 1
+  assert.equal(rows.filter(r => r.dir.includes('circular')).length <= 1, true)
+  assert.equal(valid.slug, 'valid-spec')
+})
+
+test('test_generate_docs_index_flat_circular_symlinks', () => {
+  const root = rootFixture()
+  const docsDir = path.join(root, 'docs')
+
+  const linkPath = path.join(docsDir, 'circular')
+  try {
+    fs.symlinkSync(docsDir, linkPath, 'dir')
+  } catch (e) {
+    // skip if symlinks not supported
+  }
+
+  const rows = buildRows(root)
+  assert.equal(rows.filter(r => r.dir.includes('circular')).length, 0)
 })
