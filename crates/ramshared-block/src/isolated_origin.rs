@@ -909,4 +909,38 @@ mod tests {
         );
         assert_eq!(write_failure.origin_state(), OriginState::Failed);
     }
+
+    #[test]
+    fn test_isolated_origin_initialization_with_valid_config() {
+        let bytes = std::rc::Rc::new(std::cell::RefCell::new(vec![0; 4096]));
+        let origin = MemoryOrigin(std::rc::Rc::clone(&bytes));
+        let mut backend = AuthoritativeOriginBackend::new(origin, crate::isolated_origin::DisabledCache, 4096, 4096).unwrap();
+        assert_eq!(backend.origin_state(), OriginState::Ready);
+        assert_eq!(backend.probe_origin().unwrap(), OriginState::Ready);
+    }
+
+    #[test]
+    fn test_isolated_origin_teardown_with_pending_io() {
+        let bytes = std::rc::Rc::new(std::cell::RefCell::new(vec![0; 4096]));
+        let origin = MemoryOrigin(std::rc::Rc::clone(&bytes));
+        let backend = AuthoritativeOriginBackend::new(origin, crate::isolated_origin::DisabledCache, 4096, 4096).unwrap();
+
+        assert_eq!(backend.origin_state(), OriginState::Ready);
+        drop(backend);
+    }
+
+    #[test]
+    fn test_isolated_origin_re_initialization() {
+        let bytes = std::rc::Rc::new(std::cell::RefCell::new(vec![0; 4096]));
+
+        let origin1 = MemoryOrigin(std::rc::Rc::clone(&bytes));
+        let backend1 = AuthoritativeOriginBackend::new(origin1, crate::isolated_origin::DisabledCache, 4096, 4096).unwrap();
+        assert_eq!(backend1.origin_state(), OriginState::Ready);
+
+        drop(backend1);
+
+        let origin2 = MemoryOrigin(std::rc::Rc::clone(&bytes));
+        let backend2 = AuthoritativeOriginBackend::new(origin2, crate::isolated_origin::DisabledCache, 4096, 4096).unwrap();
+        assert_eq!(backend2.origin_state(), OriginState::Ready);
+    }
 }
