@@ -684,4 +684,43 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         let c = WinDriveConfig::from_toml(GOOD).unwrap();
         assert_eq!(c.evidence_path(), c.evidence_path.as_path());
     }
+
+    #[test]
+    fn test_config_capacity_zero_fails() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = 0");
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_config_capacity_u64_max_fails() {
+        let bad = GOOD.replace("size_bytes = 536870912", &format!("size_bytes = {}", u64::MAX));
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_config_capacity_negative_fails() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = -1");
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn test_config_input_non_utf8_fails() {
+        let e = WinDriveConfig::from_reader(&[0xff, 0xff, 0xff]).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
 }

@@ -233,4 +233,4 @@ function main(argv = process.argv.slice(2)) {
   return 1
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exitCode = main()
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}` && !process.env.NODE_TEST_CONTEXT) process.exitCode = main()

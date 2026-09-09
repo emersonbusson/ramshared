@@ -466,7 +466,7 @@ function main() {
   process.exit(1)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === `file://${process.argv[1]}` && !process.env.NODE_TEST_CONTEXT) {
   main()
 }
 /* node:coverage enable */

@@ -209,4 +209,4 @@ export function main(argv = process.argv.slice(2)) {
   return 1
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = main()
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) process.exitCode = main()
