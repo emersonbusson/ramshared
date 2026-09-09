@@ -10,6 +10,10 @@ pub enum BrokerConnectError {
     NonTransient(i32),
 }
 
+pub(crate) fn calculate_io_length(len: usize) -> u32 {
+    u32::try_from(len).unwrap_or(u32::MAX)
+}
+
 pub fn retryable_pipe_error(code: i32) -> bool {
     matches!(code, 2 | 231)
 }
@@ -175,7 +179,7 @@ impl Drop for OwnedPipeHandle {
 #[cfg(windows)]
 impl std::io::Read for OwnedPipeHandle {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let length = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        let length = calculate_io_length(buf.len());
         self.overlapped_io(buf.as_mut_ptr(), length, false)
             .map(|n| n as usize)
     }
@@ -184,7 +188,7 @@ impl std::io::Read for OwnedPipeHandle {
 #[cfg(windows)]
 impl std::io::Write for OwnedPipeHandle {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let length = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        let length = calculate_io_length(buf.len());
         self.overlapped_io(buf.as_ptr().cast_mut(), length, true)
             .map(|n| n as usize)
     }
@@ -223,6 +227,83 @@ impl BrokerStream for NamedPipeBrokerStream {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_ipc_payload_max_length() {
+        let max_len = u32::MAX as usize;
+        let clamped = calculate_io_length(max_len);
+        assert_eq!(clamped, u32::MAX);
+    }
+
+    #[test]
+    fn test_ipc_payload_overflow_length() {
+        let overflow_len = (u32::MAX as usize).saturating_add(1);
+        let clamped = calculate_io_length(overflow_len);
+        assert_eq!(clamped, u32::MAX);
+    }
+
+    #[cfg(windows)]
+    mod mock_pipe {
+        use super::*;
+        use std::io;
+
+        pub struct MockNamedPipeBrokerStream {
+            pub written: Vec<u8>,
+        }
+
+        impl MockNamedPipeBrokerStream {
+            pub fn new() -> Self {
+                Self { written: Vec::new() }
+            }
+        }
+
+        impl io::Read for MockNamedPipeBrokerStream {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                Ok(0)
+            }
+        }
+
+        impl io::BufRead for MockNamedPipeBrokerStream {
+            fn fill_buf(&mut self) -> io::Result<&[u8]> { Ok(&[]) }
+            fn consume(&mut self, _amount: usize) {}
+        }
+
+        impl io::Write for MockNamedPipeBrokerStream {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                let length = super::calculate_io_length(buf.len());
+                let write_len = std::cmp::min(buf.len(), length as usize);
+                self.written.extend_from_slice(&buf[..write_len]);
+                Ok(write_len)
+            }
+            fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        }
+
+        impl BrokerStream for MockNamedPipeBrokerStream {}
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_ipc_payload_zero_length() {
+        use std::io::Write;
+        let mut mock = mock_pipe::MockNamedPipeBrokerStream::new();
+        let payload: &[u8] = &[];
+        let result = mock.write(payload);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+        assert!(mock.written.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_ipc_payload_embedded_nulls() {
+        use std::io::Write;
+        let mut mock = mock_pipe::MockNamedPipeBrokerStream::new();
+        let payload: &[u8] = &[0x41, 0x00, 0x42, 0x00, 0x43];
+        let write_result = mock.write(payload);
+        assert!(write_result.is_ok());
+        assert_eq!(write_result.unwrap(), 5);
+        assert_eq!(&mock.written, payload);
+    }
+
     #[test]
     fn only_not_found_and_busy_retry() {
         assert!(retryable_pipe_error(2));

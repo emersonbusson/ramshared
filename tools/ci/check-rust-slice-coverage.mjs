@@ -116,11 +116,21 @@ function parseArgs(argv) {
           .filter(Boolean),
       );
     } else if (argument === "--files-from") out.filesFrom = next();
-    else if (argument === "--min") out.min = Number(next());
+    else if (argument === "--min") {
+      out.min = Number(next());
+      if (Number.isNaN(out.min) || out.min <= 0 || out.min > 100) {
+        throw usageError(`invalid --min (expected (0, 100])`);
+      }
+    }
     else if (argument === "--report-json") out.reportJson = next();
     else if (argument === "--report-only") out.reportOnly = next();
     else if (argument === "--allow-missing") out.allowMissing = true;
-    else if (argument === "--metric") out.metric = next();
+    else if (argument === "--metric") {
+      out.metric = next();
+      if (!["lines", "regions", "functions"].includes(out.metric)) {
+        throw usageError(`--metric must be lines|regions|functions`);
+      }
+    }
     else throw usageError(`unknown arg: ${argument}`);
   }
   return out;
