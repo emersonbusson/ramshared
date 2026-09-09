@@ -94,19 +94,44 @@ function candidate() {
 
 test('publication_input_rejects_historical_or_non_exact_identity', () => {
   assert.deepEqual(validateReleasePromotionPolicy(POLICY), { ok: true, errors: [] })
+  const fixture = releaseCandidateFixture()
+  writeFileSync(path.join(fixture.root, 'CHANGELOG.md'), '## [0.9.0-beta.1]\n')
   assert.deepEqual(validatePublicationInput({
     tag: TARGET_TAG,
     source_sha: SOURCE_SHA,
     integrity_run_id: '123456',
-  }, POLICY), { ok: true, errors: [] })
+  }, POLICY, { root: fixture.root }), { ok: true, errors: [] })
   for (const input of [
     { tag: 'v0.8.0', source_sha: SOURCE_SHA, integrity_run_id: '123456' },
     { tag: TARGET_TAG, source_sha: 'main', integrity_run_id: '123456' },
     { tag: TARGET_TAG, source_sha: SOURCE_SHA, integrity_run_id: '0' },
   ]) {
-    const result = validatePublicationInput(input, POLICY)
+    const result = validatePublicationInput(input, POLICY, { root: fixture.root })
     assert.equal(result.ok, false)
   }
+})
+
+test('publication_input_rejects_non_semver_tag', () => {
+  const fixture = releaseCandidateFixture()
+  writeFileSync(path.join(fixture.root, 'CHANGELOG.md'), '## [0.9.0-beta.1]\n')
+  const result = validatePublicationInput({
+    tag: 'invalid-tag',
+    source_sha: SOURCE_SHA,
+    integrity_run_id: '123456',
+  }, { ...POLICY, target_tag: 'invalid-tag' }, { root: fixture.root })
+  assert.equal(result.ok, false)
+  assert.equal(result.errors.includes('publication-tag-not-semver'), true)
+})
+
+test('publication_input_rejects_missing_changelog', () => {
+  const fixture = releaseCandidateFixture()
+  const result = validatePublicationInput({
+    tag: TARGET_TAG,
+    source_sha: SOURCE_SHA,
+    integrity_run_id: '123456',
+  }, POLICY, { root: fixture.root })
+  assert.equal(result.ok, false)
+  assert.equal(result.errors.includes('publication-changelog-missing'), true)
 })
 
 test('publication_policy_and_candidate_refuse_malformed_records', () => {
@@ -294,6 +319,7 @@ test('publication_candidate_and_plan_cli_bind_files_and_fail_closed_on_paths', (
   assert.deepEqual(direct.public_assets.map((record) => record.name), PUBLIC_ASSETS)
 
   const output = []
+  writeFileSync(path.join(fixture.root, 'CHANGELOG.md'), '## [0.9.0-beta.1]\n')
   assert.equal(main([
     '--policy', 'policy.json',
     '--manifest', 'artifacts/release/release-manifest.json',
@@ -305,7 +331,7 @@ test('publication_candidate_and_plan_cli_bind_files_and_fail_closed_on_paths', (
   ], {
     cwd: fixture.root,
     print: (line) => output.push(line),
-    error: () => assert.fail('verified candidate must not emit an error'),
+    error: (msg) => assert.fail(`verified candidate must not emit an error: ${msg}`),
   }), 0)
   assert.deepEqual(output, ['RELEASE_PUBLICATION_CANDIDATE=PASS'])
   const candidateJson = JSON.parse(readFileSync(path.join(fixture.root, 'candidate.json'), 'utf8'))

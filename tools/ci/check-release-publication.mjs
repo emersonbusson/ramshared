@@ -59,11 +59,30 @@ export function validateReleasePromotionPolicy(policy) {
   return { ok: errors.length === 0, errors }
 }
 
-export function validatePublicationInput(input, policy) {
+const SEMVER_TAG_RE = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/
+
+function checkChangelogEntry(tag, root) {
+  try {
+    const changelogPath = path.resolve(root || process.cwd(), 'CHANGELOG.md')
+    if (!existsSync(changelogPath)) return false
+    const content = readFileSync(changelogPath, 'utf8')
+    const version = tag.replace(/^v/, '')
+    const headerPrefix = `## [${version}]`
+    return content.includes(headerPrefix)
+  } catch {
+    return false
+  }
+}
+
+export function validatePublicationInput(input, policy, { root } = {}) {
   const errors = [...validateReleasePromotionPolicy(policy).errors]
   if (!isObject(input) || input.tag !== policy?.target_tag || !SOURCE_SHA_RE.test(input.source_sha) ||
       typeof input.integrity_run_id !== 'string' || !/^[1-9][0-9]{0,18}$/.test(input.integrity_run_id)) {
     add(errors, 'publication-input-invalid')
+  } else if (!SEMVER_TAG_RE.test(input.tag)) {
+    add(errors, 'publication-tag-not-semver')
+  } else if (!checkChangelogEntry(input.tag, root)) {
+    add(errors, 'publication-changelog-missing')
   }
   return { ok: errors.length === 0, errors: errors.sort() }
 }
@@ -81,9 +100,9 @@ export function validatePublicationCandidate(policy, candidate) {
   return { ok: errors.length === 0, errors: errors.sort() }
 }
 
-export function validatePublicationBinding(input, candidate, policy) {
+export function validatePublicationBinding(input, candidate, policy, { root } = {}) {
   const errors = [
-    ...validatePublicationInput(input, policy).errors,
+    ...validatePublicationInput(input, policy, { root }).errors,
     ...validatePublicationCandidate(policy, candidate).errors,
   ]
   if (candidate?.source?.tag !== input?.tag || candidate?.source?.sha !== input?.source_sha) {
@@ -260,7 +279,7 @@ export function main(argv = process.argv.slice(2), { cwd = process.cwd(), print 
         tag: args.values.get('--tag'),
         source_sha: args.values.get('--source-sha'),
         integrity_run_id: args.values.get('--integrity-run-id'),
-      }, policy)
+      }, policy, { root: cwd })
       if (!inputResult.ok) throw new Error(inputResult.errors.join(','))
       print('RELEASE_PUBLICATION_INPUT=PASS')
       return 0
@@ -271,13 +290,13 @@ export function main(argv = process.argv.slice(2), { cwd = process.cwd(), print 
         source_sha: args.values.get('--source-sha'),
         integrity_run_id: args.values.get('--integrity-run-id'),
       }
-      const inputResult = validatePublicationInput(input, policy)
-      if (!inputResult.ok) throw new Error(inputResult.errors.join(','))
       const root = resolveRelative(cwd, args.values.get('--root'), { allowRoot: true })
+      const inputResult = validatePublicationInput(input, policy, { root })
+      if (!inputResult.ok) throw new Error(inputResult.errors.join(','))
       const manifestPath = resolveRelative(cwd, args.values.get('--manifest'))
       if (!root || !manifestPath) throw new Error('publication-candidate-path-invalid')
       const candidate = candidateFromReleaseManifest(readJson(manifestPath), { root })
-      const binding = validatePublicationBinding(input, candidate, policy)
+      const binding = validatePublicationBinding(input, candidate, policy, { root })
       if (!binding.ok) {
         throw new Error(binding.errors.join(','))
       }
