@@ -940,4 +940,252 @@ mod tests {
         );
         assert!(parse_product_cli(&["start".into(), "now".into()]).is_err());
     }
+
+    #[test]
+    fn runtime_error_display_and_error_trait() {
+        let err = RuntimeError::new(RuntimeErrorClass::Internal, 42, "test message");
+        assert_eq!(err.to_string(), "runtime Internal code=42: test message");
+        let std_err: &dyn std::error::Error = &err;
+        assert_eq!(std_err.to_string(), "runtime Internal code=42: test message");
+    }
+
+    #[test]
+    fn run_runtime_requires_stopped_phase() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.phase = RuntimePhase::Online;
+        let mut ops = MockOps::default();
+        let err = run_runtime(&c, &mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Internal);
+    }
+
+    #[test]
+    fn run_runtime_fails_if_lease_fails() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            fail_at: Some("lease"),
+            ..Default::default()
+        };
+        let err = run_runtime(&c, &mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Broker);
+        assert_eq!(state.phase, RuntimePhase::FailedSafe);
+    }
+
+    #[test]
+    fn run_runtime_fails_busy_multiple_retries() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.effects.retries = 1;
+        let mut ops = MockOps {
+            fail_at: None,
+            busy_once: true,
+            ..Default::default()
+        };
+        let err = run_runtime(&c, &mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Busy);
+        assert_eq!(err.message, "busy observation budget exhausted");
+    }
+
+    #[test]
+    fn run_runtime_fails_busy_if_not_busy_after() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            fail_at: None,
+            busy_once: true,
+            busy_observe: false,
+            ..Default::default()
+        };
+        let err = run_runtime(&c, &mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Busy);
+        assert_eq!(err.message, "CREATE busy; will not retry IOCTL");
+    }
+
+    #[test]
+    fn stop_runtime_idempotent_if_already_stopped() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.stop_completed = true;
+        state.phase = RuntimePhase::Stopped;
+        let mut ops = MockOps::default();
+        let summary = stop_runtime(&mut state, &mut ops).unwrap();
+        assert!(summary.idempotent_stop);
+    }
+
+    #[test]
+    fn stop_runtime_if_never_started() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.stop_completed = false;
+        state.phase = RuntimePhase::Stopped;
+        let mut ops = MockOps::default();
+        let summary = stop_runtime(&mut state, &mut ops).unwrap();
+        assert!(summary.idempotent_stop);
+        assert!(state.stop_completed);
+    }
+
+    #[test]
+    fn stop_runtime_fails_if_pagefile_gate_error() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.phase = RuntimePhase::Online;
+        let mut ops = MockOps {
+            pagefile_clear: false,
+            ..Default::default()
+        };
+        let err = stop_runtime(&mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::PagefileSafety);
+    }
+
+    #[test]
+    fn stop_runtime_fails_if_pagefile_gate_returns_error() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.phase = RuntimePhase::Online;
+        struct ErrOps;
+        impl RuntimeOps for ErrOps {
+            fn acquire_lease(&mut self, _: u64) -> Result<u32, RuntimeError> { Ok(1) }
+            fn release_lease(&mut self, _: u32) -> Result<(), RuntimeError> { Ok(()) }
+            fn cuda_alloc(&mut self, _: u64) -> Result<(), RuntimeError> { Ok(()) }
+            fn cuda_free(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn create_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn destroy_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn register_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn unregister_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn drain_io(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> {
+                Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "gate err"))
+            }
+        }
+        let mut ops = ErrOps;
+        let err = stop_runtime(&mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Internal);
+    }
+
+    #[test]
+    fn stop_runtime_fails_if_drain_io_returns_error() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.phase = RuntimePhase::Online;
+        struct ErrOps;
+        impl RuntimeOps for ErrOps {
+            fn acquire_lease(&mut self, _: u64) -> Result<u32, RuntimeError> { Ok(1) }
+            fn release_lease(&mut self, _: u32) -> Result<(), RuntimeError> { Ok(()) }
+            fn cuda_alloc(&mut self, _: u64) -> Result<(), RuntimeError> { Ok(()) }
+            fn cuda_free(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn create_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn destroy_disk(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn register_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn unregister_queue(&mut self) -> Result<(), RuntimeError> { Ok(()) }
+            fn drain_io(&mut self) -> Result<(), RuntimeError> {
+                Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "drain err"))
+            }
+            fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> { Ok(true) }
+        }
+        let mut ops = ErrOps;
+        let err = stop_runtime(&mut state, &mut ops).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Internal);
+    }
+
+    #[test]
+    fn parse_product_cli_missing_flag_value() {
+        let err = parse_product_cli(&["probe-cuda".into(), "--config".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("requires a path"));
+    }
+
+    #[test]
+    fn parse_product_cli_missing_flag_completely() {
+        let err = parse_product_cli(&["console".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("missing --config"));
+    }
+
+    #[test]
+    fn parse_product_cli_empty_flag_value() {
+        let err = parse_product_cli(&["probe-cuda".into(), "--config".into(), "".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("path must be absolute"));
+    }
+
+    #[test]
+    fn parse_product_cli_missing_flag_value_install() {
+        let err = parse_product_cli(&["install".into(), "--manifest".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("requires a path"));
+    }
+
+    #[test]
+    fn parse_product_cli_missing_flag_value_repair() {
+        let err = parse_product_cli(&["repair".into(), "--manifest".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("requires a path"));
+    }
+
+    #[test]
+    fn parse_product_cli_console_without_storage_only() {
+        let err = parse_product_cli(&["console".into(), "--config".into(), r"C:\config.toml".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("console requires --storage-only"));
+    }
+
+    #[test]
+    fn parse_product_cli_unknown_command() {
+        let err = parse_product_cli(&["unknown-cmd".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("unknown command"));
+    }
+
+    #[test]
+    fn parse_product_cli_start_with_extra() {
+        let err = parse_product_cli(&["start".into(), "extra".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("unknown command"));
+    }
+
+    #[test]
+    fn parse_product_cli_install_cmd() {
+        let cmd = parse_product_cli(&["install".into(), "--manifest".into(), r"C:\manifest.json".into()]).unwrap();
+        assert_eq!(cmd, ProductCommand::Install { manifest: r"C:\manifest.json".into() });
+    }
+
+    #[test]
+    fn parse_product_cli_repair_cmd() {
+        let cmd = parse_product_cli(&["repair".into(), "--manifest".into(), r"C:\manifest.json".into()]).unwrap();
+        assert_eq!(cmd, ProductCommand::Repair { manifest: r"C:\manifest.json".into() });
+    }
+
+    #[test]
+    fn parse_product_cli_uninstall_cmd() {
+        let cmd = parse_product_cli(&["uninstall".into()]).unwrap();
+        assert_eq!(cmd, ProductCommand::Uninstall);
+    }
+
+    #[test]
+    fn parse_product_cli_probe_cuda_cmd() {
+        let cmd = parse_product_cli(&["probe-cuda".into(), "--config".into(), r"C:\config.toml".into()]).unwrap();
+        assert_eq!(cmd, ProductCommand::ProbeCuda { config: r"C:\config.toml".into() });
+    }
+
+    #[test]
+    fn parse_product_cli_status_cmd() {
+        let cmd = parse_product_cli(&["status".into()]).unwrap();
+        assert_eq!(cmd, ProductCommand::Status { json: false });
+    }
+
+    #[test]
+    fn path_is_absolute_str_unix() {
+        assert!(path_is_absolute_str("/absolute/path"));
+    }
+
+    #[test]
+    fn path_is_absolute_str_windows() {
+        assert!(path_is_absolute_str(r"C:\Windows\System32"));
+        assert!(path_is_absolute_str(r"D:/Program Files"));
+        assert!(path_is_absolute_str(r"\\?\C:\"));
+    }
+
+    #[test]
+    fn path_is_absolute_str_relative() {
+        assert!(!path_is_absolute_str("relative/path"));
+        assert!(!path_is_absolute_str(r"relative\path"));
+        assert!(!path_is_absolute_str("./relative"));
+        assert!(!path_is_absolute_str("C:relative"));
+    }
 }
