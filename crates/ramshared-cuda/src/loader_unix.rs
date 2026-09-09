@@ -57,7 +57,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_formatting() {
+    fn test_loader_error_formatting_ok() {
         // Clear any preexisting errors
         let _ = error();
 

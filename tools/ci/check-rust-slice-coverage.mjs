@@ -99,7 +99,7 @@ function parseArgs(argv) {
     const argument = argv[i];
     const next = () => {
       const value = argv[++i];
-      if (value === undefined) throw usageError(`missing value after ${argument}`);
+      if (value === undefined || value.startsWith("--")) throw usageError(`missing value after ${argument}`);
       return value;
     };
     if (argument === "--help" || argument === "-h") out.help = true;
@@ -531,6 +531,24 @@ function runLlvmCov(
   if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "Cargo.toml not found at repository root", 2);
   }
+  if (!Array.isArray(packages) || packages.length === 0) {
+    throw new CoverageGateError("COVERAGE_TOOL_PACKAGES_INVALID", "Packages list cannot be empty", 2);
+  }
+  if (typeof jsonOutPath !== 'string' || jsonOutPath.length === 0) {
+    throw new CoverageGateError("COVERAGE_TOOL_OUTPATH_INVALID", "JSON output path cannot be empty", 2);
+  }
+  if (typeof cargoTargetDir !== 'string' || cargoTargetDir.length === 0) {
+    throw new CoverageGateError("COVERAGE_TOOL_TARGETDIR_INVALID", "Cargo target dir cannot be empty", 2);
+  }
+  if (!Array.isArray(packages) || packages.length === 0) {
+    throw new CoverageGateError("COVERAGE_TOOL_PACKAGES_INVALID", "Packages list cannot be empty", 2);
+  }
+  if (typeof jsonOutPath !== 'string' || jsonOutPath.length === 0) {
+    throw new CoverageGateError("COVERAGE_TOOL_OUTPATH_INVALID", "JSON output path cannot be empty", 2);
+  }
+  if (typeof cargoTargetDir !== 'string' || cargoTargetDir.length === 0) {
+    throw new CoverageGateError("COVERAGE_TOOL_TARGETDIR_INVALID", "Cargo target dir cannot be empty", 2);
+  }
   const cargoArgs = ["llvm-cov"];
   for (const packageName of packages) cargoArgs.push("-p", packageName);
   cargoArgs.push("--json", "--summary-only", "--output-path", jsonOutPath);
@@ -638,16 +656,16 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       return 0;
     }
     if (!Number.isFinite(options.min) || options.min <= 0 || options.min > 100) {
-      throw usageError("invalid --min (expected (0, 100])");
+      throw new CoverageGateError("COVERAGE_TOOL_MIN_INVALID", "invalid --min (expected (0, 100])", 2);
     }
-    if (!["lines", "regions", "functions"].includes(options.metric)) {
-      throw usageError("--metric must be lines|regions|functions");
+    if (typeof options.metric !== "string" || !["lines", "regions", "functions"].includes(options.metric)) {
+      throw new CoverageGateError("COVERAGE_TOOL_METRIC_INVALID", "--metric must be lines|regions|functions", 2);
     }
 
     let files = options.files.map((file) => normRepoPath(file));
     if (options.filesFrom) files.push(...loadFilesFrom(options.filesFrom).map((file) => normRepoPath(file)));
     files = [...new Set(files)];
-    if (files.length === 0) throw usageError("provide --files and/or --files-from (production paths to gate)");
+    if (files.length === 0) throw new CoverageGateError("COVERAGE_TOOL_FILES_INVALID", "provide --files and/or --files-from (production paths to gate)", 2);
 
     let coverageContent;
     if (options.reportOnly) {

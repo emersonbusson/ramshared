@@ -65,7 +65,7 @@ mod tests {
     use crate::Cuda;
 
     #[test]
-    fn test_vram_error_conversion_out_of_range() {
+    fn test_vram_error_conversion_out_of_range_ok() {
         let cuda_err = CudaError::OutOfRange {
             off: 10,
             len: 20,
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vram_error_conversion_provider() {
+    fn test_vram_error_conversion_provider_ok() {
         let cuda_err = CudaError::Driver {
             op: "cuMemAlloc",
             code: 2,
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires functional CUDA GPU"]
-    fn test_vram_traits_delegation() {
+    fn test_vram_traits_delegation_ok() {
         let cuda = Cuda::load().expect("libcuda must load");
         let dev = cuda.device(0).expect("device(0) must exist");
         let ctx = cuda.create_context(&dev).expect("context must be created");

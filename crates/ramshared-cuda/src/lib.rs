@@ -46,7 +46,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn error_display_is_descriptive() {
+    fn test_lib_error_display_is_descriptive_ok() {
         let e = CudaError::OutOfRange {
             off: 4096,
             len: 8192,
@@ -58,7 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn driver_error_carries_op_and_code() {
+    fn test_lib_driver_error_carries_op_and_code_ok() {
         let e = CudaError::Driver {
             op: "cuMemAlloc",
             code: 2,
@@ -73,7 +73,7 @@ mod tests {
     /// Run with: `cargo test -p ramshared-cuda -- --ignored`.
     #[test]
     #[ignore = "requires a working CUDA GPU (run with --ignored on a GPU host)"]
-    fn gpu_roundtrip_256mib() {
+    fn test_lib_gpu_roundtrip_256mib_ok() {
         let cuda = Cuda::load().expect("libcuda must load");
         assert!(cuda.device_count().unwrap() >= 1);
         let dev = cuda.device(0).unwrap();

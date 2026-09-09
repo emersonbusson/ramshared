@@ -116,7 +116,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_offsets_for_64mib() {
+    fn test_probe_offsets_for_64mib_ok() {
         let size = 64 * 1024 * 1024;
         let [a, b, c] = plan_probe_offsets(size).unwrap();
         assert_eq!(a, 0);
@@ -127,7 +127,7 @@ mod tests {
     }
 
     #[test]
-    fn patterns_differ_across_offsets() {
+    fn test_probe_patterns_differ_across_offsets_ok() {
         let p0 = pattern_for_offset(0);
         let p1 = pattern_for_offset(32 * 1024 * 1024);
         let p2 = pattern_for_offset(64 * 1024 * 1024 - 4096);
@@ -137,7 +137,74 @@ mod tests {
     }
 
     #[test]
-    fn reject_small_size() {
+    fn test_probe_hardware_zero_gpus_invalid() {
+        assert!(matches!(
+            validate_hardware_specs(0, 0, 0),
+            Err(ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 })
+        ));
+    }
+
+    #[test]
+    fn test_probe_hardware_single_gpu_ok() {
+        assert!(validate_hardware_specs(8, 9, 256 * 1024 * 1024).is_ok());
+    }
+
+    #[test]
+    fn test_probe_hardware_multi_gpu_simulated_ok() {
+        assert!(validate_hardware_specs(9, 0, 1024 * 1024 * 1024).is_ok());
+    }
+
+    #[test]
+    fn test_probe_hardware_insufficient_compute_invalid() {
+        assert!(matches!(
+            validate_hardware_specs(0, 1, 1024 * 1024 * 1024),
+            Err(ProbePlanError::InvalidComputeCapability { major: 0, minor: 1 })
+        ));
+    }
+
+    #[test]
+    fn test_probe_unaligned_size_invalid() {
+        let size = 64 * 1024 * 1024 + 1; // Not multiple of 4096
+        assert!(matches!(
+            plan_probe_offsets(size),
+            Err(ProbePlanError::Unaligned { size: s }) if s == size
+        ));
+    }
+
+    #[test]
+    fn test_probe_error_display_ok() {
+        assert_eq!(
+            ProbePlanError::TooSmall { size: 4096 }.to_string(),
+            "probe size 4096 too small for three 4 KiB patterns"
+        );
+        assert_eq!(
+            ProbePlanError::Unaligned { size: 4097 }.to_string(),
+            "probe size 4097 not 4 KiB aligned"
+        );
+        assert_eq!(
+            ProbePlanError::NonDistinct { size: 12288, mid: 4096, last: 8192 }.to_string(),
+            "probe offsets not distinct size=12288 mid=4096 last=8192"
+        );
+        assert_eq!(
+            ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 }.to_string(),
+            "invalid compute capability major=0 minor=0"
+        );
+        assert_eq!(
+            ProbePlanError::InvalidTotalMemory { size: 0 }.to_string(),
+            "invalid total memory size 0"
+        );
+    }
+
+    #[test]
+    fn test_probe_distinct_offsets_ok() {
+        assert!(matches!(
+            plan_probe_offsets(12288), // 3 * 4096
+            Ok([0, 4096, 8192])
+        ));
+    }
+
+    #[test]
+    fn test_probe_small_size_invalid() {
         assert!(matches!(
             plan_probe_offsets(4096),
             Err(ProbePlanError::TooSmall { .. })
@@ -145,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_invalid_compute_capability() {
+    fn test_probe_compute_capability_invalid() {
         assert!(matches!(
             validate_hardware_specs(0, 0, 1024),
             Err(ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 })
@@ -168,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn reject_invalid_total_memory() {
+    fn test_probe_total_memory_invalid() {
         assert!(matches!(
             validate_hardware_specs(8, 9, 0),
             Err(ProbePlanError::InvalidTotalMemory { size: 0 })
