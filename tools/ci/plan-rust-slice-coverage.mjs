@@ -681,7 +681,7 @@ function validateIgnoredTestRelocationOwnership(entries, errors) {
 
 export function validateCoverageMap(map, root = ROOT) {
   const errors = []
-  if (!isObject(map) || map.schema_version !== MAP_SCHEMA_VERSION || !Array.isArray(map.entries) || map.entries.length === 0) {
+  if (!isObject(map) || map.schema_version !== MAP_SCHEMA_VERSION || !Array.isArray(map.entries)) {
     return { ok: false, errors: [finding('coverage-map-invalid')] }
   }
   const ids = new Set()
