@@ -82,4 +82,53 @@ mod tests {
         let err_msg2 = error();
         assert_eq!(err_msg2, "unknown dlopen error");
     }
+
+    #[test]
+    fn test_loader_missing_library_returns_null() {
+        let _ = error(); // Clear preexisting error
+
+        let lib_name = c"libcuda_missing_123.so";
+        let handle = unsafe { open(lib_name.as_ptr()) };
+
+        assert!(handle.is_null());
+        let err_msg = error();
+        assert!(!err_msg.is_empty());
+        assert!(err_msg.contains("libcuda_missing_123.so"));
+    }
+
+    #[test]
+    fn test_loader_missing_symbol_returns_null() {
+        // We need a library we can reliably open to test dlsym failing.
+        // It's safer to just test missing library handling again, or open a known library.
+        // Let's use `libc.so.6` which is ubiquitous.
+        let lib_name = c"libc.so.6";
+        let handle = unsafe { open(lib_name.as_ptr()) };
+
+        // This could fail if libc.so.6 is not found, but it usually is.
+        // If it is found, test missing symbol behavior.
+        // To strictly get 100% test coverage without conditional branches on handle,
+        // we assert it is not null directly, since libc.so.6 should always exist on Linux.
+        assert!(!handle.is_null());
+
+        let symbol_name = c"this_symbol_definitely_does_not_exist";
+        let sym_ptr = unsafe { sym(handle, symbol_name.as_ptr()) };
+        assert!(sym_ptr.is_null());
+
+        let err_msg = error();
+        assert!(err_msg.contains("this_symbol_definitely_does_not_exist"));
+
+        let res = unsafe { close(handle) };
+        assert_eq!(res, 0);
+    }
+
+    #[test]
+    fn test_loader_no_error_returns_fallback() {
+        let _ = error(); // clear errors
+
+        // Simulating a failed call to `error` when dlerror returns null pointer.
+        // We can't really force dlerror to return null if an error just happened,
+        // but it should return null when called normally if there's no error.
+        let msg = error();
+        assert_eq!(msg, "unknown dlopen error");
+    }
 }
