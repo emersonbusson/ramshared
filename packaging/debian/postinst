@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
+
+if [ -d /run/udev ] && command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+fi
