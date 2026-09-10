@@ -1,0 +1,32 @@
+# /usr/lib/udev/rules.d/99-ramshared.rules
+# RamShared Discrete GPU Auto-Detection & Udev Trigger
+# SPDX-License-Identifier: GPL-2.0-only
+
+ACTION!="add|remove", GOTO="ramshared_end"
+
+# 1. NVIDIA Discrete GPUs (DRM Render Node & NVIDIA UVM Character Devices)
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x10de", ATTRS{class}=="0x030000|0x030200|0x038000", \
+    ENV{RAMSHARED_GPU_VENDOR}="nvidia", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+ACTION=="add", SUBSYSTEM=="nvidia-uvm", KERNEL=="nvidia-uvm", \
+    ENV{RAMSHARED_GPU_VENDOR}="nvidia", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# 2. AMD Radeon Discrete GPUs (Vendor 0x1002, Class: VGA/3D Controller)
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x1002", ATTRS{class}=="0x030000|0x030200", \
+    ENV{RAMSHARED_GPU_VENDOR}="amd", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# 3. Intel Arc Discrete GPUs (Vendor 0x8086, Class: 3D/VGA Controller)
+ACTION=="add", SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x8086", ATTRS{class}=="0x030000|0x030200", \
+    ENV{RAMSHARED_GPU_VENDOR}="intel", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# ---
+# eGPU Hot-Unplug / Removal Handling
+# ---
+# Cache properties are used on remove
+ACTION=="remove", SUBSYSTEM=="drm", KERNEL=="renderD*", ENV{RAMSHARED_GPU_VENDOR}=="?*", \
+    RUN+="/usr/bin/systemctl --no-block stop ramshared-vram.service"
+
+ACTION=="remove", SUBSYSTEM=="nvidia-uvm", KERNEL=="nvidia-uvm", ENV{RAMSHARED_GPU_VENDOR}=="?*", \
+    RUN+="/usr/bin/systemctl --no-block stop ramshared-vram.service"
+
+LABEL="ramshared_end"
