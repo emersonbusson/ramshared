@@ -7,12 +7,17 @@ obj-$(CONFIG_BLK_DEV_RAMSHARED) += ramshared.o
 
 ramshared-y := main.o dma.o queue.o
 
+EXTRA_CFLAGS += -Wall -Wextra -Werror
+
 # Standalone build support
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
 
 default:
 	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_BLK_DEV_RAMSHARED=m modules
+
+checkpatch:
+	$(KDIR)/scripts/checkpatch.pl -f *.c *.h
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
