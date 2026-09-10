@@ -1,0 +1,19 @@
+# /usr/lib/udev/rules.d/99-ramshared.rules
+# RamShared PCI GPU Auto-Detection & Udev Trigger
+# SPDX-License-Identifier: GPL-2.0-only
+
+ACTION!="add", GOTO="ramshared_pci_end"
+
+# NVIDIA (0x10de)
+SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030200", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# AMD Radeon (0x1002)
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1002", ATTR{class}=="0x030000", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x1002", ATTR{class}=="0x030200", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# Intel Arc (0x8086)
+SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{class}=="0x030000", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+SUBSYSTEM=="pci", ATTR{vendor}=="0x8086", ATTR{class}=="0x030200", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+LABEL="ramshared_pci_end"

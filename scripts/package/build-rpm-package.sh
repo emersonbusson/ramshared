@@ -65,6 +65,9 @@ fi
 if [ -f ${ROOT}/packaging/systemd/65-ramshared-observability.rules ]; then
   install -m 0644 ${ROOT}/packaging/systemd/65-ramshared-observability.rules %{buildroot}/lib/udev/rules.d/65-ramshared-observability.rules
 fi
+if [ -f ${ROOT}/packaging/udev/99-ramshared.rules ]; then
+  install -m 0644 ${ROOT}/packaging/udev/99-ramshared.rules %{buildroot}/lib/udev/rules.d/99-ramshared.rules
+fi
 
 %files
 /usr/bin/ramshared
@@ -73,6 +76,7 @@ fi
 /etc/ramshared
 /lib/udev/rules.d/60-ramshared.rules
 /lib/udev/rules.d/65-ramshared-observability.rules
+/lib/udev/rules.d/99-ramshared.rules
 
 %changelog
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
