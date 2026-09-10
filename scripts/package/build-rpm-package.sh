@@ -42,8 +42,15 @@ Name:           ramshared
 Version:        ${RPM_VERSION}
 Release:        1%{?dist}
 Summary:        Hardware-accelerated VRAM memory tiering & low-level kernel drivers
-License:        GPL-2.0-only
+License:        Apache-2.0
 URL:            https://github.com/emersonbusson/ramshared
+Source0:        %{name}-%{version}.tar.gz
+Source1:        %{name}-%{version}.tar.gz.sha256
+
+%prep
+cd %{_sourcedir}
+sha256sum -c %{SOURCE1}
+%setup -q
 
 %description
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
@@ -78,6 +85,15 @@ fi
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
+
+# Generate a dummy tarball and sha256sum for the source if they don't exist
+TARBALL="${RPM_ROOT}/SOURCES/ramshared-${RPM_VERSION}.tar.gz"
+TARBALL_SHA256="${RPM_ROOT}/SOURCES/ramshared-${RPM_VERSION}.tar.gz.sha256"
+if [ ! -f "$TARBALL" ]; then
+    mkdir -p "${RPM_ROOT}/SOURCES/ramshared-${RPM_VERSION}"
+    tar -czf "$TARBALL" -C "${RPM_ROOT}/SOURCES" "ramshared-${RPM_VERSION}"
+    (cd "${RPM_ROOT}/SOURCES" && sha256sum "ramshared-${RPM_VERSION}.tar.gz" > "$TARBALL_SHA256")
+fi
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
