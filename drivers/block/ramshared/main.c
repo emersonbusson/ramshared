@@ -187,4 +187,17 @@ static struct pci_driver ramshared_pci_driver = {
 	.err_handler	= &ramshared_pci_err_handler,
 };
 
-module_pci_driver(ramshared_pci_driver);
+static int __init ramshared_init(void)
+{
+	pr_info("RamShared Hardware-Accelerated VRAM Block Driver v%s loaded\n",
+		RAMSHARED_DRIVER_VERSION);
+	return pci_register_driver(&ramshared_pci_driver);
+}
+
+static void __exit ramshared_exit(void)
+{
+	pci_unregister_driver(&ramshared_pci_driver);
+}
+
+module_init(ramshared_init);
+module_exit(ramshared_exit);
