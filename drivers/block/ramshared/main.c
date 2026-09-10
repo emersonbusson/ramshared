@@ -16,13 +16,19 @@ MODULE_DESCRIPTION("Hardware-Accelerated VRAM Block Driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(RAMSHARED_DRIVER_VERSION);
 
-static unsigned long capacity_mb = 1024;
-module_param(capacity_mb, ulong, 0444);
-MODULE_PARM_DESC(capacity_mb, "Initial VRAM block device capacity in MiB (default: 1024)");
+static unsigned long default_capacity_mb = 1024;
+module_param(default_capacity_mb, ulong, 0444);
+MODULE_PARM_DESC(default_capacity_mb, "Initial VRAM block device capacity in MiB (default: 1024)");
+
+static unsigned int max_devices = 4;
+module_param(max_devices, uint, 0444);
+MODULE_PARM_DESC(max_devices, "Maximum number of RamShared devices (default: 4)");
 
 static unsigned int queue_depth = RAMSHARED_DEFAULT_QUEUE_DEPTH;
 module_param(queue_depth, uint, 0444);
 MODULE_PARM_DESC(queue_depth, "Hardware queue depth (default: 256)");
+
+static atomic_t ramshared_dev_count = ATOMIC_INIT(0);
 
 static int ramshared_pci_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *id)
@@ -34,31 +40,27 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -EINVAL;
 
 	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
-		 capacity_mb);
+		 default_capacity_mb);
 
-	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
-		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
-			capacity_mb);
-		return -ERANGE;
-	}
-
-	if (queue_depth < 16 || queue_depth > 1024) {
-		dev_warn(&pdev->dev,
-			 "clamping queue_depth (%lu) to bounds [16, 1024]\n",
-			 queue_depth);
-		if (queue_depth < 16)
-			queue_depth = 16;
-		else
-			queue_depth = 1024;
+	/* Enforce max_devices limit */
+	if (atomic_inc_return(&ramshared_dev_count) > max_devices) {
+		atomic_dec(&ramshared_dev_count);
+		dev_err(&pdev->dev,
+			"max_devices (%u) limit reached, rejecting device\n",
+			max_devices);
+		return -ENOSPC;
 	}
 
 	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
-	if (!rs_dev)
+	if (!rs_dev) {
+		atomic_dec(&ramshared_dev_count);
 		return -ENOMEM;
+	}
 
 	rs_dev->dev = &pdev->dev;
-	if (check_mul_overflow((u64)capacity_mb, 1024ULL * 1024ULL, &rs_dev->capacity_bytes)) {
+	if (check_mul_overflow((u64)default_capacity_mb, 1024ULL * 1024ULL, &rs_dev->capacity_bytes)) {
 		dev_err(&pdev->dev, "capacity_bytes integer overflow\n");
+		atomic_dec(&ramshared_dev_count);
 		return -EOVERFLOW;
 	}
 	mutex_init(&rs_dev->lock);
@@ -69,6 +71,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = pci_enable_device_mem(pdev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
+		atomic_dec(&ramshared_dev_count);
 		return -ENODEV;
 	}
 
@@ -120,6 +123,7 @@ err_clear_master:
 	pci_clear_master(pdev);
 err_disable_pci:
 	pci_disable_device(pdev);
+	atomic_dec(&ramshared_dev_count);
 	return ret;
 }
 
@@ -139,6 +143,8 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	pci_release_mem_regions(pdev);
 	pci_clear_master(pdev);
 	pci_disable_device(pdev);
+
+	atomic_dec(&ramshared_dev_count);
 
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
 }
@@ -187,4 +193,42 @@ static struct pci_driver ramshared_pci_driver = {
 	.err_handler	= &ramshared_pci_err_handler,
 };
 
-module_pci_driver(ramshared_pci_driver);
+static int __init ramshared_init(void)
+{
+	if (default_capacity_mb == 0 || default_capacity_mb > (1UL << 20)) {
+		pr_warn("ramshared: clamping default_capacity_mb (%lu) to bounds [1, 1048576]\n",
+			default_capacity_mb);
+		if (default_capacity_mb == 0)
+			default_capacity_mb = 1;
+		else
+			default_capacity_mb = (1UL << 20);
+	}
+
+	if (max_devices == 0 || max_devices > 256) {
+		pr_warn("ramshared: clamping max_devices (%u) to bounds [1, 256]\n",
+			max_devices);
+		if (max_devices == 0)
+			max_devices = 1;
+		else
+			max_devices = 256;
+	}
+
+	if (queue_depth < 16 || queue_depth > 1024) {
+		pr_warn("ramshared: clamping queue_depth (%u) to bounds [16, 1024]\n",
+			queue_depth);
+		if (queue_depth < 16)
+			queue_depth = 16;
+		else
+			queue_depth = 1024;
+	}
+
+	return pci_register_driver(&ramshared_pci_driver);
+}
+
+static void __exit ramshared_exit(void)
+{
+	pci_unregister_driver(&ramshared_pci_driver);
+}
+
+module_init(ramshared_init);
+module_exit(ramshared_exit);
