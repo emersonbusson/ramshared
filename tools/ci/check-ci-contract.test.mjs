@@ -24,7 +24,7 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const RUSTSEC_SNAPSHOT_COMMIT = 'b50980aad8b8f14f77e25a97b32dd94bf008b0af'
-const RUSTSEC_SNAPSHOT_UTC = '2026-09-09T10:41:56Z'
+const RUSTSEC_SNAPSHOT_UTC = '2026-09-09T10:49:52Z'
 const REMOTE_OBSERVATION_NOW = Date.parse('2026-08-09T16:00:00Z')
 
 function compliantRemoteObservation(overrides = {}) {
