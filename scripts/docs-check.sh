@@ -41,6 +41,11 @@ run_gate gap-register node tools/ci/check-gap-register.mjs
 run_gate public-hygiene node tools/ci/check-public-hygiene.mjs --candidate
 run_gate public-hygiene-tests node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs
 run_gate legacy-preallocation-removal node tools/ci/check-legacy-preallocation-removal.mjs --candidate
+run_gate pkgbuild-namcap node tools/ci/check-pkgbuild-namcap.mjs
+run_gate pkgbuild-namcap-tests node --experimental-test-coverage \
+  --test-coverage-include=tools/ci/check-pkgbuild-namcap.mjs \
+  --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
+  --test-reporter=dot tools/ci/check-pkgbuild-namcap.test.mjs
 run_gate legacy-preallocation-removal-tests node --experimental-test-coverage \
   --test-coverage-include=tools/ci/check-legacy-preallocation-removal.mjs \
   --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
