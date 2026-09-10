@@ -13,7 +13,8 @@ optdepends=(
 )
 install=ramshared.install
 source=("$pkgname-$pkgver.tar.gz::https://github.com/emersonbusson/ramshared/archive/refs/tags/v0.9.0-beta.2.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('11f9b090357ed9e0da2eadcb58d600da93963116ad645449ff18ccd23c70b9db')
+backup=('etc/ramshared/config.toml')
 
 build() {
     cd "$srcdir/$pkgname-${pkgver//./-}" 2>/dev/null || cd "$srcdir"
@@ -24,8 +25,8 @@ build() {
 
 package() {
     cd "$srcdir/$pkgname-${pkgver//./-}" 2>/dev/null || cd "$srcdir"
-    install -Dm755 target/release/ramshared "$pkgdir/usr/bin/ramshared"
-    install -Dm755 target/release/ramsharedd "$pkgdir/usr/bin/ramsharedd"
+    install -s -Dm755 target/release/ramshared "$pkgdir/usr/bin/ramshared"
+    install -s -Dm755 target/release/ramsharedd "$pkgdir/usr/bin/ramsharedd"
     install -Dm644 packaging/systemd/60-ramshared.rules "$pkgdir/usr/lib/udev/rules.d/60-ramshared.rules"
     install -Dm644 packaging/systemd/ramshared-vram.service "$pkgdir/usr/lib/systemd/system/ramshared-vram.service"
 }
