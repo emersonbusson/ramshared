@@ -474,6 +474,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "jules-findings",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-09T00:00:00Z"
+    },
+    {
       "id": "kernel-driver-documents",
       "pattern": "drivers/block/**/*.md",
       "owner": "kernel-driver",
