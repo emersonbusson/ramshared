@@ -41,9 +41,11 @@ cat << SPEC_EOF > "$SPEC_FILE"
 Name:           ramshared
 Version:        ${RPM_VERSION}
 Release:        1%{?dist}
-Summary:        Hardware-accelerated VRAM memory tiering & low-level kernel drivers
+Summary:        Hardware-accelerated VRAM memory management and low-level kernel drivers
+Group:          System Environment/Kernel
 License:        GPL-2.0-only
 URL:            https://github.com/emersonbusson/ramshared
+Packager:       Emerson Busson <emersonbusson@example.com>
 
 %description
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
@@ -82,6 +84,38 @@ SPEC_EOF
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
   rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
+
+  if command -v rpmlint >/dev/null 2>&1; then
+    echo "==> Running rpmlint on generated spec and RPMS..."
+
+    cat << LINT_EOF > "$RPM_ROOT/rpmlint.toml"
+Filters = [
+  "no-signature",
+  "hardcoded-library-path",
+  "no-binary",
+  "spelling-error",
+  "zero-length",
+  "script-without-shebang",
+  "no-packager-tag",
+  "no-group-tag"
+]
+LINT_EOF
+
+    set +e
+    rpmlint_out=$(rpmlint -c "$RPM_ROOT/rpmlint.toml" "$SPEC_FILE" "$RPM_ROOT"/RPMS/*/*.rpm 2>&1)
+    rpmlint_rc=$?
+    set -e
+
+    echo "$rpmlint_out"
+
+    if [ $rpmlint_rc -ne 0 ]; then
+      echo "ERROR: rpmlint failed. Strict zero-error policy." >&2
+      exit 1
+    fi
+  else
+    echo "==> rpmlint not installed on host. Skipping RPM validation."
+  fi
+
   cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
   echo "✓ RPM package built under $OUT_DIR/"
 else
