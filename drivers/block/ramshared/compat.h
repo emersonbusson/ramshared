@@ -10,6 +10,7 @@
 #ifndef _RAMSHARED_COMPAT_H
 #define _RAMSHARED_COMPAT_H
 
+#include <linux/workqueue.h>
 #include <linux/version.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
@@ -100,6 +101,35 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 
 	return disk;
 #endif
+}
+
+/**
+ * ramshared_alloc_ordered_workqueue - Allocate an ordered workqueue safely
+ * @fmt: printf format for the name of the workqueue
+ *
+ * Wraps alloc_ordered_workqueue.
+ */
+#define ramshared_alloc_ordered_workqueue(fmt, ...) \
+	alloc_ordered_workqueue(fmt, WQ_MEM_RECLAIM, ##__VA_ARGS__)
+
+/**
+ * ramshared_flush_workqueue - Flush a workqueue if it exists
+ * @wq: Pointer to the workqueue
+ */
+static inline void ramshared_flush_workqueue(struct workqueue_struct *wq)
+{
+	if (wq)
+		flush_workqueue(wq);
+}
+
+/**
+ * ramshared_destroy_workqueue - Destroy a workqueue safely
+ * @wq: Pointer to the workqueue
+ */
+static inline void ramshared_destroy_workqueue(struct workqueue_struct *wq)
+{
+	if (wq)
+		destroy_workqueue(wq);
 }
 
 #endif /* _RAMSHARED_COMPAT_H */
