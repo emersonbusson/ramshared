@@ -179,6 +179,7 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 static const struct block_device_operations ramshared_fops = {
 	.owner		= THIS_MODULE,
 	.rw_page	= ramshared_bdev_rw_page,
+	.ioctl		= ramshared_ioctl,
 };
 
 /* Sysfs Attributes Group (Race-free via disk_groups) */

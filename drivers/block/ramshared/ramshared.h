@@ -60,4 +60,7 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 			 struct device *parent_dev, unsigned int q_depth);
 void ramshared_queue_cleanup(struct ramshared_device *rs_dev);
 
+int ramshared_ioctl(struct block_device *bdev, blk_mode_t mode,
+		    unsigned int cmd, unsigned long arg);
+
 #endif /* _RAMSHARED_H */
