@@ -1,4 +1,3 @@
-Date.now = () => new Date("2026-09-06T12:00:00Z").getTime();
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

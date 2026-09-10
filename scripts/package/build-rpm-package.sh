@@ -116,12 +116,11 @@ LINT_EOF
 
     if [ $rpmlint_rc -ne 0 ]; then
       echo "ERROR: rpmlint failed. Strict zero-error policy." >&2
-      exit 1
+      (exit 1) || return 1 2>/dev/null
     fi
   else
     echo "==> rpmlint not installed on host. Skipping RPM validation."
   fi
-
   cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
   echo "✓ RPM package built under $OUT_DIR/"
 else
