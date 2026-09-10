@@ -1,0 +1,11 @@
+#!/usr/bin/make -f
+export DH_VERBOSE = 1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CFLAGS_MAINT_APPEND = -fstack-protector-strong -D_FORTIFY_SOURCE=2
+export DEB_LDFLAGS_MAINT_APPEND = -Wl,-z,relro,-z,now
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	if command -v cargo >/dev/null 2>&1; then cargo build --release --locked -p ramshared-cli -p ramshared-wsl2d; fi
