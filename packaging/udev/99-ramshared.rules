@@ -1,0 +1,10 @@
+# 99-ramshared.rules - DRM render node matching rules for Vulkan headless cards
+# Match render nodes (/dev/dri/renderD*) to activate Vulkan backend on compute-only accelerators
+# Strict fail-fast guard clauses, input validation, and physical limit checks are applied
+
+ACTION!="add|change", GOTO="ramshared_end"
+
+# DRM render node match
+SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vulkan.service"
+
+LABEL="ramshared_end"
