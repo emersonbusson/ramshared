@@ -13,6 +13,13 @@
 #include <linux/version.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
+#include <linux/timer.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
+#define RAMSHARED_HAVE_LEGACY_TIMER		1
+#else
+#define RAMSHARED_HAVE_MODERN_TIMER		1
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 /* Linux 6.11+ Paradigm: Features embedded in struct queue_limits */
@@ -100,6 +107,36 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 
 	return disk;
 #endif
+}
+
+
+/**
+ * ramshared_timer_setup - Wrapper for timer initialization across kernels
+ * @timer: pointer to struct timer_list
+ * @callback: timer callback function
+ * @flags: timer flags
+ */
+#if defined(RAMSHARED_HAVE_LEGACY_TIMER)
+#define ramshared_timer_setup(timer, callback, flags) \
+	do { \
+		init_timer(timer); \
+		(timer)->function = (void (*)(unsigned long))(callback); \
+		(timer)->data = (unsigned long)(timer); \
+	} while (0)
+#else
+#define ramshared_timer_setup(timer, callback, flags) \
+	timer_setup(timer, callback, flags)
+#endif
+
+/**
+ * ramshared_mod_timer - Wrapper for mod_timer
+ * @timer: pointer to struct timer_list
+ * @expires: expiration time in jiffies
+ */
+static inline int ramshared_mod_timer(struct timer_list *timer,
+				      unsigned long expires)
+{
+	return mod_timer(timer, expires);
 }
 
 #endif /* _RAMSHARED_COMPAT_H */
