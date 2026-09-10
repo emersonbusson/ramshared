@@ -20,7 +20,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 {
 	struct bio_vec bvec;
 	struct bvec_iter iter;
-	unsigned int op = bio_op(bio);
+	blk_opf_t op = bio_op(bio);
 	void __iomem *vram_ptr;
 
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
@@ -135,50 +135,9 @@ static const struct blk_mq_ops ramshared_mq_ops = {
 };
 
 /* Synchronous Zero-Allocation Swap Fast-Path */
-static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
-				  struct page *page, enum req_op op)
-{
-	struct ramshared_device *rs_dev = bdev->bd_disk->private_data;
-	loff_t pos;
-	size_t len = PAGE_SIZE;
-	void __iomem *vram_ptr;
-	void *mem;
-	int is_write = op_is_write(op);
-
-	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
-
-	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
-		return -EIO;
-
-	if (unlikely(pos > rs_dev->dma.size ||
-		     len > rs_dev->dma.size - pos ||
-		     pos + len > rs_dev->capacity_bytes))
-		return -ERANGE;
-
-	vram_ptr = rs_dev->dma.cpu_addr + pos;
-	mem = kmap_local_page(page);
-
-	if (is_write) {
-		memcpy_toio(vram_ptr, mem, len);
-		dma_wmb();
-		atomic64_add(len, &rs_dev->write_bytes);
-	} else {
-		dma_rmb();
-		memcpy_fromio(mem, vram_ptr, len);
-		flush_dcache_page(page);
-		atomic64_add(len, &rs_dev->read_bytes);
-	}
-
-	kunmap_local(mem);
-	atomic64_inc(&rs_dev->dma_transfers_total);
-	page_endio(page, is_write, 0);
-	return 0;
-}
 
 static const struct block_device_operations ramshared_fops = {
 	.owner		= THIS_MODULE,
-	.rw_page	= ramshared_bdev_rw_page,
 };
 
 /* Sysfs Attributes Group (Race-free via disk_groups) */
@@ -212,6 +171,16 @@ static ssize_t write_bytes_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(write_bytes);
 
+static ssize_t dma_transfers_total_show(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct ramshared_device *rs_dev = disk->private_data;
+
+	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->dma_transfers_total));
+}
+static DEVICE_ATTR_RO(dma_transfers_total);
+
 static struct attribute *ramshared_attrs[] = {
 	&dev_attr_capacity_bytes.attr,
 	&dev_attr_dma_transfers_total.attr,
@@ -225,7 +194,7 @@ static const struct attribute_group ramshared_attr_group = {
 	.attrs = ramshared_attrs,
 };
 
-static const struct attribute_group *ramshared_attr_groups[] = {
+const struct attribute_group *ramshared_attr_groups[] = {
 	&ramshared_attr_group,
 	NULL,
 };
@@ -269,9 +238,7 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 	rs_dev->disk->minors = 1;
 	rs_dev->disk->fops = &ramshared_fops;
 	rs_dev->disk->private_data = rs_dev;
-	rs_dev->disk->disk_groups = ramshared_attr_groups;
 	rs_dev->disk->flags |= GENHD_FL_NO_PART;
-	rs_dev->disk->parent = parent_dev;
 	snprintf(rs_dev->disk->disk_name, DISK_NAME_LEN, "ramshared0");
 	set_capacity(rs_dev->disk, rs_dev->capacity_bytes >> RAMSHARED_SECTOR_SHIFT);
 

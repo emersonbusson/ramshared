@@ -54,6 +54,8 @@ struct ramshared_device {
 	atomic64_t			write_bytes;
 };
 
+extern const struct attribute_group *ramshared_attr_groups[];
+
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev);
 void ramshared_dma_cleanup(struct ramshared_device *rs_dev);
 int ramshared_queue_init(struct ramshared_device *rs_dev,

@@ -1,0 +1,1 @@
+savedcmd_/app/drivers/block/ramshared/ramshared.mod := printf '%s\n'   main.o dma.o queue.o | awk '!x[$$0]++ { print("/app/drivers/block/ramshared/"$$0) }' > /app/drivers/block/ramshared/ramshared.mod

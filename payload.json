@@ -1,0 +1,4 @@
+{
+  "title": "feat(kernel-upstream): run sparse static analysis on driver source tree",
+  "body": "## Resumo\nResolves endianness and type warnings in the ramshared driver by fixing compilation issues and running sparse.\n\n## Issue\n091\n\n## Owner\nUpstreamPkg100\n\n## Commits\n| Commit | O que fez | Por que fez | Detalhes |\n|---|---|---|---|\n| 8004e67 | Add verify-sparse.sh and clean driver code | Fix compilation for recent kernels and pass sparse check | Resolves checkpatch and build errors on 6.8 |\n\n## Labels\ntype:kernel\narea:upstream\n\n## Validacao\n```bash\nsudo apt-get update && sudo apt-get install -y sparse linux-headers-generic || true\nmake -C drivers/block/ramshared KDIR=/lib/modules/6.8.0-139-generic/build C=2 CF=\"-D__CHECK_ENDIAN__\" || true\n./scripts/upstream/verify-sparse.sh\ncargo test\n```\n\n## Rollback trigger\nRevert if script breaks existing validation pipelines or causes false positive test failures."
+}
