@@ -21,7 +21,6 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	unsigned int op = bio_op(bio);
-	loff_t start_byte;
 	void __iomem *vram_ptr;
 
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
@@ -32,12 +31,8 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 		return BLK_STS_IOERR;
 	}
 
-	if (unlikely(check_shl_overflow((loff_t)bio->bi_iter.bi_sector, RAMSHARED_SECTOR_SHIFT, &start_byte)))
-		return BLK_STS_IOERR;
-
 	if (unlikely(pos > rs_dev->dma.size ||
 		     bio->bi_iter.bi_size > rs_dev->dma.size - pos ||
-		     start_byte + bio->bi_iter.bi_size > rs_dev->capacity_bytes ||
 		     pos + bio->bi_iter.bi_size > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 				    "Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
