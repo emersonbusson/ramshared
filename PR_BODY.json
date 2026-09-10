@@ -1,0 +1,38 @@
+{"title": "test(systemd-udev): add udevadm test simulation harness for GPU events", "body": "1. Read README.md, AGENTS.md, CLAUDE.md, trovaldo.md, and all pertinent .claude/rules/.
+2. Baseline git SHA is 156355c4427b6e00321ebc68c7de9288dbf72e09 on origin/main.
+3. Implement only the smallest safe orthogonal slice. Use TDD, run cargo test, shellcheck, or checkpatch where applicable, and open 1 PR strictly against jules/inbox.
+4. If safe code modification is not possible, produce FINDING_ONLY with evidence in docs/jules/findings/.
+5. Do not read, write, print, or persist credentials/secrets.
+6. PRs remain unmerged on jules/inbox; human consolidation will merge verified gains into main.
+7. English only for all source code, comments, identifiers, commits, and PR descriptions.
+8. Follow Conventional Commits format (<=72 chars title, body explaining rationale and rollback trigger).
+9. Format PR body with: Resumo, Commits, Labels, Validacao, Rollback trigger.
+10. All 10 contractual blocks MUST be generated in the plan before modifying any file.
+
+## Issue
+TASK-0016
+
+## Responsavel/Owner
+UpstreamPkg-100
+
+## Resumo
+Created scripts/udev/test-udev-rules.sh to test 99-ramshared.rules (mapped locally from 60-ramshared.rules) using udevadm test /sys/class/drm/card0, verifying service trigger for ADD and REMOVE events.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| 41718a2120c5b22dc702008831a8d241d04ee660 | Added scripts/udev/test-udev-rules.sh | To test udev rule triggers for GPU devices | Enforces fail-fast, tests for card0/drm path |
+
+## Labels
+type:systemd, type:packaging
+
+## Validacao
+```bash
+sudo apt-get update && sudo apt-get install -y shellcheck && shellcheck scripts/udev/test-udev-rules.sh
+chmod 0755 scripts/udev/test-udev-rules.sh
+./scripts/udev/test-udev-rules.sh
+cargo test
+```
+
+## Rollback trigger
+Revert if script falsely fails on expected virtual machines without real GPU."}
