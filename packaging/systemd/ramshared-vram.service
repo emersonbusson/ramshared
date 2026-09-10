@@ -6,7 +6,7 @@ StopWhenUnneeded=yes
 
 [Service]
 Type=simple
-ExecStartPre=/bin/sh -c 'set -euo pipefail; if ! test -d /sys/module/ublk_drv && ! grep -qw "^ublk_drv" /proc/modules; then echo "Error: ublk_drv kernel module is not loaded." >&2; exit 1; fi'
+ExecStartPre=/bin/sh -c 'set -euo pipefail; if ! test -d /sys/module/ublk_drv && ! grep -qw "^ublk_drv" /proc/modules; then echo "Error: ublk_drv kernel module is not loaded." >&2; (exit 1) || return 1 2>/dev/null; fi'
 ExecStart=/usr/bin/ramsharedd --daemon --origin-ssd
 ExecStop=/usr/bin/ramshared cascade down
 Restart=on-failure
