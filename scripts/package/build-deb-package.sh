@@ -4,6 +4,25 @@
 # Usage: scripts/package/build-deb-package.sh [version]
 set -euo pipefail
 
+# Validate prerequisites
+for cmd in dpkg-deb fakeroot; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not installed or not in PATH." >&2
+    exit 1
+  fi
+done
+
+# Sanitize input arguments
+if [[ "$#" -gt 1 ]]; then
+  echo "Usage: $0 [version]" >&2
+  exit 1
+fi
+
+if [[ -n "${1:-}" && ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+  echo "ERROR: Version must be in format vX.Y.Z[-suffix]" >&2
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
 VERSION_CLEAN="${VERSION#v}"
@@ -146,7 +165,7 @@ chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
-dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
+fakeroot dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
 
 # Compute SHA-256
