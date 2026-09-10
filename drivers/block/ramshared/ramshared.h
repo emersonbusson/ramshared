@@ -8,6 +8,19 @@
 #include <linux/pci.h>
 #include <linux/mutex.h>
 #include <linux/atomic.h>
+#include <linux/ioctl.h>
+
+struct ramshared_info {
+	__u64 capacity_bytes;
+	__u64 read_bytes;
+	__u64 write_bytes;
+	__u32 queue_depth;
+	__u32 reserved;
+};
+
+#define RAMSHARED_IOC_MAGIC		'R'
+#define RAMSHARED_IOC_GET_INFO		_IOR(RAMSHARED_IOC_MAGIC, 1, struct ramshared_info)
+
 
 #define RAMSHARED_DRIVER_NAME		"ramshared"
 #define RAMSHARED_DRIVER_VERSION	"0.9.0-beta.2"
@@ -59,5 +72,12 @@ void ramshared_dma_cleanup(struct ramshared_device *rs_dev);
 int ramshared_queue_init(struct ramshared_device *rs_dev,
 			 struct device *parent_dev, unsigned int q_depth);
 void ramshared_queue_cleanup(struct ramshared_device *rs_dev);
+
+int ramshared_ioctl(struct block_device *bdev, fmode_t mode,
+		    unsigned int cmd, unsigned long arg);
+#ifdef CONFIG_COMPAT
+int ramshared_compat_ioctl(struct block_device *bdev, fmode_t mode,
+			   unsigned int cmd, unsigned long arg);
+#endif
 
 #endif /* _RAMSHARED_H */
