@@ -257,7 +257,8 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 					    RAMSHARED_SECTOR_SIZE, 2048);
 	if (IS_ERR(rs_dev->disk)) {
 		ret = PTR_ERR(rs_dev->disk);
-		blk_mq_free_tag_set(&rs_dev->tag_set);
+		if (rs_dev->tag_set.tags)
+			blk_mq_free_tag_set(&rs_dev->tag_set);
 		return ret;
 	}
 
