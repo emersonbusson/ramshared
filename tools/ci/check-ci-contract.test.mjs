@@ -25,14 +25,14 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const RUSTSEC_SNAPSHOT_COMMIT = 'b50980aad8b8f14f77e25a97b32dd94bf008b0af'
 const RUSTSEC_SNAPSHOT_UTC = '2026-09-09T10:41:56Z'
-const REMOTE_OBSERVATION_NOW = Date.parse('2026-08-09T16:00:00Z')
+const REMOTE_OBSERVATION_NOW = Date.parse('2026-09-09T10:41:56Z')
 
 function compliantRemoteObservation(overrides = {}) {
   return {
     schema_version: 1,
     repository: 'emersonbusson/ramshared',
     default_branch: 'main',
-    observed_at_utc: '2026-08-09T15:30:00Z',
+    observed_at_utc: '2026-09-09T10:11:56Z',
     source: 'github-rest-api',
     actions: {
       default_workflow_permissions: 'read',
@@ -1232,7 +1232,7 @@ test('remote_controls_malformed_future_and_partial_protection_are_no_go', () => 
   assert.equal(invalidClock.errors.some((item) => item.rule === 'observation-time-invalid'), true)
 
   const future = validateRemoteControlObservation(compliantRemoteObservation({
-    observed_at_utc: '2026-08-09T17:00:00Z',
+    observed_at_utc: '2026-09-09T11:41:56Z',
   }), { now: REMOTE_OBSERVATION_NOW })
   assert.equal(future.errors.some((item) => item.rule === 'observation-future'), true)
 
