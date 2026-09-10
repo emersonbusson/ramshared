@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly automated memory integrity scrub for RamShared
+ConditionPathExists=/sys/module/ramshared
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
