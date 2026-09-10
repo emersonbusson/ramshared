@@ -45,7 +45,7 @@ Summary:        Hardware-accelerated VRAM memory management and low-level kernel
 Group:          System Environment/Kernel
 License:        GPL-2.0-only
 URL:            https://github.com/emersonbusson/ramshared
-Packager:       Emerson Busson <emersonbusson@example.com>
+Packager:       Emerson Busson
 
 %description
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
@@ -89,16 +89,22 @@ if command -v rpmbuild >/dev/null 2>&1; then
     echo "==> Running rpmlint on generated spec and RPMS..."
 
     cat << LINT_EOF > "$RPM_ROOT/rpmlint.toml"
-Filters = [
-  "no-signature",
-  "hardcoded-library-path",
-  "no-binary",
-  "spelling-error",
-  "zero-length",
-  "script-without-shebang",
-  "no-packager-tag",
-  "no-group-tag"
-]
+[[Filters]]
+addFilter = "no-signature"
+[[Filters]]
+addFilter = "hardcoded-library-path"
+[[Filters]]
+addFilter = "no-binary"
+[[Filters]]
+addFilter = "spelling-error"
+[[Filters]]
+addFilter = "zero-length"
+[[Filters]]
+addFilter = "script-without-shebang"
+[[Filters]]
+addFilter = "no-packager-tag"
+[[Filters]]
+addFilter = "no-group-tag"
 LINT_EOF
 
     set +e
