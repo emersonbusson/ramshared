@@ -10,6 +10,7 @@
 #include <linux/init.h>
 #include <linux/pci.h>
 #include "ramshared.h"
+#include "compat.h"
 
 MODULE_AUTHOR("Emerson Busson");
 MODULE_DESCRIPTION("Hardware-Accelerated VRAM Block Driver");
@@ -66,13 +67,17 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	atomic64_set(&rs_dev->read_bytes, 0);
 	atomic64_set(&rs_dev->write_bytes, 0);
 
-	ret = pci_enable_device_mem(pdev);
+	ret = ramshared_pci_enable_device_mem(pdev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
 		return -ENODEV;
 	}
 
-	pci_set_master(pdev);
+	ret = ramshared_pci_set_master(pdev);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to set PCI bus master\n");
+		goto err_disable_pci;
+	}
 
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (ret) {

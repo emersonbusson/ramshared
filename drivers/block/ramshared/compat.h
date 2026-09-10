@@ -102,4 +102,53 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 #endif
 }
 
+
+#ifndef _RAMSHARED_PCI_COMPAT_H
+#define _RAMSHARED_PCI_COMPAT_H
+
+#include <linux/pci.h>
+
+/**
+ * ramshared_pci_enable_device_mem - Enable PCI memory device with checked returns
+ * @pdev: PCI device
+ */
+static inline int __must_check ramshared_pci_enable_device_mem(struct pci_dev *pdev)
+{
+	int ret;
+
+	if (!pdev)
+		return -EINVAL;
+
+	ret = pci_enable_device_mem(pdev);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+/**
+ * ramshared_pci_set_master - Assert Bus Master with validation
+ * @pdev: PCI device
+ */
+static inline int __must_check ramshared_pci_set_master(struct pci_dev *pdev)
+{
+	u16 cmd;
+
+	if (!pdev)
+		return -EINVAL;
+
+	pci_set_master(pdev);
+
+	if (!pdev->is_busmaster)
+		return -EIO;
+
+	pci_read_config_word(pdev, PCI_COMMAND, &cmd);
+	if (!(cmd & PCI_COMMAND_MASTER))
+		return -EIO;
+
+	return 0;
+}
+
+#endif /* _RAMSHARED_PCI_COMPAT_H */
+
 #endif /* _RAMSHARED_COMPAT_H */
