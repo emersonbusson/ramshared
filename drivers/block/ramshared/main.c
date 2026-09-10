@@ -14,6 +14,7 @@
 MODULE_AUTHOR("Emerson Busson");
 MODULE_DESCRIPTION("Hardware-Accelerated VRAM Block Driver");
 MODULE_LICENSE("GPL");
+
 MODULE_VERSION(RAMSHARED_DRIVER_VERSION);
 
 static unsigned long capacity_mb = 1024;
