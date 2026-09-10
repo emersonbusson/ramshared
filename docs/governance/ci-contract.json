@@ -998,5 +998,7 @@
         }
       ]
     }
-  }
+  },
+  "rustsec_db_commit": "b50980aad8b8f14f77e25a97b32dd94bf008b0af",
+  "rustsec_db_commit_utc": "2026-09-09T10:49:52Z"
 }

@@ -20,12 +20,9 @@ static blk_status_t ramshared_errno_to_blk_status(int err)
 	switch (err) {
 	case -ENOMEM:
 		return BLK_STS_RESOURCE;
-	case -ENOTSUPP:
 	case -EOPNOTSUPP:
+	case -ENOTSUPP:
 		return BLK_STS_NOTSUPP;
-	case -EINVAL:
-	case -ERANGE:
-	case -EIO:
 	default:
 		return BLK_STS_IOERR;
 	}
