@@ -26,6 +26,12 @@
 #endif
 
 /**
+ * ramshared_bio_for_each_segment - Iterate over bio segments
+ * Abstracts compatibility issues with bio iterators in older Linux kernels.
+ */
+#define ramshared_bio_for_each_segment(bvl, bio, iter) bio_for_each_segment(bvl, bio, iter)
+
+/**
  * ramshared_alloc_disk - Allocate gendisk across all kernel versions
  * @set: Pointer to tag set
  * @queuedata: Private device state

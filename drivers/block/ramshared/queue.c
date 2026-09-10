@@ -43,7 +43,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 
-	bio_for_each_segment(bvec, bio, iter) {
+	ramshared_bio_for_each_segment(bvec, bio, iter) {
 		void *src_or_dst = bvec_kmap_local(&bvec);
 		size_t len = bvec.bv_len;
 
