@@ -16,6 +16,7 @@ TimeoutStartSec=60s
 TimeoutStopSec=30s
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=ramshared-vram
 
 # Sandboxing & Security Hardening
 ProtectSystem=strict
