@@ -1,0 +1,25 @@
+[Unit]
+Description=RamShared Background Memory Scrubbing Service
+Documentation=man:ramshared(8)
+After=network.target ramshared-vram.service
+Requires=ramshared-vram.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ramshared check --scrub
+RemainAfterExit=no
+
+# Security sandboxing
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ReadOnlyPaths=/
+ReadWritePaths=/dev/ramshared
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+
+[Install]
+WantedBy=multi-user.target
