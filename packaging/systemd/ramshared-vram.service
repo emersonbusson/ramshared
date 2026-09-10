@@ -1,4 +1,7 @@
 [Unit]
+DefaultDependencies=no
+Before=umount.target swap.target
+Requires=local-fs.target
 Description=RamShared Zero-Copy GPU VRAM Memory Tier Service
 Documentation=https://github.com/emersonbusson/ramshared
 After=systemd-udevd.service local-fs.target
