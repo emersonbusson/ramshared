@@ -83,6 +83,13 @@ if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
   rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
   cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+
+  if [ -n "${RPM_SIGN_KEY_NAME:-}" ] && command -v rpm >/dev/null 2>&1; then
+    echo "==> Signing RPM packages with key: ${RPM_SIGN_KEY_NAME}"
+    rpm --addsign --define "_gpg_name ${RPM_SIGN_KEY_NAME}" "$OUT_DIR"/*.rpm
+    echo "✓ RPM packages signed."
+  fi
+
   echo "✓ RPM package built under $OUT_DIR/"
 else
   echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
