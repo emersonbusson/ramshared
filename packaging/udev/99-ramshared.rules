@@ -1,0 +1,5 @@
+# /usr/lib/udev/rules.d/99-ramshared.rules
+# Trigger ramshared-vram.service on GPU load
+
+# AMD/NVIDIA/Intel GPU triggers to start RAMShared auto-activation
+ACTION=="add", SUBSYSTEM=="pci", ATTR{class}=="0x030000", TAG+="systemd", ENV{SYSTEMD_WANTS}="ramshared-vram.service"
