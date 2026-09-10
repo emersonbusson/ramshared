@@ -135,9 +135,9 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 		return;
 
 	ramshared_queue_cleanup(rs_dev);
+	pci_clear_master(pdev);
 	ramshared_dma_cleanup(rs_dev);
 	pci_release_mem_regions(pdev);
-	pci_clear_master(pdev);
 	pci_disable_device(pdev);
 
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
