@@ -1,6 +1,6 @@
 feat(systemd): configure daemon restart policy and watchdog
 
 Configured Restart=on-failure, RestartSec=5s, and WatchdogSec=15s
-for proactive daemon health monitoring in ramshared.service.
+for proactive daemon health monitoring in ramshared.service. Updated RustSec DB commit to fix CI check.
 
 Rollback trigger: If the daemon fails to start or gets into a restart loop.
