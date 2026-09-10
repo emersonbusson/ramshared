@@ -15,4 +15,5 @@ default:
 	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_BLK_DEV_RAMSHARED=m modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) clean || true
+	rm -f *.o *.ko *.mod.c *.mod *.cmd .*.cmd
