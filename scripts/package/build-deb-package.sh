@@ -89,7 +89,11 @@ fi
 
 # Install documentation & licenses
 install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
-install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
+if [[ -f "$ROOT/packaging/debian/copyright" ]]; then
+  install -m 0644 "$ROOT/packaging/debian/copyright" "$STAGE_DIR/usr/share/doc/ramshared/copyright"
+else
+  install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
+fi
 
 # Generate DEBIAN/control file
 printf "Package: ramshared\n" > "$STAGE_DIR/DEBIAN/control"
