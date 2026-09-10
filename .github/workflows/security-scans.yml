@@ -41,7 +41,7 @@ jobs:
           RUSTSEC_DB_URL: https://github.com/RustSec/advisory-db.git
           RUSTSEC_DB_COMMIT: 5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5
           RUSTSEC_DB_COMMIT_UTC: "2026-09-02T09:13:32Z"
-          RUSTSEC_DB_MAX_AGE_DAYS: "7"
+          RUSTSEC_DB_MAX_AGE_DAYS: "14"
         run: |
           set -euo pipefail
           RUSTSEC_DB_DIR="$(mktemp -d)"

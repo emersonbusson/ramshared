@@ -374,6 +374,7 @@ test('ci_contract_rejects_missing_or_mismatched_advisory_snapshot', () => {
   assert.equal(missing.errors.some((item) => item.rule === 'advisory-db-metadata-missing'), true)
 
   const gate = cargoAuditGate()
+  gate.policy.advisory_db.max_age_days = 14
   const contract = currentOnlyContract(gate)
   const mismatchWorkflow = validWorkflow([
     '      - name: Audit wrong snapshot',
@@ -381,7 +382,7 @@ test('ci_contract_rejects_missing_or_mismatched_advisory_snapshot', () => {
     '          RUSTSEC_DB_URL: https://github.com/RustSec/advisory-db.git',
     `          RUSTSEC_DB_COMMIT: ${'0'.repeat(40)}`,
     `          RUSTSEC_DB_COMMIT_UTC: "${RUSTSEC_SNAPSHOT_UTC}"`,
-    '          RUSTSEC_DB_MAX_AGE_DAYS: "7"',
+    '          RUSTSEC_DB_MAX_AGE_DAYS: "14"',
     '        run: |',
     '          git -C "$RUSTSEC_DB_DIR" fetch --depth=1 origin "$RUSTSEC_DB_COMMIT"',
     '          cargo audit --db "$RUSTSEC_DB_DIR" --no-fetch',
