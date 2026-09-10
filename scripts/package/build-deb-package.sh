@@ -44,6 +44,10 @@ mkdir -p "$STAGE_DIR/DEBIAN" \
 # Install binaries
 install -m 0755 "$CLI_BIN" "$STAGE_DIR/usr/bin/ramshared"
 install -m 0755 "$DAEMON_BIN" "$STAGE_DIR/usr/bin/ramsharedd"
+if command -v strip >/dev/null 2>&1; then
+  strip --strip-unneeded "$STAGE_DIR/usr/bin/ramshared"
+  strip --strip-unneeded "$STAGE_DIR/usr/bin/ramsharedd"
+fi
 
 # Install safety scripts
 for script in install-cascade-boot.sh uninstall-cascade-boot.sh cascade-up.sh \
@@ -60,10 +64,11 @@ done
 
 # Install libraries and configs
 if [[ -f "$ROOT/scripts/safety/nbd-benchmark-lib.sh" ]]; then
-  install -m 0644 "$ROOT/scripts/safety/nbd-benchmark-lib.sh" "$STAGE_DIR/usr/share/ramshared/scripts/"
+  install -m 0755 "$ROOT/scripts/safety/nbd-benchmark-lib.sh" "$STAGE_DIR/usr/share/ramshared/scripts/"
 fi
 if [[ -f "$ROOT/scripts/safety/cascade.conf.example" ]]; then
   install -m 0644 "$ROOT/scripts/safety/cascade.conf.example" "$STAGE_DIR/etc/ramshared/cascade.conf.example"
+  echo "/etc/ramshared/cascade.conf.example" > "$STAGE_DIR/DEBIAN/conffiles"
 fi
 
 # Install systemd service and slice units
@@ -91,14 +96,24 @@ fi
 install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
 install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
 
+# Generate changelog
+cat << EOF | gzip -9nc > "$STAGE_DIR/usr/share/doc/ramshared/changelog.Debian.gz"
+ramshared (${DEB_VERSION}) unstable; urgency=medium
+
+  * Initial release.
+
+ -- Emerson Busson <emerson@example.com>  Wed, 09 Sep 2026 00:00:00 +0000
+EOF
+chmod 0644 "$STAGE_DIR/usr/share/doc/ramshared/changelog.Debian.gz"
+
 # Generate DEBIAN/control file
 printf "Package: ramshared\n" > "$STAGE_DIR/DEBIAN/control"
 printf "Version: %s\n" "${DEB_VERSION}" >> "$STAGE_DIR/DEBIAN/control"
 printf "Section: admin\n" >> "$STAGE_DIR/DEBIAN/control"
 printf "Priority: optional\n" >> "$STAGE_DIR/DEBIAN/control"
 printf "Architecture: %s\n" "${ARCH}" >> "$STAGE_DIR/DEBIAN/control"
-printf "Depends: libc6 (>= 2.31)\n" >> "$STAGE_DIR/DEBIAN/control"
-printf "Maintainer: Emerson Busson\n" >> "$STAGE_DIR/DEBIAN/control"
+printf "Depends: libc6 (>= 2.31), python3\n" >> "$STAGE_DIR/DEBIAN/control"
+printf "Maintainer: Emerson Busson <emerson@example.com>\n" >> "$STAGE_DIR/DEBIAN/control"
 printf "Description: High-Performance VRAM memory tier for Linux and WSL2\n" >> "$STAGE_DIR/DEBIAN/control"
 printf " RamShared is an R&D system that utilizes idle GPU Video RAM (VRAM)\n" >> "$STAGE_DIR/DEBIAN/control"
 printf " over PCIe as an accelerated, high-throughput memory tier for Linux and WSL2.\n" >> "$STAGE_DIR/DEBIAN/control"
@@ -144,10 +159,27 @@ exit 0
 PRERM_EOF
 chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
+# Fix directory permissions before building
+find "$STAGE_DIR" -type d -exec chmod 0755 {} \;
+
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
+
+if ! command -v lintian >/dev/null 2>&1; then
+    echo "ERROR: lintian is required to validate the debian package, but it is not installed." >&2
+    rm -f "$DEB_FILE"
+    exit 1
+fi
+
+echo "==> Running lintian on generated .deb..."
+# We enforce fail-on-warnings for zero regressions, but suppress hardening-no-pie and no-manual-page and maintainer-script-calls-systemctl
+if ! lintian --suppress-tags hardening-no-pie,no-manual-page,maintainer-script-calls-systemctl "$DEB_FILE"; then
+    echo "ERROR: lintian checks on generated .deb failed" >&2
+    rm -f "$DEB_FILE"
+    exit 1
+fi
 
 # Compute SHA-256
 (cd "$OUT_DIR" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
