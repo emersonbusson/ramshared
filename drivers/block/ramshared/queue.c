@@ -273,7 +273,7 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 	rs_dev->disk->flags |= GENHD_FL_NO_PART;
 	rs_dev->disk->parent = parent_dev;
 	snprintf(rs_dev->disk->disk_name, DISK_NAME_LEN, "ramshared0");
-	set_capacity(rs_dev->disk, rs_dev->capacity_bytes >> RAMSHARED_SECTOR_SHIFT);
+	ramshared_set_capacity(rs_dev->disk, rs_dev->capacity_bytes >> RAMSHARED_SECTOR_SHIFT);
 
 	return 0;
 }
