@@ -79,11 +79,21 @@ fi
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
-if command -v rpmbuild >/dev/null 2>&1; then
-  echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
-  echo "✓ RPM package built under $OUT_DIR/"
-else
-  echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
+for cmd in rpmbuild spectool createrepo; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not installed." >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$OUT_DIR"
+AVAILABLE_SPACE=$(df -kP "$OUT_DIR" | awk 'NR==2 {print $4}')
+if [ -n "$AVAILABLE_SPACE" ] && [ "$AVAILABLE_SPACE" -lt 512000 ]; then
+  echo "ERROR: Insufficient disk space in $OUT_DIR (less than 500MB)." >&2
+  exit 1
 fi
+
+echo "==> Executing rpmbuild..."
+rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
+cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+echo "✓ RPM package built under $OUT_DIR/"
