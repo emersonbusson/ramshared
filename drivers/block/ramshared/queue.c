@@ -44,8 +44,18 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 
 	bio_for_each_segment(bvec, bio, iter) {
-		void *src_or_dst = bvec_kmap_local(&bvec);
-		size_t len = bvec.bv_len;
+		void *src_or_dst;
+		size_t len;
+
+		if (unlikely(!bvec.bv_page || bvec.bv_len == 0)) {
+			dev_err_ratelimited(rs_dev->dev,
+					    "Invalid bvec segment: page=%p, len=%u\n",
+					    bvec.bv_page, bvec.bv_len);
+			return BLK_STS_IOERR;
+		}
+
+		src_or_dst = bvec_kmap_local(&bvec);
+		len = bvec.bv_len;
 
 		if (op == REQ_OP_READ) {
 			dma_rmb();
