@@ -11,7 +11,7 @@ ramshared-y := main.o dma.o queue.o
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
 
-default:
+modules default:
 	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_BLK_DEV_RAMSHARED=m modules
 
 clean:

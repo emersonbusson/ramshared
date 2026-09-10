@@ -135,6 +135,7 @@ static const struct blk_mq_ops ramshared_mq_ops = {
 };
 
 /* Synchronous Zero-Allocation Swap Fast-Path */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 				  struct page *page, enum req_op op)
 {
@@ -176,9 +177,13 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	return 0;
 }
 
+#endif
+
 static const struct block_device_operations ramshared_fops = {
 	.owner		= THIS_MODULE,
+	#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
 	.rw_page	= ramshared_bdev_rw_page,
+#endif
 };
 
 /* Sysfs Attributes Group (Race-free via disk_groups) */
@@ -212,6 +217,15 @@ static ssize_t write_bytes_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(write_bytes);
 
+static ssize_t dma_transfers_total_show(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct ramshared_device *rs_dev = disk->private_data;
+	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->dma_transfers_total));
+}
+static DEVICE_ATTR_RO(dma_transfers_total);
+
 static struct attribute *ramshared_attrs[] = {
 	&dev_attr_capacity_bytes.attr,
 	&dev_attr_dma_transfers_total.attr,
@@ -225,7 +239,7 @@ static const struct attribute_group ramshared_attr_group = {
 	.attrs = ramshared_attrs,
 };
 
-static const struct attribute_group *ramshared_attr_groups[] = {
+const struct attribute_group *ramshared_attr_groups[] = {
 	&ramshared_attr_group,
 	NULL,
 };
@@ -269,9 +283,13 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 	rs_dev->disk->minors = 1;
 	rs_dev->disk->fops = &ramshared_fops;
 	rs_dev->disk->private_data = rs_dev;
+	#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
 	rs_dev->disk->disk_groups = ramshared_attr_groups;
+#endif
 	rs_dev->disk->flags |= GENHD_FL_NO_PART;
+	#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 0, 0)
 	rs_dev->disk->parent = parent_dev;
+#endif
 	snprintf(rs_dev->disk->disk_name, DISK_NAME_LEN, "ramshared0");
 	set_capacity(rs_dev->disk, rs_dev->capacity_bytes >> RAMSHARED_SECTOR_SHIFT);
 

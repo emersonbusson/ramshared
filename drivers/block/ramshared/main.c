@@ -118,8 +118,10 @@ err_release_regions:
 	pci_release_mem_regions(pdev);
 err_clear_master:
 	pci_clear_master(pdev);
+#if 0
 err_disable_pci:
 	pci_disable_device(pdev);
+#endif
 	return ret;
 }
 
