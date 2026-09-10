@@ -1,0 +1,2 @@
+# SELinux context attribute propagation for ramshared device
+SUBSYSTEM=="block", KERNEL=="ramshared*", SECLABEL{selinux}="system_u:object_r:ramshared_device_t:s0"
