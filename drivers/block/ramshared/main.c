@@ -102,7 +102,10 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = add_disk(rs_dev->disk);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
-		goto err_queue_cleanup;
+		put_disk(rs_dev->disk);
+		rs_dev->disk = NULL;
+		blk_mq_free_tag_set(&rs_dev->tag_set);
+		goto err_dma_cleanup;
 	}
 
 	pci_set_drvdata(pdev, rs_dev);
@@ -110,8 +113,6 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		 rs_dev->disk->disk_name);
 	return 0;
 
-err_queue_cleanup:
-	ramshared_queue_cleanup(rs_dev);
 err_dma_cleanup:
 	ramshared_dma_cleanup(rs_dev);
 err_release_regions:
