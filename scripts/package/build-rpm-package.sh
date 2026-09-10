@@ -5,7 +5,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
+WORKSPACE_VERSION=""
+if [ -f "$ROOT/Cargo.toml" ]; then
+  WORKSPACE_VERSION=$(awk -F '"' '/^version =/ {print $2; exit}' "$ROOT/Cargo.toml")
+fi
+if [ -z "$WORKSPACE_VERSION" ] && [ -f "$ROOT/crates/ramshared-cli/Cargo.toml" ]; then
+  WORKSPACE_VERSION=$(awk -F '"' '/^version =/ {print $2; exit}' "$ROOT/crates/ramshared-cli/Cargo.toml")
+fi
+if [ -z "$WORKSPACE_VERSION" ]; then
+  WORKSPACE_VERSION="0.9.0-beta.2"
+fi
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v$WORKSPACE_VERSION}}"
 VERSION_CLEAN="${VERSION#v}"
 RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
 ARCH="x86_64"
@@ -75,8 +85,8 @@ fi
 /lib/udev/rules.d/65-ramshared-observability.rules
 
 %changelog
-* Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
-- Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
+* Wed Aug 26 2026 Emerson Busson <emersonbusson@users.noreply.github.com> - ${RPM_VERSION}-1
+- Official v${RPM_VERSION} Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
 if command -v rpmbuild >/dev/null 2>&1; then
