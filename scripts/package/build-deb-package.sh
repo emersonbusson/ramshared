@@ -144,9 +144,17 @@ exit 0
 PRERM_EOF
 chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
+# Enable deterministic timestamps for reproducible builds
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}"
+
+# Clamp timestamps of files inside the staging directory
+find "$STAGE_DIR" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
+
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
+
+
 rm -rf "$STAGE_DIR"
 
 # Compute SHA-256
