@@ -602,6 +602,18 @@
         "state": "unverified"
       },
       "registeredAt": "2026-09-10T17:13:31Z"
+    },
+    {
+      "id": "jules-findings",
+      "pattern": "docs/jules/findings/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "README.md",
+      "lifecycle": "archived",
+      "freshnessDays": null,
+      "verification": {
+        "state": "unverified"
+      },
+      "registeredAt": "2026-09-10T17:31:35Z"
     }
   ],
   "exclusions": [

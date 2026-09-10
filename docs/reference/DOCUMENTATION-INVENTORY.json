@@ -3,10 +3,10 @@
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
     "total": 274,
-    "classified": 271,
+    "classified": 270,
     "excluded": 3,
     "unclassified": 0,
-    "ambiguous": 0
+    "ambiguous": 1
   },
   "entries": [
     {
@@ -787,15 +787,11 @@
     },
     {
       "path": "docs/jules/findings/control_mismatch.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
+      "disposition": "ambiguous",
+      "ruleId": "jules-findings,jules-findings",
       "verification": {
         "state": "unverified"
-      },
-      "owner": "documentation-governance",
-      "canonicalSource": "README.md",
-      "lifecycle": "archived",
-      "freshnessDays": null
+      }
     },
     {
       "path": "docs/labs/EVIDENCE-RETENTION.md",
