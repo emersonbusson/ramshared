@@ -1,0 +1,2 @@
+ACTION=="add|change", KERNEL=="ublkb*", GROUP="ramshared", MODE="0660"
+ACTION=="add|change", KERNEL=="ramshared*", GROUP="ramshared", MODE="0660"
