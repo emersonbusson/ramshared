@@ -22,3 +22,4 @@ pub mod priority;
 
 pub use cascade::{SafetyNet, Tier, vram_safety_net};
 pub use priority::{OrderError, TierPriorities, VRAM_PRIO, ZRAM_PRIO, validate_order};
+pub mod priority_queue;

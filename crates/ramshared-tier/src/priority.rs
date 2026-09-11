@@ -238,3 +238,129 @@ mod tests {
         );
     }
 }
+
+use std::collections::BinaryHeap;
+use std::cmp::Ordering;
+
+/// A request in the priority queue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Request {
+    pub id: u64,
+    pub base_priority: i32,
+    pub tick_inserted: u64,
+    effective_key: i64,
+}
+
+impl Ord for Request {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.effective_key
+            .cmp(&other.effective_key)
+            .then_with(|| other.tick_inserted.cmp(&self.tick_inserted))
+    }
+}
+
+impl PartialOrd for Request {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// A priority queue that implements an aging mechanism in O(log N) time to prevent starvation.
+///
+/// It uses a static virtual priority key `P_i - alpha * t_i` to preserve the relative ordering
+/// of elements over time, avoiding the need to re-evaluate all elements on each pop.
+#[derive(Clone, Debug, Default)]
+pub struct AgedPriorityQueue {
+    queue: BinaryHeap<Request>,
+    aging_factor: u32,
+    current_tick: u64,
+}
+
+impl AgedPriorityQueue {
+    /// Creates a new `AgedPriorityQueue` with the given aging factor.
+    pub fn new(aging_factor: u32) -> Self {
+        Self {
+            queue: BinaryHeap::new(),
+            aging_factor,
+            current_tick: 0,
+        }
+    }
+
+    /// Pushes a new request onto the queue with a base priority.
+    pub fn push(&mut self, id: u64, base_priority: i32) {
+        let key = (base_priority as i64)
+            .saturating_sub((self.aging_factor as i64).saturating_mul(self.current_tick as i64));
+
+        self.queue.push(Request {
+            id,
+            base_priority,
+            tick_inserted: self.current_tick,
+            effective_key: key,
+        });
+
+        // Advance the tick on each push to simulate time passing for new arrivals.
+        self.current_tick = self.current_tick.saturating_add(1);
+    }
+
+    /// Pops the request with the highest effective priority.
+    pub fn pop(&mut self) -> Option<Request> {
+        let req = self.queue.pop();
+        if req.is_some() {
+            // Also advance tick on pop to allow aging when only pops are happening
+            self.current_tick = self.current_tick.saturating_add(1);
+        }
+        req
+    }
+
+    /// Returns the number of requests in the queue.
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    /// Returns true if the queue is empty.
+    pub fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod queue_tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_priority() {
+        let mut pq = AgedPriorityQueue::new(0); // No aging
+        pq.push(1, 10);
+        pq.push(2, 20);
+        pq.push(3, 5);
+
+        assert_eq!(pq.pop().unwrap().id, 2); // Prio 20
+        assert_eq!(pq.pop().unwrap().id, 1); // Prio 10
+        assert_eq!(pq.pop().unwrap().id, 3); // Prio 5
+    }
+
+    #[test]
+    fn test_aging_prevents_starvation() {
+        let mut pq = AgedPriorityQueue::new(10);
+
+        // Push a low priority item
+        pq.push(1, 5); // t=0, key = 5
+
+        // Push a high priority item
+        pq.push(2, 20); // t=1, key = 20 - 10 = 10
+
+        // First pop should be the high priority item (id 2)
+        assert_eq!(pq.pop().unwrap().id, 2); // t becomes 3
+
+        // Now, id 1 should have aged.
+        // Let's push another item with priority 10.
+        pq.push(3, 10); // t=3, key = 10 - 30 = -20
+
+        // Next pop should be id 1 because it aged.
+        // id 1 key is 5. id 3 key is -20.
+        assert_eq!(pq.pop().unwrap().id, 1);
+
+        // Finally, id 3
+        assert_eq!(pq.pop().unwrap().id, 3);
+    }
+}
