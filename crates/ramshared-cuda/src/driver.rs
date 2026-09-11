@@ -12,7 +12,9 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt;
 
-use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
+use crate::ffi::{
+    CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, RawCuContext, RawCuDevicePtr, Syms,
+};
 
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
 #[derive(Debug)]
@@ -156,11 +158,14 @@ impl Cuda {
 
     /// Creates a CUDA context on the specified device (becomes current on the calling thread).
     pub fn create_context<'a>(&'a self, device: &Device) -> Result<Context<'a>, CudaError> {
-        let mut raw: CuContext = core::ptr::null_mut();
+        let mut raw: RawCuContext = core::ptr::null_mut();
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
-        Ok(Context { cuda: self, raw })
+        Ok(Context {
+            cuda: self,
+            _raw: CuContext::new(raw, &self.syms),
+        })
     }
 }
 
@@ -191,7 +196,7 @@ impl Device {
 /// would require calling `cuCtxSetCurrent` (not implemented here). The DEMOTE thread only calls `swapoff`.
 pub struct Context<'a> {
     cuda: &'a Cuda,
-    raw: CuContext,
+    _raw: CuContext<'a>,
 }
 
 impl<'a> Context<'a> {
@@ -206,31 +211,22 @@ impl<'a> Context<'a> {
 
     /// Allocates `bytes` of VRAM. The allocation is released when the returned `DeviceMem` is dropped.
     pub fn alloc(&self, bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> {
-        let mut ptr: CuDevicePtr = 0;
+        let mut ptr: RawCuDevicePtr = 0;
         // SAFETY: ptr points to a valid local; CUDA context is current.
         let r = unsafe { (self.cuda.syms.mem_alloc)(&mut ptr, bytes) };
         check(&self.cuda.syms, r, "cuMemAlloc")?;
         Ok(DeviceMem {
             ctx: self,
-            ptr,
+            ptr: CuDevicePtr::new(ptr, &self.cuda.syms),
             len: bytes,
         })
-    }
-}
-
-impl Drop for Context<'_> {
-    fn drop(&mut self) {
-        // SAFETY: raw handle was returned by cuCtxCreate and has not been destroyed yet. Best-effort drop.
-        unsafe {
-            let _ = (self.cuda.syms.ctx_destroy)(self.raw);
-        }
     }
 }
 
 /// Allocated VRAM memory region. `Drop` implementation calls `cuMemFree`. Borrows the [`Context`].
 pub struct DeviceMem<'c, 'a> {
     ctx: &'c Context<'a>,
-    ptr: CuDevicePtr,
+    ptr: CuDevicePtr<'c>,
     len: usize,
 }
 
@@ -247,7 +243,7 @@ impl DeviceMem<'_, '_> {
     pub fn zero(&mut self) -> Result<(), CudaError> {
         let syms = &self.ctx.cuda.syms;
         // SAFETY: ptr and len accurately describe the region allocated for this memory object.
-        let r = unsafe { (syms.memset_d8)(self.ptr, 0, self.len) };
+        let r = unsafe { (syms.memset_d8)(self.ptr.as_raw(), 0, self.len) };
         check(syms, r, "cuMemsetD8")?;
         // SAFETY: cuCtxSynchronize takes no arguments.
         let r = unsafe { (syms.ctx_synchronize)() };
@@ -261,7 +257,7 @@ impl DeviceMem<'_, '_> {
         // SAFETY: offset and length validated by bounds(); src is a valid memory slice.
         let r = unsafe {
             (syms.memcpy_htod)(
-                self.ptr + off as u64,
+                self.ptr.as_raw() + off as u64,
                 src.as_ptr() as *const c_void,
                 src.len(),
             )
@@ -277,7 +273,7 @@ impl DeviceMem<'_, '_> {
         let r = unsafe {
             (syms.memcpy_dtoh)(
                 dst.as_mut_ptr() as *mut c_void,
-                self.ptr + off as u64,
+                self.ptr.as_raw() + off as u64,
                 dst.len(),
             )
         };
@@ -292,15 +288,6 @@ impl DeviceMem<'_, '_> {
                 len,
                 size: self.len,
             }),
-        }
-    }
-}
-
-impl Drop for DeviceMem<'_, '_> {
-    fn drop(&mut self) {
-        // SAFETY: ptr was returned by a successful cuMemAlloc call and has not been freed.
-        unsafe {
-            let _ = (self.ctx.cuda.syms.mem_free)(self.ptr);
         }
     }
 }

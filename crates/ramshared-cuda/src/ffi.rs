@@ -16,22 +16,22 @@ pub type CuResult = c_int;
 pub const CUDA_SUCCESS: CuResult = 0;
 
 pub type CuDevice = c_int;
-pub type CuContext = *mut c_void;
-pub type CuDevicePtr = u64;
+pub type RawCuContext = *mut c_void;
+pub type RawCuDevicePtr = u64;
 
 // Driver API signatures (ABI _v2 where applicable — matching `nbd-vram`).
 pub type FnInit = unsafe extern "C" fn(c_uint) -> CuResult;
 pub type FnDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
 pub type FnDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
 pub type FnDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
-pub type FnCtxCreate = unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult;
-pub type FnCtxDestroy = unsafe extern "C" fn(CuContext) -> CuResult;
+pub type FnCtxCreate = unsafe extern "C" fn(*mut RawCuContext, c_uint, CuDevice) -> CuResult;
+pub type FnCtxDestroy = unsafe extern "C" fn(RawCuContext) -> CuResult;
 pub type FnCtxSynchronize = unsafe extern "C" fn() -> CuResult;
-pub type FnMemAlloc = unsafe extern "C" fn(*mut CuDevicePtr, usize) -> CuResult;
-pub type FnMemFree = unsafe extern "C" fn(CuDevicePtr) -> CuResult;
-pub type FnMemcpyHtoD = unsafe extern "C" fn(CuDevicePtr, *const c_void, usize) -> CuResult;
-pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) -> CuResult;
-pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
+pub type FnMemAlloc = unsafe extern "C" fn(*mut RawCuDevicePtr, usize) -> CuResult;
+pub type FnMemFree = unsafe extern "C" fn(RawCuDevicePtr) -> CuResult;
+pub type FnMemcpyHtoD = unsafe extern "C" fn(RawCuDevicePtr, *const c_void, usize) -> CuResult;
+pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, RawCuDevicePtr, usize) -> CuResult;
+pub type FnMemsetD8 = unsafe extern "C" fn(RawCuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
 
@@ -51,4 +51,51 @@ pub struct Syms {
     pub memset_d8: FnMemsetD8,
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
+}
+
+/// Safe RAII wrapper for a CUDA context.
+pub struct CuContext<'a> {
+    raw: RawCuContext,
+    syms: &'a Syms,
+}
+
+impl<'a> CuContext<'a> {
+    pub(crate) fn new(raw: RawCuContext, syms: &'a Syms) -> Self {
+        Self { raw, syms }
+    }
+}
+
+impl Drop for CuContext<'_> {
+    fn drop(&mut self) {
+        // SAFETY: raw handle was returned by cuCtxCreate and has not been destroyed yet. Best-effort drop.
+        unsafe {
+            let _ = (self.syms.ctx_destroy)(self.raw);
+        }
+    }
+}
+
+/// Safe RAII wrapper for a CUDA device pointer.
+pub struct CuDevicePtr<'a> {
+    raw: RawCuDevicePtr,
+    syms: &'a Syms,
+}
+
+impl<'a> CuDevicePtr<'a> {
+    pub(crate) fn new(raw: RawCuDevicePtr, syms: &'a Syms) -> Self {
+        Self { raw, syms }
+    }
+
+    /// Returns the underlying raw CUDA device pointer.
+    pub fn as_raw(&self) -> RawCuDevicePtr {
+        self.raw
+    }
+}
+
+impl Drop for CuDevicePtr<'_> {
+    fn drop(&mut self) {
+        // SAFETY: ptr was returned by a successful cuMemAlloc call and has not been freed.
+        unsafe {
+            let _ = (self.syms.mem_free)(self.raw);
+        }
+    }
 }
