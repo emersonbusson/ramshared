@@ -33,9 +33,11 @@ use loader_win as loader;
 mod driver;
 mod ffi;
 pub mod probe;
+pub mod context_scope;
 mod vram_impl; // impl VramProvider/VramMemory for CUDA types (RF-G1)
 
 pub use driver::{Context, Cuda, CudaError, Device, DeviceMem};
+pub use context_scope::ContextScope;
 pub use probe::{PROBE_PATTERN_LEN, ProbePlanError, pattern_for_offset, plan_probe_offsets};
 
 #[cfg(test)]
