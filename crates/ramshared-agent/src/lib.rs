@@ -6,10 +6,10 @@
 //! SPEC: docs/specs/no-milestone/memory-broker/SPEC.md (ITEM-9). Without `unsafe`.
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod explain;
 pub mod local;
 pub mod psi;
 pub mod swap;
 pub mod watchdog;
 pub mod win_mem;
-pub mod auth;

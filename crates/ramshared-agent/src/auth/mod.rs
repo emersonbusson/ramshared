@@ -79,9 +79,9 @@ impl TokenManager {
 
     /// Checks if the token needs rotation.
     pub fn needs_rotation(&self) -> bool {
-        self.current_token.as_ref().is_none_or(|t| {
-            t.needs_rotation(self.rotation_interval)
-        })
+        self.current_token
+            .as_ref()
+            .is_none_or(|t| t.needs_rotation(self.rotation_interval))
     }
 }
 
