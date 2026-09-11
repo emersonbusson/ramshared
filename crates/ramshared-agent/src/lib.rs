@@ -12,3 +12,4 @@ pub mod psi;
 pub mod swap;
 pub mod watchdog;
 pub mod win_mem;
+pub mod auth;
