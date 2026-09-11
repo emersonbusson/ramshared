@@ -19,6 +19,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ash::vk;
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
+mod debug;
+mod instance;
+
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
@@ -126,6 +129,7 @@ impl Drop for ResGuard {
 /// the queue is externally synchronized, DT-7). Reuses 1 staging buffer + 1 cmd buffer + 1 fence.
 pub struct VulkanProvider {
     instance: ash::Instance,
+    _debug: Option<instance::DebugResources>, // keeps debug messenger alive
     _entry: ash::Entry, // keeps the loader alive as long as the instance exists
     phys: vk::PhysicalDevice,
     device: ash::Device,
@@ -146,16 +150,13 @@ impl VulkanProvider {
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
         let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
-        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
-        let ci = vk::InstanceCreateInfo::default().application_info(&app);
-        // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
-        let instance = unsafe { entry.create_instance(&ci, None) }
-            .map_err(|e| vk_err("create_instance", e))?;
+        let (instance, debug) = instance::create_instance(&entry)?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
         match Self::after_instance(&instance, ordinal) {
             Ok((phys, name, bits)) => Ok(Self {
                 instance,
+                _debug: debug,
                 _entry: entry,
                 phys,
                 device: bits.device,
@@ -472,6 +473,13 @@ impl Drop for VulkanProvider {
             self.device.destroy_fence(self.fence, None);
             self.device.destroy_command_pool(self.cmd_pool, None);
             self.device.destroy_device(None);
+        }
+
+        if let Some(mut d) = self._debug.take() {
+            d.destroy();
+        }
+
+        unsafe {
             self.instance.destroy_instance(None);
         }
     }
