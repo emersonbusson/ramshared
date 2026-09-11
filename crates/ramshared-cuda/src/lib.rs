@@ -40,7 +40,6 @@ pub use probe::{PROBE_PATTERN_LEN, ProbePlanError, pattern_for_offset, plan_prob
 
 #[cfg(test)]
 mod tests {
-    // unwrap/expect allowed in tests only (coding.md rules), despite the crate-level deny.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
@@ -73,25 +72,25 @@ mod tests {
     /// Run with: `cargo test -p ramshared-cuda -- --ignored`.
     #[test]
     #[ignore = "requires a working CUDA GPU (run with --ignored on a GPU host)"]
-    fn gpu_roundtrip_256mib() {
-        let cuda = Cuda::load().expect("libcuda must load");
-        assert!(cuda.device_count().unwrap() >= 1);
-        let dev = cuda.device(0).unwrap();
-        let ctx = cuda.create_context(&dev).unwrap();
+    fn gpu_roundtrip_256mib() -> Result<(), Box<dyn std::error::Error>> {
+        let cuda = Cuda::load()?;
+        assert!(cuda.device_count()? >= 1);
+        let dev = cuda.device(0)?;
+        let ctx = cuda.create_context(&dev)?;
 
-        let (free_before, total) = ctx.mem_info().unwrap();
+        let (free_before, total) = ctx.mem_info()?;
         assert!(total > 0 && free_before > 0);
 
         let size = 256 * 1024 * 1024;
-        let mut mem = ctx.alloc(size).unwrap();
-        mem.zero().unwrap();
+        let mut mem = ctx.alloc(size)?;
+        mem.zero()?;
 
         // Known pattern at three offsets.
         let pat: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
         for off in [0usize, size / 2, size - pat.len()] {
-            mem.write_at(off, &pat).unwrap();
+            mem.write_at(off, &pat)?;
             let mut out = vec![0u8; pat.len()];
-            mem.read_at(off, &mut out).unwrap();
+            mem.read_at(off, &mut out)?;
             assert_eq!(out, pat, "roundtrip diverged at off={off}");
         }
 
@@ -101,5 +100,6 @@ mod tests {
             mem.read_at(size - 8, &mut tiny),
             Err(CudaError::OutOfRange { .. })
         ));
+        Ok(())
     }
 }

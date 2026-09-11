@@ -116,14 +116,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_offsets_for_64mib() {
+    fn plan_offsets_for_64mib() -> Result<(), Box<dyn std::error::Error>> {
         let size = 64 * 1024 * 1024;
-        let [a, b, c] = plan_probe_offsets(size).unwrap();
+        let [a, b, c] = plan_probe_offsets(size)?;
         assert_eq!(a, 0);
         assert_eq!(b, size / 2);
         assert_eq!(c, size - 4096);
         assert_ne!(a, b);
         assert_ne!(b, c);
+        Ok(())
+
     }
 
     #[test]
