@@ -128,15 +128,15 @@ pub fn run_service(config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Err
         }
         ServiceControl::Pause => {
             handler_paused.store(true, Ordering::Release);
-            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref().copied() {
-                let _ = set_status(&handle, ServiceState::Paused, 0, Duration::ZERO, 0);
+            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                let _ = set_status(handle, ServiceState::Paused, 0, Duration::ZERO, 0);
             }
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Continue => {
             handler_paused.store(false, Ordering::Release);
-            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref().copied() {
-                let _ = set_status(&handle, ServiceState::Running, 0, Duration::ZERO, 0);
+            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                let _ = set_status(handle, ServiceState::Running, 0, Duration::ZERO, 0);
             }
             ServiceControlHandlerResult::NoError
         }
