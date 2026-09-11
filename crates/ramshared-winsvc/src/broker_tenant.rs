@@ -5,6 +5,9 @@
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
+pub mod quota;
+use quota::TenantQuota;
+
 use ramshared_broker::model::{PsiSample, TransportKind};
 use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg};
 
@@ -40,6 +43,11 @@ pub enum BrokerTenantError {
         free: u64,
         need: u64,
     },
+    /// Tenant VRAM quota exceeded.
+    QuotaExceeded {
+        limit: u64,
+        requested: u64,
+    },
     Eof,
 }
 
@@ -58,6 +66,9 @@ impl std::fmt::Display for BrokerTenantError {
             BrokerTenantError::CoresidenceFailClosed { free, need } => {
                 write!(f, "coresidence_fail_closed free={free} need={need}")
             }
+            BrokerTenantError::QuotaExceeded { limit, requested } => {
+                write!(f, "quota_exceeded limit={limit} requested={requested}")
+            }
             BrokerTenantError::Eof => write!(f, "broker EOF"),
         }
     }
@@ -74,10 +85,20 @@ pub struct BrokerTenant {
     requested_bytes: Option<u64>,
     release_sent: ReleaseSent,
     heartbeat: Duration,
+    pub quota: Option<TenantQuota>,
 }
 
 impl BrokerTenant {
     pub fn new(tenant: impl Into<String>, heartbeat: Duration) -> Self {
+        Self::new_with_quota(tenant, heartbeat, None)
+    }
+
+    /// Create a new broker tenant with an optional quota limit.
+    pub fn new_with_quota(
+        tenant: impl Into<String>,
+        heartbeat: Duration,
+        quota: Option<TenantQuota>,
+    ) -> Self {
         Self {
             tenant: tenant.into(),
             tenant_id: None,
@@ -85,6 +106,7 @@ impl BrokerTenant {
             requested_bytes: None,
             release_sent: ReleaseSent::None,
             heartbeat,
+            quota,
         }
     }
 
@@ -134,6 +156,12 @@ impl BrokerTenant {
         stream: &mut S,
         bytes: u64,
     ) -> Result<(), BrokerTenantError> {
+        if let Some(q) = &self.quota {
+            let res = q.enforce(bytes);
+            if let Err(limit) = res {
+                return Err(BrokerTenantError::QuotaExceeded { limit, requested: bytes });
+            }
+        }
         write_msg(stream, &Msg::LeaseRequest { bytes })
             .map_err(|e| BrokerTenantError::Io(e.to_string()))?;
         Ok(())
@@ -328,6 +356,19 @@ mod tests {
         let mut t = BrokerTenant::new("wd", Duration::from_secs(5));
         let e = t.acquire(&mut dual, 1).unwrap_err();
         assert!(matches!(e, BrokerTenantError::Denied(r) if r == "lease_em_andamento"));
+    }
+
+    #[test]
+    fn request_lease_quota_exceeded() {
+        let mut stream = Dual::new(Vec::new());
+        let quota = crate::broker_tenant::quota::TenantQuota::new(1024);
+        let mut t = BrokerTenant::new_with_quota("wd", Duration::from_secs(5), Some(quota));
+
+        let err = t.request_lease(&mut stream, 2048).unwrap_err();
+        assert!(matches!(
+            err,
+            BrokerTenantError::QuotaExceeded { limit: 1024, requested: 2048 }
+        ));
     }
 
     #[test]
