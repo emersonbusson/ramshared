@@ -65,18 +65,20 @@ impl DiagnoseError {
     }
 }
 
+pub mod json;
+
 #[derive(Clone, Debug, Default, PartialEq)]
-struct Diagnosis {
-    samples: usize,
-    first_t: Option<u64>,
-    last_t: Option<u64>,
-    demotes: u64,
-    max_vram_other: Option<u64>,
-    max_swap_used: Option<u64>,
-    max_page_io_s: Option<u64>,
-    flags: Vec<String>,
-    timeline: Vec<String>,
-    recommendations: Vec<String>,
+pub struct Diagnosis {
+    pub samples: usize,
+    pub first_t: Option<u64>,
+    pub last_t: Option<u64>,
+    pub demotes: u64,
+    pub max_vram_other: Option<u64>,
+    pub max_swap_used: Option<u64>,
+    pub max_page_io_s: Option<u64>,
+    pub flags: Vec<String>,
+    pub timeline: Vec<String>,
+    pub recommendations: Vec<String>,
 }
 
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
@@ -84,7 +86,7 @@ pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
     let diagnosis = diagnose_jsonl(&text)?;
     if json {
-        println!("{}", render_json(&diagnosis));
+        println!("{}", json::render_json(&diagnosis));
     } else {
         print_text(&diagnosis);
     }
@@ -270,22 +272,6 @@ fn opt_num(value: Option<u64>) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn render_json(d: &Diagnosis) -> String {
-    serde_json::json!({
-        "samples": d.samples,
-        "first_t": d.first_t,
-        "last_t": d.last_t,
-        "demotes": d.demotes,
-        "max_vram_other": d.max_vram_other,
-        "max_swap_used": d.max_swap_used,
-        "max_page_io_s": d.max_page_io_s,
-        "flags": d.flags,
-        "timeline": d.timeline,
-        "recommendations": d.recommendations,
-    })
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,7 +296,7 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("DEMOTE occurred"))
         );
-        let rendered = render_json(&d);
+        let rendered = json::render_json(&d);
         assert!(rendered.contains("\"demotes\":1"));
         print_text(&d);
     }
@@ -355,7 +341,7 @@ mod tests {
                 .iter()
                 .any(|r| r.contains("Swap usage exceeded"))
         );
-        let json_str = render_json(&d);
+        let json_str = json::render_json(&d);
         assert!(json_str.contains("stuck_slice"));
         print_text(&d);
     }
