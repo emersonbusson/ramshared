@@ -33,6 +33,9 @@ use crate::proto::{
     ABI_VERSION, Cqe, DiskParams, MAX_IO, MAX_QD, RING_MAGIC, Register, RingHdr, Sqe,
 };
 
+/// Expose driver installation with rollback wrapper
+pub use crate::driver_install::DriverInstallTransaction;
+
 /// CTL_CODE(FILE_DEVICE_MASS_STORAGE=0x2d, 0x800|N, METHOD_BUFFERED, FILE_READ|FILE_WRITE).
 const fn ioctl_code(fn_n: u32) -> u32 {
     const FILE_DEVICE_MASS_STORAGE: u32 = 0x0000_002d;
