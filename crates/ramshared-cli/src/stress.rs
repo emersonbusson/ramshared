@@ -159,6 +159,9 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
             "--cascade" => {
                 opts.cascade = true;
                 opts.battery = true;
+                if opts.tier3_target_pct.is_none() {
+                    opts.tier3_target_pct = Some(30);
+                }
             }
             "--tier3-target-pct" => {
                 i += 1;
@@ -510,7 +513,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut active_cycles_done = 0usize;
 
     // Phase 1: 1%-by-1% Micro-Step Ramp
-    let effective_target = if opts.tier3_target_pct.is_some() {
+    let effective_target = if opts.tier3_target_pct.is_some() || opts.cascade {
         1000
     } else {
         opts.target_pct
@@ -544,7 +547,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
         let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
         let hard_floor = if is_multi_tier {
-            opts.min_ram_mb.max(500)
+            200
         } else {
             opts.min_ram_mb.max(dynamic_kernel_floor)
         };
@@ -569,12 +572,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             } else {
                 idle_cycles += 1;
             }
-            if idle_cycles >= max_idle_cycles {
+            if idle_cycles >= max_idle_cycles || avail_mb > hard_floor {
                 break;
             }
         }
 
-        if avail_mb <= hard_floor && (!is_multi_tier || idle_cycles >= max_idle_cycles) {
+        let floor_breached = if is_multi_tier {
+            avail_mb <= hard_floor && idle_cycles >= max_idle_cycles
+        } else {
+            avail_mb <= hard_floor
+        };
+
+        if floor_breached {
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -702,20 +711,34 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
+        let mut safe_alloc_mb = if is_multi_tier {
+            if avail_mb > 400 {
+                one_pct_mb.min(avail_mb.saturating_sub(250)).min(128)
+            } else if avail_mb >= 220 {
+                32
+            } else {
+                0
+            }
+        } else {
+            one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128)
+        };
+
         if safe_alloc_mb == 0 {
-            if is_multi_tier && avail_mb > 350 && psi_full < opts.max_psi_full {
-                safe_alloc_mb = 32;
+            if is_multi_tier && avail_mb > hard_floor && psi_full < opts.max_psi_full {
+                safe_alloc_mb = 16;
             } else {
                 break;
             }
         }
 
-        // Allocate and dirty pages
+        // Allocate and dirty pages with realistic workload entropy
         let num_bytes = (safe_alloc_mb as usize) * 1024 * 1024;
         let mut slice = vec![0u8; num_bytes];
         for i in (0..num_bytes).step_by(4096) {
-            slice[i] = (current_target as u8).wrapping_add((i & 0xFF) as u8);
+            let base = (current_target as u8).wrapping_add((i & 0xFF) as u8);
+            for offset in (0..4096).step_by(128) {
+                slice[i + offset] = base.wrapping_add((offset as u8) ^ 0xA5);
+            }
         }
 
         if let Ok(mut guard) = chunks.lock() {
