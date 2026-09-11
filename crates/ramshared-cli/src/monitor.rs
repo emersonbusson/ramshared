@@ -850,7 +850,7 @@ struct TierAccumulator {
 
 impl TierAccumulator {
     fn record(&mut self, speed: f64) {
-        if speed > 0.05 {
+        if speed >= 5.0 {
             self.min_mbs = if self.min_mbs == 0.0 {
                 speed
             } else {
@@ -1277,7 +1277,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
     let ssd_baseline = 20.0f64;
     match tier_prio {
         100 => {
-            if io.max_mbs > 0.1 {
+            if io.max_mbs >= 5.0 {
                 let min_mult = (io.min_mbs / ssd_baseline).clamp(1.0, 500.0);
                 let avg_mult = (io.avg_mbs / ssd_baseline).clamp(1.0, 500.0);
                 let max_mult = (io.max_mbs / ssd_baseline).clamp(1.0, 500.0);
@@ -1290,7 +1290,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
             }
         }
         50 => {
-            if io.max_mbs > 0.1 {
+            if io.max_mbs >= 5.0 {
                 let min_mult = (io.min_mbs / ssd_baseline).clamp(1.0, 150.0);
                 let avg_mult = (io.avg_mbs / ssd_baseline).clamp(1.0, 150.0);
                 let max_mult = (io.max_mbs / ssd_baseline).clamp(1.0, 150.0);
@@ -1303,7 +1303,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
             }
         }
         _ => {
-            if io.max_mbs > 0.1 {
+            if io.max_mbs >= 5.0 {
                 "🐢 Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (WSL2 System Disk)".to_string()
             } else {
                 "🐢 1.0x Host VHDX Baseline (WSL2 System Disk)".to_string()
@@ -1523,24 +1523,16 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 d_peak_pct = d_peak_pct
             );
 
-            let z_rate = format!(
-                "Min: {z_min:>4.0} │ Avg: {z_avg:>4.0} │ Max: {z_max:>4.0} MB/s",
-                z_min = z_min,
-                z_avg = z_avg,
-                z_max = z_max
-            );
-            let v_rate = format!(
-                "Min: {v_min:>4.0} │ Avg: {v_avg:>4.0} │ Max: {v_max:>4.0} MB/s",
-                v_min = v_min,
-                v_avg = v_avg,
-                v_max = v_max
-            );
-            let d_rate = format!(
-                "Min: {d_min:>4.0} │ Avg: {d_avg:>4.0} │ Max: {d_max:>4.0} MB/s",
-                d_min = d_min,
-                d_avg = d_avg,
-                d_max = d_max
-            );
+            let format_rate = |min: f64, avg: f64, max: f64| {
+                if max >= 5.0 {
+                    format!("Min: {min:>4.0} │ Avg: {avg:>4.0} │ Max: {max:>4.0} MB/s")
+                } else {
+                    "Idle (Awaiting Workload)".to_string()
+                }
+            };
+            let z_rate = format_rate(z_min, z_avg, z_max);
+            let v_rate = format_rate(v_min, v_avg, v_max);
+            let d_rate = format_rate(d_min, d_avg, d_max);
 
             format!(
                 concat!(
