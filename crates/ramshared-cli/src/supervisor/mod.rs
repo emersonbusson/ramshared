@@ -1,6 +1,5 @@
 //! Preventive control-plane pressure state machine.
 
-use crate::bounded_process;
 use crate::workload::{self, OwnerIdentity};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -9,12 +8,11 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+pub mod lifecycle;
 
 const CONTROL_REQUEST_MAX_AGE_MS: u64 = 15_000;
-const SYSTEMCTL_IDENTITY_TIMEOUT: Duration = Duration::from_secs(1);
 const EMERGENCY_TERM_GRACE_MS: u64 = 5_000;
 const ACTION_ERROR_MAX_BYTES: usize = 1_024;
 const ACTION_ERROR_TRUNCATION_MARKER: &str = " [truncated]";
@@ -745,105 +743,10 @@ fn critical_request_value(
     request
 }
 
-fn run_systemctl_bounded(args: &[&str]) -> Result<(), String> {
-    run_systemctl_bounded_for(Path::new("systemctl"), args, Duration::from_secs(1))
-}
 
-fn run_systemctl_bounded_for(
-    command: &Path,
-    args: &[&str],
-    timeout: Duration,
-) -> Result<(), String> {
-    let mut command = Command::new(command);
-    command.args(args);
-    let output = bounded_process::run_capture_command(
-        &mut command,
-        "systemctl action",
-        timeout,
-        bounded_process::DEFAULT_OUTPUT_LIMIT,
-        |_| {},
-    )
-    .map_err(|error| format!("bounded systemctl action failed: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            Err(format!("systemctl exited with {}", output.status))
-        } else {
-            Err(format!("systemctl exited with {}: {stderr}", output.status))
-        }
-    }
-}
-
-trait UnitActionRunner {
-    fn current_invocation_id(&self, unit: &str) -> Result<String, String>;
-    fn run(&self, args: &[&str]) -> Result<(), String>;
-}
-
-struct SystemUnitActionRunner;
-
-impl UnitActionRunner for SystemUnitActionRunner {
-    fn current_invocation_id(&self, unit: &str) -> Result<String, String> {
-        query_unit_invocation_id(unit)
-    }
-
-    fn run(&self, args: &[&str]) -> Result<(), String> {
-        run_systemctl_bounded(args)
-    }
-}
-
-fn parse_unit_invocation_id(unit: &str, output: &str) -> Result<String, String> {
-    let mut id = None;
-    let mut invocation_id = None;
-    for line in output.lines() {
-        let (name, value) = line
-            .split_once('=')
-            .ok_or("malformed systemd identity response")?;
-        let target = match name {
-            "Id" => &mut id,
-            "InvocationID" => &mut invocation_id,
-            _ => return Err("unexpected systemd identity field".into()),
-        };
-        if target.replace(value.to_string()).is_some() {
-            return Err("duplicate systemd identity field".into());
-        }
-    }
-    if id.as_deref() != Some(unit) {
-        return Err("systemd unit identity changed".into());
-    }
-    invocation_id
-        .filter(|value| workload::valid_systemd_invocation_id(value))
-        .ok_or_else(|| "systemd InvocationID is missing or invalid".into())
-}
-
-fn query_unit_invocation_id(unit: &str) -> Result<String, String> {
-    if !valid_scope_unit(unit) {
-        return Err("invalid managed scope unit".into());
-    }
-    let mut command = Command::new("systemctl");
-    command.args(["show", "--property=Id", "--property=InvocationID", unit]);
-    let output = bounded_process::run_capture_command(
-        &mut command,
-        "systemd identity query",
-        SYSTEMCTL_IDENTITY_TIMEOUT,
-        bounded_process::DEFAULT_OUTPUT_LIMIT,
-        |_| {},
-    )
-    .map_err(|error| format!("bounded systemd identity query failed: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "systemd identity query exited with {}",
-            output.status
-        ));
-    }
-    let output = String::from_utf8(output.stdout)
-        .map_err(|error| format!("systemd identity query returned non-UTF-8 output: {error}"))?;
-    parse_unit_invocation_id(unit, &output)
-}
 
 fn run_identity_bound_action(
-    runner: &dyn UnitActionRunner,
+    runner: &dyn lifecycle::UnitActionRunner,
     victim: &VictimIdentity,
     args: &[&str],
 ) -> Result<(), String> {
@@ -864,7 +767,7 @@ struct ActionPaths<'a> {
 fn execute_freeze(
     paths: &ActionPaths<'_>,
     selected: &Result<Option<VictimIdentity>, String>,
-    runner: &dyn UnitActionRunner,
+    runner: &dyn lifecycle::UnitActionRunner,
 ) -> Result<(), String> {
     let now_ms = paths
         .issued_at_unix_ms
@@ -883,7 +786,7 @@ fn execute_freeze(
     write_frozen_target(paths.runtime, FrozenPhase::Applied, &victim, now_ms)
 }
 
-fn execute_thaw(paths: &ActionPaths<'_>, runner: &dyn UnitActionRunner) -> Result<(), String> {
+fn execute_thaw(paths: &ActionPaths<'_>, runner: &dyn lifecycle::UnitActionRunner) -> Result<(), String> {
     let Some((_, victim)) = read_frozen_target(paths.runtime)? else {
         return Err("no_frozen_scope".into());
     };
@@ -894,7 +797,7 @@ fn execute_thaw(paths: &ActionPaths<'_>, runner: &dyn UnitActionRunner) -> Resul
 fn execute_term(
     paths: &ActionPaths<'_>,
     selected: &Result<Option<VictimIdentity>, String>,
-    runner: &dyn UnitActionRunner,
+    runner: &dyn lifecycle::UnitActionRunner,
 ) -> Result<(), String> {
     let now_ms = paths
         .issued_at_unix_ms
@@ -929,7 +832,7 @@ fn execute_term(
     )
 }
 
-fn execute_kill(paths: &ActionPaths<'_>, runner: &dyn UnitActionRunner) -> Result<(), String> {
+fn execute_kill(paths: &ActionPaths<'_>, runner: &dyn lifecycle::UnitActionRunner) -> Result<(), String> {
     let now_ms = paths
         .issued_at_unix_ms
         .ok_or("KILL outcome timestamp is unavailable")?;
@@ -965,7 +868,7 @@ fn execute_kill(paths: &ActionPaths<'_>, runner: &dyn UnitActionRunner) -> Resul
 fn execute_actions_with<F>(
     decision: &SupervisorDecision,
     paths: &ActionPaths<'_>,
-    runner: &dyn UnitActionRunner,
+    runner: &dyn lifecycle::UnitActionRunner,
     mut close_admission: F,
 ) -> Vec<SupervisorActionResult>
 where
@@ -1071,7 +974,7 @@ fn apply_decision_with(
     ledger_root: &Path,
     decision: &SupervisorDecision,
     action_paths: &ActionPaths<'_>,
-    runner: &dyn UnitActionRunner,
+    runner: &dyn lifecycle::UnitActionRunner,
     supervisor_identity: &OwnerIdentity,
     written_at_unix_ms: u64,
 ) -> Result<Vec<SupervisorActionResult>, DecisionApplyError> {
@@ -1195,7 +1098,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 daemon_instance_id: daemon_instance_id.as_deref(),
                 issued_at_unix_ms: Some(written_at_unix_ms),
             },
-            &SystemUnitActionRunner,
+            &lifecycle::SystemUnitActionRunner,
             &supervisor_identity,
             written_at_unix_ms,
         );
@@ -1257,7 +1160,7 @@ mod tests {
         identity_queries: RefCell<usize>,
     }
 
-    impl UnitActionRunner for FakeUnitRunner {
+    impl lifecycle::UnitActionRunner for FakeUnitRunner {
         fn current_invocation_id(&self, _unit: &str) -> Result<String, String> {
             Ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
         }
@@ -1274,7 +1177,7 @@ mod tests {
         }
     }
 
-    impl UnitActionRunner for StaleIdentityRunner {
+    impl lifecycle::UnitActionRunner for StaleIdentityRunner {
         fn current_invocation_id(&self, _unit: &str) -> Result<String, String> {
             *self.identity_queries.borrow_mut() += 1;
             Ok("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into())
@@ -1865,7 +1768,7 @@ mod tests {
         saw_pending: RefCell<bool>,
     }
 
-    impl UnitActionRunner for FreezeEvidenceRunner {
+    impl lifecycle::UnitActionRunner for FreezeEvidenceRunner {
         fn current_invocation_id(&self, _unit: &str) -> Result<String, String> {
             Ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
         }
@@ -2184,7 +2087,7 @@ mod tests {
 
     struct HugeErrorRunner;
 
-    impl UnitActionRunner for HugeErrorRunner {
+    impl lifecycle::UnitActionRunner for HugeErrorRunner {
         fn current_invocation_id(&self, _unit: &str) -> Result<String, String> {
             Ok("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into())
         }
@@ -2698,27 +2601,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    // TestName: bounded_systemctl_adapter_is_fixture_scoped_under_parallel_execution
-    fn bounded_systemctl_adapter_is_fixture_scoped_under_parallel_execution() {
-        let fixture = TestDir::new();
-        let systemctl = fixture.program(
-            "systemctl-fixture",
-            "#!/bin/sh\ncase \"$1\" in\n  --version) exit 0 ;;\n  ramshared-invalid-command) exit 1 ;;\n  *) exit 2 ;;\nesac\n",
-        );
-        assert!(
-            run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(100),)
-                .is_ok()
-        );
-        assert!(
-            run_systemctl_bounded_for(
-                &systemctl,
-                &["ramshared-invalid-command"],
-                Duration::from_millis(100),
-            )
-            .is_err()
-        );
-    }
+
 
     #[test]
     // TestName: bounded_systemctl_adapter_reaps_its_owned_timeout_fixture
@@ -2730,7 +2613,7 @@ mod tests {
             "#!/bin/sh\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.05; done\n",
         );
         let started = Instant::now();
-        let error = run_systemctl_bounded_for(
+        let error = lifecycle::run_systemctl_bounded_for(
             &systemctl,
             &[pid_file.to_str().unwrap()],
             Duration::from_millis(100),
@@ -2765,7 +2648,7 @@ mod tests {
                     "#!/bin/sh\nsleep 0.05\n[ \"$1\" = \"--version\" ]\n",
                 );
                 success_start.wait();
-                run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(500))
+                lifecycle::run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(500))
             });
             let timeout_start = std::sync::Arc::clone(&start);
             let timeout = scope.spawn(move || {
@@ -2775,7 +2658,7 @@ mod tests {
                     "#!/bin/sh\nwhile :; do sleep 0.05; done\n",
                 );
                 timeout_start.wait();
-                run_systemctl_bounded_for(&systemctl, &[], Duration::from_millis(100))
+                lifecycle::run_systemctl_bounded_for(&systemctl, &[], Duration::from_millis(100))
             });
             assert!(success.join().unwrap().is_ok());
             let error = timeout.join().unwrap().unwrap_err();
