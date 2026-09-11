@@ -74,7 +74,7 @@ named-test drift. Neither residual is relaxed or rewritten in this dispatch.
   `crates/ramshared-cli/src/cascade/lifecycle.rs`,
   `crates/ramshared-cli/src/main.rs`,
   `crates/ramshared-winsvc/src/config.rs`,
-  `crates/ramshared-winsvc/src/evidence.rs`, and
+  `crates/ramshared-winsvc/src/evidence/mod.rs`, and
   `crates/ramshared-winsvc/src/runtime.rs`. The shared map is intentionally not
   edited under this dispatch.
 - no Cargo, PowerShell, WSL, host, device, swap, GPU, service, publication,

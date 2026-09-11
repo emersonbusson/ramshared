@@ -252,7 +252,7 @@
   "impl_path": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
   "gaps": {
     "open": [
-      "docs/governance/rust-slice-coverage.json has five line-coverage-production-owner-duplicate findings for crates/ramshared-cli/src/cascade/lifecycle.rs, crates/ramshared-cli/src/main.rs, crates/ramshared-winsvc/src/config.rs, crates/ramshared-winsvc/src/evidence.rs, and crates/ramshared-winsvc/src/runtime.rs; the shared map is outside this dispatch",
+      "docs/governance/rust-slice-coverage.json has five line-coverage-production-owner-duplicate findings for crates/ramshared-cli/src/cascade/lifecycle.rs, crates/ramshared-cli/src/main.rs, crates/ramshared-winsvc/src/config.rs, crates/ramshared-winsvc/src/evidence/mod.rs, and crates/ramshared-winsvc/src/runtime.rs; the shared map is outside this dispatch",
       "docs/reference/DOCUMENTATION-INVENTORY.json is out of sync with its deterministic generator; generated state is outside this dispatch",
       "docs/governance/capability-observations.generated.json is out of sync; generated state is outside this dispatch",
       "docs/governance/campaign-evidence-catalog.generated.json reports catalog-stale; generated state is outside this dispatch",

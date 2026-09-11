@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, GetLastError};
 #[cfg(windows)]
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, GENERIC_WRITE,
+    CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_GENERIC_WRITE,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::Diagnostics::Debug::{
@@ -64,7 +64,7 @@ pub fn write_minidump(config: &DumpConfig) -> Result<std::path::PathBuf, u32> {
     let h_file = unsafe {
         CreateFileW(
             path_w.as_ptr(),
-            GENERIC_WRITE,
+            FILE_GENERIC_WRITE,
             FILE_SHARE_READ,
             ptr::null(),
             CREATE_ALWAYS,

@@ -25,7 +25,7 @@
    `crates/ramshared-cli/src/cascade/lifecycle.rs`,
    `crates/ramshared-cli/src/main.rs`,
    `crates/ramshared-winsvc/src/config.rs`,
-   `crates/ramshared-winsvc/src/evidence.rs`, and
+   `crates/ramshared-winsvc/src/evidence/mod.rs`, and
    `crates/ramshared-winsvc/src/runtime.rs`. The shared coverage map is outside
    this dispatch and remains unchanged for a separately owned reconciliation.
 2. The full planner test still requires the out-of-scope Rust named test

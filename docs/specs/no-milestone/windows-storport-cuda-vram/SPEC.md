@@ -169,14 +169,14 @@ Evidence is executable tests + live lab campaigns (not “code exists”). Unche
 - Cover target: N/A — E2E-only; Windows handle/MDL behavior requires WDK driver plus Verifier.
 - Kahneman: ITEM-3 row.
 
-**`crates/ramshared-winsvc/src/evidence.rs`**
+**`crates/ramshared-winsvc/src/evidence/mod.rs`**
 - Purpose: schema-1 evidence structs, stable event/error names, append-only writer, latency histogram
   summarization, and redaction boundary.
 - RF / DT: RF-4; DT-10, DT-13; NFR-3/NFR-4.
 - Types / fns: `RuntimeEvidence`, `IoCounters`, `LatencySummary`, `EvidenceWriter::open`,
   `EvidenceWriter::append`, `nearest_rank_percentile`, and `redacted_error`.
 - Reference pattern in this repo: append-only JSONL in `docs/benchmarks/results.jsonl`.
-- Required tests: `crates/ramshared-winsvc/src/evidence.rs` :: `append_preserves_prior_rows`,
+- Required tests: `crates/ramshared-winsvc/src/evidence/mod.rs` :: `append_preserves_prior_rows`,
   `schema_has_no_pointer_or_payload_fields`,
   `nearest_rank_percentiles_are_deterministic`, `stable_error_redacts_payload`.
 - Cover target: >=80%.
@@ -458,7 +458,7 @@ the product binary and product installer.
 | Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
 | --- | --- | --- | --- | --- |
 | `crates/ramshared-winsvc/src/config.rs` | `crates/ramshared-winsvc/src/config.rs` :: `parse_product_config`; `reject_unknown_backend`; `reject_queue_data_area_over_4mib`; `reserve_cannot_lower_policy_floor` | unit | #13 | >=80% |
-| `crates/ramshared-winsvc/src/evidence.rs` | `crates/ramshared-winsvc/src/evidence.rs` :: `append_preserves_prior_rows`; `nearest_rank_percentiles_are_deterministic`; `stable_error_discards_free_form_detail`; `nearest_rank_clamps_boundary_percentiles` | unit | #9/#13 | >=80% |
+| `crates/ramshared-winsvc/src/evidence/mod.rs` | `crates/ramshared-winsvc/src/evidence/mod.rs` :: `append_preserves_prior_rows`; `nearest_rank_percentiles_are_deterministic`; `stable_error_discards_free_form_detail`; `nearest_rank_clamps_boundary_percentiles` | unit | #9/#13 | >=80% |
 | `crates/ramshared-winsvc/src/driver_link.rs` | `crates/ramshared-winsvc/src/driver_link.rs` :: `roundtrip_write_read_flush`; `unknown_flags_return_einval`; `write_uses_owned_payload_snapshot`; `invalid_slot_does_not_touch_backend` | unit | #13 | >=80% |
 | `crates/ramshared-winsvc/src/broker_tenant.rs` | `crates/ramshared-winsvc/src/broker_tenant.rs` :: `granted_bytes_must_equal_requested`; `release_flushes_before_session_close`; `release_twice_writes_once`; `failed_release_retains_lease_and_is_not_replayed`; `lease_denied` | unit | #13/#17 | >=80% |
 | `crates/ramshared-winsvc/src/runtime.rs` | `crates/ramshared-winsvc/src/runtime.rs` :: `no_fallback_after_cuda_failure`; `failure_after_register_unwinds_reverse`; `deterministic_failure_is_not_retried`; `stop_twice_has_one_effect`; `ambiguous_crash_state_is_not_replayed`; `cuda_watchdog_does_not_destroy_stuck_context` | unit | #15/#16/#17 | >=80% |
@@ -489,7 +489,7 @@ those shared sources as evidence without creating a second coverage owner.
 - [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
 - [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
-- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence/mod.rs,crates/ramshared-winsvc/src/evidence/minidump.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
   (also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
 - [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.
