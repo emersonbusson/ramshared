@@ -45,7 +45,7 @@ const WSL2_CONTROL_PLANE_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-cli',
-    '--files', 'crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs',
+    '--files', 'crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress/mod.rs,crates/ramshared-cli/src/stress/options.rs',
     '--min', '80',
     '--report-json', 'tmp/wsl2-control-plane-pressure-incident-cov.json',
   ],
@@ -54,7 +54,8 @@ const WSL2_CONTROL_PLANE_COVERAGE_ENTRY = {
     'crates/ramshared-cli/src/workload.rs',
     'crates/ramshared-cli/src/supervisor.rs',
     'crates/ramshared-cli/src/monitor.rs',
-    'crates/ramshared-cli/src/stress.rs',
+    'crates/ramshared-cli/src/stress/mod.rs',
+    'crates/ramshared-cli/src/stress/options.rs',
   ],
   min: 80,
 }
