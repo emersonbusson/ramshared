@@ -57,6 +57,7 @@ pub fn get_features(path: impl AsRef<Path>) -> io::Result<FeatureReport> {
 }
 
 pub fn add_device(path: impl AsRef<Path>, spec: DeviceSpec) -> io::Result<DeviceReport> {
+    crate::ublk::security::require_sys_admin()?;
     let control = OpenOptions::new().read(true).write(true).open(path)?;
     let ublksrv_pid =
         i32::try_from(process::id()).map_err(|_| io::Error::other("process id exceeds i32"))?;
@@ -260,12 +261,8 @@ mod tests {
             get_features(&path).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
-        assert_eq!(
-            add_device(&path, DeviceSpec::smoke_auto())
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::NotFound
-        );
+        let err = add_device(&path, DeviceSpec::smoke_auto()).unwrap_err();
+        assert!(err.kind() == io::ErrorKind::NotFound || err.kind() == io::ErrorKind::PermissionDenied);
         assert_eq!(
             delete_device(&path, 0).unwrap_err().kind(),
             io::ErrorKind::NotFound
