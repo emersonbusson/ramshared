@@ -33,6 +33,8 @@ pub type FnMemcpyHtoD = unsafe extern "C" fn(CuDevicePtr, *const c_void, usize) 
 pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) -> CuResult;
 pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
+pub type FnDeviceCanAccessPeer = unsafe extern "C" fn(*mut c_int, CuDevice, CuDevice) -> CuResult;
+pub type FnMemcpyPeer = unsafe extern "C" fn(CuDevicePtr, CuContext, CuDevicePtr, CuContext, usize) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
 
 /// Table of resolved symbols from the CUDA driver library.
@@ -50,5 +52,7 @@ pub struct Syms {
     pub memcpy_dtoh: FnMemcpyDtoH,
     pub memset_d8: FnMemsetD8,
     pub mem_get_info: FnMemGetInfo,
+    pub device_can_access_peer: FnDeviceCanAccessPeer,
+    pub memcpy_peer: FnMemcpyPeer,
     pub get_error_string: Option<FnGetErrorString>,
 }

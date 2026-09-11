@@ -86,6 +86,24 @@ mod tests {
         let mut mem = ctx.alloc(size).unwrap();
         mem.zero().unwrap();
 
+        // Test P2P if multiple devices exist
+        if cuda.device_count().unwrap() >= 2 {
+            let dev1 = cuda.device(1).unwrap();
+            if cuda.device_can_access_peer(&dev, &dev1).unwrap() {
+                let ctx1 = cuda.create_context(&dev1).unwrap();
+                let mut mem1 = ctx1.alloc(size).unwrap();
+                mem1.zero().unwrap();
+
+                // mem was allocated on dev 0, mem1 on dev 1.
+                // Test Device -> Device copy
+                mem.write_at(0, b"p2ptest").unwrap();
+                mem1.memcpy_peer(0, &mem, 0, 7).unwrap();
+                let mut out_p2p = vec![0u8; 7];
+                mem1.read_at(0, &mut out_p2p).unwrap();
+                assert_eq!(out_p2p, b"p2ptest", "P2P roundtrip diverged");
+            }
+        }
+
         // Known pattern at three offsets.
         let pat: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
         for off in [0usize, size / 2, size - pat.len()] {

@@ -9,7 +9,7 @@
 //! (freeing memory -> destroying context -> closing library), translating the kernel's
 //! `goto out_err` pattern into Rust's borrow checker invariants.
 
-use core::ffi::{CStr, c_char, c_void};
+use core::ffi::{CStr, c_char, c_int, c_void};
 use core::fmt;
 
 use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
@@ -112,6 +112,8 @@ impl Cuda {
                 memcpy_dtoh: load_sym(handle, c"cuMemcpyDtoH_v2")?,
                 memset_d8: load_sym(handle, c"cuMemsetD8_v2")?,
                 mem_get_info: load_sym(handle, c"cuMemGetInfo_v2")?,
+                device_can_access_peer: load_sym(handle, c"cuDeviceCanAccessPeer")?,
+                memcpy_peer: load_sym(handle, c"cuMemcpyPeer")?,
                 get_error_string: load_sym_opt(handle, c"cuGetErrorString"),
             }
         };
@@ -121,6 +123,15 @@ impl Cuda {
         check(&syms, r, "cuInit")?;
 
         Ok(Cuda { _lib: lib, syms })
+    }
+
+    /// Queries if `dev` can directly access `peer_dev`'s memory.
+    pub fn device_can_access_peer(&self, dev: &Device, peer_dev: &Device) -> Result<bool, CudaError> {
+        let mut can_access: c_int = 0;
+        // SAFETY: can_access points to a valid local memory location.
+        let r = unsafe { (self.syms.device_can_access_peer)(&mut can_access, dev.raw, peer_dev.raw) };
+        check(&self.syms, r, "cuDeviceCanAccessPeer")?;
+        Ok(can_access != 0)
     }
 
     /// Returns the number of CUDA-capable devices visible to the system.
@@ -282,6 +293,32 @@ impl DeviceMem<'_, '_> {
             )
         };
         check(syms, r, "cuMemcpyDtoH")
+    }
+
+    /// Copies `len` bytes directly from another device memory (`src_mem`) at `src_off`
+    /// to this memory at `dst_off` (Device->Device, synchronous).
+    pub fn memcpy_peer(
+        &mut self,
+        dst_off: usize,
+        src_mem: &DeviceMem<'_, '_>,
+        src_off: usize,
+        len: usize,
+    ) -> Result<(), CudaError> {
+        self.bounds(dst_off, len)?;
+        src_mem.bounds(src_off, len)?;
+
+        let syms = &self.ctx.cuda.syms;
+        // SAFETY: offsets and lengths validated by bounds(); pointers are within allocated regions.
+        let r = unsafe {
+            (syms.memcpy_peer)(
+                self.ptr + dst_off as u64,
+                self.ctx.raw,
+                src_mem.ptr + src_off as u64,
+                src_mem.ctx.raw,
+                len,
+            )
+        };
+        check(syms, r, "cuMemcpyPeer")
     }
 
     fn bounds(&self, off: usize, len: usize) -> Result<(), CudaError> {
