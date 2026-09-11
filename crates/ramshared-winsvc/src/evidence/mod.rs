@@ -504,3 +504,6 @@ mod tests {
         assert_ne!(current_health, Some(true));
     }
 }
+
+
+pub mod minidump;

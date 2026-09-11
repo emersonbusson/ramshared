@@ -28,6 +28,7 @@ mod windows_svc {
     use ramshared_winsvc::config::WinDriveConfig;
     use ramshared_winsvc::runtime::{ProductCommand, RunMode, parse_product_cli};
     use ramshared_winsvc::windows_host::WindowsHostState;
+    use ramshared_winsvc::{DumpConfig, write_minidump};
 
     pub const SERVICE_NAME: &str = "RamSharedWinSvc";
     pub const SERVICE_DISPLAY: &str = "RamShared CUDA VRAM Disk Service";
@@ -39,7 +40,25 @@ mod windows_svc {
 
     define_windows_service!(ffi_service_main, service_main);
 
+
+    pub fn setup_panic_hook() {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let _ = std::fs::create_dir_all(std::path::Path::new(PROGRAM_DATA).join("CrashDumps"));
+            let config = DumpConfig {
+                directory: std::path::Path::new(PROGRAM_DATA).join("CrashDumps"),
+                prefix: "ramshared-winsvc-crash".to_string(),
+                full_memory: true,
+            };
+            if let Err(e) = write_minidump(&config) {
+                eprintln!("Failed to write minidump during panic: {}", e);
+            }
+            default_hook(info);
+        }));
+    }
+
     pub fn entry(args: Vec<String>) -> i32 {
+        setup_panic_hook();
         let cmd_args: Vec<String> = if args.len() > 1 {
             args[1..].to_vec()
         } else {

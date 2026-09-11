@@ -36,7 +36,9 @@ pub use driver_link::{
 pub use evidence::{
     EvidenceWriter, IoCounters, LatencySummary, RuntimeEvidence, nearest_rank_percentile,
     redacted_error, summarize_latencies,
+    minidump::{DumpConfig, write_minidump},
 };
+
 pub use ntpagefile::{PagefileError, supported_build};
 pub use proto::{ABI_VERSION, Cqe, DiskParams, Register, RingHdr, Sqe};
 pub use runtime::{
