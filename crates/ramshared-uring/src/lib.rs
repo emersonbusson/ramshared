@@ -76,6 +76,8 @@ impl From<UringError> for io::Error {
     }
 }
 
+pub mod sqe;
+
 use io_uring::{IoUring, opcode, squeue, types};
 
 /// Returns the system page size (`sysconf(_SC_PAGESIZE)`), falling back to 4096.
@@ -299,15 +301,7 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 
     {
         let mut sq = ring.submission();
-        if sq.is_full() {
-            return Err(io::Error::from_raw_os_error(libc::EBUSY));
-        }
-        // SAFETY: `cmd` is copied into the SQE before submission. Public wrappers
-        // in this module pass null pointers, local stack pointers, or borrowed mutable
-        // buffers, and this function awaits the CQE before returning.
-        unsafe {
-            let _ = sq.push(&entry);
-        }
+        crate::sqe::safe_push(&mut sq, &entry)?;
     }
 
     ring.submit_and_wait(1)?;
@@ -405,12 +399,7 @@ impl UblkFetchRing {
             // while the FETCH calls are parked; the kernel only accesses the buffer when
             // serving I/O, which requires `START_DEV` (not invoked in this path).
             let mut sq = ring.submission();
-            if sq.is_full() {
-                return Err(io::Error::from_raw_os_error(libc::EBUSY));
-            }
-            unsafe {
-                let _ = sq.push(&entry);
-            }
+            crate::sqe::safe_push(&mut sq, &entry)?;
         }
 
         // Does not block (want=0); the FETCH requests remain parked in the driver.
@@ -569,12 +558,7 @@ impl UblkServer {
         // to `self.buffers[tag]`, which remains valid for the server's lifetime; `self.fd`
         // remains open. The kernel only accesses the buffer to serve I/O on this thread.
         let mut sq = self.ring.submission();
-        if sq.is_full() {
-            return Err(io::Error::from_raw_os_error(libc::EBUSY));
-        }
-        unsafe {
-            let _ = sq.push(&entry);
-        }
+        crate::sqe::safe_push(&mut sq, &entry)?;
         Ok(())
     }
 }
