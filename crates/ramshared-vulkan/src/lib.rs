@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ash::vk;
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
+pub mod device_group;
+
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
@@ -182,13 +184,56 @@ impl VulkanProvider {
         instance: &ash::Instance,
         ordinal: u32,
     ) -> Result<(vk::PhysicalDevice, String, DeviceBits), VramError> {
+        // Try device groups first
+        #[allow(clippy::collapsible_if)]
+        if let Ok(groups) = device_group::enumerate_groups(instance) {
+            if !groups.is_empty() {
+                // Find a group with a discrete GPU if possible
+                let mut best_group = &groups[0];
+                for group in &groups {
+                    let mut has_discrete = false;
+                    for i in 0..group.physical_device_count as usize {
+                        let p = group.physical_devices[i];
+                        // SAFETY: `p` is a valid handle from the group.
+                        let props = unsafe { instance.get_physical_device_properties(p) };
+                        if props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
+                            has_discrete = true;
+                            break;
+                        }
+                    }
+                    if has_discrete {
+                        best_group = group;
+                        break;
+                    }
+                }
+
+                // For this provider, we select the primary device of the group (index 0)
+                // but a multi-GPU extension could allocate across the group.
+                let phys = best_group.physical_devices[0];
+
+                // SAFETY: `phys` valid.
+                let props = unsafe { instance.get_physical_device_properties(phys) };
+                let name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned();
+                let qf = pick_transfer_family(instance, phys)
+                    .ok_or_else(|| VramError::Provider("sem queue family de transfer".into()))?;
+
+                // Pass the device group info to device creation via chain
+                let mut group_info = vk::DeviceGroupDeviceCreateInfo::default()
+                    .physical_devices(&best_group.physical_devices[0..best_group.physical_device_count as usize]);
+                let bits = create_device_resources_with_group(instance, phys, qf, &mut group_info)?;
+                return Ok((phys, name, bits));
+            }
+        }
+
+        // Fallback to basic physical devices if groups are unavailable or empty
         // SAFETY: `instance` valid.
         let pdevs = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| vk_err("enumerate_physical_devices", e))?;
         if pdevs.is_empty() {
             return Err(VramError::Provider("no Vulkan physical device".into()));
         }
-        // Prefers a discrete GPU; otherwise the requested ordinal (clamped).
         let discrete = pdevs.iter().copied().find(|&p| {
             // SAFETY: `p` is a valid handle enumerated from `instance`.
             unsafe { instance.get_physical_device_properties(p) }.device_type
@@ -270,12 +315,25 @@ fn create_device_resources(
     phys: vk::PhysicalDevice,
     qf: u32,
 ) -> Result<DeviceBits, VramError> {
+    let mut group_info = vk::DeviceGroupDeviceCreateInfo::default();
+    create_device_resources_with_group(instance, phys, qf, &mut group_info)
+}
+
+fn create_device_resources_with_group(
+    instance: &ash::Instance,
+    phys: vk::PhysicalDevice,
+    qf: u32,
+    group_info: &mut vk::DeviceGroupDeviceCreateInfo<'_>,
+) -> Result<DeviceBits, VramError> {
     let prio = [1.0f32];
     let qci = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(qf)
         .queue_priorities(&prio)];
-    let dci = vk::DeviceCreateInfo::default().queue_create_infos(&qci);
-    // SAFETY: `dci`/`qci`/`prio` valid during call; `phys` enumerated from `instance`. Before
+    let mut dci = vk::DeviceCreateInfo::default().queue_create_infos(&qci);
+    if group_info.physical_device_count > 0 {
+        dci = dci.push_next(group_info);
+    }
+    // SAFETY: `dci`/`qci`/`prio`/`group_info` valid during call; `phys` enumerated from `instance`. Before
     // device creation, there are no resources to clean up (returns directly on failure).
     let device = unsafe { instance.create_device(phys, &dci, None) }
         .map_err(|e| vk_err("create_device", e))?;
