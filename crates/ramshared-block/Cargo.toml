@@ -8,6 +8,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+sha2 = "0.10.8"
 ramshared-vram = { path = "../ramshared-vram" }
 
 [lints.clippy]
