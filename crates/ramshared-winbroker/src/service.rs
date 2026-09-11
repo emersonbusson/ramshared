@@ -43,7 +43,9 @@ pub fn dispatch() -> Result<(), windows_service::Error> {
 
 pub fn service_main(_args: Vec<OsString>) {
     if let Err(error) = run_service_from_config() {
-        eprintln!("RamSharedBroker service error: {error}");
+        let msg = format!("RamSharedBroker service error: {error}");
+        eprintln!("{msg}");
+        crate::WinBrokerError::report_to_event_log(&msg);
         let _ = report_deterministic_start_failure(3);
     }
 }
