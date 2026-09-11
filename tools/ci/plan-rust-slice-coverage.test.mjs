@@ -36,8 +36,6 @@ const COMMENT_LANGUAGE_FEATURE_OWNED_FILES = [
   'crates/ramshared-agent/src/main.rs',
   'crates/ramshared-cli/src/cascade/cascade_io.rs',
   'crates/ramshared-cli/src/main.rs',
-  'crates/ramshared-cli/src/diagnose/mod.rs',
-  'crates/ramshared-cli/src/diagnose/kernel.rs',
   'crates/ramshared-wsl2d/src/conn.rs',
 ]
 const WSL2_CONTROL_PLANE_COVERAGE_ENTRY = {
