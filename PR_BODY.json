@@ -1,0 +1,4 @@
+{
+  "title": "refactor(wsl2d): extract ublk init to dedicated module",
+  "body": "## Summary\n\nExtract ublk device creation, parameter setup, and queue initialization from `main.rs` into `ublk_init.rs` for modularity.\n\n## Commits\n\n- aee40e220740621339cf2bf2070ccb26e01aa69a\n\n## Validation\n\n- `cargo test` passes.\n- `cargo clippy --all-targets` passes.\n\n## Rollback trigger\n\nRevert if WSL2 host stalls or memory lock leaks on standalone ublk creation.\n\n## Labels\n\ntype:refactoring\narea:windows"
+}
