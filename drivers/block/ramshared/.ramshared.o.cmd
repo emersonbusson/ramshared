@@ -1,1 +1,0 @@
-savedcmd_/app/drivers/block/ramshared/ramshared.o := ld -m elf_x86_64 -z noexecstack --no-warn-rwx-segments   -r -o /app/drivers/block/ramshared/ramshared.o @/app/drivers/block/ramshared/ramshared.mod

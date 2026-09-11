@@ -44,7 +44,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 
 	if (queue_depth < 16 || queue_depth > 1024) {
 		dev_warn(&pdev->dev,
-			 "clamping queue_depth (%u) to bounds [16, 1024]\n",
+			 "clamping queue_depth (%lu) to bounds [16, 1024]\n",
 			 queue_depth);
 		if (queue_depth < 16)
 			queue_depth = 16;
@@ -99,7 +99,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (ret)
 		goto err_dma_cleanup;
 
-	ret = device_add_disk(&pdev->dev, rs_dev->disk, ramshared_attr_groups);
+	ret = add_disk(rs_dev->disk);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
 		goto err_queue_cleanup;
@@ -118,6 +118,8 @@ err_release_regions:
 	pci_release_mem_regions(pdev);
 err_clear_master:
 	pci_clear_master(pdev);
+err_disable_pci:
+	pci_disable_device(pdev);
 	return ret;
 }
 
@@ -136,6 +138,7 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	ramshared_dma_cleanup(rs_dev);
 	pci_release_mem_regions(pdev);
 	pci_clear_master(pdev);
+	pci_disable_device(pdev);
 
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
 }
