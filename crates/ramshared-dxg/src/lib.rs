@@ -18,6 +18,41 @@ pub mod uapi {
     pub const QUERY_VIDEO_MEMORY_INFO_IOCTL: u64 = 0xc038_470a;
     pub const CLOSE_ADAPTER_IOCTL: u64 = 0xc004_4715;
     pub const MAX_ADAPTERS: usize = 64;
+    pub const QUERY_ADAPTER_INFO_IOCTL: u64 = 0xc018_4709;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct QueryAdapterInfo {
+        pub adapter: u32,
+        pub query_type: u32,
+        pub private_data: u64,
+        pub private_data_size: u32,
+        pub _padding: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct AdapterType {
+        pub value: u32,
+    }
+
+    impl AdapterType {
+        pub fn render_supported(&self) -> bool {
+            (self.value & 1) != 0
+        }
+        pub fn display_supported(&self) -> bool {
+            (self.value & (1 << 1)) != 0
+        }
+        pub fn software_device(&self) -> bool {
+            (self.value & (1 << 2)) != 0
+        }
+        pub fn compute_only(&self) -> bool {
+            (self.value & (1 << 11)) != 0
+        }
+    }
+
+    pub const KMTQAITYPE_ADAPTERTYPE: u32 = 15;
+
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Default)]
@@ -212,6 +247,34 @@ impl DxgBudgetProvider {
         self.adapter_luid
     }
 }
+#[derive(Clone, Copy, Debug)]
+pub struct AdapterCapabilities {
+    pub is_render_supported: bool,
+    pub is_display_supported: bool,
+    pub is_software_device: bool,
+    pub is_compute_only: bool,
+}
+
+impl DxgBudgetProvider {
+    pub fn query_capabilities(&self) -> Result<AdapterCapabilities, DxgError> {
+        let mut adapter_type = uapi::AdapterType::default();
+        let mut query = uapi::QueryAdapterInfo {
+            adapter: self.adapter_handle,
+            query_type: uapi::KMTQAITYPE_ADAPTERTYPE,
+            private_data: &mut adapter_type as *mut _ as u64,
+            private_data_size: std::mem::size_of::<uapi::AdapterType>() as u32,
+            ..Default::default()
+        };
+        ioctl_mut(&self.file, uapi::QUERY_ADAPTER_INFO_IOCTL, &mut query)?;
+        Ok(AdapterCapabilities {
+            is_render_supported: adapter_type.render_supported(),
+            is_display_supported: adapter_type.display_supported(),
+            is_software_device: adapter_type.software_device(),
+            is_compute_only: adapter_type.compute_only(),
+        })
+    }
+}
+
 
 impl GpuBudgetProvider for DxgBudgetProvider {
     fn snapshot(&self) -> Result<BudgetSnapshot, DxgError> {
@@ -306,6 +369,13 @@ mod tests {
         assert_eq!(size_of::<super::uapi::AdapterInfo>(), 20);
         assert_eq!(size_of::<super::uapi::QueryVideoMemoryInfo>(), 56);
     }
+    #[test]
+    fn official_uapi_query_adapter_info_match_wsl_618() {
+        assert_eq!(super::uapi::QUERY_ADAPTER_INFO_IOCTL, 0xc018_4709);
+        assert_eq!(size_of::<super::uapi::QueryAdapterInfo>(), 24);
+        assert_eq!(size_of::<super::uapi::AdapterType>(), 4);
+    }
+
 
     #[test]
     fn adapter_selection_rejects_ambiguity() {
