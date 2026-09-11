@@ -326,7 +326,7 @@ coverage ownership.
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-cli \
-  --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/diagnose.rs \
+  --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/diagnose/mod.rs,crates/ramshared-cli/src/diagnose/kernel.rs \
   --min 80 \
   --report-json tmp/cascade-lifecycle-cov.json
 ```
