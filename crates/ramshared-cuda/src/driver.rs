@@ -107,6 +107,7 @@ impl Cuda {
                 ctx_destroy: load_sym(handle, c"cuCtxDestroy_v2")?,
                 ctx_synchronize: load_sym(handle, c"cuCtxSynchronize")?,
                 mem_alloc: load_sym(handle, c"cuMemAlloc_v2")?,
+                mem_alloc_managed: load_sym_opt(handle, c"cuMemAllocManaged_v2").or_else(|| load_sym_opt(handle, c"cuMemAllocManaged")),
                 mem_free: load_sym(handle, c"cuMemFree_v2")?,
                 memcpy_htod: load_sym(handle, c"cuMemcpyHtoD_v2")?,
                 memcpy_dtoh: load_sym(handle, c"cuMemcpyDtoH_v2")?,
@@ -210,6 +211,22 @@ impl<'a> Context<'a> {
         // SAFETY: ptr points to a valid local; CUDA context is current.
         let r = unsafe { (self.cuda.syms.mem_alloc)(&mut ptr, bytes) };
         check(&self.cuda.syms, r, "cuMemAlloc")?;
+        Ok(DeviceMem {
+            ctx: self,
+            ptr,
+            len: bytes,
+        })
+    }
+
+    /// Allocates `bytes` of managed memory (`cuMemAllocManaged`). The allocation is released when the returned `DeviceMem` is dropped.
+    pub fn alloc_managed(&self, bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> {
+        let mem_alloc_managed = self.cuda.syms.mem_alloc_managed.ok_or_else(|| {
+            CudaError::Symbol("cuMemAllocManaged not available".to_string())
+        })?;
+        let mut ptr: CuDevicePtr = 0;
+        // SAFETY: ptr points to a valid local; CUDA context is current.
+        let r = unsafe { mem_alloc_managed(&mut ptr, bytes, crate::ffi::CU_MEM_ATTACH_GLOBAL) };
+        check(&self.cuda.syms, r, "cuMemAllocManaged")?;
         Ok(DeviceMem {
             ctx: self,
             ptr,

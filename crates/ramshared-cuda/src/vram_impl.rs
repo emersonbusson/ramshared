@@ -46,7 +46,13 @@ impl<'a> VramProvider for Context<'a> {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
-        Context::alloc(self, bytes).map_err(Into::into)
+        match Context::alloc(self, bytes) {
+            Ok(mem) => Ok(mem),
+            Err(CudaError::Driver { code, .. }) if code == crate::ffi::CUDA_ERROR_OUT_OF_MEMORY => {
+                Context::alloc_managed(self, bytes).map_err(Into::into)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
@@ -80,6 +86,24 @@ mod tests {
                 assert_eq!(size, 25);
             }
             _ => panic!("Expected VramError::OutOfRange"),
+        }
+    }
+
+    #[test]
+    fn test_vram_alloc_fallback_logic() {
+        let cuda_err = CudaError::Driver {
+            op: "cuMemAlloc",
+            code: crate::ffi::CUDA_ERROR_OUT_OF_MEMORY,
+            msg: "out of memory".to_string(),
+        };
+
+        let vram_err: VramError = cuda_err.into();
+        match vram_err {
+            VramError::Provider(msg) => {
+                assert!(msg.contains("cuMemAlloc"));
+                assert!(msg.contains("CUresult=2"));
+            }
+            _ => panic!("Expected VramError::Provider"),
         }
     }
 
@@ -137,4 +161,3 @@ mod tests {
     }
 }
 // dummy comment to force push
-// dummy 2

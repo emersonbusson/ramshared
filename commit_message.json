@@ -1,0 +1,6 @@
+{
+  "title": "feat(gpu): implement CUDA unified memory fallback on VRAM exhaustion",
+  "commit_message": "Implement graceful fallback to cuMemAllocManaged when cuMemAlloc fails with CUDA_ERROR_OUT_OF_MEMORY. This allows allocations to span host RAM when discrete VRAM is exhausted. Rollback trigger: CUDA allocations failing in the presence of free system RAM.",
+  "branch_name": "jules/inbox",
+  "description": "## Summary\n\nImplement graceful fallback to cuMemAllocManaged when cuMemAlloc fails due to VRAM exhaustion.\n\n## Commits\n\n| Commit | Message |\n|---|---|\n| TBD | feat(gpu): implement CUDA unified memory fallback on VRAM exhaustion |\n\n## Validation\n\n- Ran `cargo check` and `cargo test -p ramshared-cuda` locally.\n- Added a unit test validating fallback parsing in vram_impl.\n\n## Rollback trigger\nCUDA allocations failing in the presence of free system RAM.\n\n## Issue\n#1\n\n## Owner\n@SecurityGpuWin100\n\n## Labels\ntype:feature\narea:gpu\n"
+}

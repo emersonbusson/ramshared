@@ -27,7 +27,12 @@ pub type FnDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) ->
 pub type FnCtxCreate = unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult;
 pub type FnCtxDestroy = unsafe extern "C" fn(CuContext) -> CuResult;
 pub type FnCtxSynchronize = unsafe extern "C" fn() -> CuResult;
+#[allow(dead_code)]
+pub const CUDA_ERROR_OUT_OF_MEMORY: CuResult = 2;
+pub const CU_MEM_ATTACH_GLOBAL: c_uint = 1;
+
 pub type FnMemAlloc = unsafe extern "C" fn(*mut CuDevicePtr, usize) -> CuResult;
+pub type FnMemAllocManaged = unsafe extern "C" fn(*mut CuDevicePtr, usize, c_uint) -> CuResult;
 pub type FnMemFree = unsafe extern "C" fn(CuDevicePtr) -> CuResult;
 pub type FnMemcpyHtoD = unsafe extern "C" fn(CuDevicePtr, *const c_void, usize) -> CuResult;
 pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) -> CuResult;
@@ -45,6 +50,7 @@ pub struct Syms {
     pub ctx_destroy: FnCtxDestroy,
     pub ctx_synchronize: FnCtxSynchronize,
     pub mem_alloc: FnMemAlloc,
+    pub mem_alloc_managed: Option<FnMemAllocManaged>,
     pub mem_free: FnMemFree,
     pub memcpy_htod: FnMemcpyHtoD,
     pub memcpy_dtoh: FnMemcpyDtoH,
