@@ -1,7 +1,7 @@
 //! Swap execution over NBD: connects `nbd-client`, formats with `mkswap` (DT-16), and activates
 //! with `swapon` (priority DT-7); the reverse path deactivates and disconnects. The argv construction
 //! is pure/testable; functions that spawn processes are thin wrappers (`Command`) and validated
-//! live in qemu / civm drills (not on WSL2 — session rule).
+//! live in qemu / isolated VM drills (not on WSL2 — session rule).
 //!
 //! DT-14: `nbd-client` ALWAYS with `-timeout 30` and NEVER `-persist` (no auto-reconnect; the
 //! broker re-subscribes). DT-16: `mkswap` is mandatory at each attach (VRAM returns zeroed/dirty).

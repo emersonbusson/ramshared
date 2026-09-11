@@ -30,7 +30,10 @@ pub use origin_cache::{
     ORIGIN_CACHE_CHUNK_BYTES, OriginState, OriginStorage, WriteThroughCacheBackend,
     physical_target_bytes,
 };
-pub use protocol::{Command, ProtocolError, Request, encode_simple_reply, parse_request};
+pub use protocol::{
+    Command, NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK, ProtocolError,
+    Request, encode_simple_reply, parse_request,
+};
 pub use request::{BlockBackend, IoError, ServeOutcome, WriteOptions, serve};
 pub use sparse_vram::{
     CommitBudgetGate, DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env,

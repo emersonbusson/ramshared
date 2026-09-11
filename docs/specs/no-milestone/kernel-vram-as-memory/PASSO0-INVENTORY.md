@@ -6,13 +6,13 @@
 
 | Check | Result |
 | --- | --- |
-| Host | Windows + Hyper-V (`EMEDEV`) |
+| Host | Windows + Hyper-V (`dev-workstation`) |
 | WSL guest | **YES** — GPU-PV only (PCI vendor **0x1414**, no `/dev/dri`) |
 | GPU (host) | NVIDIA GeForce RTX 2060 6 GB |
-| Dual-boot free space (R: RUSSIA) | **FAIL** — free ~170 GB but shrinkable only ~**2.68 GB** (NTFS end-of-volume / immovable layout) |
-| Dual-boot free space (E: ESPANHA) | **PASS** — shrunk 2026-07-10; **~32 GB unallocated** on disk 0 (SAMSUNG HD154UI) |
-| Ubuntu ISO for installer | `R:\Hyper-V\iso\ubuntu-24.04.2-live-server-amd64.iso` |
-| Hyper-V Linux lab | `linux-kernel-lab` Running (cloudimg) — **not** bare-metal GPU |
+| Dual-boot free space (Secondary Disk 2) | **FAIL** — free ~170 GB but shrinkable only ~**2.68 GB** (NTFS end-of-volume / immovable layout) |
+| Dual-boot free space (Secondary Disk 1) | **PASS** — shrunk 2026-07-10; **~32 GB unallocated** on secondary storage |
+| Ubuntu ISO for installer | `<lab-storage>\iso\ubuntu-24.04.2-live-server-amd64.iso` |
+| Hyper-V Linux lab | `isolated-linux-lab` Running (cloudimg) — **not** bare-metal GPU |
 
 ## Gate A verdict (updated)
 

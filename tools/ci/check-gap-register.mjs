@@ -2,7 +2,7 @@
 /**
  * Validates docs/reliability/GAP-REGISTER.md as a machine-checkable guardrail.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -21,9 +21,18 @@ const REQUIRED_LINKS = [
 const OPEN_STATUSES = new Set(['PARTIAL', 'DEFERRED', 'BLOCKED'])
 const BAD_PLACEHOLDERS = /\b(?:TBD|TODO|PENDING|UNKNOWN|N\/A|none)\b/i
 
-function read(rel) {
-  return readFileSync(path.join(ROOT, rel), 'utf8')
-}
+// Semantic anti-phantom-blocker patterns: expressions alleging defects or external
+// blockers that have already been resolved and verified in active CI test suites.
+const FORBIDDEN_OBSOLETE_BLOCKERS = [
+  { name: 'obsolete-guard-repair', regex: /\b(?:await|pending|awaiting)\s+(?:the\s+)?external\s+guard\s+repair\b/i },
+  { name: 'generic-guard-repair', regex: /\bguard\s+repair\b/i },
+]
+
+// Mandatory reliability milestones that must be recorded as closed evidence
+const REQUIRED_CLOSED_MILESTONES = [
+  { name: 'tier-3-ssd', regex: /Tier\s*3\s*(?:\(SSD\)|\bSSD\b)/i },
+  { name: 'rust-ci-guardrails', regex: /Rust\s+(?:CI|slice\s+coverage)/i },
+]
 
 function lineOf(text, needle) {
   const idx = text.indexOf(needle)
@@ -48,9 +57,24 @@ function tableRows(sectionText) {
     .map((line) => line.split('|').slice(1, -1).map((cell) => cell.trim()))
 }
 
-function main() {
+export function checkGapRegister({ root = ROOT } = {}) {
   const findings = []
-  const register = read(REGISTER)
+  const registerPath = path.join(root, REGISTER)
+
+  if (!existsSync(registerPath)) {
+    findings.push(`${REGISTER}:1 — missing gap register file`)
+    return { ok: false, findings }
+  }
+
+  const register = readFileSync(registerPath, 'utf8')
+
+  // Semantic check: forbid obsolete / phantom blocker phrases anywhere in the register
+  for (const { name, regex } of FORBIDDEN_OBSOLETE_BLOCKERS) {
+    if (regex.test(register)) {
+      const line = lineOf(register, register.match(regex)?.[0] ?? '')
+      findings.push(`${REGISTER}:${line} — phantom/obsolete blocker detected: ${name}`)
+    }
+  }
 
   const open = section(register, 'Current Open Gates')
   if (!open) {
@@ -94,22 +118,46 @@ function main() {
   const closed = section(register, 'Closed In This Session')
   if (!closed) {
     findings.push(`${REGISTER}:1 — missing Closed In This Session section`)
-  } else if (tableRows(closed).length === 0) {
-    findings.push(`${REGISTER}:1 — Closed In This Session table is empty`)
+  } else {
+    const closedRows = tableRows(closed)
+    if (closedRows.length === 0) {
+      findings.push(`${REGISTER}:1 — Closed In This Session table is empty`)
+    } else {
+      // Check mandatory milestone coverage in closed table
+      for (const { name, regex } of REQUIRED_CLOSED_MILESTONES) {
+        const found = closedRows.some((r) => regex.test(r[0] ?? '') || regex.test(r[1] ?? ''))
+        if (!found) {
+          findings.push(`${REGISTER}:1 — missing closed milestone evidence for ${name}`)
+        }
+      }
+    }
   }
 
   for (const rel of REQUIRED_LINKS) {
-    const text = read(rel)
+    const linkPath = path.join(root, rel)
+    if (!existsSync(linkPath)) continue
+    const text = readFileSync(linkPath, 'utf8')
     if (!text.includes('docs/reliability/GAP-REGISTER.md')) {
       findings.push(`${rel}:1 — missing link to ${REGISTER}`)
     }
   }
 
-  if (findings.length > 0) {
-    for (const f of findings) console.error(f)
+  return {
+    ok: findings.length === 0,
+    findings,
+  }
+}
+
+function main() {
+  const result = checkGapRegister({ root: ROOT })
+  if (!result.ok) {
+    for (const f of result.findings) console.error(f)
     process.exit(1)
   }
   console.log('✓ gap register OK')
 }
 
-main()
+// Support direct CLI execution
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main()
+}

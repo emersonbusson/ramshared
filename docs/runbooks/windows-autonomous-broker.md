@@ -14,7 +14,7 @@ separate gate.
 3. Install:
 
    ```powershell
-   C:\ramshared\bin\ramshared-winsvc.exe install --manifest C:\absolute\product-manifest.json
+   C:\ProgramData\RamShared\bin\ramshared-winsvc.exe install --manifest C:\path\to\product-manifest.json
    ```
 
 4. Confirm both services are demand-start, `RamSharedWinSvc` depends on
@@ -28,7 +28,7 @@ Start only the consumer; SCM starts the broker dependency:
 
 ```powershell
 Start-Service RamSharedWinSvc
-C:\ramshared\bin\ramshared-winsvc.exe status --json
+C:\ProgramData\RamShared\bin\ramshared-winsvc.exe status --json
 ```
 
 Require one exact-size `RAMSHARE VRAMDISK`, broker registration and lease,

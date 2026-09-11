@@ -159,8 +159,20 @@ wslconfig_existing_swapfile() {
 	done <"$cfg"
 }
 
+wslconfig_win_to_linux_path() {
+	local p="$1"
+	if [[ "$p" =~ ^([A-Za-z]):/(.*)$ ]]; then
+		local drive="${BASH_REMATCH[1],,}"
+		local rest="${BASH_REMATCH[2]}"
+		printf '/mnt/%s/%s' "$drive" "$rest"
+	else
+		printf '%s' "$p"
+	fi
+}
+
 wslconfig_render_host() {
 	local cfg=${1:-} mem swap sf kern mods swapfile_line="" sparse_line=""
+	local kern_line mods_line kern_linux mods_linux
 	mem="$(wslconfig_encode_path "${WSLCONFIG_MEMORY_BYTES}")"
 	# memory/swap are integers — encode_path is no-op for digits
 	mem="${WSLCONFIG_MEMORY_BYTES}"
@@ -189,18 +201,33 @@ wslconfig_render_host() {
 		sparse_line=$'# UNSAFE LAB ONLY: WSL 2.7.12 requires an explicit corruption-risk override.\nsparseVhd=true'
 	fi
 
+	kern_linux="$(wslconfig_win_to_linux_path "$kern")"
+	mods_linux="$(wslconfig_win_to_linux_path "$mods")"
+
+	if [[ -n "$kern" && -f "$kern_linux" ]]; then
+		kern_line="kernel=${kern}"
+	else
+		kern_line="# kernel=${kern} # Disabled: kernel file not found on disk (fail-safe protection)"
+	fi
+
+	if [[ -n "$mods" && -f "$mods_linux" && -n "$kern" && -f "$kern_linux" ]]; then
+		mods_line="kernelModules=${mods}"
+	else
+		mods_line="# kernelModules=${mods} # Disabled: file not found or kernel disabled"
+	fi
+
 	cat <<EOF
 # Managed by scripts/safety/wslconfig-ctl.sh — do not hand-edit path backslashes.
 # Paths use forward slashes only (WSL escape-safe). See scripts/safety/wslconfig.host.example.
 
 [wsl2]
-# 16 GiB WSL hard cap; host residual for Windows + Hyper-V (civm, win11-drill).
+# 16 GiB WSL hard cap; host residual for Windows + Hyper-V (isolated guest VMs).
 memory=${mem}
 # 4 GiB WSL fallback; preserve an existing swapFile path or use WSL's default.
 swap=${swap}
 ${swapfile_line}
-kernel=${kern}
-kernelModules=${mods}
+${kern_line}
+${mods_line}
 
 [experimental]
 autoMemoryReclaim=Gradual

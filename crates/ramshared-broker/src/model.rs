@@ -3,7 +3,7 @@
 //! `SliceState` includes `Leased` (DT-19: slice reservation for lease, outside round-robin).
 //! `Lease` is internal state of the broker (does not travel over the wire), hence does not derive `serde`.
 
-/// Tenant identifier (consumer host: WSL2, civm, ...).
+/// Tenant identifier (consumer host: WSL2, guest VM, ...).
 pub type TenantId = u32;
 /// Slice identifier (`s0..s{K-1}`); the number is the suffix of the NBD device (DT-21).
 pub type SliceId = u16;

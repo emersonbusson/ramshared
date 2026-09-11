@@ -282,7 +282,7 @@ never abort the broker.
   `mem = Some(TenantMem { swap_current: psi::read_memcg_swap(), diskstats_io: active_swap_devs.iter().filter_map(|d| psi::read_diskstats(d)).sum() })`
   (DT-9/DT-11).
 - **Impact:** backwards-compatible; no active devices → `diskstats_io=0`.
-- **Tests:** parsers in `psi.rs`; sending exercised in civm e2e (Q1d).
+- **Tests:** parsers in `psi.rs`; sending exercised in isolated VM e2e (Q1d).
 
 ## Files to DELETE
 
@@ -351,7 +351,7 @@ the deferred `BINARY_MATCH/E2E` obligation are owned by memory-broker
 ITEM-8's daemon entry-point contract.
 
 **Manual:** `nc`+`jq` → `{"type":"status"}` → `StatusReply` with `slice_io`
-(ADR-0005); civm e2e (Q1d): `eviction`/`unaccounted` flag under real load
+(ADR-0005); isolated VM e2e (Q1d): `eviction`/`unaccounted` flag under real load
 (objective evidence for the ITEM-7 Kahneman map).
 
 ## Validation checklist

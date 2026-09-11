@@ -5,7 +5,7 @@
 # scenario). Replaces the SPEC's "cargo build -j4": P0 found that a build is CPU-bound and does
 # NOT generate memory PSI (see P0-RESULTS §1, "load" cell).
 # Usage: measure-psi-load.sh [DUR_s] [OUT_csv] [WS_MB] [HIGH_MB] [MAX_MB]   (root)
-# SPEC: docs/memory-broker/SPECv2.md ITEM-1; calibrates delta_psi (P0-RESULTS §5). Reusable for civm.
+# SPEC: docs/memory-broker/SPECv2.md ITEM-1; calibrates delta_psi (P0-RESULTS §5). Reusable for secondary VM.
 set -euo pipefail
 
 DUR="${1:-40}"

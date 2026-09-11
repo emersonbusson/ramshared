@@ -81,6 +81,30 @@ test('public_provenance_redaction_preserves_metrics_and_verdict', () => {
   assert.equal(isSecurityRedaction(`OOM after ${foreignName} — 3.9 GiB`, 'OOM after unrelated workload — 3.9 GiB'), true)
 })
 
+test('host_boundary_sanitization_preserves_metrics_and_verdict', () => {
+  assert.equal(
+    isSecurityRedaction(
+      '**What:** Apply shared-host policy so WSL2 does not starve Windows/Hyper-V (civm, win11-drill): system RAM cap 16 GiB in `.wslconfig`; cascade VRAM tier 4 GiB; GPU free floor 1 GiB.',
+      '**What:** Apply shared-host policy so WSL2 does not starve Windows/Hyper-V (isolated guest VMs): system RAM cap 16 GiB in `.wslconfig`; cascade VRAM tier 4 GiB; GPU free floor 1 GiB.'
+    ),
+    true
+  )
+  assert.equal(
+    isSecurityRedaction(
+      'cat /mnt/c/Users/emedev/.wslconfig',
+      'cat /mnt/c/Users/<user>/.wslconfig'
+    ),
+    true
+  )
+  assert.equal(
+    isSecurityRedaction(
+      '## 2026-07-10 — Hyper-V lab on R: RUSSIA (3 paths)',
+      '## 2026-07-10 — Hyper-V lab on secondary storage (3 paths)'
+    ),
+    true
+  )
+})
+
 test('public_provenance_redaction_cannot_change_measurement_or_claim', () => {
   const oldWindows = ['C:', 'Users', 'private-user', 'ramshared-drill', 'run.json'].join('\\')
   assert.equal(isSecurityRedaction(`Artifacts: ${oldWindows} — 12/12 ✅`, 'Artifacts: C:\\ramshared\\artifacts\\run.json — 11/12 ✅'), false)

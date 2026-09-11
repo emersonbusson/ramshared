@@ -20,7 +20,7 @@ automática. Prevenção + caixa-preta, não escudo mágico.
 | `preflight.sh` | **Portão falha-seguro** antes de subir o daemon: RECUSA (exit≠0, o daemon nem inicia) se o binário não tiver o fix do mlockall, se a GPU não responder, se faltar VRAM, ou se houver `/dev/ublkb*` órfão. Roda o snapshot no sucesso. |
 | `preflight-snapshot.sh` | Baseline "estado bom" antes de um start arriscado (git commit, `nvidia-smi`, mem/swap, `.wslconfig`, cmdline) + **arma** o coletor (`.armed`). |
 | `postmortem.sh` | **Coletor forense**: `postmortem.sh --auto` (no boot) coleta se o boot anterior teve `kernel BUG`/Oops/OOM OU marcador `.armed`. Junta journal, sinais de crash, **Windows Event Log** (Kernel-Power 41=host travou, TDR 4101=GPU crashou, Hyper-V-VmSwitch=restart), console durável do kernel, estado GPU/mem/swap. Idempotente. |
-| `kmsg-recorder.sh` | Espelha `/dev/kmsg` (`dmesg --follow`) pra `C:\wsl-forensics\kernel-console.log` em tempo real — caixa-preta host-side que pega o **call trace completo** do BUG que o journald perde ao congelar. |
+| `kmsg-recorder.sh` | Espelha `/dev/kmsg` (`dmesg --follow`) pra `<forensics-dir>\kernel-console.log` em tempo real — caixa-preta host-side que pega o **call trace completo** do BUG que o journald perde ao congelar. |
 | `install.sh` | Instala tudo (unidades systemd + drop-in journald) de forma idempotente. NÃO habilita o `ramsharedd` (rollout supervisionado); habilita só os serviços de segurança. |
 
 Unidades systemd em `scripts/safety/systemd/` (versionadas no repo):
@@ -30,7 +30,7 @@ Unidades systemd em `scripts/safety/systemd/` (versionadas no repo):
 
 ## Onde a evidência mora
 
-**`/mnt/c/wsl-forensics/`** — NTFS do host, **sobrevive à morte da VM** (ao contrário do
+**`/mnt/c/path/to/forensics/`** — NTFS do host, **sobrevive à morte da VM** (ao contrário do
 `/var` do guest). Contém: `postmortem-<ts>-boot<N>.md` (relatórios), `snapshot-<ts>.md`
 (baselines), `kernel-console.log` (console vivo), `kernel-console.prev.log` (console do boot
 que travou).
@@ -49,7 +49,7 @@ bash scripts/safety/preflight.sh            # exit 0 = seguro; exit 1 = RECUSADO
 ```
 
 Após qualquer travamento: reinicie o WSL2 e o `ramshared-postmortem.service` gera o relatório
-automaticamente no boot seguinte, em `/mnt/c/wsl-forensics/`.
+automaticamente no boot seguinte, em `/mnt/c/path/to/forensics/`.
 
 ## Validação (feita em 2026-07-03)
 

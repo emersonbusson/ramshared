@@ -50,7 +50,7 @@
 
 ## Results (Executed on 2026-07-03)
 
-**Environment:** Hyper-V VM `win11-drill` (Windows 11 Pro 25H2, 4 GB -> 2 GB RAM, Secure Boot OFF + test-signing), installed headless via `autounattend.xml`. Automation orchestrated via **PowerShell Direct** (no GUI/network). Volatile backend = **5 GB hot-removable VHDX** on SCSI 0:1. Execution scripts stored in `C:\ramshared-drill\`.
+**Environment:** Hyper-V VM `isolated-windows-vm` (Windows 11 Pro 25H2, 4 GB -> 2 GB RAM, Secure Boot OFF + test-signing), installed headless via `autounattend.xml`. Automation orchestrated via **PowerShell Direct** (no GUI/network). Volatile backend = **5 GB hot-removable VHDX** on SCSI 0:1. Execution scripts stored in `C:\path\to\drill\`.
 
 | Scenario | Result | Evidence |
 | --- | --- | --- |

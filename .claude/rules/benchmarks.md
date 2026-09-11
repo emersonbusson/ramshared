@@ -22,7 +22,7 @@ cited in a doc, PR, or decision, it becomes a registered benchmark** and must fo
   Every run carries a **condition tag** (`idle` | `loaded`).
 - **Bounded and supervised on the live host.** Unsupervised swap/ublk thrashing on WSL2 is forbidden
   because it can freeze the host and crash user apps. Real pressure should prefer an isolated
-  VM/qemu/civm. When the explicit target is the shared daily WSL2 host, it must go through
+  VM/QEMU environment. When the explicit target is the shared daily WSL2 host, it must go through
   `scripts/windows/Invoke-SharedWslPressureCampaign.ps1` with approval, a Windows-side watchdog,
   cgroup-bounded pressure, telemetry, and cleanup artifacts.
 

@@ -398,7 +398,16 @@ function hasPrecedingSafetyMarker(lines, line) {
 }
 
 function isPublicArtifact(file) {
-  return file === 'README.md' || file === 'README.pt-BR.md' || file === 'validation.md' || file.startsWith('docs/')
+  return (
+    file === 'README.md' ||
+    file === 'README.pt-BR.md' ||
+    file === 'validation.md' ||
+    file === 'AGENTS.md' ||
+    file === 'CLAUDE.md' ||
+    file === 'ARCHITECTURE.md' ||
+    file.startsWith('.claude/rules/') ||
+    file.startsWith('docs/')
+  )
 }
 
 function publicBinaryContract(file) {

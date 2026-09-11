@@ -69,7 +69,7 @@
 | --- | --- |
 | Soak reboot 2× after enable | **Hygiene** — human/lab; no new SPEC (covers existing boot SPEC) |
 | Full ublk `up` wire | Future SPEC + AUDIT-2.5 |
-| Pressure thrash | Host-unsafe on live WSL2 — only qemu/civm |
+| Pressure thrash | Host-unsafe on live WSL2 — only QEMU/isolated VM |
 | Custom-kernel DXG/systemd requalification | **NO-GO** until the exact-distro bundled/custom A/B canary passes; see the [2026-08-23 finding](../../../reliability/incidents/2026-08-23-wsl2-dxg-fortify-systemd-no-go.md) |
 
 ## Rollback trigger

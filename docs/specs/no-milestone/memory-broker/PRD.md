@@ -38,7 +38,7 @@ acceptance target, not a current product capability.
 - **Confirmed in docs (CUDA/native Windows):** UVM oversubscription via page faults is **Linux-only** (`cudaMallocManaged` WDDM does not have demand paging); native application fallback behavior varies by engine and version and must be measured, not assumed.
 - **Confirmed (tester report):** Windows GPU workloads can lose significant time to manual memory reduction when scenes/projects do not fit in VRAM, while RAM is idle; real workloads are available for measurement.
 - **Two personas** *(Confirmed in conversations)*:
-  - **Dev/CI (Developer, host dev-host):** WSL2 (compiles) + civm (Actions) compete for memory; VRAM is the extra tier. The brain lives in WSL2 (the stack lives there).
+  - **Dev/CI (Developer, host dev-host):** WSL2 (compiles) + isolated VM (Actions) compete for memory; VRAM is the extra tier. The brain lives in WSL2 (the stack lives there).
   - **Windows GPU workload user:** native GPU workloads compete for VRAM with the rest of the system; RAM is the extra tier. **No WSL2** — the brain must run as a native Windows service.
 - **Inference (to be validated in P0):** VM → WSL2 connectivity (WSL2 NAT may require Tailscale in WSL2 or port-forwarding); NBD/TCP latency in the virt-switch; out-of-core coverage of OptiX/HIP.
 
@@ -57,7 +57,7 @@ acceptance target, not a current product capability.
   is the first source backend; Vulkan is proposed for native Windows/Linux;
   D3D12/dxg remains research for non-NVIDIA WSL2.
 
-**Rejected options:** identical single binary everywhere (mechanisms diverge by OS); UVM-only (does not cover Windows); GPU-P/passthrough on civm (poor consumer GPU support); broker on Windows host for the dev persona (stack is Linux/Day-0; WSL2 is the place on the dev host); static partitioning (does not address "whoever needs it most").
+**Rejected options:** identical single binary everywhere (mechanisms diverge by OS); UVM-only (does not cover Windows); GPU-P/passthrough on isolated VM (poor consumer GPU support); broker on Windows host for the dev persona (stack is Linux/Day-0; WSL2 is the place on the dev host); static partitioning (does not address "whoever needs it most").
 
 ## 4. Functional Requirements
 
@@ -67,11 +67,11 @@ acceptance target, not a current product capability.
 - **RF-B3** **Revocable Lease**: revocation = demote per-slice (reusing `spawn_swapoff` + canary); priority: explicit VRAM request (DCC) > swap tier.
 - **RF-B4** Observability: each decision logged with pressure from both sides; `Status` shows slices/tenant, PSI, last rebalance ("each knows who needs it most").
 
-**Linux Tenants (WSL2 + civm)**
+**Linux Tenants (WSL2 + isolated VM)**
 - **RF-L1** Slices: `--slices K --slice-mb N`; K independent devices (disjoint offsets in the same `DeviceMem`); dynamic slice → tenant mapping. *(Check in the SPEC if `VramBackend` supports offset/len view — Hard Rule #1.)*
 - **RF-L2** **NBD/TCP** listener (`--listen-nbd tcp://IP:PORT`), coexisting with Unix socket; bind only to private interface/Tailscale.
 - **RF-L3** Linux Agent: reads `/proc/pressure/memory` + `/proc/swaps`, executes swapon/swapoff.
-- **RF-L4** Copiable provisioning runbook for civm (nbd-client + agent + systemd), respecting civm policy (peer copies template; zero host automation).
+- **RF-L4** Copiable provisioning runbook for isolated VM (nbd-client + agent + systemd), respecting tenant policy (peer copies template; zero host automation).
 
 **Windows / DCC (Phase C)**
 - **RF-W1** Windows Agent (native Rust): OS memory pressure + NVML/GPU budget.
@@ -85,7 +85,7 @@ acceptance target, not a current product capability.
 - **RF-G3** *(research)* D3D12/`/dev/dxg` for non-NVIDIA inside WSL2.
 
 **Product**
-- **RF-P1** Packaging target: `ramshared-setup.exe`/winget (Windows service + CLI) and `.deb` + systemd (Linux/WSL2/civm). Native Rust binaries; GPU APIs via dlopen/driver (zero extra dependencies).
+- **RF-P1** Packaging target: `ramshared-setup.exe`/winget (Windows service + CLI) and `.deb` + systemd (Linux/WSL2/isolated VM). Native Rust binaries; GPU APIs via dlopen/driver (zero extra dependencies).
 - **RF-P2** Transport with fallback: ublk where the kernel supports it (`CONFIG_BLK_DEV_UBLK`); **NBD as universal fallback**. Any transport comparison requires separately qualified evidence.
 - **RF-P3** Single configuration file (TOML) per host: tenants, slices, binds, arbiter policy.
 
@@ -100,7 +100,7 @@ acceptance target, not a current product capability.
 
 ## 6. Workflows
 
-1. **CI vs. build (dev persona):** Actions on civm (PSI rises) + `cargo build` on WSL2 → arbiter sees `psi_civm ≫ psi_wsl2` over N samples → swapoff slice on WSL2 → swapon on civm via NBD → invert when pressure inverts.
+1. **CI vs. build (dev persona):** Actions on isolated VM (PSI rises) + `cargo build` on WSL2 → arbiter sees `psi_tenant ≫ psi_wsl2` over N samples → swapoff slice on WSL2 → swapon on isolated VM via NBD → invert when pressure inverts.
 2. **Windows GPU workload:** host agent observes or receives a generic headroom request → `LeaseRequest` to broker → broker demotes swap slices (revokes lease) → workload runs with reclaimed VRAM → end of workload window → `LeaseRelease` → broker re-leases to swap tier.
 3. **Broker dies:** agents detect (watchdog) → best-effort swapoff of remote slices → tenants continue with local swap (RNF-1).
 4. **Orderly shutdown:** demote-all → agents confirm swapoff → STOP/DEL (ublk) + close NBD → zero VRAM. The prior teardown design may be reused, but this phase requires current evidence.
@@ -124,7 +124,7 @@ acceptance target, not a current product capability.
 | R1 | VM↔WSL2 connectivity (NAT) *(Inference)* | P0 measures; Tailscale in WSL2 or port-forwarding |
 | R2 | **D-state in remote tenant** (dead broker) | RNF-1 (priority, watchdog, runbook) |
 | R3 | Arbiter flapping | RNF-3 (hysteresis+cooldown) + counterfactual §14 |
-| R4 | NBD/TCP latency in virt-switch | P0 measures; compared to swap in saturated VHDX, civm still profits *(Inference)* |
+| R4 | NBD/TCP latency in virt-switch | P0 measures; compared to swap in saturated VHDX, isolated VM still profits *(Inference)* |
 | R5 | Vulkan inside WSL2 immature (non-NVIDIA) | Honest matrix: CUDA covers WSL2/NVIDIA; Vulkan covers native; D3D12 = RF-G3 research |
 | R6 | Fragile `nvcuda.dll` hooking (v2) | v2 gated; degrades to native path (Phase C RNF-4) |
 | R7 | `wsl --shutdown` kills the dev host broker | = R2 (watchdog); document |
@@ -134,14 +134,14 @@ acceptance target, not a current product capability.
 ## 10. Implementation Strategy (phases with anti-halo gates)
 
 - **P0 — Measurement (no product code):** PSI idle/load in the 3 environments; VM↔WSL2 reachability and RTT; raw NBD/TCP p50/p99; Alex's scenes (Annex B) + native out-of-core behavior. **Gate:** documented numbers; without them, no subsequent phase begins.
-- **P1 — Broker Core, Linux↔Linux:** RF-B1..B4, RF-L1..L4 (slices, NBD/TCP, agent, arbiter). Real e2e: action on civm + build on WSL2 with observed rebalancing. **Gate:** Scenario 1 demonstrated with PSI logs; D-state drill (kill broker → watchdog cleans up <5s).
+- **P1 — Broker Core, Linux↔Linux:** RF-B1..B4, RF-L1..L4 (slices, NBD/TCP, agent, arbiter). Real e2e: action on isolated VM + build on WSL2 with observed rebalancing. **Gate:** Scenario 1 demonstrated with PSI logs; D-state drill (kill broker → watchdog cleans up <5s).
 - **P2 — Windows Bridge + DCC MVP:** RF-W1..W3 (Windows agent, MVP addon, lease bridge). **Gate:** ≥1 real scene from Alex that used to fail renders without manual editing; lease revokes/returns VRAM.
 - **P3 — Any GPU:** RF-G1..G2 (trait + Vulkan). **Gate:** swap tier smoke tests passing on non-NVIDIA GPU (native).
 - **P4 — Gated (numbers-only):** interposer v2 (RF-W4; gate: MVP does not unlock Alex's scene or cost >2× vs. VRAM working set), Windows swap driver, D3D12-WSL2 (RF-G3).
 
 ## 11. Documents to Update
 
-`docs/specs/no-milestone/memory-broker/SPEC.md` (**next step**, from this PRD); IMPL per phase; copiable civm runbook; `README`/`ARCHITECTURE` (platform); `MEMORY.md`. Source PRDs remain as history (marked).
+`docs/specs/no-milestone/memory-broker/SPEC.md` (**next step**, from this PRD); IMPL per phase; copiable isolated VM runbook; `README`/`ARCHITECTURE` (platform); `MEMORY.md`. Source PRDs remain as history (marked).
 
 ## 12. Out of Scope
 
@@ -149,7 +149,7 @@ DCC adapter business model (pricing/licensing); custom auth/encryption (private 
 
 ## 13. Acceptance Criteria (Platform)
 
-1. P1: automatic WSL2↔civm rebalancing under real load, with "whoever needs it most" logs and clean D-state drill.
+1. P1: automatic WSL2↔isolated-VM rebalancing under real load, with "whoever needs it most" logs and clean D-state drill.
 2. P2: a real Windows GPU workload that previously exhausted VRAM completes or shows improved headroom without app-specific assumptions; lease revokes the swap tier and returns VRAM.
 3. P3: functional swap tier on native non-NVIDIA GPU (Vulkan).
 4. RNF-4: Phase B smokes remain green in all phases.

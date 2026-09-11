@@ -44,7 +44,7 @@
   quiet now).
 - **Active (Windows GUI):** OBS 32.1 (live Instagram), Microsoft Edge (GitHub/CI), **qBittorrent
   v5.2.1** (background disk IO), AnyDesk, VMS, Windows Terminal, VS Code (WSL Ubuntu-24.04),
-  **Hyper-V Manager** (civm host), Task Manager, Notepad. | WSL2 (RSS): claude, dockerd, gopls,
+  **Hyper-V Manager** (isolated VM host), Task Manager, Notepad. | WSL2 (RSS): claude, dockerd, gopls,
   clamd, MainThread (~3 GiB).
 - **Tooling:** `scripts/p0/measure-vram-headroom.sh` (read-only, 30 s) + `scripts/p0/measure-swap-compare.sh`
   → `fio` 4K `direct=1 ioengine=libaio` **bounded** (256 MiB, 12 s, ramp 2 s), target file on `sdc`
@@ -81,7 +81,7 @@ VRAM-swap reference (P0-RESULTS §3, same 4K p50 op): **ublk 241 µs / NBD-Unix 
 - **VRAM Volatility:** 1.4% currently because no heavy GPU workload is active; under OBS/gaming/rendering,
   `used` rises and free capacity shrinks — harvesting idle VRAM requires yielding when the host needs the GPU.
 - **Pending decisiveness (Q1d):** Apples-to-apples comparison under **identical** controlled pressure
-  (`MADV_PAGEOUT`) in civm: swap → remote VRAM vs swap → local disk. This constitutes strong directional evidence,
+  (`MADV_PAGEOUT`) in isolated VM: swap → remote VRAM vs swap → local disk. This constitutes strong directional evidence,
   not a final unqualified promotion verdict.
 
 ---

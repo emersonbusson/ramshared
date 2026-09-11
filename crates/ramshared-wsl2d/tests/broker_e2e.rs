@@ -178,7 +178,7 @@ fn e2e_duplicate_register_closes_second() {
 
 #[test]
 fn e2e_psi_flood_does_not_starve_arbiter_tick() {
-    // Regression (bug caught in cross-host civm e2e): under high-rate `Psi` (>> tick), the Arbiter's
+    // Regression (bug caught in cross-host multi-tenant e2e): under high-rate `Psi` (>> tick), the Arbiter's
     // Tick MUST NOT be starved — otherwise `AssignFree` never runs and the tenant never receives
     // `SwapOn`. The `core_loop` fires the Tick by wall-clock deadline, not just on recv
     // timeout. Here the agent floods `Psi` every ~5ms (tick=50ms) and should still receive SwapOn.

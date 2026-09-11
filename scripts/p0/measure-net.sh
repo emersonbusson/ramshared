@@ -2,7 +2,7 @@
 # P0 ITEM-1 — VM<->WSL2 reachability and RTT: ping (p50/p99) plus a TCP port test.
 # Usage: measure-net.sh PEER_HOST [PORT] [PING_COUNT]
 # SPEC: docs/memory-broker/SPECv2.md ITEM-1; R1 (WSL2 NAT — PRD inference to validate).
-# Run in BOTH directions (WSL2->civm and civm->WSL2), with and without Tailscale; decide the transport.
+# Run in BOTH directions (WSL2->remote and remote->WSL2), with and without Tailscale; decide the transport.
 set -euo pipefail
 
 PEER="${1:?usage: measure-net.sh PEER_HOST [PORT] [PING_COUNT]}"

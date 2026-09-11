@@ -80,7 +80,7 @@ pub enum Msg {
     },
 }
 
-/// NBD endpoint that the agent receives in `SwapOn` (DT-25: Unix for local tenant, TCP for civm).
+/// NBD endpoint that the agent receives in `SwapOn` (DT-25: Unix for local tenant, TCP for remote tenant).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NbdEndpoint {

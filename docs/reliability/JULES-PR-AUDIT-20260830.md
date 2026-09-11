@@ -946,7 +946,7 @@ Analysis was conducted under project reliability policies (RamShared Day-0, SSDV
 - **Subsystem:** `ramshared-wsl2d`
 - **Verdict:** **FINDING_ONLY (Valid Documentation Finding)**
 - **Summary:** Validation report of historical note in `broker_srv.rs`.
-- **Technical Analysis:** Recorded as Finding 24 in `docs/jules/findings/24-pr489-broker-cross-host-civm-historical-note.md`.
+- **Technical Analysis:** Recorded as Finding 24 in `docs/jules/findings/24-pr489-broker-cross-host-multi-tenant-historical-note.md`.
 - **Recommended Action:** Documented in findings.
 
 ### PR #490: 🧪 test(wsl2d): io error in serve_request

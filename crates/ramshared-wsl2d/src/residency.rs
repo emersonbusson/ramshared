@@ -5,7 +5,7 @@
 
 /// Trigger parameters (§9.3). Calibration (DT-31): WDDM eviction spikes ~330× baseline
 /// (Phase 0), BUT serve latency under heavy LOAD reaches ~17× (measured on e2e cross-host
-/// civm). `8×` gave false positives and dropped the swap under the very load it was supposed to support.
+/// multi-tenant). `8×` gave false positives and dropped the swap under the very load it was supposed to support.
 /// `64×` has margins on both sides (>>17× load, <<330× eviction); the **content probe
 /// §9.4** is the AUTHORITATIVE eviction detector (latency is just a fast, coarse hint).
 #[derive(Clone, Copy, Debug)]
@@ -64,6 +64,26 @@ pub enum DemoteReason {
     Latency,
     Corruption,
     FreeFloor,
+    GpuLost,
+    IoErrorBurst,
+}
+
+impl DemoteReason {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Latency => "Latency",
+            Self::Corruption => "Corruption",
+            Self::FreeFloor => "FreeFloor",
+            Self::GpuLost => "GpuLost",
+            Self::IoErrorBurst => "IoErrorBurst",
+        }
+    }
+}
+
+impl std::fmt::Display for DemoteReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,7 +270,7 @@ mod tests {
     #[test]
     fn load_spike_below_threshold_stays_ok() {
         // Regression DT-31: LOAD spike ~17× baseline (not eviction) must NOT demote.
-        // With 8× this triggered and dropped the swap under load (e2e civm bug); with 64×, it remains Ok.
+        // With 8× this triggered and dropped the swap under load (e2e multi-tenant bug); with 64×, it remains Ok.
         let mut c = canary(); // baseline 4 ms → limiar 256 ms
         for _ in 0..10 {
             assert_eq!(c.sample(4000 * 17, true, u64::MAX), Verdict::Ok); // 68 ms = 17× < 256 ms
@@ -386,5 +406,17 @@ mod sampler_tests {
             ResidencyError::MalformedMetric.to_string(),
             "malformed metric (-EINVAL)"
         );
+    }
+
+    #[test]
+    fn demote_reason_display_and_as_str() {
+        assert_eq!(DemoteReason::Latency.as_str(), "Latency");
+        assert_eq!(DemoteReason::Corruption.as_str(), "Corruption");
+        assert_eq!(DemoteReason::FreeFloor.as_str(), "FreeFloor");
+        assert_eq!(DemoteReason::GpuLost.as_str(), "GpuLost");
+        assert_eq!(DemoteReason::IoErrorBurst.as_str(), "IoErrorBurst");
+
+        assert_eq!(DemoteReason::GpuLost.to_string(), "GpuLost");
+        assert_eq!(DemoteReason::IoErrorBurst.to_string(), "IoErrorBurst");
     }
 }

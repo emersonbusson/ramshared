@@ -19,6 +19,8 @@ Before changing code:
 5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md). For benchmark/stress changes, include a self-contained compact hardware comparison table with directions (`[Higher is better 🔺]` / `[Lower is better 🔻]`) and alarm thresholds (blocked on 🔴 ALARM via [`docs/reliability/HARDWARE-METRICS-TRIAGE.md`](docs/reliability/HARDWARE-METRICS-TRIAGE.md)). All branch commits must be listed in the PR table. PT-BR is permitted during draft review, transitioning to English for final merge.
 6. For benchmarks/measurements backing decisions, follow [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (auto context + ≥3 rounds + append-only log in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
 7. Follow the **Zero-Sum README Policy**: keep the README bounded to the single latest verified qualification run, removing superseded historical benchmarks (which belong in `docs/benchmarks/history/`), and strictly avoiding internal agent/bot references ("Jules", "Codex", censuses) in public READMEs.
+8. Respect the **Repository Boundary & Host Isolation**: RamShared is an independent open-source project. Never touch, modify, or delete anything outside the repository directory workspace, and never reference or cross-contaminate with foreign repositories or private host environments (see [`.claude/rules/governance.md`](.claude/rules/governance.md)).
+9. Maintain semantic truth in [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md): update closed milestones upon release promotions, and never keep phantom blockers when CI suites are passing (see [`.claude/rules/documentation.md`](.claude/rules/documentation.md)).
 
 ## Core Methodologies
 
