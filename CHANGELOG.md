@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.11.0] (2026-09-11)
+
+### Features
+
+* **governor:** closed-loop swap-paced memory consumption governor for deterministic multi-tier filling ([b721733](https://github.com/emersonbusson/ramshared/commit/b721733), [8d192a0](https://github.com/emersonbusson/ramshared/commit/8d192a0))
+* **telemetry:** active tier throughput and speedup factor metrics via empirical `/proc/diskstats` ([2696511](https://github.com/emersonbusson/ramshared/commit/2696511))
+* **monitor:** latching peak hardware tier usage across RAM, VRAM, and SSD in monitor and flight log ([b6f97d2](https://github.com/emersonbusson/ramshared/commit/b6f97d2))
+* **wsl2d:** native in-process RAM failover and automatic backend selection ([0c25e3a](https://github.com/emersonbusson/ramshared/commit/0c25e3a))
+* **packaging:** multi-distro Debian (`.deb`), Fedora (`.rpm`), and Arch Linux (`.tar.gz`) release packaging workflow ([cffc137](https://github.com/emersonbusson/ramshared/commit/cffc137))
+* **governance:** automated workspace boundary and host isolation CI gates ([1a8e7c0](https://github.com/emersonbusson/ramshared/commit/1a8e7c0), [2424a3c](https://github.com/emersonbusson/ramshared/commit/2424a3c))
+
+### Bug Fixes
+
+* **safety:** enforce unconditional safety memory floor and fail-safe `.wslconfig` brick protection ([4574832](https://github.com/emersonbusson/ramshared/commit/4574832))
+* **wsl2d:** circuit breaker and idle heartbeat for GPU driver reload resilience ([1299f09](https://github.com/emersonbusson/ramshared/commit/1299f09))
+* **packaging:** automatic RAM backend fallback when GPU access is blocked ([8eeb663](https://github.com/emersonbusson/ramshared/commit/8eeb663))
+* **ci:** restore release-producer policy contract compliance and security snapshots ([08d3ff4](https://github.com/emersonbusson/ramshared/commit/08d3ff4), [ce6c12c](https://github.com/emersonbusson/ramshared/commit/ce6c12c))
+
+### Documentation & Reliability
+
+* **reliability:** streamline gap register to architectural product gates and purge obsolete pre-v0.11.0 records ([ea029c4](https://github.com/emersonbusson/ramshared/commit/ea029c4), [9fdc4e4](https://github.com/emersonbusson/ramshared/commit/9fdc4e4))
+* **benchmarks:** qualify Tier 1 (124.5 MB/s), Tier 2 (612.2 MB/s, 30.6x speedup), and Tier 3 (1077.2 MB/s) cascade with zero panics ([2696511](https://github.com/emersonbusson/ramshared/commit/2696511))
+
 ## [0.9.0-beta.1](https://github.com/emersonbusson/ramshared/compare/v0.9.0-beta.1...v0.9.0-beta.1) (2026-08-14)
 
 
