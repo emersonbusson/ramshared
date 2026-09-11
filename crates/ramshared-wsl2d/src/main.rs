@@ -37,7 +37,7 @@ use ramshared_block::{GpuSample, WriteThroughCacheBackend};
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
-use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
+use ramshared_dxg::DxgBudgetProvider;
 use ramshared_vram::{VramMemory, VramProvider};
 use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::autotier::{
@@ -47,7 +47,7 @@ use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::{spawn_activate_swap, spawn_swapoff};
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
-    RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceIoCounters, SliceView, Verdict,
+    RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceIoCounters, SliceView,
     VramBackend, VramGauge, WMsg, spawn_acceptor,
 };
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
@@ -268,102 +268,6 @@ fn zero_window<B: BlockBackend>(
         off += n as u64;
     }
     Ok(())
-}
-
-/// Per-request residency shared by NBD workers (single and broker): arms the latency
-/// canary (§9, baseline→Canary; serve-only, DT-16) and runs the §9.4 probe (content/free in
-/// cadence, with hysteresis via streak). Returns `Some(reason)` if any signal requests DEMOTE;
-/// the caller decides the ACTION (local swapoff in single, `DemoteAll` via broker in multi-slice).
-struct ResidencyCheckState<'a, M: VramMemory> {
-    canary: &'a mut Option<Canary>,
-    baseline: &'a mut Vec<u64>,
-    sampler: &'a mut ResidencySampler,
-    cadence: &'a mut Cadence,
-    probe: &'a mut CanaryProbe<M>,
-    free_floor_bytes: u64,
-}
-
-fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
-    lat_us: u64,
-    state: &mut ResidencyCheckState<'_, M>,
-    mem_free: F,
-) -> Option<DemoteReason> {
-    // §9: per-request latency canary. content_ok=true/free=u64::MAX ON PURPOSE — the signal
-    // here is latency; content and free-floor come from the probe §9.4 below.
-    let mut latency_reason = None;
-    match state.canary.as_mut() {
-        None => {
-            state.baseline.push(lat_us);
-            if state.baseline.len() >= 16 {
-                state.baseline.sort_unstable();
-                let med = state.baseline[state.baseline.len() / 2].max(1);
-                *state.canary = Some(Canary::new(ResidencyConfig::default(), med));
-                eprintln!("[ramsharedd] canario armado (baseline={med} us)");
-            }
-        }
-        Some(c) => {
-            if let Verdict::Demote(reason) = c.sample(lat_us, true, u64::MAX) {
-                latency_reason = Some(reason);
-            }
-        }
-    }
-    // §9.4: dedicated content/free probe in cadence (corrupted content demotes immediately;
-    // free-floor/transient error require streak).
-    let mut probe_reason = None;
-    if state.cadence.tick() {
-        let content = state.probe.check_content().ok();
-        let free = mem_free();
-        let verdict = state.sampler.sample(content, free);
-        let streak = state.sampler.bad_streak();
-        let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
-        if should_log_probe_sample(content, free, state.free_floor_bytes, streak, trace_probe) {
-            eprintln!(
-                "[ramsharedd] sonda §9.4 sample: content={content:?} free={free:?} \
-                 floor={} streak={streak}",
-                state.free_floor_bytes
-            );
-        }
-        if let Verdict::Demote(reason) = verdict {
-            eprintln!(
-                "[ramsharedd] sonda §9.4: content={content:?} free={free:?} streak={}",
-                streak
-            );
-            probe_reason = Some(reason);
-        }
-    }
-    choose_residency_reason(latency_reason, probe_reason)
-}
-
-fn choose_residency_reason(
-    latency: Option<DemoteReason>,
-    probe: Option<DemoteReason>,
-) -> Option<DemoteReason> {
-    probe.or(latency)
-}
-
-fn should_log_probe_sample(
-    content: Option<bool>,
-    free: Option<u64>,
-    free_floor_bytes: u64,
-    streak: u32,
-    trace_probe: bool,
-) -> bool {
-    trace_probe
-        || content != Some(true)
-        || free.is_none()
-        || free.is_some_and(|f| f < free_floor_bytes.saturating_mul(2))
-        || streak > 0
-}
-
-fn sparse_residency_config(reserve_floor_bytes: u64) -> ResidencyConfig {
-    ResidencyConfig {
-        free_floor_bytes: reserve_floor_bytes,
-        ..ResidencyConfig::default()
-    }
-}
-
-fn sparse_residency_requests_swapoff(reason: DemoteReason) -> bool {
-    !matches!(reason, DemoteReason::Latency)
 }
 
 fn parse_nvidia_smi_free_bytes(output: &str) -> Option<u64> {
@@ -2148,32 +2052,6 @@ impl DaemonActionRunner for ProductionDaemonRunner {
     }
 }
 
-/// Minimal WDDM-budget view used by the NBD policy. The daemon core needs only
-/// a fresh budget/current-usage sample; `/dev/dxg` stays in the production
-/// adapter so deterministic tests can inject a safe snapshot.
-struct NbdBudgetSnapshot {
-    budget: u64,
-    current_usage: u64,
-    sampled_at: Instant,
-}
-
-trait NbdBudgetProvider {
-    fn snapshot(&self) -> Result<NbdBudgetSnapshot, String>;
-}
-
-struct ProductionNbdBudgetProvider(DxgBudgetProvider);
-
-impl NbdBudgetProvider for ProductionNbdBudgetProvider {
-    fn snapshot(&self) -> Result<NbdBudgetSnapshot, String> {
-        let snapshot = self.0.snapshot().map_err(|error| error.to_string())?;
-        Ok(NbdBudgetSnapshot {
-            budget: snapshot.budget,
-            current_usage: snapshot.current_usage,
-            sampled_at: snapshot.sampled_at,
-        })
-    }
-}
-
 /// OS-facing edges for the NBD worker. The production implementation owns the
 /// process memory lock, protocol acceptor, `/proc/swaps` observation, and
 /// demote-status file. Tests inject a deterministic in-memory implementation,
@@ -2230,7 +2108,7 @@ trait NbdRuntimeStarter {
     fn startup_budget(
         &mut self,
         _requested: bool,
-    ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>, Box<dyn std::error::Error>> {
         Ok(None)
     }
 
@@ -2284,109 +2162,6 @@ struct ProductionNbdRuntimeStarter;
 struct NbdShutdownBridge {
     stop: std::sync::Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
-}
-
-const RECOVERY_ACTIVATION_OBSERVATION_DEADLINE: Duration = Duration::from_secs(30);
-const RECOVERY_ACTIVATION_POLL_TICK: Duration = Duration::from_millis(100);
-
-/// Terminal observation for a recovery `swapon` child. `Pending` intentionally
-/// remains non-terminal after the observation deadline: the child may still be
-/// reading the NBD export, so freeing the backend would recreate the deadlock.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RecoveryActivationPoll {
-    Idle,
-    Pending,
-    Succeeded,
-    Failed,
-}
-
-/// Owns at most one recovery activation child receiver. A failed healthy epoch
-/// remains parked until an unhealthy or nonempty observation begins a new
-/// epoch, preventing retry storms against the same NBD export.
-#[derive(Default)]
-struct RecoveryActivation {
-    result_rx: Option<std::sync::mpsc::Receiver<bool>>,
-    failed_epoch: bool,
-    shutdown_requested: bool,
-    started_at: Option<Instant>,
-    deadline_reported: bool,
-}
-
-impl RecoveryActivation {
-    fn start(&mut self, result_rx: std::sync::mpsc::Receiver<bool>) -> Result<(), &'static str> {
-        if self.result_rx.is_some() {
-            return Err("recovery activation is already pending");
-        }
-        if self.failed_epoch {
-            return Err("recovery activation is parked for this healthy epoch");
-        }
-        self.result_rx = Some(result_rx);
-        self.started_at = Some(Instant::now());
-        self.deadline_reported = false;
-        Ok(())
-    }
-
-    fn poll(&mut self) -> RecoveryActivationPoll {
-        let Some(rx) = self.result_rx.take() else {
-            return RecoveryActivationPoll::Idle;
-        };
-        match rx.try_recv() {
-            Ok(true) => {
-                self.started_at = None;
-                self.deadline_reported = false;
-                self.failed_epoch = false;
-                RecoveryActivationPoll::Succeeded
-            }
-            Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.started_at = None;
-                self.deadline_reported = false;
-                self.failed_epoch = true;
-                RecoveryActivationPoll::Failed
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                self.result_rx = Some(rx);
-                RecoveryActivationPoll::Pending
-            }
-        }
-    }
-
-    fn launch_allowed(&mut self, healthy: bool, tier_empty: bool) -> bool {
-        if !healthy || !tier_empty {
-            self.failed_epoch = false;
-            return false;
-        }
-        self.result_rx.is_none() && !self.failed_epoch
-    }
-
-    fn is_pending(&self) -> bool {
-        self.result_rx.is_some()
-    }
-
-    fn mark_dispatch_failure(&mut self) {
-        self.failed_epoch = true;
-        self.started_at = None;
-        self.deadline_reported = false;
-    }
-
-    fn request_shutdown(&mut self) {
-        self.shutdown_requested = true;
-    }
-
-    fn backend_release_allowed(&self) -> bool {
-        !self.shutdown_requested || self.result_rx.is_none()
-    }
-
-    fn take_observation_deadline_exceeded(&mut self) -> bool {
-        let overdue = self.result_rx.is_some()
-            && self.started_at.is_some_and(|started| {
-                started.elapsed() >= RECOVERY_ACTIVATION_OBSERVATION_DEADLINE
-            });
-        if overdue && !self.deadline_reported {
-            self.deadline_reported = true;
-            return true;
-        }
-        false
-    }
 }
 
 impl Drop for NbdShutdownBridge {
@@ -2512,7 +2287,7 @@ impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
     fn startup_budget(
         &mut self,
         requested: bool,
-    ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>, Box<dyn std::error::Error>> {
         if !requested {
             return Ok(None);
         }
@@ -2522,7 +2297,7 @@ impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
                     "[ramsharedd] budget_source=dxg adapter={} (WDDM authority)",
                     provider.adapter_luid()
                 );
-                Ok(Some(Box::new(ProductionNbdBudgetProvider(provider))))
+                Ok(Some(Box::new(ramshared_wsl2d::health::ProductionNbdBudgetProvider(provider))))
             }
             Err(error) if error.permits_startup_fallback() => {
                 eprintln!(
@@ -2599,7 +2374,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         starter.startup_budget(use_dxg_budget)?
     };
     struct NbdBudgetGate<'a> {
-        provider: &'a dyn NbdBudgetProvider,
+        provider: &'a dyn ramshared_wsl2d::health::NbdBudgetProvider,
         config: AutotierConfig,
     }
     impl CommitBudgetGate for NbdBudgetGate<'_> {
@@ -2638,7 +2413,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     };
     let mut cadence = Cadence::new(CANARY_EVERY);
     let reserve_floor = reserve_floor_bytes_from_env();
-    let residency_cfg = sparse_residency_config(reserve_floor);
+    let residency_cfg = ramshared_wsl2d::health::sparse_residency_config(reserve_floor);
     let mut sampler = ResidencySampler::new(residency_cfg);
     let free_floor = residency_cfg.free_floor_bytes;
     let idle_free = Duration::from_secs(idle_free_secs_from_env());
@@ -2755,7 +2530,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let mut swapoff_confirmed = false;
     let mut observed_budget_refuses = 0;
     let mut recovery = RecoveryTracker::new(3);
-    let mut recovery_activation = RecoveryActivation::default();
+    let mut recovery_activation = ramshared_wsl2d::health::RecoveryActivation::default();
     let mut shutdown_requested = false;
     let mut live = LiveCount::new();
     let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
@@ -2778,7 +2553,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         }
 
         match recovery_activation.poll() {
-            RecoveryActivationPoll::Succeeded => {
+            ramshared_wsl2d::health::RecoveryActivationPoll::Succeeded => {
                 demoted = false;
                 swapoff_attempted = false;
                 swapoff_confirmed = false;
@@ -2791,11 +2566,11 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     starter.publish_demote(demotes_total, &last_demote_reason, true);
                 }
             }
-            RecoveryActivationPoll::Failed => {
+            ramshared_wsl2d::health::RecoveryActivationPoll::Failed => {
                 recovery.reset();
                 eprintln!("[ramsharedd] RECOVERING: swapon {nbd_dev} failed; parked");
             }
-            RecoveryActivationPoll::Idle | RecoveryActivationPoll::Pending => {}
+            ramshared_wsl2d::health::RecoveryActivationPoll::Idle | ramshared_wsl2d::health::RecoveryActivationPoll::Pending => {}
         }
         if let Some(rx) = demote_rx.take() {
             match rx.try_recv() {
@@ -2823,7 +2598,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             eprintln!(
                 "[ramsharedd] RECOVERING: swapon {nbd_dev} observation exceeded {}s; \
                  keeping NBD backend alive",
-                RECOVERY_ACTIVATION_OBSERVATION_DEADLINE.as_secs()
+                ramshared_wsl2d::health::RECOVERY_ACTIVATION_OBSERVATION_DEADLINE.as_secs()
             );
         }
         if shutdown_requested
@@ -2833,7 +2608,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             break;
         }
         let recv_tick = if recovery_activation.is_pending() {
-            RECOVERY_ACTIVATION_POLL_TICK
+            ramshared_wsl2d::health::RECOVERY_ACTIVATION_POLL_TICK
         } else {
             RECV_TICK
         };
@@ -2918,7 +2693,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     let probe = probe
                         .as_mut()
                         .ok_or("legacy residency probe is unavailable")?;
-                    let mut residency_state = ResidencyCheckState {
+                    let mut residency_state = ramshared_wsl2d::health::ResidencyCheckState {
                         canary: &mut canary,
                         baseline: &mut baseline,
                         sampler: &mut sampler,
@@ -2926,7 +2701,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                         probe,
                         free_floor_bytes: free_floor,
                     };
-                    if let Some(reason) = residency_check(lat_us, &mut residency_state, || {
+                    if let Some(reason) = ramshared_wsl2d::health::residency_check(lat_us, &mut residency_state, || {
                         let cuda_free = provider.mem_info().ok().map(|(f, _)| f);
                         match (cuda_free, last_global_free) {
                             (Some(cuda), Some(global)) => Some(cuda.min(global)),
@@ -2936,7 +2711,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                         }
                     }) {
                         let sparse = matches!(backend, Be::Sparse(_));
-                        let skip = sparse && !sparse_residency_requests_swapoff(reason);
+                        let skip = sparse && !ramshared_wsl2d::health::sparse_residency_requests_swapoff(reason);
                         if skip {
                             eprintln!(
                                 "[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us"
@@ -4309,7 +4084,7 @@ where
         backend,
         worker,
         |lat_us| {
-            let mut residency_state = ResidencyCheckState {
+            let mut residency_state = ramshared_wsl2d::health::ResidencyCheckState {
                 canary: &mut canary,
                 baseline: &mut baseline,
                 sampler: &mut sampler,
@@ -4317,7 +4092,7 @@ where
                 probe: &mut probe,
                 free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
             };
-            residency_check(lat_us, &mut residency_state, || {
+            ramshared_wsl2d::health::residency_check(lat_us, &mut residency_state, || {
                 let (f, t) = provider.mem_info().ok()?;
                 // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
                 vram.free.store(f, Ordering::Relaxed);
@@ -4792,8 +4567,9 @@ fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error:
 // See the "dxgkrnl ANTI-BUG" comment in run_ublk.
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use ramshared_wsl2d::health::*;
     use super::*;
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
@@ -5051,7 +4827,7 @@ mod tests {
             fn startup_budget(
                 &mut self,
                 _requested: bool,
-            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            ) -> Result<Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>, Box<dyn std::error::Error>>
             {
                 panic!("origin composition must not initialize DXG")
             }
@@ -5634,7 +5410,7 @@ mod tests {
         });
         let mut cadence = Cadence::new(1);
         let mut probe = CanaryProbe::new(TestMemory::new(CANARY_BYTES));
-        let mut state = ResidencyCheckState {
+        let mut state = ramshared_wsl2d::health::ResidencyCheckState {
             canary: &mut canary,
             baseline: &mut baseline,
             sampler: &mut sampler,
@@ -5643,7 +5419,7 @@ mod tests {
             free_floor_bytes: 100,
         };
         assert_eq!(
-            residency_check(10, &mut state, || Some(99)),
+            ramshared_wsl2d::health::residency_check(10, &mut state, || Some(99)),
             Some(DemoteReason::FreeFloor)
         );
 
@@ -5652,7 +5428,7 @@ mod tests {
         let mut sampler = ResidencySampler::new(ResidencyConfig::default());
         let mut cadence = Cadence::new(u64::from(u32::MAX));
         let mut probe = CanaryProbe::new(TestMemory::new(CANARY_BYTES));
-        let mut state = ResidencyCheckState {
+        let mut state = ramshared_wsl2d::health::ResidencyCheckState {
             canary: &mut canary,
             baseline: &mut baseline,
             sampler: &mut sampler,
@@ -5661,12 +5437,12 @@ mod tests {
             free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
         };
         for _ in 0..16 {
-            assert_eq!(residency_check(10, &mut state, || Some(u64::MAX)), None);
+            assert_eq!(ramshared_wsl2d::health::residency_check(10, &mut state, || Some(u64::MAX)), None);
         }
-        assert_eq!(residency_check(1_000, &mut state, || Some(u64::MAX)), None);
-        assert_eq!(residency_check(1_000, &mut state, || Some(u64::MAX)), None);
+        assert_eq!(ramshared_wsl2d::health::residency_check(1_000, &mut state, || Some(u64::MAX)), None);
+        assert_eq!(ramshared_wsl2d::health::residency_check(1_000, &mut state, || Some(u64::MAX)), None);
         assert_eq!(
-            residency_check(1_000, &mut state, || Some(u64::MAX)),
+            ramshared_wsl2d::health::residency_check(1_000, &mut state, || Some(u64::MAX)),
             Some(DemoteReason::Latency)
         );
     }
@@ -6466,7 +6242,7 @@ mod tests {
         }
 
         struct BudgetStarter {
-            budget: Option<Box<dyn NbdBudgetProvider>>,
+            budget: Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>,
             budget_calls: std::rc::Rc<std::cell::Cell<usize>>,
             global_calls: usize,
         }
@@ -6541,7 +6317,7 @@ mod tests {
             fn startup_budget(
                 &mut self,
                 requested: bool,
-            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            ) -> Result<Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>, Box<dyn std::error::Error>>
             {
                 assert!(requested, "test requests the WDDM budget path");
                 Ok(self.budget.take())
@@ -6626,7 +6402,7 @@ mod tests {
         }
 
         struct RecoveryStarter {
-            budget: Option<Box<dyn NbdBudgetProvider>>,
+            budget: Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>,
             swapoff_calls: usize,
             activate_calls: usize,
             statuses: Vec<(u64, Option<String>, bool)>,
@@ -6703,7 +6479,7 @@ mod tests {
             fn startup_budget(
                 &mut self,
                 requested: bool,
-            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            ) -> Result<Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>, Box<dyn std::error::Error>>
             {
                 assert!(requested);
                 Ok(self.budget.take())
@@ -6822,7 +6598,7 @@ mod tests {
         }
 
         struct PendingRecoveryStarter {
-            budget: Option<Box<dyn NbdBudgetProvider>>,
+            budget: Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>,
             jobs_tx: std::sync::mpsc::Sender<std::sync::mpsc::SyncSender<WMsg>>,
             activation_started: std::sync::mpsc::Sender<()>,
             activation_rx: Option<std::sync::mpsc::Receiver<bool>>,
@@ -6910,7 +6686,7 @@ mod tests {
             fn startup_budget(
                 &mut self,
                 requested: bool,
-            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            ) -> Result<Option<Box<dyn ramshared_wsl2d::health::NbdBudgetProvider>>, Box<dyn std::error::Error>>
             {
                 assert!(requested, "the test drives the bounded recovery path");
                 Ok(self.budget.take())
@@ -7048,14 +6824,14 @@ mod tests {
         );
 
         let (success_tx, success_rx) = std::sync::mpsc::channel();
-        let mut success = RecoveryActivation::default();
+        let mut success = ramshared_wsl2d::health::RecoveryActivation::default();
         success
             .start(success_rx)
             .expect("the successful activation receiver is owned");
         success_tx
             .send(true)
             .expect("inject terminal swapon success");
-        assert_eq!(success.poll(), RecoveryActivationPoll::Succeeded);
+        assert_eq!(success.poll(), ramshared_wsl2d::health::RecoveryActivationPoll::Succeeded);
         assert!(
             success.launch_allowed(true, true),
             "a successful terminal result returns the tier to the available state"
@@ -7064,7 +6840,7 @@ mod tests {
 
     #[test]
     fn daemon_nbd_recovery_failure_parks_without_relaunch() {
-        let mut dispatch_failure = RecoveryActivation::default();
+        let mut dispatch_failure = ramshared_wsl2d::health::RecoveryActivation::default();
         dispatch_failure.mark_dispatch_failure();
         assert!(
             !dispatch_failure.launch_allowed(true, true),
@@ -7074,7 +6850,7 @@ mod tests {
         assert!(dispatch_failure.launch_allowed(true, true));
 
         let (activation_tx, activation_rx) = std::sync::mpsc::channel();
-        let mut activation = RecoveryActivation::default();
+        let mut activation = ramshared_wsl2d::health::RecoveryActivation::default();
         activation
             .start(activation_rx)
             .expect("the first recovery activation is owned");
@@ -7082,7 +6858,7 @@ mod tests {
             .send(false)
             .expect("inject terminal swapon failure");
 
-        assert_eq!(activation.poll(), RecoveryActivationPoll::Failed);
+        assert_eq!(activation.poll(), ramshared_wsl2d::health::RecoveryActivationPoll::Failed);
         assert!(
             !activation.launch_allowed(true, true),
             "one failed healthy epoch must not relaunch swapon"
@@ -7095,11 +6871,11 @@ mod tests {
 
         let (disconnected_tx, disconnected_rx) = std::sync::mpsc::channel();
         drop(disconnected_tx);
-        let mut disconnected = RecoveryActivation::default();
+        let mut disconnected = ramshared_wsl2d::health::RecoveryActivation::default();
         disconnected
             .start(disconnected_rx)
             .expect("the disconnected activation receiver is owned");
-        assert_eq!(disconnected.poll(), RecoveryActivationPoll::Failed);
+        assert_eq!(disconnected.poll(), ramshared_wsl2d::health::RecoveryActivationPoll::Failed);
         assert!(
             !disconnected.launch_allowed(true, true),
             "a disconnected activation receiver must also park the healthy epoch"
@@ -7109,13 +6885,13 @@ mod tests {
     #[test]
     fn daemon_nbd_shutdown_with_pending_recovery_fails_closed() {
         let (activation_tx, activation_rx) = std::sync::mpsc::channel();
-        let mut activation = RecoveryActivation::default();
+        let mut activation = ramshared_wsl2d::health::RecoveryActivation::default();
         activation
             .start(activation_rx)
             .expect("the recovery activation is owned");
         activation.request_shutdown();
 
-        assert_eq!(activation.poll(), RecoveryActivationPoll::Pending);
+        assert_eq!(activation.poll(), ramshared_wsl2d::health::RecoveryActivationPoll::Pending);
         assert!(
             !activation.backend_release_allowed(),
             "an unobserved swapon child must retain the backend"
@@ -7123,7 +6899,7 @@ mod tests {
         activation_tx
             .send(false)
             .expect("inject terminal swapon failure");
-        assert_eq!(activation.poll(), RecoveryActivationPoll::Failed);
+        assert_eq!(activation.poll(), ramshared_wsl2d::health::RecoveryActivationPoll::Failed);
         assert!(activation.backend_release_allowed());
     }
 
@@ -9466,14 +9242,14 @@ mod tests {
 
     #[test]
     fn sparse_free_floor_requests_swapoff_but_latency_does_not() {
-        assert!(sparse_residency_requests_swapoff(DemoteReason::FreeFloor));
-        assert!(sparse_residency_requests_swapoff(DemoteReason::Corruption));
-        assert!(!sparse_residency_requests_swapoff(DemoteReason::Latency));
+        assert!(ramshared_wsl2d::health::sparse_residency_requests_swapoff(DemoteReason::FreeFloor));
+        assert!(ramshared_wsl2d::health::sparse_residency_requests_swapoff(DemoteReason::Corruption));
+        assert!(!ramshared_wsl2d::health::sparse_residency_requests_swapoff(DemoteReason::Latency));
     }
 
     #[test]
     fn sparse_residency_uses_configured_reserve_floor() {
-        let cfg = sparse_residency_config(512 * 1024 * 1024);
+        let cfg = ramshared_wsl2d::health::sparse_residency_config(512 * 1024 * 1024);
         assert_eq!(cfg.free_floor_bytes, 512 * 1024 * 1024);
         assert_eq!(cfg.latency_mult, ResidencyConfig::default().latency_mult);
         assert_eq!(cfg.consecutive, ResidencyConfig::default().consecutive);
