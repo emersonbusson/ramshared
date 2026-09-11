@@ -57,6 +57,17 @@ pub fn get_features(path: impl AsRef<Path>) -> io::Result<FeatureReport> {
 }
 
 pub fn add_device(path: impl AsRef<Path>, spec: DeviceSpec) -> io::Result<DeviceReport> {
+    if spec.nr_hw_queues as u64 > ublk::UBLK_MAX_NR_QUEUES {
+        return Err(io::Error::other(format!("nr_hw_queues exceeds maximum: {}", ublk::UBLK_MAX_NR_QUEUES)));
+    }
+    if spec.queue_depth as u64 > ublk::UBLK_MAX_QUEUE_DEPTH {
+        return Err(io::Error::other(format!("queue_depth exceeds maximum: {}", ublk::UBLK_MAX_QUEUE_DEPTH)));
+    }
+    #[allow(clippy::manual_is_multiple_of)]
+    if spec.max_io_buf_bytes > 0 && spec.max_io_buf_bytes % (ublk::UBLK_SECTOR_SIZE as u32) != 0 {
+        return Err(io::Error::other(format!("max_io_buf_bytes {} not a multiple of sector size {}", spec.max_io_buf_bytes, ublk::UBLK_SECTOR_SIZE)));
+    }
+
     let control = OpenOptions::new().read(true).write(true).open(path)?;
     let ublksrv_pid =
         i32::try_from(process::id()).map_err(|_| io::Error::other("process id exceeds i32"))?;
@@ -288,6 +299,27 @@ mod tests {
             stop_dev(&path, 0).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn add_device_validates_limits() {
+        let path = get_unique_temp_path();
+
+        let mut spec = DeviceSpec::smoke_auto();
+        spec.nr_hw_queues = (ublk::UBLK_MAX_NR_QUEUES + 1) as u16;
+        let err = add_device(&path, spec).unwrap_err();
+        assert!(err.to_string().contains("nr_hw_queues exceeds maximum"));
+
+        let mut spec = DeviceSpec::smoke_auto();
+        spec.queue_depth = (ublk::UBLK_MAX_QUEUE_DEPTH + 1) as u16;
+        let err = add_device(&path, spec).unwrap_err();
+        assert!(err.to_string().contains("queue_depth exceeds maximum"));
+
+        let mut spec = DeviceSpec::smoke_auto();
+        spec.max_io_buf_bytes = 1000; // Not a multiple of 512
+        let err = add_device(&path, spec).unwrap_err();
+        assert!(err.to_string().contains("max_io_buf_bytes"));
+        assert!(err.to_string().contains("not a multiple of sector size"));
     }
 
     #[test]
