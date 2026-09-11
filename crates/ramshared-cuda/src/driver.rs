@@ -113,6 +113,7 @@ impl Cuda {
                 memset_d8: load_sym(handle, c"cuMemsetD8_v2")?,
                 mem_get_info: load_sym(handle, c"cuMemGetInfo_v2")?,
                 get_error_string: load_sym_opt(handle, c"cuGetErrorString"),
+                device_get_attribute: load_sym(handle, c"cuDeviceGetAttribute")?,
             }
         };
 
@@ -151,7 +152,15 @@ impl Cuda {
             .to_string_lossy()
             .into_owned();
 
-        Ok(Device { raw, name, ordinal })
+        let mut major = 0;
+        let mut minor = 0;
+        // SAFETY: major/minor point to valid local memory; raw is a valid CUdevice handle.
+        let r = unsafe { (self.syms.device_get_attribute)(&mut major, crate::ffi::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, raw) };
+        check(&self.syms, r, "cuDeviceGetAttribute")?;
+        let r = unsafe { (self.syms.device_get_attribute)(&mut minor, crate::ffi::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, raw) };
+        check(&self.syms, r, "cuDeviceGetAttribute")?;
+
+        Ok(Device { raw, name, ordinal, major, minor })
     }
 
     /// Creates a CUDA context on the specified device (becomes current on the calling thread).
@@ -160,7 +169,17 @@ impl Cuda {
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
-        Ok(Context { cuda: self, raw })
+        let ctx = Context { cuda: self, raw };
+
+        let (_, total) = ctx.mem_info()?;
+        crate::probe::validate_hardware_specs(device.major, device.minor, total)
+            .map_err(|e| CudaError::Driver {
+                op: "validate_hardware_specs",
+                code: -1,
+                msg: e.to_string(),
+            })?;
+
+        Ok(ctx)
     }
 }
 
@@ -170,6 +189,10 @@ pub struct Device {
     raw: CuDevice,
     name: String,
     ordinal: i32,
+    /// Compute capability major version.
+    pub major: i32,
+    /// Compute capability minor version.
+    pub minor: i32,
 }
 
 impl Device {

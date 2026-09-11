@@ -35,6 +35,11 @@ pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
 
+pub type CuDeviceAttribute = c_int;
+pub const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR: CuDeviceAttribute = 75;
+pub const CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR: CuDeviceAttribute = 76;
+pub type FnDeviceGetAttribute = unsafe extern "C" fn(*mut c_int, CuDeviceAttribute, CuDevice) -> CuResult;
+
 /// Table of resolved symbols from the CUDA driver library.
 pub struct Syms {
     pub init: FnInit,
@@ -51,4 +56,5 @@ pub struct Syms {
     pub memset_d8: FnMemsetD8,
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
+    pub device_get_attribute: FnDeviceGetAttribute,
 }
