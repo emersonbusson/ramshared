@@ -8,6 +8,7 @@ pub mod backend;
 pub mod broker_srv;
 pub mod canary_probe;
 pub mod conn;
+pub mod connection;
 pub mod demote_status;
 pub mod residency;
 pub mod state;
