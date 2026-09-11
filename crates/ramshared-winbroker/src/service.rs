@@ -115,15 +115,39 @@ fn verify_active_config(
 
 pub fn run_service(config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Error>> {
     let stop = Arc::new(AtomicBool::new(false));
+    let paused = Arc::new(AtomicBool::new(false));
+    let status_handle = Arc::new(Mutex::new(None::<ServiceStatusHandle>));
+    let closure_status_handle = Arc::clone(&status_handle);
+
     let handler_stop = Arc::clone(&stop);
+    let handler_paused = Arc::clone(&paused);
     let status = service_control_handler::register(SERVICE_NAME, move |control| match control {
         ServiceControl::Stop | ServiceControl::Shutdown => {
             handler_stop.store(true, Ordering::Release);
             ServiceControlHandlerResult::NoError
         }
+        ServiceControl::Pause => {
+            handler_paused.store(true, Ordering::Release);
+            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref().copied() {
+                let _ = set_status(&handle, ServiceState::Paused, 0, Duration::ZERO, 0);
+            }
+            ServiceControlHandlerResult::NoError
+        }
+        ServiceControl::Continue => {
+            handler_paused.store(false, Ordering::Release);
+            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref().copied() {
+                let _ = set_status(&handle, ServiceState::Running, 0, Duration::ZERO, 0);
+            }
+            ServiceControlHandlerResult::NoError
+        }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
         _ => ServiceControlHandlerResult::NotImplemented,
     })?;
+
+    if let Ok(mut guard) = status_handle.lock() {
+        *guard = Some(status);
+    }
+
     set_status(
         &status,
         ServiceState::StartPending,
@@ -132,7 +156,7 @@ pub fn run_service(config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Err
         0,
     )?;
     set_status(&status, ServiceState::Running, 0, Duration::ZERO, 0)?;
-    let result = run_console(config, Arc::clone(&stop));
+    let result = run_console(config, Arc::clone(&stop), Arc::clone(&paused));
     let exit_code = if result.is_ok() { 0 } else { 3 };
     set_status(&status, ServiceState::Stopped, 0, Duration::ZERO, exit_code)?;
     result.map_err(Into::into)
@@ -148,8 +172,8 @@ fn set_status(
     handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: state,
-        controls_accepted: if state == ServiceState::Running {
-            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN
+        controls_accepted: if state == ServiceState::Running || state == ServiceState::Paused {
+            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN | ServiceControlAccept::PAUSE_CONTINUE
         } else {
             ServiceControlAccept::empty()
         },
@@ -164,7 +188,7 @@ fn set_status(
     })
 }
 
-pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<()> {
+pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>, paused: Arc<AtomicBool>) -> io::Result<()> {
     let instance_id = broker_instance_id()?;
     let evidence_path = config.evidence_path.clone();
     append_evidence(&evidence_path, &instance_id, "process_ready", None)?;
@@ -178,6 +202,10 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
     let status_thread = std::thread::spawn(move || serve_status(status_core, status_stop));
     let mut session_id = 1usize;
     while !stop.load(Ordering::Acquire) {
+        if paused.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         let server =
             match PipeServer::bind_product(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT) {
                 Ok(server) => server,

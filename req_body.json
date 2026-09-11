@@ -1,0 +1,6 @@
+{
+  "title": "feat(winbroker): support service pause and continue state transitions",
+  "branch_name": "jules-427012978794491220-b4776f3e",
+  "commit_message": "feat(winbroker): support service pause and continue state transitions\n\nRollback trigger: pause continues",
+  "description": "## Summary\nImplement `SERVICE_CONTROL_PAUSE` and `SERVICE_CONTROL_CONTINUE` handlers for the Windows service broker. When paused, the service loop stops accepting new product pipes and waits until continued.\n\n## Commits\n- 8a243f7 feat(winbroker): support service pause and continue state transitions\n\n## Validation\n- `cargo test -p ramshared-winbroker` passed.\n- `cargo clippy --all-targets` passed with zero warnings.\n\n## Rollback trigger\npause continues"
+}
