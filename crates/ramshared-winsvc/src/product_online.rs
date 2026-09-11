@@ -1237,7 +1237,7 @@ impl DiskControl for LinkDisk<'_> {
     }
 }
 
-struct BackendWipe<'a, M> {
+struct BackendWipe<'a, M: ramshared_vram::VramMemory> {
     backend: &'a mut VramBackend<M>,
 }
 
