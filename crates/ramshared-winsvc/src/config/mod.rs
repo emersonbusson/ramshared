@@ -1,6 +1,10 @@
 //! WinDrive product configuration (SPEC windows-storport-cuda-vram DT-1 / DT-2).
 //!
 //! Closed storage-only shape: CUDA + queue + evidence; no pagefile/backend selector.
+pub mod registry;
+#[cfg(windows)]
+pub use registry::{read_config_from_registry, watch_config_registry};
+
 
 use std::path::{Path, PathBuf};
 
@@ -447,7 +451,7 @@ tenant = "windrive-host"
 
     #[test]
     fn example_config_parses() {
-        let example = include_str!("../winsvc.example.toml");
+        let example = include_str!("../../winsvc.example.toml");
         let c = WinDriveConfig::from_toml(example).unwrap();
         assert!(c.size_bytes >= MIN_SIZE_BYTES);
         assert_eq!(c.queue_depth, 4);
