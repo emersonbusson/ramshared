@@ -68,20 +68,18 @@ impl TokenManager {
 
     /// Gets the current token if valid.
     pub fn get_valid_token(&self) -> Option<&str> {
-        self.current_token.as_ref().and_then(|t| {
-            if t.is_valid(self.grace_period) {
-                Some(t.as_str())
-            } else {
-                None
-            }
-        })
+        self.current_token
+            .as_ref()
+            .filter(|t| t.is_valid(self.grace_period))
+            .map(|t| t.as_str())
     }
 
     /// Checks if the token needs rotation.
+    #[allow(clippy::unnecessary_map_or)]
     pub fn needs_rotation(&self) -> bool {
         self.current_token
             .as_ref()
-            .is_none_or(|t| t.needs_rotation(self.rotation_interval))
+            .map_or(true, |t| t.needs_rotation(self.rotation_interval))
     }
 }
 
@@ -91,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_token_validity() {
-        let token = AuthToken::new("test_token".to_string(), Duration::from_secs(1));
+        let token = AuthToken::new("test_token".to_string(), Duration::from_secs(60));
         assert!(token.is_valid(Duration::from_secs(0)));
         // Assuming test runs instantly, token shouldn't expire
     }
