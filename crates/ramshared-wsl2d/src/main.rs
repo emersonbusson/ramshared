@@ -51,6 +51,8 @@ use ramshared_wsl2d::{
     VramBackend, VramGauge, WMsg, spawn_acceptor,
 };
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
+pub mod gpu_selector;
+use gpu_selector::*;
 
 // Discipline 3 (anti-deadlock): the daemon serves swap, so it cannot be swapped out.
 unsafe extern "C" {
@@ -366,14 +368,6 @@ fn sparse_residency_requests_swapoff(reason: DemoteReason) -> bool {
     !matches!(reason, DemoteReason::Latency)
 }
 
-fn parse_nvidia_smi_free_bytes(output: &str) -> Option<u64> {
-    let first = output.lines().find(|line| !line.trim().is_empty())?.trim();
-    let token = first
-        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
-        .find(|part| !part.is_empty())?;
-    let mib = token.parse::<u64>().ok()?;
-    mib.checked_mul(1024 * 1024)
-}
 
 trait CommandFatalContainment {
     fn contain(&self, detail: &str);
@@ -730,7 +724,7 @@ impl Drop for CommandChildGuard {
 /// helpers do not intentionally call `setsid`, `setpgid`, or daemonize; a
 /// malicious helper that deliberately escapes this private group is outside
 /// the custody boundary.
-fn command_stdout_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+pub fn command_stdout_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
     let label = format!("{program} command");
     let mut command = ProcessCommand::new(program);
     command
@@ -828,58 +822,6 @@ fn command_stdout_with_timeout(program: &str, args: &[&str], timeout: Duration) 
     }
 }
 
-fn global_gpu_free_bytes_with<A, R>(
-    programs: &[&str],
-    timeout: Duration,
-    mut available: A,
-    mut run: R,
-) -> Option<u64>
-where
-    A: FnMut(&str) -> bool,
-    R: FnMut(&str, &[&str], Duration) -> Option<String>,
-{
-    const ARGS: &[&str] = &["--query-gpu=memory.free", "--format=csv,noheader,nounits"];
-    for program in programs {
-        if !available(program) {
-            continue;
-        }
-        if let Some(output) = run(program, ARGS, timeout)
-            && let Some(bytes) = parse_nvidia_smi_free_bytes(&output)
-        {
-            return Some(bytes);
-        }
-    }
-    None
-}
-
-fn global_gpu_free_bytes_from_nvidia_smi(timeout: Duration) -> Option<u64> {
-    global_gpu_free_bytes_with(
-        &["/usr/lib/wsl/lib/nvidia-smi", "nvidia-smi"],
-        timeout,
-        |program| !program.starts_with('/') || Path::new(program).exists(),
-        command_stdout_with_timeout,
-    )
-}
-
-fn observe_global_free_floor(
-    free_bytes: Option<u64>,
-    floor_bytes: u64,
-    committed_bytes: u64,
-    streak: &mut u32,
-    required: u32,
-) -> bool {
-    if committed_bytes == 0 {
-        *streak = 0;
-        return false;
-    }
-    if free_bytes.is_some_and(|free| free < floor_bytes) {
-        *streak = streak.saturating_add(1);
-        *streak >= required.max(1)
-    } else {
-        *streak = 0;
-        false
-    }
-}
 
 fn validate_partuuid_path(path: &str) -> Result<&str, String> {
     let partuuid = path
@@ -9516,80 +9458,6 @@ mod tests {
             0,
             true
         ));
-    }
-
-    #[test]
-    fn nvidia_smi_free_parser_accepts_plain_csv_mib() {
-        assert_eq!(
-            parse_nvidia_smi_free_bytes("4731\n"),
-            Some(4731 * 1024 * 1024)
-        );
-        assert_eq!(
-            parse_nvidia_smi_free_bytes(" 222 MiB \n"),
-            Some(222 * 1024 * 1024)
-        );
-        assert_eq!(
-            parse_nvidia_smi_free_bytes("222, 5733\n"),
-            Some(222 * 1024 * 1024)
-        );
-    }
-
-    #[test]
-    fn nvidia_smi_free_parser_rejects_empty_or_bad_output() {
-        assert_eq!(parse_nvidia_smi_free_bytes(""), None);
-        assert_eq!(parse_nvidia_smi_free_bytes("N/A\n"), None);
-    }
-
-    #[test]
-    fn global_free_floor_demote_requires_committed_tier_and_streak() {
-        let mut streak = 0;
-        assert!(!observe_global_free_floor(
-            Some(128),
-            512,
-            0,
-            &mut streak,
-            3
-        ));
-        assert_eq!(streak, 0);
-
-        assert!(!observe_global_free_floor(
-            Some(128),
-            512,
-            1024,
-            &mut streak,
-            3
-        ));
-        assert_eq!(streak, 1);
-        assert!(!observe_global_free_floor(
-            Some(128),
-            512,
-            1024,
-            &mut streak,
-            3
-        ));
-        assert!(observe_global_free_floor(
-            Some(128),
-            512,
-            1024,
-            &mut streak,
-            3
-        ));
-    }
-
-    #[test]
-    fn global_free_floor_resets_on_healthy_or_missing_sample() {
-        let mut streak = 2;
-        assert!(!observe_global_free_floor(
-            Some(2048),
-            512,
-            1024,
-            &mut streak,
-            3
-        ));
-        assert_eq!(streak, 0);
-        streak = 2;
-        assert!(!observe_global_free_floor(None, 512, 1024, &mut streak, 3));
-        assert_eq!(streak, 0);
     }
 
     #[test]
