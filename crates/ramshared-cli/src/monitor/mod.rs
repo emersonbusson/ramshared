@@ -1079,7 +1079,6 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                 let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
             }
             history.push(memory_used_pct(&observation.mem));
-
             next_sample = Instant::now() + interval;
         }
         let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
