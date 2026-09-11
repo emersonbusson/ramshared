@@ -50,6 +50,7 @@ promotional claims or process narration.
 | Numerical gate / perf claim | `docs/BENCHMARKS.md` + `docs/benchmarks/results.jsonl` (see `benchmarks.md` rule) |
 | Empirical “does it work now?” | Append to `validation.md` (append-only) |
 | Coding / agent convention | `.claude/rules/*` + sync `CLAUDE.md` / `AGENTS.md` when the root map changes (see `governance.md`) |
+| Reliability claims / release milestones | `docs/reliability/GAP-REGISTER.md` (close resolved gates; remove obsolete blockers) |
 | Build / test / drill command | Root `README.md` or relevant runbook; agent entrypoints if agents must run it |
 | Kahneman discipline / cognitive gate | `docs/methodology/kahneman-disciplines.md` + SPEC Kahneman map when critical |
 | Host safety / supervised pressure | `benchmarks.md` rule + runbook; never document direct live WSL2 pressure as a happy path |
@@ -93,3 +94,4 @@ Accepted | Proposed | Deprecated | Superseded by ADR-XXX
 - ❌ Leave `docs/INDEX.md` out of sync after adding a feature folder
 - ❌ Put long feature dossiers only in `CLAUDE.md`
 - ❌ Document dual-path/shims as default without Day-0 exception fields
+- ❌ Keep phantom blockers or outdated pipeline errors in `GAP-REGISTER.md` when code passes CI

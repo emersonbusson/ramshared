@@ -31,27 +31,27 @@ sudo bash scripts/kernel/qemu-validate.sh ~/WSL2-Linux-Kernel/arch/x86/boot/bzIm
 #    → "QEMU-VALIDATE: PASS" = booted to userspace. Proceed only if it passes.
 
 # 3. Copy the bzImage to Windows
-mkdir -p /mnt/c/wsl && cp ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage /mnt/c/wsl/kernel-ramshared
-cp scripts/kernel/boot-kernel-safe.ps1 /mnt/c/wsl/   # self-healing launcher
-cp scripts/kernel/boot-kernel-logged.ps1 /mnt/c/wsl/ # wrapper with persistent log
+mkdir -p /mnt/c/path/to/wsl && cp ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage /mnt/c/path/to/wsl/kernel-ramshared
+cp scripts/kernel/boot-kernel-safe.ps1 /mnt/c/path/to/wsl/   # self-healing launcher
+cp scripts/kernel/boot-kernel-logged.ps1 /mnt/c/path/to/wsl/ # wrapper with persistent log
 ```
 
 ```powershell
 # 4a. SAFE PREFLIGHT (in Windows PowerShell; DOES NOT end WSL):
-powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1 -PreflightOnly
+powershell -ExecutionPolicy Bypass -File C:\path\to\boot-kernel-logged.ps1 -PreflightOnly
 #    → validates the kernel, clean backup, .wslconfig, and arm/disarm in a temporary file.
-#    The log is at C:\wsl\boot-ramshared.log.
+#    The log is at C:\path\to\boot-ramshared.log.
 
 # 4b. SAFE SWITCH + AUTO-REVERT (ends WSL):
-powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1
+powershell -ExecutionPolicy Bypass -File C:\path\to\boot-kernel-logged.ps1
 #    → backs up .wslconfig, arms it, runs wsl --shutdown, and checks boot (timeout).
 #    If it DOES NOT boot: RESTORES .wslconfig and restarts → returns to the Microsoft kernel.
-#    The log is at C:\wsl\boot-ramshared.log.
-#    Test the arming logic without touching WSL: ... -DryRunConfig C:\wsl\test.txt
+#    The log is at C:\path\to\boot-ramshared.log.
+#    Test the arming logic without touching WSL: ... -DryRunConfig C:\path\to\test.txt
 ```
 
 Auto-revert prerequisite: a **clean** `.wslconfig` (without `kernel=`) at
-`C:\wsl\wslconfig-original.txt` (the launcher creates it the first time when
+`C:\path\to\wslconfig-original.txt` (the launcher creates it the first time when
 the current file does not yet contain `kernel=`).
 
 ## 0. Prerequisites (in WSL2)
@@ -102,16 +102,16 @@ sudo make modules_install
 ## 4. Install (Windows side)
 
 ```sh
-# Copy the bzImage to a Windows path (for example, C:\wsl\kernel-ramshared).
-mkdir -p /mnt/c/wsl
-cp arch/x86/boot/bzImage /mnt/c/wsl/kernel-ramshared
+# Copy the bzImage to a Windows path (for example, C:\path\to\wsl\kernel-ramshared).
+mkdir -p /mnt/c/path/to/wsl
+cp arch/x86/boot/bzImage /mnt/c/path/to/wsl/kernel-ramshared
 ```
 
 On **Windows**, `%UserProfile%\.wslconfig`:
 
 ```ini
 [wsl2]
-kernel=C:\\wsl\\kernel-ramshared
+kernel=C:\\path\\to\\wsl\\kernel-ramshared
 ```
 
 ## 5. Boot (ends the agent session)

@@ -7,7 +7,7 @@ RamShared is an advanced hardware-accelerated memory tiering system that opportu
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.10.0"><img alt="Release v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Release v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-20k%2B-blue?style=flat-square&logo=git">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
@@ -41,7 +41,7 @@ ramshared top
 
 ## Current Status
 
-Release: **v0.10.0 (Production Qualified Release & Linux Kernel Driver Upstream RFC v2)**. Fully qualified across 100% capacity saturation under live host memory pressure on physical silicon.
+Release: **v0.11.0 (Production Qualified Release & Multi-Tier Memory Cascade)**. Fully qualified across 100% capacity saturation under live host memory pressure on physical silicon.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -131,25 +131,7 @@ Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x
 │ 1. Stock WSL2 Swap     │ Virtualized VHDX on SSD          │ 0.06 GB/s (63 MB/s)     │ 0.08 GB/s (85 MB/s)     │ ~30,000 µs (30ms) │ ~4,000 ms Transfer      │
 │ 2. Early RamShared     │ Unix Socket NBD + User Buffers   │ 3.71 GB/s (3,798 MB/s)  │ 5.58 GB/s (5,714 MB/s)  │ ~326–550 µs       │ 67.4 ms Transfer        │
 │ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6.38 GB/s (6,530 MB/s)  │ 8.74 GB/s (8,947 MB/s)  │ 231 µs (0.23 ms)  │ 28.6–39.2 ms Transfer   │
-│ 4. Multi-Tier Hardened │ Direct DMA + VirtDisk / ublk     │ 9.09 GB/s Direct DMA    │ 9.09 GB/s (+25.7% speed)│ 0.00 ms Latency   │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
-```
-
-#### Stress Battery Qualification Report (Latest Host Hardware Qualification):
-
-```text
-══════════════════════════════════════════════════════════════════════════════════
- 📊 STRESS BATTERY QUALIFICATION REPORT (PHYSICAL HOST QUALIFICATION):
-  • Execution Mode:          FULL MULTI-TIER CASCADE QUALIFICATION (180s HOLD)
-  • Memory Pressure Index:   10.0 / 10.0 (Closed-Loop Safe Dynamic Governor)
-  • Active I/O Cycles:       296 active cycles completed (180s sustained hold)
-  • Peak Total Swap Used:    9,216 MB (100% Capacity Across All Tiers)
-  • Tier 1 (ZRAM Swap):      1,024 MB Peak (100% capacity) ── 🟢 QUALIFIED (In-RAM LZ4)
-  • Tier 2 (GPU VRAM Swap):  4,096 MB Peak (100% capacity) ── 🟢 QUALIFIED (PCIe DMA)
-  • Tier 3 (SSD Storage):    4,096 MB Peak (100% capacity) ── 🟢 QUALIFIED (Fallback)
-  • Reclaim Return Speed:    100.00 GB/s (Bounded atomic return to host)
-  • Stability Verdict:       🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Memory Leaks)
-══════════════════════════════════════════════════════════════════════════════════
 ```
 
 Zero-copy pinned memory (`cuMemHostAlloc`) and native `ublk` (`io_uring`) kernel block devices provide ~100x higher read throughput and ~130x lower latency than virtualized VHDX swap, eliminating desktop thrashing stalls while retaining 100% cryptographic integrity (0 bit flips).
@@ -201,7 +183,7 @@ scripts, systemd service templates, documentation, and `SHA256SUMS` cryptographi
 Build caches, credentials, and transient environment artifacts are excluded by policy. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-Official Linux release distributions (including v0.10.0 and prior milestones) and
+Official Linux release distributions (including v0.11.0 and prior milestones) and
 their detached checksums are qualified through the automated release promotion workflow.
 
 ## Windows StorPort Driver Architecture
