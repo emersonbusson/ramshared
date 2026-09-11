@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 273,
-    "classified": 270,
+    "total": 274,
+    "classified": 271,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -1308,6 +1308,18 @@
       },
       "owner": "operations",
       "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/security/FUZZING-GUIDE.md",
+      "disposition": "classified",
+      "ruleId": "security-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "security",
+      "canonicalSource": "docs/security/THREAT-MODEL.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
