@@ -211,40 +211,21 @@ enum CliCommand {
     Help,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum CliParseError {
-    UnsupportedCommand(String),
-    InvalidOption {
-        command: &'static str,
-        options: Vec<String>,
-    },
-}
+pub mod cli_error;
+use cli_error::CliError;
 
-impl fmt::Display for CliParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CliParseError::UnsupportedCommand(command) => {
-                write!(f, "unsupported command: {command}")
-            }
-            CliParseError::InvalidOption { command, options } => {
-                write!(f, "invalid {command} option: {}", options.join(" "))
-            }
-        }
-    }
-}
-
-fn parse_json_option(command: &'static str, options: &[String]) -> Result<bool, CliParseError> {
+fn parse_json_option(command: &'static str, options: &[String]) -> Result<bool, CliError> {
     match options {
         [] => Ok(false),
         [option] if option == "--json" => Ok(true),
-        _ => Err(CliParseError::InvalidOption {
+        _ => Err(CliError::InvalidOption {
             command,
-            options: options.to_vec(),
+            options: options.join(" "),
         }),
     }
 }
 
-fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
+fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliError> {
     let Some((command, options)) = args.split_first() else {
         return Ok(CliCommand::Help);
     };
@@ -254,9 +235,9 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
             if options.is_empty() {
                 Ok(CliCommand::Version)
             } else {
-                Err(CliParseError::InvalidOption {
+                Err(CliError::InvalidOption {
                     command: "version",
-                    options: options.to_vec(),
+                    options: options.join(" "),
                 })
             }
         }
@@ -275,18 +256,18 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
                     args: options.to_vec(),
                 })
             } else {
-                Err(CliParseError::InvalidOption {
+                Err(CliError::InvalidOption {
                     command: "supervise",
-                    options: options.to_vec(),
+                    options: options.join(" "),
                 })
             }
         }
         "recover" => match options {
             [option] if option == "--status" => Ok(CliCommand::Recover { resume: false }),
             [option] if option == "--resume" => Ok(CliCommand::Recover { resume: true }),
-            _ => Err(CliParseError::InvalidOption {
+            _ => Err(CliError::InvalidOption {
                 command: "recover",
-                options: options.to_vec(),
+                options: options.join(" "),
             }),
         },
         "doctor" => Ok(CliCommand::Doctor {
@@ -299,9 +280,9 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
             if options.is_empty() {
                 Ok(CliCommand::Down)
             } else {
-                Err(CliParseError::InvalidOption {
+                Err(CliError::InvalidOption {
                     command: "down",
-                    options: options.to_vec(),
+                    options: options.join(" "),
                 })
             }
         }
@@ -309,12 +290,12 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
             json: parse_json_option("status", options)?,
         }),
         cmd @ ("monitor" | "top") => Ok(CliCommand::Monitor {
-            options: MonitorOptions::parse(options).map_err(|_| CliParseError::InvalidOption {
+            options: MonitorOptions::parse(options).map_err(|_| CliError::InvalidOption {
                 command: match cmd {
                     "top" => "top",
                     _ => "monitor",
                 },
-                options: options.to_vec(),
+                options: options.join(" "),
             })?,
         }),
         "diagnose" => Ok(CliCommand::Diagnose {
@@ -324,7 +305,7 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
             args: options.to_vec(),
         }),
         "-h" | "--help" => Ok(CliCommand::Help),
-        other => Err(CliParseError::UnsupportedCommand(other.to_string())),
+        other => Err(CliError::UnsupportedCommand(other.to_string())),
     }
 }
 
@@ -508,7 +489,7 @@ impl CliActionRunner for SystemCliActions {
                     ExitCode::from(1)
                 }
             },
-            Err(error) => to_exit::<String>(Err(error), stderr),
+            Err(error) => to_exit(Err(error.to_string()), stderr),
         }
     }
 }
@@ -991,7 +972,7 @@ fn probe_cuda() -> CudaProbe {
             nvidia_smi_status,
             nvidia_smi_output,
             gpu: None,
-            detail,
+            detail: detail.to_string(),
         },
     }
 }
@@ -1046,14 +1027,14 @@ fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
 
 /// Real probe of CUDA via the audited `ramshared-cuda` crate (isolated FFI, RAII).
 /// Replaces the duplicated FFI that lived here (Day-0: only `unsafe` in ramshared-cuda).
-fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
-    let cuda = Cuda::load().map_err(|e| e.to_string())?;
-    if cuda.device_count().map_err(|e| e.to_string())? < 1 {
-        return Err("CUDA found no devices".to_string());
+fn cuda_probe_via_lib() -> Result<GpuInfo, CliError> {
+    let cuda = Cuda::load().map_err(|e| CliError::CudaProbe(e.to_string()))?;
+    if cuda.device_count().map_err(|e| CliError::CudaProbe(e.to_string()))? < 1 {
+        return Err(CliError::CudaNoDevices);
     }
-    let dev = cuda.device(0).map_err(|e| e.to_string())?;
-    let ctx = cuda.create_context(&dev).map_err(|e| e.to_string())?;
-    let (free, total) = ctx.mem_info().map_err(|e| e.to_string())?;
+    let dev = cuda.device(0).map_err(|e| CliError::CudaProbe(e.to_string()))?;
+    let ctx = cuda.create_context(&dev).map_err(|e| CliError::CudaProbe(e.to_string()))?;
+    let (free, total) = ctx.mem_info().map_err(|e| CliError::CudaProbe(e.to_string()))?;
     Ok(GpuInfo {
         name: dev.name().to_string(),
         total_bytes: total as u64,
@@ -1819,7 +1800,7 @@ mod tests {
 
         let error = parse_cli_command(&cli_args(&["monitor", "--activate"]))
             .expect_err("monitor has no mutation controls");
-        assert!(matches!(error, CliParseError::InvalidOption { .. }));
+        assert!(matches!(error, CliError::InvalidOption { .. }));
     }
 
     #[test]
