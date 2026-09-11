@@ -8,6 +8,10 @@
 use std::fs;
 use std::path::PathBuf;
 
+mod kernel;
+
+use kernel::check_module_compatibility;
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize)]
 struct Event {
     #[serde(default)]
@@ -80,6 +84,11 @@ struct Diagnosis {
 }
 
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
+    // Attempt kernel module version check, print warning if mismatch or read error
+    if let Err(e) = check_module_compatibility() {
+        eprintln!("WARNING: {}", e);
+    }
+
     let (path, json) = parse_args(args)?;
     let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
     let diagnosis = diagnose_jsonl(&text)?;
