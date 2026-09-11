@@ -64,6 +64,26 @@ pub enum DemoteReason {
     Latency,
     Corruption,
     FreeFloor,
+    GpuLost,
+    IoErrorBurst,
+}
+
+impl DemoteReason {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Latency => "Latency",
+            Self::Corruption => "Corruption",
+            Self::FreeFloor => "FreeFloor",
+            Self::GpuLost => "GpuLost",
+            Self::IoErrorBurst => "IoErrorBurst",
+        }
+    }
+}
+
+impl std::fmt::Display for DemoteReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -386,5 +406,17 @@ mod sampler_tests {
             ResidencyError::MalformedMetric.to_string(),
             "malformed metric (-EINVAL)"
         );
+    }
+
+    #[test]
+    fn demote_reason_display_and_as_str() {
+        assert_eq!(DemoteReason::Latency.as_str(), "Latency");
+        assert_eq!(DemoteReason::Corruption.as_str(), "Corruption");
+        assert_eq!(DemoteReason::FreeFloor.as_str(), "FreeFloor");
+        assert_eq!(DemoteReason::GpuLost.as_str(), "GpuLost");
+        assert_eq!(DemoteReason::IoErrorBurst.as_str(), "IoErrorBurst");
+
+        assert_eq!(DemoteReason::GpuLost.to_string(), "GpuLost");
+        assert_eq!(DemoteReason::IoErrorBurst.to_string(), "IoErrorBurst");
     }
 }

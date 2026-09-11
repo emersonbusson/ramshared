@@ -2758,6 +2758,10 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let mut recovery_activation = RecoveryActivation::default();
     let mut shutdown_requested = false;
     let mut live = LiveCount::new();
+    let mut consecutive_io_errors = 0u32;
+    const MAX_CONSECUTIVE_IO_ERRORS: u32 = 3;
+    let mut last_gpu_heartbeat = Instant::now();
+    const GPU_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
     let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
     let global_probe_interval = Duration::from_secs(1);
     let global_probe_timeout = Duration::from_secs(2);
@@ -2909,6 +2913,28 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     data: out.read_data,
                     disconnect: out.disconnect,
                 });
+
+                let reply_errno =
+                    u32::from_be_bytes([out.reply[4], out.reply[5], out.reply[6], out.reply[7]]);
+                let is_io_error = touches_vram && reply_errno == ramshared_block::protocol::NBD_EIO;
+                if is_io_error {
+                    consecutive_io_errors = consecutive_io_errors.saturating_add(1);
+                    if consecutive_io_errors >= MAX_CONSECUTIVE_IO_ERRORS
+                        && !demoted
+                        && demote_rx.is_none()
+                        && !matches!(backend, Be::Origin(_))
+                    {
+                        eprintln!(
+                            "[ramsharedd] DEMOTE (IoErrorBurst) consecutive_errors={consecutive_io_errors} -> swapoff {nbd_dev}"
+                        );
+                        last_demote_reason = Some("IoErrorBurst".into());
+                        demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
+                        swapoff_attempted = true;
+                        starter.publish_demote(demotes_total, &last_demote_reason, true);
+                    }
+                } else if touches_vram && reply_errno == ramshared_block::protocol::NBD_OK {
+                    consecutive_io_errors = 0;
+                }
 
                 if touches_vram
                     && !demoted
@@ -3065,6 +3091,23 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     cache.target_bytes() >> 10
                 },
             });
+        }
+
+        if !demoted
+            && demote_rx.is_none()
+            && !matches!(backend, Be::Origin(_))
+            && last_gpu_heartbeat.elapsed() >= GPU_HEARTBEAT_INTERVAL
+        {
+            last_gpu_heartbeat = Instant::now();
+            if let Err(error) = provider.mem_info() {
+                eprintln!(
+                    "[ramsharedd] GPU probe failed during idle tick: {error} -> swapoff {nbd_dev}"
+                );
+                last_demote_reason = Some("GpuLost".into());
+                demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
+                swapoff_attempted = true;
+                starter.publish_demote(demotes_total, &last_demote_reason, true);
+            }
         }
 
         if let (Some(dxg_provider), Be::Sparse(sparse)) = (&dxg, &backend) {
@@ -4095,14 +4138,52 @@ fn serve_broker_jobs_with_poll<B: BlockBackend>(
     serve_broker_jobs_with_poll_and_reply_hook(backend, rt, residency, poll_interval, || {})
 }
 
+fn serve_broker_jobs_with_poll_and_heartbeat<B: BlockBackend>(
+    backend: B,
+    rt: BrokerWorkerRuntime,
+    residency: impl FnMut(u64) -> Option<DemoteReason>,
+    heartbeat: impl FnMut() -> Option<DemoteReason>,
+    poll_interval: Duration,
+) -> B {
+    serve_broker_jobs_with_poll_heartbeat_and_reply_hook(
+        backend,
+        rt,
+        residency,
+        heartbeat,
+        poll_interval,
+        Duration::from_secs(1),
+        || {},
+    )
+}
+
 /// Worker core with an injected post-publication hook. The hook lets tests
 /// freeze the worker immediately after a reply becomes observable and prove
 /// that all completion state was published first.
 fn serve_broker_jobs_with_poll_and_reply_hook<B: BlockBackend>(
+    backend: B,
+    rt: BrokerWorkerRuntime,
+    residency: impl FnMut(u64) -> Option<DemoteReason>,
+    poll_interval: Duration,
+    reply_published: impl FnMut(),
+) -> B {
+    serve_broker_jobs_with_poll_heartbeat_and_reply_hook(
+        backend,
+        rt,
+        residency,
+        || None,
+        poll_interval,
+        Duration::from_secs(1),
+        reply_published,
+    )
+}
+
+fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
     mut backend: B,
     rt: BrokerWorkerRuntime,
     mut residency: impl FnMut(u64) -> Option<DemoteReason>,
+    mut heartbeat: impl FnMut() -> Option<DemoteReason>,
     poll_interval: Duration,
+    heartbeat_interval: Duration,
     mut reply_published: impl FnMut(),
 ) -> B {
     let poll_interval = if poll_interval.is_zero() {
@@ -4110,7 +4191,15 @@ fn serve_broker_jobs_with_poll_and_reply_hook<B: BlockBackend>(
     } else {
         poll_interval
     };
+    let heartbeat_interval = if heartbeat_interval.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        heartbeat_interval
+    };
     let mut demoted = false;
+    let mut consecutive_io_errors: u32 = 0;
+    const MAX_CONSECUTIVE_IO_ERRORS: u32 = 3;
+    let mut last_heartbeat = std::time::Instant::now();
     eprintln!("[ramsharedd] serving (single worker; multi-slice broker)");
     loop {
         if rt.shutdown.load(Ordering::SeqCst) {
@@ -4122,6 +4211,16 @@ fn serve_broker_jobs_with_poll_and_reply_hook<B: BlockBackend>(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if rt.shutdown.load(Ordering::SeqCst) {
                     break; // DT-28: stop only after SIGINT or SIGTERM.
+                }
+                if last_heartbeat.elapsed() >= heartbeat_interval && !demoted {
+                    last_heartbeat = std::time::Instant::now();
+                    if let Some(reason) = heartbeat() {
+                        eprintln!(
+                            "[ramsharedd] DEMOTE ({reason:?}) heartbeat probe -> broker DemoteAll"
+                        );
+                        let _ = rt.demote_tx.send(reason);
+                        demoted = true;
+                    }
                 }
                 continue;
             }
@@ -4154,6 +4253,24 @@ fn serve_broker_jobs_with_poll_and_reply_hook<B: BlockBackend>(
                 serve(&job.req, &job.payload, &mut view)
             };
             let lat_us = t0.elapsed().as_micros() as u64;
+
+            // Circuit breaker: rapid consecutive NBD_EIO replies immediately trip demote
+            // rather than waiting for 64-request cadence canary sampling.
+            let reply_errno =
+                u32::from_be_bytes([out.reply[4], out.reply[5], out.reply[6], out.reply[7]]);
+            let is_io_error = touches && reply_errno == ramshared_block::protocol::NBD_EIO;
+            if is_io_error {
+                consecutive_io_errors = consecutive_io_errors.saturating_add(1);
+                if consecutive_io_errors >= MAX_CONSECUTIVE_IO_ERRORS && !demoted {
+                    eprintln!(
+                        "[ramsharedd] DEMOTE (IoErrorBurst) consecutive_errors={consecutive_io_errors} -> broker DemoteAll"
+                    );
+                    let _ = rt.demote_tx.send(DemoteReason::IoErrorBurst);
+                    demoted = true;
+                }
+            } else if touches && reply_errno == ramshared_block::protocol::NBD_OK {
+                consecutive_io_errors = 0;
+            }
 
             // Telemetry RF-1: a reply is the completion barrier. Publish the
             // counters first so every observer that receives the reply also
@@ -4305,7 +4422,7 @@ where
     let (worker, broker, shutdown, socket) = rt.into_parts();
     let broker_monitor = BrokerJoinMonitor::start(broker, shutdown);
     let vram = std::sync::Arc::clone(&worker.vram);
-    backend = serve_broker_jobs_with_poll(
+    backend = serve_broker_jobs_with_poll_and_heartbeat(
         backend,
         worker,
         |lat_us| {
@@ -4317,13 +4434,31 @@ where
                 probe: &mut probe,
                 free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
             };
-            residency_check(lat_us, &mut residency_state, || {
-                let (f, t) = provider.mem_info().ok()?;
-                // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
+            residency_check(lat_us, &mut residency_state, || match provider.mem_info() {
+                Ok((f, t)) => {
+                    vram.free.store(f, Ordering::Relaxed);
+                    vram.total.store(t, Ordering::Relaxed);
+                    Some(f)
+                }
+                Err(_) => {
+                    vram.free.store(0, Ordering::Relaxed);
+                    vram.total.store(0, Ordering::Relaxed);
+                    None
+                }
+            })
+        },
+        || match provider.mem_info() {
+            Ok((f, t)) => {
                 vram.free.store(f, Ordering::Relaxed);
                 vram.total.store(t, Ordering::Relaxed);
-                Some(f)
-            })
+                None
+            }
+            Err(error) => {
+                eprintln!("[ramsharedd] GPU probe failed during idle heartbeat: {error}");
+                vram.free.store(0, Ordering::Relaxed);
+                vram.total.store(0, Ordering::Relaxed);
+                Some(DemoteReason::GpuLost)
+            }
         },
         worker_poll,
     );
@@ -8806,6 +8941,316 @@ mod tests {
             "a continuously full queue starved the terminal flag"
         );
         assert_eq!(reply_count, REFILLS);
+    }
+
+    struct TestFailingBackend {
+        fail_io: std::sync::Arc<AtomicBool>,
+        size: u64,
+    }
+
+    impl TestFailingBackend {
+        fn new(size: u64, fail_io: bool) -> (Self, std::sync::Arc<AtomicBool>) {
+            let flag = std::sync::Arc::new(AtomicBool::new(fail_io));
+            (
+                Self {
+                    fail_io: std::sync::Arc::clone(&flag),
+                    size,
+                },
+                flag,
+            )
+        }
+    }
+
+    impl BlockBackend for TestFailingBackend {
+        fn size_bytes(&self) -> u64 {
+            self.size
+        }
+        fn block_size(&self) -> u32 {
+            512
+        }
+        fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
+            if self.fail_io.load(Ordering::SeqCst) {
+                Err(ramshared_block::IoError("simulated I/O failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), ramshared_block::IoError> {
+            if self.fail_io.load(Ordering::SeqCst) {
+                Err(ramshared_block::IoError("simulated I/O failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn broker_worker_circuit_breaker_trips_after_three_consecutive_io_errors() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(16);
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let (demote_tx, demote_rx) = std::sync::mpsc::channel();
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            shutdown_wake_pending: std::sync::Arc::clone(&stop.wake_pending),
+            shutdown_wake_tx: stop.wake_tx.clone(),
+            slice_io: std::sync::Arc::new(vec![SliceIoCounters::default()]),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+
+        let make_job = |handle: u64| {
+            WMsg::Job(ramshared_wsl2d::conn::Job {
+                export: 0,
+                req: ramshared_block::Request {
+                    flags: 0,
+                    cmd: Command::Write,
+                    handle,
+                    offset: 0,
+                    len: 512,
+                },
+                payload: vec![0x5A; 512],
+                reply: reply_tx.clone(),
+            })
+        };
+
+        let (backend, _fail_flag) = TestFailingBackend::new(4096, true);
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll_and_reply_hook(
+                    backend,
+                    worker_rt,
+                    |_| None,
+                    Duration::from_millis(5),
+                    || {},
+                )
+            });
+            let _shutdown_guard = BrokerWorkerShutdownGuard(&stop);
+
+            // Job 1 fails: no demote
+            jobs_tx.send(make_job(1)).unwrap();
+            let r1 = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                u32::from_be_bytes([r1.reply[4], r1.reply[5], r1.reply[6], r1.reply[7]]),
+                ramshared_block::protocol::NBD_EIO
+            );
+            assert_eq!(
+                demote_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+
+            // Job 2 fails: no demote
+            jobs_tx.send(make_job(2)).unwrap();
+            let r2 = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                u32::from_be_bytes([r2.reply[4], r2.reply[5], r2.reply[6], r2.reply[7]]),
+                ramshared_block::protocol::NBD_EIO
+            );
+            assert_eq!(
+                demote_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+
+            // Job 3 fails: trips circuit breaker!
+            jobs_tx.send(make_job(3)).unwrap();
+            let r3 = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                u32::from_be_bytes([r3.reply[4], r3.reply[5], r3.reply[6], r3.reply[7]]),
+                ramshared_block::protocol::NBD_EIO
+            );
+            let reason = demote_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("circuit breaker fired demote");
+            assert_eq!(reason, DemoteReason::IoErrorBurst);
+
+            // Shutdown worker cleanly
+            stop.request();
+            worker.join().expect("worker joins cleanly");
+        });
+    }
+
+    #[test]
+    fn broker_worker_circuit_breaker_resets_on_success() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(16);
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let (demote_tx, demote_rx) = std::sync::mpsc::channel();
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            shutdown_wake_pending: std::sync::Arc::clone(&stop.wake_pending),
+            shutdown_wake_tx: stop.wake_tx.clone(),
+            slice_io: std::sync::Arc::new(vec![SliceIoCounters::default()]),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+
+        let (backend, fail_flag) = TestFailingBackend::new(4096, true);
+
+        let make_job = |handle: u64| {
+            WMsg::Job(ramshared_wsl2d::conn::Job {
+                export: 0,
+                req: ramshared_block::Request {
+                    flags: 0,
+                    cmd: Command::Write,
+                    handle,
+                    offset: 0,
+                    len: 512,
+                },
+                payload: vec![0x5A; 512],
+                reply: reply_tx.clone(),
+            })
+        };
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll_and_reply_hook(
+                    backend,
+                    worker_rt,
+                    |_| None,
+                    Duration::from_millis(5),
+                    || {},
+                )
+            });
+            let _shutdown_guard = BrokerWorkerShutdownGuard(&stop);
+
+            // 2 failures
+            jobs_tx.send(make_job(1)).unwrap();
+            let _ = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            jobs_tx.send(make_job(2)).unwrap();
+            let _ = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                demote_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+
+            // Success resets streak
+            fail_flag.store(false, Ordering::SeqCst);
+            jobs_tx.send(make_job(3)).unwrap();
+            let r3 = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                u32::from_be_bytes([r3.reply[4], r3.reply[5], r3.reply[6], r3.reply[7]]),
+                ramshared_block::protocol::NBD_OK
+            );
+            assert_eq!(
+                demote_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+
+            // 2 more failures: total is 4 failures, but streak is only 2 -> no demote
+            fail_flag.store(true, Ordering::SeqCst);
+            jobs_tx.send(make_job(4)).unwrap();
+            let _ = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            jobs_tx.send(make_job(5)).unwrap();
+            let _ = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            assert_eq!(
+                demote_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+
+            // 3rd consecutive failure in this streak -> trips
+            jobs_tx.send(make_job(6)).unwrap();
+            let _ = reply_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            let reason = demote_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("circuit breaker fired");
+            assert_eq!(reason, DemoteReason::IoErrorBurst);
+
+            stop.request();
+            worker.join().expect("worker joins cleanly");
+        });
+    }
+
+    #[test]
+    fn broker_worker_idle_heartbeat_detects_gpu_loss() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(16);
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let (demote_tx, demote_rx) = std::sync::mpsc::channel();
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            shutdown_wake_pending: std::sync::Arc::clone(&stop.wake_pending),
+            shutdown_wake_tx: stop.wake_tx.clone(),
+            slice_io: std::sync::Arc::new(vec![SliceIoCounters::default()]),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll_heartbeat_and_reply_hook(
+                    RamBackend::new(4096),
+                    worker_rt,
+                    |_| None,
+                    || Some(DemoteReason::GpuLost),
+                    Duration::from_millis(5),
+                    Duration::from_millis(5),
+                    || {},
+                )
+            });
+
+            // Idle worker should trigger heartbeat on first tick and send GpuLost
+            let reason = demote_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("heartbeat sent GpuLost");
+            assert_eq!(reason, DemoteReason::GpuLost);
+
+            stop.request();
+            worker.join().expect("worker joins cleanly");
+        });
+    }
+
+    #[test]
+    fn broker_worker_idle_heartbeat_healthy_does_not_demote() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(16);
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let (demote_tx, demote_rx) = std::sync::mpsc::channel();
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            shutdown_wake_pending: std::sync::Arc::clone(&stop.wake_pending),
+            shutdown_wake_tx: stop.wake_tx.clone(),
+            slice_io: std::sync::Arc::new(vec![SliceIoCounters::default()]),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll_heartbeat_and_reply_hook(
+                    RamBackend::new(4096),
+                    worker_rt,
+                    |_| None,
+                    || None,
+                    Duration::from_millis(5),
+                    Duration::from_millis(5),
+                    || {},
+                )
+            });
+
+            // Sleep a short time and ensure no demote was triggered
+            std::thread::sleep(Duration::from_millis(30));
+            assert_eq!(
+                demote_rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            );
+
+            stop.request();
+            worker.join().expect("worker joins cleanly");
+        });
     }
 
     #[test]

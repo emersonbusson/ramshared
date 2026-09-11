@@ -3,13 +3,8 @@
 
 use crate::protocol::{Command, NBD_CMD_FLAG_FUA, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
 
-// errno in simple reply (error field).
-pub const NBD_OK: u32 = 0;
-pub const NBD_EPERM: u32 = 1;
-pub const NBD_EIO: u32 = 5;
-pub const NBD_EACCES: u32 = 13;
-pub const NBD_EINVAL: u32 = 22;
-pub const NBD_ERANGE: u32 = 34;
+// errno in simple reply (re-exported from protocol for backward compatibility).
+pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK};
 
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
