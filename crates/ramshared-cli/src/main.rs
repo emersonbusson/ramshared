@@ -11,6 +11,7 @@ use std::process::{Command, ExitCode};
 
 use ramshared_cuda::Cuda;
 
+mod completion;
 mod bounded_process;
 mod cascade;
 mod diagnose;
@@ -209,6 +210,7 @@ enum CliCommand {
     Diagnose { args: Vec<String> },
     Stress { args: Vec<String> },
     Help,
+    Completion { shell: clap_complete::Shell },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -320,6 +322,19 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "diagnose" => Ok(CliCommand::Diagnose {
             args: options.to_vec(),
         }),
+        "completion" => {
+            let shell = options.first()
+                .ok_or_else(|| CliParseError::InvalidOption {
+                    command: "completion",
+                    options: options.to_vec(),
+                })?
+                .parse::<clap_complete::Shell>()
+                .map_err(|_| CliParseError::InvalidOption {
+                    command: "completion",
+                    options: options.to_vec(),
+                })?;
+            Ok(CliCommand::Completion { shell })
+        }
         "stress" | "bench" => Ok(CliCommand::Stress {
             args: options.to_vec(),
         }),
@@ -372,11 +387,16 @@ trait CliActionRunner {
     ) -> ExitCode;
     fn recover(&mut self, resume: bool, stdout: &mut dyn Write, stderr: &mut dyn Write)
     -> ExitCode;
+    fn completion(&mut self, shell: clap_complete::Shell, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
 }
 
 struct SystemCliActions;
 
 impl CliActionRunner for SystemCliActions {
+    fn completion(&mut self, shell: clap_complete::Shell, stdout: &mut dyn Write, _stderr: &mut dyn Write) -> ExitCode {
+        crate::completion::generate_script(shell, stdout)
+    }
+
     fn check(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
         let report = run_check();
         let output = if json {
@@ -546,6 +566,7 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
         Ok(CliCommand::Stress { args }) => actions.stress(&args, stdout, stderr),
+        Ok(CliCommand::Completion { shell }) => actions.completion(shell, stdout, stderr),
         Ok(CliCommand::Help) => {
             print_usage(stderr);
             ExitCode::SUCCESS
@@ -608,6 +629,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared stress [--start %] [--target %] [--step %] [--interval-ms N] [--hold-sec N] [--min-ram-mb N] [--json]"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared completion <bash|zsh|fish|powershell|elvish>"
     );
     let _ = writeln!(
         stderr,
@@ -1699,6 +1724,16 @@ mod tests {
             self.calls.push(CliCommand::Recover { resume });
             self.result()
         }
+
+        fn completion(
+            &mut self,
+            shell: clap_complete::Shell,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Completion { shell });
+            self.result()
+        }
     }
 
     fn cli_args(args: &[&str]) -> Vec<String> {
@@ -2210,6 +2245,7 @@ CONFIG_BLK_DEV_NBD=m\n\
             &["status"][..],
             &["status", "--json"][..],
             &["monitor", "--once"][..],
+            &["completion", "bash"][..],
             &["diagnose", "--events", "/dev/null"][..],
             &["--help"][..],
         ] {
