@@ -2902,7 +2902,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             if let Some(job) = job {
                 let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
                 let t0 = std::time::Instant::now();
-                let out = serve(&job.req, &job.payload, &mut backend);
+                let out = serve(None, &job.req, &job.payload, &mut backend);
                 let lat_us = starter.elapsed_us(t0);
                 let _ = job.reply.send(Reply {
                     reply: out.reply,
@@ -4151,7 +4151,7 @@ fn serve_broker_jobs_with_poll_and_reply_hook<B: BlockBackend>(
             let t0 = std::time::Instant::now();
             let out = {
                 let mut view = SliceView::new(&mut backend, base, len);
-                serve(&job.req, &job.payload, &mut view)
+                serve(None, &job.req, &job.payload, &mut view)
             };
             let lat_us = t0.elapsed().as_micros() as u64;
 

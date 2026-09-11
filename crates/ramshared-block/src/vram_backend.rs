@@ -135,7 +135,7 @@ mod tests {
     fn vram_backend_write_then_read_roundtrip() {
         let mut be = VramBackend::new(FakeVram::new(1 << 20), 4096);
         let payload = vec![0x5Au8; 4096];
-        let w = serve(
+        let w = serve(None,
             &Request {
                 flags: 0,
                 cmd: Command::Write,
@@ -148,7 +148,7 @@ mod tests {
         );
         assert_eq!(errno(&w), 0, "WRITE must succeed");
 
-        let r = serve(
+        let r = serve(None,
             &Request {
                 flags: 0,
                 cmd: Command::Read,
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn vram_backend_oob_is_error() {
         let mut be = VramBackend::new(FakeVram::new(8192), 4096);
-        let r = serve(
+        let r = serve(None,
             &Request {
                 flags: 0,
                 cmd: Command::Read,

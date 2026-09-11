@@ -163,7 +163,7 @@ mod tests {
         // Access beyond the slice's len → EINVAL via serve (bounds-check of slice is free).
         let mut be = RamBackend::new(128);
         let mut view = SliceView::new(&mut be, 64, 64);
-        let out = serve(
+        let out = serve(None,
             &Request {
                 flags: 0,
                 cmd: Command::Read,

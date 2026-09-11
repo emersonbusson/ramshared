@@ -16,7 +16,7 @@ fn vram_backend_serves_nbd_write_then_read() {
     let mut be = VramBackend::new(mem, 4096);
 
     let payload = vec![0x5Au8; 4096];
-    let w = serve(
+    let w = serve(None,
         &Request {
             flags: 0,
             cmd: Command::Write,
@@ -33,7 +33,7 @@ fn vram_backend_serves_nbd_write_then_read() {
         "WRITE must return NBD_OK"
     );
 
-    let r = serve(
+    let r = serve(None,
         &Request {
             flags: 0,
             cmd: Command::Read,
