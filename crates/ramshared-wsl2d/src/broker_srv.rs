@@ -1082,6 +1082,7 @@ struct TelemetrySink {
     file: File,
     branch: Option<String>,
     commit: Option<String>,
+    trace_context: Option<crate::telemetry::TraceContext>,
 }
 
 impl TelemetrySink {
@@ -1092,10 +1093,24 @@ impl TelemetrySink {
             .open(&path)
             .map_err(|e| eprintln!("[ramsharedd] WARN telemetria off: {path:?}: {e}"))
             .ok()?;
+
+        let trace_context = std::env::var("TRACEPARENT").ok().and_then(|tp| {
+            let parts: Vec<&str> = tp.split('-').collect();
+            if parts.len() == 4 {
+                Some(crate::telemetry::TraceContext {
+                    trace_id: parts[1].to_string(),
+                    span_id: parts[2].to_string(),
+                })
+            } else {
+                None
+            }
+        });
+
         Some(Self {
             file,
             branch: std::env::var("RAMSHARED_BUILD_BRANCH").ok(),
             commit: std::env::var("RAMSHARED_BUILD_COMMIT").ok(),
+            trace_context,
         })
     }
 
@@ -1108,6 +1123,7 @@ impl TelemetrySink {
             t,
             branch: self.branch.clone(),
             commit: self.commit.clone(),
+            trace_context: self.trace_context.clone(),
             core: core.clone(),
         };
         let mut line = serde_json::to_string(&sample)
