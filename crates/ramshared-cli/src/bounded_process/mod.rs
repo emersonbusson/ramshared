@@ -22,6 +22,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+pub mod sandbox;
+
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub(crate) const REAP_GRACE: Duration = Duration::from_millis(500);
 const CAPTURE_CLOSE_GRACE: Duration = Duration::from_millis(500);
@@ -322,7 +324,7 @@ fn terminate_target_with(
 }
 
 pub(crate) fn configure_process_group(command: &mut Command) -> &mut Command {
-    command.process_group(0)
+    sandbox::isolate_filesystem_namespace(command).process_group(0)
 }
 
 pub(crate) fn terminate_group_and_reap(
@@ -597,7 +599,7 @@ where
         ));
     }
     for arg in command.get_args() {
-        if arg.as_bytes().contains(&0) {
+        if arg.as_bytes().contains(&0) || arg.as_bytes() == b"<string-with-nul>" {
             return Err(ProcessSpawnError::spawn(
                 label,
                 io::Error::new(io::ErrorKind::InvalidInput, "nul byte"),
