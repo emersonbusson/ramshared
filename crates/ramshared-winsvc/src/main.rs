@@ -148,6 +148,12 @@ mod windows_svc {
             // SCM default without service dispatcher running returns 1
             assert_eq!(code, 1);
         }
+
+        #[test]
+        fn dump_cmd_path_is_expected() {
+            let dump_cmd = OsString::from(r"C:\Program Files\RamShared\tools\crash_dump.bat");
+            assert_eq!(dump_cmd.to_string_lossy(), r"C:\Program Files\RamShared\tools\crash_dump.bat");
+        }
     }
 
     fn service_main(_args: Vec<OsString>) {
@@ -740,11 +746,29 @@ mod windows_svc {
             })?;
             service.set_failure_actions_on_non_crash_failures(false)?;
         } else {
+            let dump_cmd = OsString::from(r"C:\Program Files\RamShared\tools\crash_dump.bat");
             service.update_failure_actions(ServiceFailureActions {
                 reset_period: ServiceFailureResetPeriod::Never,
                 reboot_msg: None,
-                command: None,
-                actions: Some(vec![]),
+                command: Some(dump_cmd),
+                actions: Some(vec![
+                    ServiceAction {
+                        action_type: ServiceActionType::RunCommand,
+                        delay: Duration::from_secs(10),
+                    },
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(60),
+                    },
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(120),
+                    },
+                    ServiceAction {
+                        action_type: ServiceActionType::Restart,
+                        delay: Duration::from_secs(300),
+                    },
+                ]),
             })?;
         }
         Ok(())
