@@ -10,6 +10,9 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 
 use crate::{BlockBackend, IoError};
 
+mod bounds;
+use bounds::{check_logical_bounds, check_physical_bounds};
+
 /// Default chunk size (MiB) — SPEC `RAMSHARED_VRAM_CHUNK_MIB` default 128.
 pub const DEFAULT_CHUNK_MIB: u64 = 128;
 
@@ -330,17 +333,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         if buf.is_empty() {
             return Ok(());
         }
-        let end = off
-            .checked_add(buf.len() as u64)
-            .filter(|&e| e <= self.capacity)
-            .ok_or_else(|| {
-                IoError(format!(
-                    "sparse read oob off={off} len={} cap={}",
-                    buf.len(),
-                    self.capacity
-                ))
-            })?;
-        let _ = end;
+        check_logical_bounds(off, buf.len(), self.capacity, false)?;
         let mut done = 0usize;
         while done < buf.len() {
             let abs = off + done as u64;
@@ -356,6 +349,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                 )));
             };
             if let Some(m) = &chunk.mem {
+                check_physical_bounds(rel, n, m.len(), false)?;
                 m.read_at(rel as u64, &mut buf[done..done + n])
                     .map_err(|e: VramError| IoError(e.to_string()))?;
             } else {
@@ -370,17 +364,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         if data.is_empty() {
             return Ok(());
         }
-        let end = off
-            .checked_add(data.len() as u64)
-            .filter(|&e| e <= self.capacity)
-            .ok_or_else(|| {
-                IoError(format!(
-                    "sparse write oob off={off} len={} cap={}",
-                    data.len(),
-                    self.capacity
-                ))
-            })?;
-        let _ = end;
+        check_logical_bounds(off, data.len(), self.capacity, true)?;
         let mut done = 0usize;
         let now = Instant::now();
         while done < data.len() {
@@ -401,6 +385,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                 .mem
                 .as_mut()
                 .ok_or_else(|| IoError("sparse: mem missing after ensure".into()))?;
+            check_physical_bounds(rel, n, m.len(), true)?;
             m.write_at(rel as u64, &data[done..done + n])
                 .map_err(|e: VramError| IoError(e.to_string()))?;
 
