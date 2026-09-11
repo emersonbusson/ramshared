@@ -16,6 +16,8 @@
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod pipeline_cache;
+
 use ash::vk;
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
