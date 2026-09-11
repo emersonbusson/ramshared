@@ -32,10 +32,12 @@ use loader_win as loader;
 
 mod driver;
 mod ffi;
+pub mod event;
 pub mod probe;
 mod vram_impl; // impl VramProvider/VramMemory for CUDA types (RF-G1)
 
 pub use driver::{Context, Cuda, CudaError, Device, DeviceMem};
+pub use event::Event;
 pub use probe::{PROBE_PATTERN_LEN, ProbePlanError, pattern_for_offset, plan_probe_offsets};
 
 #[cfg(test)]
@@ -71,6 +73,31 @@ mod tests {
 
     /// Real Host→VRAM→Host roundtrip. Requires a working CUDA GPU (WSL2/GPU-PV).
     /// Run with: `cargo test -p ramshared-cuda -- --ignored`.
+
+    #[test]
+    #[ignore = "requires a working CUDA GPU"]
+    fn gpu_event_timing() {
+        let cuda = Cuda::load().expect("libcuda must load");
+        if cuda.device_count().unwrap() < 1 { return; }
+        let dev = cuda.device(0).unwrap();
+        let ctx = cuda.create_context(&dev).unwrap();
+
+        let mut start = Event::new(&ctx).unwrap();
+        let mut end = Event::new(&ctx).unwrap();
+
+        start.record().unwrap();
+
+        let size = 1024 * 1024;
+        let mut mem = ctx.alloc(size).unwrap();
+        mem.zero().unwrap();
+
+        end.record().unwrap();
+        end.synchronize().unwrap();
+
+        let ms = start.elapsed_time_ms(&end).unwrap();
+        assert!(ms >= 0.0);
+    }
+
     #[test]
     #[ignore = "requires a working CUDA GPU (run with --ignored on a GPU host)"]
     fn gpu_roundtrip_256mib() {

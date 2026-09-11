@@ -19,6 +19,13 @@ pub type CuDevice = c_int;
 pub type CuContext = *mut c_void;
 pub type CuDevicePtr = u64;
 
+pub type CuStream = *mut c_void;
+pub type CuEvent = *mut c_void;
+
+pub const CU_EVENT_DEFAULT: c_uint = 0x0;
+pub const CU_EVENT_BLOCKING_SYNC: c_uint = 0x1;
+
+
 // Driver API signatures (ABI _v2 where applicable — matching `nbd-vram`).
 pub type FnInit = unsafe extern "C" fn(c_uint) -> CuResult;
 pub type FnDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
@@ -33,6 +40,11 @@ pub type FnMemcpyHtoD = unsafe extern "C" fn(CuDevicePtr, *const c_void, usize) 
 pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) -> CuResult;
 pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
+pub type FnEventCreate = unsafe extern "C" fn(*mut CuEvent, c_uint) -> CuResult;
+pub type FnEventDestroy = unsafe extern "C" fn(CuEvent) -> CuResult;
+pub type FnEventRecord = unsafe extern "C" fn(CuEvent, CuStream) -> CuResult;
+pub type FnEventSynchronize = unsafe extern "C" fn(CuEvent) -> CuResult;
+pub type FnEventElapsedTime = unsafe extern "C" fn(*mut f32, CuEvent, CuEvent) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
 
 /// Table of resolved symbols from the CUDA driver library.
@@ -50,5 +62,10 @@ pub struct Syms {
     pub memcpy_dtoh: FnMemcpyDtoH,
     pub memset_d8: FnMemsetD8,
     pub mem_get_info: FnMemGetInfo,
+        pub event_create: FnEventCreate,
+    pub event_destroy: FnEventDestroy,
+    pub event_record: FnEventRecord,
+    pub event_synchronize: FnEventSynchronize,
+    pub event_elapsed_time: FnEventElapsedTime,
     pub get_error_string: Option<FnGetErrorString>,
 }
