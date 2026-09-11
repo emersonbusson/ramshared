@@ -544,25 +544,25 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
         let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
         let hard_floor = if is_multi_tier {
-            250
+            opts.min_ram_mb.max(500)
         } else {
             opts.min_ram_mb.max(dynamic_kernel_floor)
         };
 
         let mut avail_mb = avail_mb;
         let mut retries = 0;
-        let max_wait_cycles = if is_multi_tier { 25 } else { 15 };
+        let max_wait_cycles = if is_multi_tier { 15 } else { 10 };
         while avail_mb <= hard_floor && is_multi_tier && retries < max_wait_cycles {
             if term_signal.load(Ordering::Relaxed) {
                 break;
             }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(150));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
             retries += 1;
         }
 
-        if avail_mb <= hard_floor && !is_multi_tier {
+        if avail_mb <= hard_floor {
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -690,21 +690,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
+        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
         if safe_alloc_mb == 0 {
-            if is_multi_tier && psi_full < opts.max_psi_full {
-                // If MemAvailable has a safe margin (>= 150 MB above kernel watermarks),
-                // inject a 64 MB chunk to keep kswapd actively writing dirty pages to swap
-                if avail_mb >= 150 {
-                    safe_alloc_mb = 64;
-                } else {
-                    // RAM is getting close to watermark; pause and let kswapd drain dirty pages to swap
-                    thread::sleep(Duration::from_millis(opts.interval_ms.clamp(100, 300)));
-                    continue;
-                }
-            } else {
-                break;
-            }
+            break;
         }
 
         // Allocate and dirty pages
