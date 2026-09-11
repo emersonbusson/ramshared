@@ -13,6 +13,8 @@
 //! with `// SAFETY:` for each block; the trait boundary is safe. `mem_info` uses `VK_EXT_memory_budget`
 //! when present; otherwise, it falls back to DT-10 (largest `DEVICE_LOCAL` heap − sum allocated).
 
+mod budget;
+
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -451,6 +453,10 @@ impl VramProvider for VulkanProvider {
     }
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
+        if let Some((free, total)) = budget::query_budget(&self.instance, self.phys)? {
+            return Ok((free, total));
+        }
+
         // DT-10 (fallback without VK_EXT_memory_budget): total = largest DEVICE_LOCAL heap; free = total −
         // Σ allocated by this provider. (Exact budget for VRAM of other processes: only on physical GPU.)
         let total = self.device_local_total();
