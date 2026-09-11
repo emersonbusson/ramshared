@@ -12,6 +12,8 @@
 //!    - Phase 4: Flash-Reclaim & Atomic Deallocation Benchmark.
 //! 3. Autonomous Watchdog Daemon Thread for fail-closed Hyper-V / WSL2 anti-hang protection.
 
+pub mod stress_scenarios;
+use self::stress_scenarios::StressScenario;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -36,6 +38,7 @@ pub struct StressOptions {
     pub telemetry_log: String,
     pub json: bool,
     pub threads: u64,
+    pub scenario: StressScenario,
 }
 
 impl Default for StressOptions {
@@ -55,6 +58,7 @@ impl Default for StressOptions {
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
             json: false,
             threads: 1,
+            scenario: StressScenario::default(),
         }
     }
 }
@@ -227,6 +231,14 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                     .ok_or_else(|| "--threads requires a value".to_string())?
                     .parse()
                     .map_err(|_| "invalid --threads value")?;
+            }
+            "--scenario" => {
+                i += 1;
+                opts.scenario = args
+                    .get(i)
+                    .ok_or_else(|| "--scenario requires a value".to_string())?
+                    .parse()
+                    .map_err(|e| format!("invalid --scenario: {}", e))?;
             }
             other => return Err(format!("unknown stress argument: {other}")),
         }
@@ -798,13 +810,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         // Allocate and dirty pages with realistic workload entropy
         let num_bytes = (safe_alloc_mb as usize) * 1024 * 1024;
-        let mut slice = vec![0u8; num_bytes];
-        for i in (0..num_bytes).step_by(4096) {
-            let base = (current_target as u8).wrapping_add((i & 0xFF) as u8);
-            for offset in (0..4096).step_by(128) {
-                slice[i + offset] = base.wrapping_add((offset as u8) ^ 0xA5);
-            }
-        }
+        let slice = stress_scenarios::generate_chunk(opts.scenario, current_target, num_bytes);
 
         if let Ok(mut guard) = chunks.lock() {
             guard.push(slice);
@@ -888,11 +894,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 let len = guard.len();
                 let idx = (cycle.wrapping_mul(7)) % len;
                 let target_chunk = &mut guard[idx];
-                let chunk_len = target_chunk.len();
-                let limit = chunk_len.min(16 * 1024 * 1024);
-                for offset in (0..limit).step_by(16384) {
-                    target_chunk[offset] = (cycle as u8).wrapping_add((offset & 0xFF) as u8);
-                }
+                stress_scenarios::modify_chunk(opts.scenario, target_chunk, cycle);
             }
 
             let (_, free_mb) = read_mem_info();
