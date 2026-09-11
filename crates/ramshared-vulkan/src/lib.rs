@@ -16,14 +16,17 @@
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod error;
+
 use ash::vk;
 use ramshared_vram::{VramError, VramMemory, VramProvider};
+use crate::error::VulkanError;
 
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
-fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
-    VramError::Provider(format!("vulkan {ctx}: {e:?}"))
+fn vk_err(ctx: &'static str, result: vk::Result) -> VulkanError {
+    VulkanError::Api { context: ctx, result }
 }
 
 /// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
@@ -145,7 +148,7 @@ impl VulkanProvider {
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
+        let entry = unsafe { ash::Entry::load() }.map_err(VulkanError::Load)?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
@@ -186,7 +189,7 @@ impl VulkanProvider {
         let pdevs = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| vk_err("enumerate_physical_devices", e))?;
         if pdevs.is_empty() {
-            return Err(VramError::Provider("no Vulkan physical device".into()));
+            return Err(VulkanError::NoDevice.into());
         }
         // Prefers a discrete GPU; otherwise the requested ordinal (clamped).
         let discrete = pdevs.iter().copied().find(|&p| {
@@ -333,9 +336,7 @@ fn create_device_resources(
         req.memory_type_bits,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
     )
-    .ok_or_else(|| {
-        VramError::Provider("sem memory type HOST_VISIBLE|COHERENT p/ staging".into())
-    })?;
+    .ok_or(VulkanError::MissingStagingMemoryType)?;
     let mai = vk::MemoryAllocateInfo::default()
         .allocation_size(req.size)
         .memory_type_index(mt);
@@ -415,9 +416,7 @@ impl VramProvider for VulkanProvider {
             None => {
                 // SAFETY: buffer created above; destroyed before returning (no leak).
                 unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(VramError::Provider(
-                    "no DEVICE_LOCAL memory type for the buffer".into(),
-                ));
+                return Err(VulkanError::MissingDeviceMemoryType.into());
             }
         };
         let mai = vk::MemoryAllocateInfo::default()
@@ -429,7 +428,7 @@ impl VramProvider for VulkanProvider {
             Err(e) => {
                 // SAFETY: buffer created above; destroyed on error.
                 unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(vk_err("allocate_memory", e));
+                return Err(vk_err("allocate_memory", e).into());
             }
         };
         // SAFETY: buffer + memory valid; offset 0.
@@ -439,7 +438,7 @@ impl VramProvider for VulkanProvider {
                 self.device.free_memory(memory, None);
                 self.device.destroy_buffer(buffer, None);
             }
-            return Err(vk_err("bind_buffer_memory", e));
+            return Err(vk_err("bind_buffer_memory", e).into());
         }
         self.allocated.fetch_add(bytes as u64, Ordering::Relaxed);
         Ok(VulkanMem {
