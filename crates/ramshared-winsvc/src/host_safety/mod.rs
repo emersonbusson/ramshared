@@ -209,3 +209,6 @@ mod tests {
         assert!(!slow.is_pass(Duration::from_secs(30)));
     }
 }
+
+pub mod watchdog;
+pub use watchdog::{MemoryWatchdog, VramReleaseControl};
