@@ -1,0 +1,5 @@
+{
+  "title": "build: update rustsec db and remote observation",
+  "description": "## Summary\nUpdate RustSec advisory-db commit references and corresponding remote observation timestamp to latest to fix CI contract validation failures (`cargo-audit:advisory-db-snapshot-stale` and `remote-controls:observation-stale`).\n\n## Commits\n| SHA | Message |\n|---|---|\n| 7b485c3 | refactor(config): secure configuration file loading with permission validation |\n| 73fa0df | build: update rustsec db and remote observation |\n\n## Validation\nTested locally with `node tools/ci/check-ci-contract.test.mjs`, `node tools/ci/check-ci-aggregate.test.mjs`, `node tools/ci/check-ci-contract.mjs --check`, `cargo test -p ramshared-config`, and `cargo clippy --all-targets`.\n\n## Rollback trigger\nRollback trigger: CI validation fails.\n\n## Labels\ntype:build\narea:ci",
+  "branch_name": "jules/inbox"
+}
