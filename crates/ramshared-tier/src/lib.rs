@@ -19,6 +19,7 @@ pub mod cascade;
 pub mod n3_state;
 pub mod nbd_readiness;
 pub mod priority;
+pub mod transition_log;
 
 pub use cascade::{SafetyNet, Tier, vram_safety_net};
 pub use priority::{OrderError, TierPriorities, VRAM_PRIO, ZRAM_PRIO, validate_order};

@@ -7,6 +7,7 @@
 //! Thus: VRAM must not be armed without a safety net tier active.
 
 use crate::nbd_readiness::ProductTransport;
+pub use crate::transition_log::TierTransitionAuditLog;
 
 /// Tiers of the swap cascade, ordered from hottest to coldest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
