@@ -354,8 +354,16 @@ mod tests {
         if !std::path::Path::new("/dev/dxg").exists() {
             return;
         }
-        let provider = DxgBudgetProvider::open(None)
-            .unwrap_or_else(|error| panic!("live dxg open failed: {error}"));
+        let provider = match DxgBudgetProvider::open(None) {
+            Ok(p) => p,
+            Err(e) if e.permits_startup_fallback() => {
+                eprintln!(
+                    "[test] skipping live DXG query test: DXG channel unavailable/blocked ({e})"
+                );
+                return;
+            }
+            Err(e) => panic!("live dxg open failed: {e}"),
+        };
         let snapshot = provider
             .snapshot()
             .unwrap_or_else(|error| panic!("live dxg query failed: {error}"));
@@ -434,6 +442,14 @@ mod tests {
     #[test]
     fn live_provider_rejects_unknown_requested_luid() {
         if !std::path::Path::new("/dev/dxg").exists() {
+            return;
+        }
+        if let Err(e) = DxgBudgetProvider::open(None)
+            && e.permits_startup_fallback()
+        {
+            eprintln!(
+                "[test] skipping live DXG rejection test: DXG channel unavailable/blocked ({e})"
+            );
             return;
         }
         let missing = AdapterLuid {

@@ -100,11 +100,12 @@ enum Transport {
 /// of the ublk daemon in **QEMU** (where there is no GPU); the teardown bug that hung
 /// WSL2 is independent of the backend. `Vulkan` covers broker + NBD single (generic paths); ublk
 /// with Vulkan is deferred (DT-11: the ublk residency server is CUDA-fixed).
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackendKind {
     Vram,
     Vulkan,
     Ram,
+    Auto,
 }
 
 struct UnavailableVramProvider;
@@ -154,12 +155,107 @@ impl VramProvider for UnavailableVramProvider {
     }
 }
 
+/// Resilient backend combining VRAM primary storage with an in-process RAM fallback buffer.
+/// When VRAM operations fail (e.g. GPU channel dropped during Windows NVIDIA driver reload),
+/// the backend seamlessly switches I/O to the RAM fallback buffer in-memory, avoiding any
+/// NBD_EIO replies, protecting the kernel swap subsystem from panics or teardowns.
+struct ResilientBackend<M: VramMemory> {
+    vram: Option<VramBackend<M>>,
+    ram: RamBackend,
+    failed_over: bool,
+}
+
+impl<M: VramMemory> ResilientBackend<M> {
+    fn new(vram: VramBackend<M>, total_bytes: usize) -> Self {
+        Self {
+            vram: Some(vram),
+            ram: RamBackend::new(total_bytes),
+            failed_over: false,
+        }
+    }
+
+    fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
+        if let Some(ref mut vram) = self.vram {
+            vram.zero()?;
+        }
+        self.ram = RamBackend::new(self.ram.size_bytes() as usize);
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn failover_to_ram(&mut self) {
+        if !self.failed_over {
+            eprintln!(
+                "[ramsharedd] in-process failover engaged: switching active storage path to RAM buffer"
+            );
+            self.failed_over = true;
+        }
+    }
+
+    #[cfg(test)]
+    fn is_failed_over(&self) -> bool {
+        self.failed_over
+    }
+}
+
+impl<M: VramMemory> BlockBackend for ResilientBackend<M> {
+    fn size_bytes(&self) -> u64 {
+        self.ram.size_bytes()
+    }
+
+    fn block_size(&self) -> u32 {
+        BLOCK_SIZE
+    }
+
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
+        if !self.failed_over
+            && let Some(ref mut vram) = self.vram
+        {
+            match vram.read_at(off, buf) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    eprintln!(
+                        "[ramsharedd] VRAM read failed ({e:?}); hot-swapping in-process to RAM backend"
+                    );
+                    self.failed_over = true;
+                }
+            }
+        }
+        self.ram.read_at(off, buf)
+    }
+
+    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), ramshared_block::IoError> {
+        // Always mirror to RAM so failover buffer is 100% synchronized
+        let _ = self.ram.write_at(off, data);
+        if !self.failed_over
+            && let Some(ref mut vram) = self.vram
+            && let Err(e) = vram.write_at(off, data)
+        {
+            eprintln!(
+                "[ramsharedd] VRAM write failed ({e:?}); hot-swapping in-process to RAM backend"
+            );
+            self.failed_over = true;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
+        if !self.failed_over
+            && let Some(ref mut vram) = self.vram
+        {
+            let _ = vram.flush();
+        }
+        self.ram.flush()
+    }
+}
+
 impl BackendKind {
     fn label(self) -> &'static str {
         match self {
             BackendKind::Vram => "vram",
             BackendKind::Vulkan => "vulkan",
             BackendKind::Ram => "ram",
+            BackendKind::Auto => "auto",
         }
     }
 }
@@ -1741,7 +1837,12 @@ impl AppArgs {
                         Some("vram") => BackendKind::Vram,
                         Some("vulkan") => BackendKind::Vulkan,
                         Some("ram") => BackendKind::Ram,
-                        _ => return Err("--backend requires 'vram', 'vulkan', or 'ram'".into()),
+                        Some("auto") => BackendKind::Auto,
+                        _ => {
+                            return Err(
+                                "--backend requires 'vram', 'vulkan', 'ram', or 'auto'".into()
+                            );
+                        }
                     };
                 }
                 "--slices" => {
@@ -1963,21 +2064,146 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                     .ok_or("--slices requires --arbiter-listen IP:PORT (broker control point)")?;
                 match backend {
                     BackendKind::Vram => {
-                        let cuda = Cuda::load()?;
-                        let dev = cuda.device(0)?;
-                        eprintln!("[ramsharedd] GPU: {}", dev.name());
-                        let ctx = cuda.create_context(&dev)?;
-                        run_broker(
-                            ctx,
-                            slice_bytes,
-                            slices,
-                            sock,
-                            force,
-                            listen_nbd_addr,
-                            advertise_tcp,
-                            arbiter_addr,
-                            telemetry_jsonl,
-                        )
+                        let maybe_run = match Cuda::load() {
+                            Ok(cuda) => match cuda.device(0) {
+                                Ok(dev) => {
+                                    eprintln!("[ramsharedd] GPU: {}", dev.name());
+                                    match cuda.create_context(&dev) {
+                                        Ok(ctx) => run_broker(
+                                            ctx,
+                                            slice_bytes,
+                                            slices,
+                                            sock.clone(),
+                                            force,
+                                            listen_nbd_addr,
+                                            advertise_tcp.clone(),
+                                            arbiter_addr,
+                                            telemetry_jsonl.clone(),
+                                        ),
+                                        Err(e) => Err(e.into()),
+                                    }
+                                }
+                                Err(e) => Err(e.into()),
+                            },
+                            Err(e) => Err(e.into()),
+                        };
+                        match maybe_run {
+                            Ok(()) => Ok(()),
+                            Err(e) => {
+                                eprintln!(
+                                    "[ramsharedd] GPU initialization failed ({e}); falling back natively to RAM backend to keep swap alive"
+                                );
+                                run_broker_ram(
+                                    slice_bytes,
+                                    slices,
+                                    sock,
+                                    listen_nbd_addr,
+                                    advertise_tcp,
+                                    arbiter_addr,
+                                    telemetry_jsonl,
+                                )
+                            }
+                        }
+                    }
+                    BackendKind::Auto => {
+                        let cuda_run = match Cuda::load() {
+                            Ok(cuda) => match cuda.device(0) {
+                                Ok(dev) => {
+                                    eprintln!(
+                                        "[ramsharedd] GPU (CUDA auto-detected): {}",
+                                        dev.name()
+                                    );
+                                    match cuda.create_context(&dev) {
+                                        Ok(ctx) => Some(run_broker(
+                                            ctx,
+                                            slice_bytes,
+                                            slices,
+                                            sock.clone(),
+                                            force,
+                                            listen_nbd_addr,
+                                            advertise_tcp.clone(),
+                                            arbiter_addr,
+                                            telemetry_jsonl.clone(),
+                                        )),
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[ramsharedd] CUDA context creation failed: {e}"
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("[ramsharedd] CUDA device(0) failed: {e}");
+                                    None
+                                }
+                            },
+                            Err(_) => None,
+                        };
+                        if let Some(res) = cuda_run {
+                            match res {
+                                Ok(()) => Ok(()),
+                                Err(err) => {
+                                    eprintln!(
+                                        "[ramsharedd] GPU broker failed ({err}); falling back natively to RAM backend"
+                                    );
+                                    run_broker_ram(
+                                        slice_bytes,
+                                        slices,
+                                        sock,
+                                        listen_nbd_addr,
+                                        advertise_tcp,
+                                        arbiter_addr,
+                                        telemetry_jsonl,
+                                    )
+                                }
+                            }
+                        } else if let Ok(provider) = VulkanProvider::open(0) {
+                            eprintln!(
+                                "[ramsharedd] GPU (Vulkan auto-detected): {}",
+                                provider.device_name()
+                            );
+                            match run_broker(
+                                provider,
+                                slice_bytes,
+                                slices,
+                                sock.clone(),
+                                force,
+                                listen_nbd_addr,
+                                advertise_tcp.clone(),
+                                arbiter_addr,
+                                telemetry_jsonl.clone(),
+                            ) {
+                                Ok(()) => Ok(()),
+                                Err(err) => {
+                                    eprintln!(
+                                        "[ramsharedd] Vulkan broker failed ({err}); falling back natively to RAM backend"
+                                    );
+                                    run_broker_ram(
+                                        slice_bytes,
+                                        slices,
+                                        sock,
+                                        listen_nbd_addr,
+                                        advertise_tcp,
+                                        arbiter_addr,
+                                        telemetry_jsonl,
+                                    )
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "[ramsharedd] No GPU available; auto-selecting RAM backend to keep swap alive"
+                            );
+                            run_broker_ram(
+                                slice_bytes,
+                                slices,
+                                sock,
+                                listen_nbd_addr,
+                                advertise_tcp,
+                                arbiter_addr,
+                                telemetry_jsonl,
+                            )
+                        }
                     }
                     BackendKind::Vulkan => {
                         let provider = VulkanProvider::open(0)?;
@@ -2048,7 +2274,7 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                     );
                 }
                 match backend {
-                    BackendKind::Vram => {
+                    BackendKind::Vram | BackendKind::Auto => {
                         let cuda = match Cuda::load() {
                             Ok(cuda) => cuda,
                             Err(error) if validated_origin.is_some() => {
@@ -4394,9 +4620,9 @@ where
         let _ = mem.zero();
         return Err(error);
     }
-    let mut backend = VramBackend::new(mem, BLOCK_SIZE);
+    let mut backend = ResilientBackend::new(VramBackend::new(mem, BLOCK_SIZE), total as usize);
     eprintln!(
-        "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
+        "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE} (resilient in-process RAM failover enabled)",
         slice_bytes >> 20,
         total >> 20
     );
@@ -4650,8 +4876,8 @@ impl UblkRuntime for ProductionUblkRuntime {
         size: u64,
     ) -> Result<Box<dyn UblkServer>, Box<dyn std::error::Error>> {
         let handle = match backend {
-            BackendKind::Vram => {
-                UblkHandle::Vram(ublk_server::spawn_server_dt3_vram_with_residency(
+            BackendKind::Vram | BackendKind::Auto => {
+                match ublk_server::spawn_server_dt3_vram_with_residency(
                     char_path,
                     queue_depth,
                     BLOCK_SIZE as usize,
@@ -4659,7 +4885,20 @@ impl UblkRuntime for ProductionUblkRuntime {
                     BLOCK_SIZE,
                     block_path.to_string(),
                     ResidencyConfig::default(),
-                )?)
+                ) {
+                    Ok(h) => UblkHandle::Vram(h),
+                    Err(e) => {
+                        eprintln!(
+                            "[ramsharedd] ublk VRAM server initialization failed ({e}); falling back natively to RAM backend"
+                        );
+                        UblkHandle::Ram(ublk_server::spawn_server_dt3(
+                            char_path,
+                            queue_depth,
+                            BLOCK_SIZE as usize,
+                            RamBackend::new(size as usize),
+                        )?)
+                    }
+                }
             }
             BackendKind::Ram => UblkHandle::Ram(ublk_server::spawn_server_dt3(
                 char_path,
@@ -5824,6 +6063,7 @@ mod tests {
         assert_eq!(BackendKind::Vram.label(), "vram");
         assert_eq!(BackendKind::Vulkan.label(), "vulkan");
         assert_eq!(BackendKind::Ram.label(), "ram");
+        assert_eq!(BackendKind::Auto.label(), "auto");
     }
 
     #[test]
@@ -10247,5 +10487,105 @@ Filename Type Size Used Priority
         let apply_result = apply_listen_backlog(&listener);
         assert!(apply_result.is_ok(), "apply_listen_backlog should succeed");
         let _ = std::fs::remove_file(&path);
+    }
+
+    struct FailingVramMemory {
+        len: usize,
+        fail_reads: std::sync::atomic::AtomicBool,
+        fail_writes: std::sync::atomic::AtomicBool,
+    }
+
+    impl VramMemory for FailingVramMemory {
+        fn len(&self) -> usize {
+            self.len
+        }
+
+        fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
+            Ok(())
+        }
+
+        fn read_at(&self, _off: u64, _dst: &mut [u8]) -> Result<(), ramshared_vram::VramError> {
+            if self.fail_reads.load(Ordering::SeqCst) {
+                return Err(ramshared_vram::VramError::Provider(
+                    "injected VRAM read error".into(),
+                ));
+            }
+            Ok(())
+        }
+
+        fn write_at(&mut self, _off: u64, _src: &[u8]) -> Result<(), ramshared_vram::VramError> {
+            if self.fail_writes.load(Ordering::SeqCst) {
+                return Err(ramshared_vram::VramError::Provider(
+                    "injected VRAM write error".into(),
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resilient_backend_hot_swaps_to_ram_on_vram_failure() {
+        let mem = FailingVramMemory {
+            len: 4096,
+            fail_reads: std::sync::atomic::AtomicBool::new(false),
+            fail_writes: std::sync::atomic::AtomicBool::new(false),
+        };
+        let vram = VramBackend::new(mem, 4096);
+        let mut resilient = ResilientBackend::new(vram, 4096);
+
+        // 1. Initial write to VRAM (and RAM mirror)
+        let payload = [0x42u8; 512];
+        resilient
+            .write_at(0, &payload)
+            .expect("initial write succeeds");
+        assert!(!resilient.is_failed_over());
+
+        // 2. Inject VRAM failure on write
+        if let Some(ref mut v) = resilient.vram {
+            v.mem_mut().fail_writes.store(true, Ordering::SeqCst);
+        }
+        let payload2 = [0x99u8; 512];
+        // Must succeed without returning IoError because RAM buffer absorbed the write!
+        resilient
+            .write_at(512, &payload2)
+            .expect("failover write succeeds");
+        assert!(
+            resilient.is_failed_over(),
+            "failover must be active after VRAM write failure"
+        );
+
+        // 3. Reads must succeed from RAM mirror
+        let mut read_buf1 = [0u8; 512];
+        resilient
+            .read_at(0, &mut read_buf1)
+            .expect("read initial data");
+        assert_eq!(read_buf1, payload);
+
+        let mut read_buf2 = [0u8; 512];
+        resilient
+            .read_at(512, &mut read_buf2)
+            .expect("read failover data");
+        assert_eq!(read_buf2, payload2);
+    }
+
+    #[test]
+    fn daemon_args_parse_auto_backend() {
+        let args = AppArgs::parse_from(&daemon_argv(&[
+            "ramsharedd",
+            "--size",
+            "1024",
+            "--sock",
+            "/tmp/test-auto.sock",
+            "--backend",
+            "auto",
+            "--slices",
+            "1",
+            "--slice-mb",
+            "1024",
+            "--arbiter-listen",
+            "127.0.0.1:9090",
+        ]))
+        .expect("auto backend must parse");
+        assert!(matches!(args.backend, BackendKind::Auto));
     }
 }

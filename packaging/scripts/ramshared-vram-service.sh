@@ -95,17 +95,17 @@ start_tier() {
     
     local vram_mib
     vram_mib=$(detect_vram_capacity)
-    local backend_type="vram"
+    local backend_type="auto"
     local backend_mb="$vram_mib"
-    local backend_desc="GPU VRAM"
+    local backend_desc="GPU VRAM (resilient in-process RAM failover)"
     if [[ "$vram_mib" -eq 0 ]]; then
         echo "[!] GPU is not accessible (e.g. host NVIDIA driver update in Windows requires a WSL restart: wsl --shutdown)."
-        echo "[+] Activating RamShared High-Speed RAM Fallback Tier (1024 MiB) to keep swap alive..."
-        backend_type="ram"
+        echo "[+] Starting RamShared with native auto-fallback to keep swap alive..."
+        backend_type="auto"
         backend_mb="1024"
-        backend_desc="RAM cushion fallback"
+        backend_desc="native RAM fallback"
     else
-        echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
+        echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU (with resilient native RAM failover)"
     fi
 
     # Clean prior stale sockets if daemon is dead
