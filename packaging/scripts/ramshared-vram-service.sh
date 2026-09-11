@@ -46,13 +46,13 @@ detect_vram_capacity() {
     if [[ -n "$smi_bin" ]]; then
         local raw
         raw=$($smi_bin --query-gpu=memory.total,memory.free --format=csv,noheader,nounits 2>/dev/null | head -n 1 || true)
-        if [[ -n "$raw" ]]; then
+        if [[ -n "$raw" && "$raw" =~ ^[0-9]+,[[:space:]]*[0-9]+ ]]; then
             total_mib=$(echo "$raw" | awk -F, '{print $1}' | tr -d ' ')
             free_mib=$(echo "$raw" | awk -F, '{print $2}' | tr -d ' ')
         fi
     fi
 
-    if [[ $total_mib -gt 0 ]]; then
+    if [[ "$total_mib" =~ ^[0-9]+$ ]] && [[ "$total_mib" -gt 0 ]]; then
         local reserve_mib=$(( total_mib * 20 / 100 ))
         if [[ $reserve_mib -lt 2048 ]]; then
             reserve_mib=2048
@@ -66,7 +66,7 @@ detect_vram_capacity() {
         fi
         echo "$target_mib"
     else
-        echo 3072
+        echo 0
     fi
 }
 
@@ -95,7 +95,18 @@ start_tier() {
     
     local vram_mib
     vram_mib=$(detect_vram_capacity)
-    echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
+    local backend_type="vram"
+    local backend_mb="$vram_mib"
+    local backend_desc="GPU VRAM"
+    if [[ "$vram_mib" -eq 0 ]]; then
+        echo "[!] GPU is not accessible (e.g. host NVIDIA driver update in Windows requires a WSL restart: wsl --shutdown)."
+        echo "[+] Activating RamShared High-Speed RAM Fallback Tier (1024 MiB) to keep swap alive..."
+        backend_type="ram"
+        backend_mb="1024"
+        backend_desc="RAM cushion fallback"
+    else
+        echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
+    fi
 
     # Clean prior stale sockets if daemon is dead
     if [[ -f "$PID_FILE" ]]; then
@@ -110,7 +121,7 @@ start_tier() {
         rm -f "$SOCK_PATH" "$PID_FILE"
         
         # Launch ramsharedd inside /ramshared-protected cgroup with memory.swap.max=0 and oom_score_adj=-1000
-        bash -c "echo \$\$ > /sys/fs/cgroup/ramshared-protected/cgroup.procs 2>/dev/null || true; echo -1000 > /proc/\$\$/oom_score_adj 2>/dev/null || true; exec /usr/local/bin/ramsharedd --backend vram --slices 1 --slice-mb '$vram_mib' --listen-nbd 127.0.0.1:10809 --arbiter-listen 127.0.0.1:9090" > "$LOG_FILE" 2>&1 &
+        bash -c "echo \$\$ > /sys/fs/cgroup/ramshared-protected/cgroup.procs 2>/dev/null || true; echo -1000 > /proc/\$\$/oom_score_adj 2>/dev/null || true; exec /usr/local/bin/ramsharedd --backend '$backend_type' --slices 1 --slice-mb '$backend_mb' --listen-nbd 127.0.0.1:10809 --arbiter-listen 127.0.0.1:9090" > "$LOG_FILE" 2>&1 &
         local daemon_pid=$!
         echo "$daemon_pid" > "$PID_FILE"
         echo "$NBD_DEV" > "$SWAP_DEV_FILE"
@@ -125,13 +136,13 @@ start_tier() {
         done
         
         if kill -0 "$daemon_pid" 2>/dev/null && [[ -S "$SOCK_PATH" ]]; then
-            echo "[+] Connecting $NBD_DEV to VRAM daemon (with swap immunity & zero-timeout protection)..."
+            echo "[+] Connecting $NBD_DEV to $backend_desc daemon (with swap immunity & zero-timeout protection)..."
             nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1 || true
             sleep 1
             if [[ -b "$NBD_DEV" ]]; then
                 mkswap -f "$NBD_DEV" >/dev/null 2>&1 || true
                 swapon -p 50 "$NBD_DEV" 2>/dev/null || true
-                echo "[+] RamShared VRAM Tier active at priority 50 on $NBD_DEV (${vram_mib} MiB) [Zero-Swap Immunity Shield ACTIVE]"
+                echo "[+] RamShared Tier active at priority 50 on $NBD_DEV (${backend_mb} MiB) [$backend_desc]"
             fi
         else
             echo "[-] Daemon failed to start, check $LOG_FILE"
