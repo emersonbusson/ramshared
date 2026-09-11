@@ -20,6 +20,7 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
 | Campaign and benchmark evidence | Custody, bounded retention, and reproducibility | A claimed observation cannot be tied to an exact run and input state. |
 | Sanitized logs and artifacts | Confidentiality and safe sharing | Credentials, private paths, or kernel-sensitive data leave the intended boundary. |
 | Host and guest safety controls | Fail-closed authority | A documentation or test action is mistaken for permission to operate privileged hardware paths. |
+| IPC messaging channels | Command authenticity | Unauthorized state changes or information disclosure |
 
 ## Trust boundaries
 
@@ -47,6 +48,9 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
 | A stale environmental result is treated as current capability | Time → capability claim | Explicit lifecycle, freshness/review fields, `PARTIAL` for blocked or stale proof | Live hardware availability still limits revalidation. |
 | A cleanup note is interpreted as permission for host mutation | Documentation → privileged host | Read-only runbook/checkers, explicit operator authority, no automatic reclaim action | An authorized operator can still make a human error; command-level safeguards remain necessary. |
 | A checker passes while its own policy has drifted | Policy → CI outcome | Deterministic fixtures, negative tests, reviewable policy files, no network dependency | A checker cannot independently establish the truth of a physical measurement. |
+| IPC message injection | Broker-daemon boundary | Message signing, capability checks, sequence numbers | A leaked capability handle allows valid injection. |
+| Replayed valid IPC command | Broker-daemon boundary | Ephemeral nonces, strictly monotonic counters | A crashed daemon loses sequence state and must negotiate a new epoch. |
+| Spoofed named pipe or Unix socket connection | Process isolation | Peer credential verification (SO_PEERCRED, GetNamedPipeClientProcessId) | A privileged attacker can forge credentials. |
 
 ## Required handling rules
 
