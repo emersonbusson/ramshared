@@ -572,11 +572,12 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut peak_ssd_mbs: f64 = 0.0;
 
     // Phase 1: 1%-by-1% Micro-Step Ramp
-    let effective_target = if (opts.tier3_target_pct.is_some() || opts.cascade) && opts.target_pct == 100 {
-        1000
-    } else {
-        opts.target_pct
-    };
+    let effective_target =
+        if (opts.tier3_target_pct.is_some() || opts.cascade) && opts.target_pct == 100 {
+            1000
+        } else {
+            opts.target_pct
+        };
     let mut current_target = opts.start_pct;
     while current_target <= effective_target {
         if term_signal.load(Ordering::Relaxed) {
