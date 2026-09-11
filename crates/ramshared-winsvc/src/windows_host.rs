@@ -29,6 +29,7 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 use crate::config::{ConfigError, MAX_CONFIG_BYTES, WinDriveConfig};
 use crate::host_safety::merge_pagefile_sources;
+use crate::pdh::HostMemoryPressure;
 use crate::service::{ObservedVolumeIdentity, parse_product_friendly_name};
 
 /// Host-side errors (no kernel addresses).
@@ -40,6 +41,7 @@ pub enum HostError {
     Pagefile(String),
     Volume(String),
     Identity(String),
+    MemoryPressure(String),
 }
 
 impl std::fmt::Display for HostError {
@@ -51,6 +53,7 @@ impl std::fmt::Display for HostError {
             HostError::Pagefile(s) => write!(f, "pagefile: {s}"),
             HostError::Volume(s) => write!(f, "volume: {s}"),
             HostError::Identity(s) => write!(f, "identity: {s}"),
+            HostError::MemoryPressure(s) => write!(f, "memory pressure: {s}"),
         }
     }
 }
@@ -186,6 +189,11 @@ struct VolumeDiskExtentsOne {
 pub struct WindowsHostState;
 
 impl WindowsHostState {
+    /// Query memory pressure (available MB and pages/sec).
+    pub fn memory_pressure() -> Result<HostMemoryPressure, HostError> {
+        HostMemoryPressure::query().map_err(HostError::MemoryPressure)
+    }
+
     pub fn is_elevated() -> bool {
         unsafe {
             let mut token: HANDLE = ptr::null_mut();

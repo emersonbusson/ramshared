@@ -19,6 +19,8 @@ pub mod service;
 pub mod smoke;
 
 #[cfg(windows)]
+pub mod pdh;
+#[cfg(windows)]
 pub mod product_online;
 #[cfg(windows)]
 pub mod windows_driver;
