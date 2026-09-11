@@ -3,6 +3,8 @@
 //! Uses `ramshared-cuda` (nvcuda.dll on Windows; libcuda on Linux/WSL). Live
 //! hardware path is E2E evidence; pure offset planning lives in `ramshared_cuda::probe`.
 
+pub mod health;
+
 use crate::config::WinDriveConfig;
 use ramshared_cuda::Cuda;
 use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
@@ -17,6 +19,7 @@ pub struct ProbeCudaReport {
     pub free_after: u64,
     pub allocated: u64,
     pub offsets: [usize; 3],
+    pub health: Option<health::GpuHealth>,
 }
 
 /// Errors from probe-cuda (stable classes, no pointers).
@@ -118,6 +121,10 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
         });
     }
 
+    // Attempt to probe health. Fail-closed is NOT done here for health,
+    // it's an optional monitoring extension.
+    let health = health::probe_gpu_health(dev.ordinal()).ok();
+
     Ok(ProbeCudaReport {
         ordinal: dev.ordinal(),
         device_name: dev.name().to_string(),
@@ -126,6 +133,7 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
         free_after: free_after as u64,
         allocated: cfg.size_bytes,
         offsets,
+        health,
     })
 }
 
