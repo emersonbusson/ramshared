@@ -1,6 +1,9 @@
 //! Read-only RamShared observability stream and terminal dashboard.
+pub use monitor_history::MonitorHistory;
+pub mod monitor_history;
 
-use std::collections::{BTreeMap, VecDeque};
+
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -942,7 +945,7 @@ fn run_tui(options: &MonitorOptions) -> Result<(), MonitorError> {
 fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
     let history_limit =
         ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
-    let mut history = VecDeque::with_capacity(history_limit);
+    let mut history = MonitorHistory::new(history_limit);
     let interval = Duration::from_millis(options.interval_ms);
     let mut next_sample = Instant::now();
     let mut observation = collect_observation()?;
@@ -1075,10 +1078,8 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             if let Ok(flight_line) = serde_json::to_string(&observation) {
                 let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
             }
-            history.push_back(memory_used_pct(&observation.mem));
-            while history.len() > history_limit {
-                history.pop_front();
-            }
+            history.push(memory_used_pct(&observation.mem));
+
             next_sample = Instant::now() + interval;
         }
         let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
@@ -1108,7 +1109,7 @@ fn memory_used_pct(memory: &MemoryObservation) -> u64 {
         / memory.total_kib
 }
 
-fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &VecDeque<u64>) {
+fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &MonitorHistory) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1168,7 +1169,7 @@ fn draw_memory(
     frame: &mut Frame<'_>,
     area: Rect,
     observation: &Observation,
-    history: &VecDeque<u64>,
+    history: &MonitorHistory,
 ) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1206,7 +1207,7 @@ fn draw_memory(
         ),
         chunks[0],
     );
-    let values: Vec<u64> = history.iter().copied().collect();
+    let values: Vec<u64> = history.values();
     frame.render_widget(
         Sparkline::default()
             .block(Block::default().borders(Borders::ALL).title("RAM History"))
@@ -1903,7 +1904,10 @@ mod tests {
         for sample in [observation(true, true), observation(false, false)] {
             let backend = TestBackend::new(120, 40);
             let mut terminal = Terminal::new(backend).expect("test terminal");
-            let history = VecDeque::from([10, 20, 30, 40, 50]);
+            let mut history = MonitorHistory::new(5);
+            for v in [10, 20, 30, 40, 50] {
+                history.push(v);
+            }
             terminal
                 .draw(|frame| draw_dashboard(frame, &sample, &history))
                 .expect("render dashboard");
@@ -2136,7 +2140,10 @@ mod tests {
         let mut sample = observation(true, true);
         sample.errors = vec!["gpu_dropped".to_string()];
         sample.control_plane.boot_tier_latency_ms = Some(2890);
-        let history = VecDeque::from(vec![25, 30, 45, 60, 55]);
+        let mut history = MonitorHistory::new(5);
+        for v in [25, 30, 45, 60, 55] {
+            history.push(v);
+        }
         let resolutions = [(80, 24), (100, 30), (140, 40), (200, 50), (240, 60)];
 
         for (w, h) in resolutions {
@@ -2175,7 +2182,7 @@ mod tests {
 
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        let history = VecDeque::new();
+        let history = MonitorHistory::new(10);
         terminal
             .draw(|frame| draw_dashboard(frame, &sample_no_gpu, &history))
             .unwrap();
