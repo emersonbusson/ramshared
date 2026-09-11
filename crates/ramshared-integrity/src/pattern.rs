@@ -13,6 +13,7 @@ pub enum Pattern {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegrityError {
     CorruptedMemory { offset: usize, bit_flip_mask: u8 },
+    SingleBitError { offset: usize, bit_index: u8 },
     InvalidStride { stride: usize, page_size: usize },
 }
 
@@ -26,6 +27,12 @@ impl fmt::Display for IntegrityError {
                 write!(
                     f,
                     "corrupted memory at offset {offset}: bit flip mask {bit_flip_mask:#04x}"
+                )
+            }
+            IntegrityError::SingleBitError { offset, bit_index } => {
+                write!(
+                    f,
+                    "single-bit error detected at offset {offset} (bit {bit_index})"
                 )
             }
             IntegrityError::InvalidStride { stride, page_size } => {
@@ -75,10 +82,18 @@ pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), Integrity
     fill_block(&mut expected, idx, kind);
     for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
         if actual != exp {
-            return Err(IntegrityError::CorruptedMemory {
-                offset,
-                bit_flip_mask: actual ^ exp,
-            });
+            let diff = actual ^ exp;
+            if diff.count_ones() == 1 {
+                return Err(IntegrityError::SingleBitError {
+                    offset,
+                    bit_index: diff.trailing_zeros() as u8,
+                });
+            } else {
+                return Err(IntegrityError::CorruptedMemory {
+                    offset,
+                    bit_flip_mask: diff,
+                });
+            }
         }
     }
     Ok(())
@@ -120,7 +135,7 @@ mod tests {
     fn corruption_breaks_verify() {
         let mut buf = vec![0u8; 4096];
         fill_block(&mut buf, 7, Pattern::Random);
-        buf[1234] ^= 0x01;
+        buf[1234] ^= 0x03; // multi-bit flip
         let Err(err) = verify_block(&buf, 7, Pattern::Random) else {
             panic!("Expected an error for corrupted buffer");
         };
@@ -128,7 +143,20 @@ mod tests {
             err,
             IntegrityError::CorruptedMemory {
                 offset: 1234,
-                bit_flip_mask: 0x01,
+                bit_flip_mask: 0x03,
+            }
+        );
+
+        buf[1234] ^= 0x03; // restore
+        buf[2345] ^= 0x08; // single-bit flip (bit 3)
+        let Err(err2) = verify_block(&buf, 7, Pattern::Random) else {
+            panic!("Expected an error for corrupted buffer");
+        };
+        assert_eq!(
+            err2,
+            IntegrityError::SingleBitError {
+                offset: 2345,
+                bit_index: 3,
             }
         );
     }
