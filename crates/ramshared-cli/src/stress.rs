@@ -550,19 +550,31 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         };
 
         let mut avail_mb = avail_mb;
-        let mut retries = 0;
-        let max_wait_cycles = if is_multi_tier { 15 } else { 10 };
-        while avail_mb <= hard_floor && is_multi_tier && retries < max_wait_cycles {
+        let mut last_swap_val = tot_swap;
+        let mut idle_cycles = 0;
+        let max_idle_cycles = 40; // 40 * 150ms = 6.0s of zero swap growth before declaring limit
+
+        while avail_mb <= hard_floor && is_multi_tier {
             if term_signal.load(Ordering::Relaxed) {
                 break;
             }
             thread::sleep(Duration::from_millis(150));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
-            retries += 1;
+            let (cur_swap, _, _, _) = read_swap_tiers();
+            if cur_swap > last_swap_val {
+                // kswapd is actively draining dirty pages into VRAM/SSD
+                last_swap_val = cur_swap;
+                idle_cycles = 0;
+            } else {
+                idle_cycles += 1;
+            }
+            if idle_cycles >= max_idle_cycles {
+                break;
+            }
         }
 
-        if avail_mb <= hard_floor {
+        if avail_mb <= hard_floor && (!is_multi_tier || idle_cycles >= max_idle_cycles) {
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -669,11 +681,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
         let total_swap_cap = cap1.total_mb + cap2.total_mb + cap3.total_mb;
         if let Some(t3_target) = opts.tier3_target_pct {
-            if cap3.pct >= t3_target {
+            if (cap1.pct >= 95 || cap1.total_mb == 0) && (cap2.pct >= 95 || cap2.total_mb == 0) && cap3.pct >= t3_target {
                 if !opts.json {
                     println!(
-                        "\n[🎯 TARGET REACHED] Tier 3 (SSD) reached target ({}% >= {}%).",
-                        cap3.pct, t3_target
+                        "\n[🎯 ALL TIERS QUALIFIED] Tier 1: {}%, Tier 2: {}%, Tier 3: {}% (Target: {}%).",
+                        cap1.pct, cap2.pct, cap3.pct, t3_target
                     );
                 }
                 break;
@@ -690,9 +702,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
+        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
         if safe_alloc_mb == 0 {
-            break;
+            if is_multi_tier && avail_mb > 350 && psi_full < opts.max_psi_full {
+                safe_alloc_mb = 32;
+            } else {
+                break;
+            }
         }
 
         // Allocate and dirty pages
