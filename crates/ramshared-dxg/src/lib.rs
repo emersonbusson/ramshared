@@ -3,6 +3,11 @@
 //! The layouts mirror Microsoft's WSL 6.18 `d3dkmthk.h`. This crate is the
 //! only `unsafe` boundary for dxg ioctls; policy remains in safe Rust.
 
+pub mod alloc;
+pub mod error;
+
+pub use error::DxgError;
+
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
@@ -77,92 +82,49 @@ pub trait GpuBudgetProvider {
     fn snapshot(&self) -> Result<BudgetSnapshot, DxgError>;
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum DxgError {
-    Unavailable(String),
-    Io(String),
-    DeviceNotFound,
-    UnsupportedHardware,
-    BufferOverflow,
-    PermissionDenied,
-    NoAdapters,
-    AmbiguousAdapters(usize),
-    AdapterNotFound(AdapterLuid),
-    TooManyAdapters(u32),
-    Malformed(&'static str),
-    BadAddress,
-}
-
-impl fmt::Display for DxgError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable(message) => write!(f, "dxg unavailable: {message}"),
-            Self::Io(message) => write!(f, "dxg ioctl failed: {message}"),
-            Self::DeviceNotFound => write!(f, "dxg device not found"),
-            Self::UnsupportedHardware => write!(f, "dxg unsupported hardware"),
-            Self::BadAddress => write!(f, "dxg bad memory address"),
-            Self::BufferOverflow => write!(f, "dxg buffer overflow"),
-            Self::PermissionDenied => write!(f, "dxg permission denied"),
-            Self::NoAdapters => write!(f, "dxg returned no adapters"),
-            Self::AmbiguousAdapters(count) => {
-                write!(f, "dxg returned {count} adapters; explicit LUID required")
-            }
-            Self::AdapterNotFound(luid) => write!(f, "dxg adapter LUID {luid} not found"),
-            Self::TooManyAdapters(count) => write!(f, "dxg adapter count {count} exceeds 64"),
-            Self::Malformed(field) => write!(f, "dxg returned malformed field: {field}"),
-        }
-    }
-}
-
-impl std::error::Error for DxgError {}
-
-impl DxgError {
-    pub fn from_sys_error(error: std::io::Error) -> Self {
-        match error.raw_os_error() {
-            Some(libc::ENODEV) => Self::DeviceNotFound,
-            Some(libc::EFAULT) => Self::BadAddress,
-            Some(libc::ENOTTY) => Self::UnsupportedHardware,
-            Some(libc::EOVERFLOW) => Self::BufferOverflow,
-            Some(libc::EPERM) | Some(libc::EACCES) => Self::PermissionDenied,
-            _ => Self::Io(error.to_string()),
-        }
-    }
-
-    pub fn permits_startup_fallback(&self) -> bool {
-        matches!(self, Self::Unavailable(_))
-    }
-}
-
-pub fn select_adapter(
-    adapters: &[AdapterLuid],
-    requested: Option<AdapterLuid>,
-) -> Result<AdapterLuid, DxgError> {
-    if let Some(luid) = requested {
-        return adapters
-            .iter()
-            .copied()
-            .find(|candidate| *candidate == luid)
-            .ok_or(DxgError::AdapterNotFound(luid));
-    }
-    match adapters {
-        [] => Err(DxgError::NoAdapters),
-        [only] => Ok(*only),
-        many => Err(DxgError::AmbiguousAdapters(many.len())),
-    }
-}
-
+/// A minimal `/dev/dxg` client for video memory metrics.
 pub struct DxgBudgetProvider {
     file: File,
     adapter_handle: u32,
     adapter_luid: AdapterLuid,
 }
 
+impl Drop for DxgBudgetProvider {
+    fn drop(&mut self) {
+        close_adapter(&self.file, self.adapter_handle);
+    }
+}
+
+fn select_adapter(
+    infos: &[uapi::AdapterInfo],
+    requested: Option<AdapterLuid>,
+) -> Result<AdapterLuid, DxgError> {
+    match infos {
+        [single] if requested.is_none() => Ok(AdapterLuid {
+            low: single.luid_low,
+            high: single.luid_high,
+        }),
+        _ if requested.is_some() => {
+            let luid = requested.unwrap_or_else(|| unreachable!());
+            infos
+                .iter()
+                .find(|info| info.luid_low == luid.low && info.luid_high == luid.high)
+                .map(|_| luid)
+                .ok_or(DxgError::AdapterNotFound(luid))
+        }
+        [] => Err(DxgError::NoAdapters),
+        many => Err(DxgError::AmbiguousAdapters(many.len())),
+    }
+}
+
 impl DxgBudgetProvider {
+    /// Opens `/dev/dxg` and claims an adapter, matching `requested` if provided
+    /// or defaulting to the only adapter if unambiguous.
     pub fn open(requested: Option<AdapterLuid>) -> Result<Self, DxgError> {
         Self::open_path("/dev/dxg", requested)
     }
 
-    pub fn open_path(
+    fn open_path(
         path: impl AsRef<Path>,
         requested: Option<AdapterLuid>,
     ) -> Result<Self, DxgError> {
@@ -180,30 +142,27 @@ impl DxgBudgetProvider {
         infos: Vec<uapi::AdapterInfo>,
         requested: Option<AdapterLuid>,
     ) -> Result<Self, DxgError> {
-        let luids: Vec<_> = infos
-            .iter()
-            .map(|info| AdapterLuid {
-                low: info.luid_low,
-                high: info.luid_high,
-            })
-            .collect();
-        let selected = select_adapter(&luids, requested)?;
-        let selected_info = infos
-            .iter()
-            .find(|info| info.luid_low == selected.low && info.luid_high == selected.high)
-            .copied()
-            .ok_or(DxgError::AdapterNotFound(selected))?;
-        if selected_info.adapter_handle == 0 {
-            return Err(DxgError::Malformed("adapter_handle"));
-        }
-        for info in &infos {
-            if info.adapter_handle != selected_info.adapter_handle {
+        let selected = select_adapter(
+            &infos,
+            requested,
+        )?;
+        let mut handle = 0;
+        for info in infos {
+            if info.luid_low == selected.low && info.luid_high == selected.high {
+                handle = info.adapter_handle;
+            } else {
                 close_adapter(&file, info.adapter_handle);
             }
         }
+        if handle == 0 {
+            return Err(DxgError::AdapterNotFound(selected));
+        }
+        if handle == u32::MAX {
+            return Err(DxgError::Malformed("adapter_handle"));
+        }
         Ok(Self {
             file,
-            adapter_handle: selected_info.adapter_handle,
+            adapter_handle: handle,
             adapter_luid: selected,
         })
     }
@@ -217,6 +176,7 @@ impl GpuBudgetProvider for DxgBudgetProvider {
     fn snapshot(&self) -> Result<BudgetSnapshot, DxgError> {
         let mut query = uapi::QueryVideoMemoryInfo {
             adapter: self.adapter_handle,
+            // 0 is DXGK_SEGMENT_GROUP_LOCAL (VRAM). 1 would be Non-Local (GART).
             memory_segment_group: 0,
             ..Default::default()
         };
@@ -233,17 +193,12 @@ impl GpuBudgetProvider for DxgBudgetProvider {
     }
 }
 
-impl Drop for DxgBudgetProvider {
-    fn drop(&mut self) {
-        close_adapter(&self.file, self.adapter_handle);
-    }
-}
-
 fn enumerate(file: &File) -> Result<Vec<uapi::AdapterInfo>, DxgError> {
-    let mut request = uapi::EnumAdapters2::default();
-    ioctl_mut(file, uapi::ENUM_ADAPTERS2_IOCTL, &mut request)?;
-    validate_enum(&request, None)?;
-    let mut infos = vec![uapi::AdapterInfo::default(); request.num_adapters as usize];
+    let mut infos = vec![uapi::AdapterInfo::default(); uapi::MAX_ADAPTERS];
+    let mut request = uapi::EnumAdapters2 {
+        num_adapters: infos.len() as u32,
+        ..Default::default()
+    };
     request.adapters = infos.as_mut_ptr() as u64;
     ioctl_mut(file, uapi::ENUM_ADAPTERS2_IOCTL, &mut request)?;
     validate_enum(&request, Some(infos.len()))?;
@@ -280,7 +235,7 @@ fn close_adapter(file: &File, handle: u32) {
     let _ = ioctl_mut(file, uapi::CLOSE_ADAPTER_IOCTL, &mut handle);
 }
 
-fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError> {
+pub(crate) fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError> {
     // SAFETY: `value` points to the exact repr(C) layout for `request` and stays
     // alive for the synchronous ioctl. The kernel validates nested pointers.
     let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T) };
@@ -296,6 +251,7 @@ mod tests {
     use super::{
         AdapterLuid, BudgetSnapshot, DxgBudgetProvider, GpuBudgetProvider, select_adapter,
     };
+    use crate::DxgError;
 
     #[test]
     fn official_uapi_layouts_and_ioctl_numbers_match_wsl_618() {
@@ -311,18 +267,18 @@ mod tests {
     fn adapter_selection_rejects_ambiguity() {
         let a = AdapterLuid { low: 1, high: 2 };
         let b = AdapterLuid { low: 3, high: 4 };
-        assert_eq!(select_adapter(&[a], None), Ok(a));
+        assert_eq!(select_adapter(&[super::uapi::AdapterInfo { luid_low: a.low, luid_high: a.high, ..Default::default() }], None), Ok(a));
         assert!(select_adapter(&[], None).is_err());
-        assert!(select_adapter(&[a, b], None).is_err());
-        assert_eq!(select_adapter(&[a, b], Some(b)), Ok(b));
-        assert!(select_adapter(&[a], Some(b)).is_err());
+        assert!(select_adapter(&[super::uapi::AdapterInfo { luid_low: a.low, luid_high: a.high, ..Default::default() }, super::uapi::AdapterInfo { luid_low: b.low, luid_high: b.high, ..Default::default() }], None).is_err());
+        assert_eq!(select_adapter(&[super::uapi::AdapterInfo { luid_low: a.low, luid_high: a.high, ..Default::default() }, super::uapi::AdapterInfo { luid_low: b.low, luid_high: b.high, ..Default::default() }], Some(b)), Ok(b));
+        assert!(select_adapter(&[super::uapi::AdapterInfo { luid_low: a.low, luid_high: a.high, ..Default::default() }], Some(b)).is_err());
     }
 
     #[test]
     fn provider_trait_carries_host_budget_fields() {
         struct Fake;
         impl GpuBudgetProvider for Fake {
-            fn snapshot(&self) -> Result<BudgetSnapshot, super::DxgError> {
+            fn snapshot(&self) -> Result<BudgetSnapshot, DxgError> {
                 Ok(BudgetSnapshot {
                     adapter: AdapterLuid { low: 7, high: 8 },
                     budget: 100,
@@ -342,11 +298,11 @@ mod tests {
 
     #[test]
     fn only_unavailable_device_permits_cuda_fallback() {
-        assert!(super::DxgError::Unavailable("missing".into()).permits_startup_fallback());
-        assert!(!super::DxgError::Io("ioctl".into()).permits_startup_fallback());
-        assert!(!super::DxgError::Malformed("process").permits_startup_fallback());
-        assert!(!super::DxgError::NoAdapters.permits_startup_fallback());
-        assert!(!super::DxgError::TooManyAdapters(65).permits_startup_fallback());
+        assert!(DxgError::Unavailable("missing".into()).permits_startup_fallback());
+        assert!(!DxgError::Io("ioctl".into()).permits_startup_fallback());
+        assert!(!DxgError::Malformed("process").permits_startup_fallback());
+        assert!(!DxgError::NoAdapters.permits_startup_fallback());
+        assert!(!DxgError::TooManyAdapters(65).permits_startup_fallback());
     }
 
     #[test]
@@ -378,31 +334,31 @@ mod tests {
     #[test]
     fn ioctl_maps_kernel_errors_to_typed_variants() {
         assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(19)),
-            super::DxgError::DeviceNotFound
+            DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::ENODEV)),
+            DxgError::DeviceNotFound
         );
         assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(25)),
-            super::DxgError::UnsupportedHardware
+            DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::ENOTTY)),
+            DxgError::UnsupportedHardware
         );
         assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(75)),
-            super::DxgError::BufferOverflow
+            DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EOVERFLOW)),
+            DxgError::BufferOverflow
         );
         assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(13)),
-            super::DxgError::PermissionDenied
+            DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EACCES)),
+            DxgError::PermissionDenied
         );
         assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(1)),
-            super::DxgError::PermissionDenied
+            DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EPERM)),
+            DxgError::PermissionDenied
         );
         assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(14)),
-            super::DxgError::BadAddress
+            DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EFAULT)),
+            DxgError::BadAddress
         );
-        let unknown = super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(9999));
-        assert!(matches!(unknown, super::DxgError::Io(_)));
+        let unknown = DxgError::from_sys_error(std::io::Error::from_raw_os_error(9999));
+        assert!(matches!(unknown, DxgError::Io(_)));
     }
 
     #[test]
@@ -413,18 +369,18 @@ mod tests {
         };
         assert_eq!(luid.to_string(), "00000034:00000012");
         let cases = [
-            super::DxgError::Unavailable("gone".into()),
-            super::DxgError::Io("bad".into()),
-            super::DxgError::NoAdapters,
-            super::DxgError::AmbiguousAdapters(2),
-            super::DxgError::AdapterNotFound(luid),
-            super::DxgError::TooManyAdapters(65),
-            super::DxgError::Malformed("field"),
-            super::DxgError::DeviceNotFound,
-            super::DxgError::UnsupportedHardware,
-            super::DxgError::BufferOverflow,
-            super::DxgError::PermissionDenied,
-            super::DxgError::BadAddress,
+            DxgError::Unavailable("gone".into()),
+            DxgError::Io("bad".into()),
+            DxgError::NoAdapters,
+            DxgError::AmbiguousAdapters(2),
+            DxgError::AdapterNotFound(luid),
+            DxgError::TooManyAdapters(65),
+            DxgError::Malformed("field"),
+            DxgError::DeviceNotFound,
+            DxgError::UnsupportedHardware,
+            DxgError::BufferOverflow,
+            DxgError::PermissionDenied,
+            DxgError::BadAddress,
         ];
         for error in cases {
             assert!(!error.to_string().is_empty());
@@ -442,7 +398,7 @@ mod tests {
         };
         assert!(matches!(
             DxgBudgetProvider::open(Some(missing)),
-            Err(super::DxgError::AdapterNotFound(value)) if value == missing
+            Err(DxgError::AdapterNotFound(value)) if value == missing
         ));
     }
 
@@ -482,23 +438,23 @@ mod tests {
         };
         assert_eq!(
             super::validate_enum(&request, None),
-            Err(super::DxgError::Malformed("enum.reserved"))
+            Err(DxgError::Malformed("enum.reserved"))
         );
         request.reserved = 0;
         request.num_adapters = 0;
         assert_eq!(
             super::validate_enum(&request, None),
-            Err(super::DxgError::NoAdapters)
+            Err(DxgError::NoAdapters)
         );
         request.num_adapters = 65;
         assert_eq!(
             super::validate_enum(&request, None),
-            Err(super::DxgError::TooManyAdapters(65))
+            Err(DxgError::TooManyAdapters(65))
         );
         request.num_adapters = 2;
         assert_eq!(
             super::validate_enum(&request, Some(1)),
-            Err(super::DxgError::TooManyAdapters(2))
+            Err(DxgError::TooManyAdapters(2))
         );
         request.num_adapters = 1;
         assert_eq!(super::validate_enum(&request, Some(1)), Ok(()));
@@ -509,12 +465,12 @@ mod tests {
         };
         assert_eq!(
             super::validate_query(&query),
-            Err(super::DxgError::Malformed("process"))
+            Err(DxgError::Malformed("process"))
         );
         query.process = 0;
         assert_eq!(
             super::validate_query(&query),
-            Err(super::DxgError::Malformed("adapter"))
+            Err(DxgError::Malformed("adapter"))
         );
         query.adapter = 1;
         assert_eq!(super::validate_query(&query), Ok(()));
