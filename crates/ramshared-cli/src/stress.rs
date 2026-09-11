@@ -690,7 +690,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
         let total_swap_cap = cap1.total_mb + cap2.total_mb + cap3.total_mb;
         if let Some(t3_target) = opts.tier3_target_pct {
-            if (cap1.pct >= 95 || cap1.total_mb == 0) && (cap2.pct >= 95 || cap2.total_mb == 0) && cap3.pct >= t3_target {
+            if (cap1.pct >= 95 || cap1.total_mb == 0)
+                && (cap2.pct >= 95 || cap2.total_mb == 0)
+                && cap3.pct >= t3_target
+            {
                 if !opts.json {
                     println!(
                         "\n[🎯 ALL TIERS QUALIFIED] Tier 1: {}%, Tier 2: {}%, Tier 3: {}% (Target: {}%).",
