@@ -75,7 +75,19 @@ pub struct TelemetryReading {
     pub psi_full: f64,
     pub ram_used_mb: u64,
     pub swap_used_mb: u64,
+    pub tier1_zram_pct: u64,
+    pub tier2_vram_pct: u64,
+    pub tier3_ssd_pct: u64,
     pub classification: String,
+}
+
+impl TelemetryReading {
+    pub fn with_tier_pcts(mut self, t1: u64, t2: u64, t3: u64) -> Self {
+        self.tier1_zram_pct = t1;
+        self.tier2_vram_pct = t2;
+        self.tier3_ssd_pct = t3;
+        self
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -412,6 +424,9 @@ pub fn compute_telemetry_reading(
         psi_full,
         ram_used_mb: ram_alloc_mb,
         swap_used_mb,
+        tier1_zram_pct: 0,
+        tier2_vram_pct: 0,
+        tier3_ssd_pct: 0,
         classification: classification.to_string(),
     }
 }
@@ -420,7 +435,7 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(
             f,
-            "[{}] IDX {:>4.1} {} Lat: {:>5.2}ms │ PSI: {:>4.1}% │ RAM: {:>5}MB │ Swap: {:>5}MB │ {}",
+            "[{}] IDX {:>4.1} {} Lat: {:>5.2}ms │ PSI: {:>4.1}% │ RAM: {:>5}MB │ Swap: {:>5}MB [T1:{:>3}%|T2:{:>3}%|T3:{:>3}%] │ {}",
             reading.timestamp_ms,
             reading.pressure_index,
             reading.gauge,
@@ -428,6 +443,9 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
             reading.psi_full,
             reading.ram_used_mb,
             reading.swap_used_mb,
+            reading.tier1_zram_pct,
+            reading.tier2_vram_pct,
+            reading.tier3_ssd_pct,
             reading.classification
         );
     }
@@ -536,9 +554,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let psi_full = read_psi_full();
         let lat_ms = probe_allocation_latency_ms();
         let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
+        let (cap1, cap2, cap3) = read_swap_tier_capacities();
 
         let reading =
-            compute_telemetry_reading(lat_ms, psi_full, total_allocated_mb, ram_total_mb, tot_swap);
+            compute_telemetry_reading(lat_ms, psi_full, total_allocated_mb, ram_total_mb, tot_swap)
+                .with_tier_pcts(cap1.pct, cap2.pct, cap3.pct);
         peak_pressure = peak_pressure.max(reading.pressure_index);
         readings_count += 1;
         append_telemetry_log(&opts.telemetry_log, &reading);
@@ -825,13 +845,15 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             let psi_full = read_psi_full();
             let lat_ms = probe_allocation_latency_ms();
 
+            let (cap1, cap2, cap3) = read_swap_tier_capacities();
             let reading = compute_telemetry_reading(
                 lat_ms,
                 psi_full,
                 total_allocated_mb,
                 ram_total_mb,
                 tot_swap,
-            );
+            )
+            .with_tier_pcts(cap1.pct, cap2.pct, cap3.pct);
             peak_pressure = peak_pressure.max(reading.pressure_index);
             readings_count += 1;
             active_cycles_done += 1;

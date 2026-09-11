@@ -158,6 +158,9 @@ pub struct ControlPlaneObservation {
     pub swap_read_mbs: f64,
     pub swap_write_mbs: f64,
     pub swap_peak_mbs: f64,
+    pub zram_peak_used_mb: u64,
+    pub vram_peak_used_mb: u64,
+    pub disk_peak_used_mb: u64,
     pub zram_io: TierIoStats,
     pub vram_io: TierIoStats,
     pub disk_io: TierIoStats,
@@ -963,6 +966,9 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
     let mut vram_acc = TierAccumulator::default();
     let mut disk_acc = TierAccumulator::default();
     let mut swap_peak_mbs = 0.0f64;
+    let mut zram_peak_used_mb = 0u64;
+    let mut vram_peak_used_mb = 0u64;
+    let mut disk_peak_used_mb = 0u64;
 
     loop {
         if Instant::now() >= next_sample {
@@ -1028,8 +1034,26 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                 }
             }
 
+            if let Some(tiers) = observation.value("tiers").and_then(Value::as_object) {
+                if let Some(t) = tiers.get("zram").and_then(Value::as_object) {
+                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                    zram_peak_used_mb = zram_peak_used_mb.max((u + 512) / 1024);
+                }
+                if let Some(t) = tiers.get("vram").and_then(Value::as_object) {
+                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                    vram_peak_used_mb = vram_peak_used_mb.max((u + 512) / 1024);
+                }
+                if let Some(t) = tiers.get("disk").and_then(Value::as_object) {
+                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                    disk_peak_used_mb = disk_peak_used_mb.max((u + 512) / 1024);
+                }
+            }
+
             let cp = &mut observation.control_plane;
             cp.swap_peak_mbs = swap_peak_mbs;
+            cp.zram_peak_used_mb = zram_peak_used_mb;
+            cp.vram_peak_used_mb = vram_peak_used_mb;
+            cp.disk_peak_used_mb = disk_peak_used_mb;
             zram_acc.apply_to_plane_io(&mut cp.zram_io);
             vram_acc.apply_to_plane_io(&mut cp.vram_io);
             disk_acc.apply_to_plane_io(&mut cp.disk_io);
@@ -1454,26 +1478,49 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 format!("{disk_pct:>2}%")
             };
 
+            let z_peak = observation.control_plane.zram_peak_used_mb.max(zram_used);
+            let v_peak = observation.control_plane.vram_peak_used_mb.max(vram_used);
+            let d_peak = observation.control_plane.disk_peak_used_mb.max(disk_used);
+
+            let z_peak_pct = z_peak
+                .saturating_mul(100)
+                .checked_div(zram_size)
+                .unwrap_or(0);
+            let v_peak_pct = v_peak
+                .saturating_mul(100)
+                .checked_div(vram_size)
+                .unwrap_or(0);
+            let d_peak_pct = d_peak
+                .saturating_mul(100)
+                .checked_div(disk_size)
+                .unwrap_or(0);
+
             let z_use = format!(
-                "{z_bar} {z_pct_str} ( {zram_u:>4} MB / {zram_t} MB )",
+                "{z_bar} {z_pct_str} ( {zram_u:>4} MB / {zram_t} MB ) │ Peak: {z_peak:>4} MB ({z_peak_pct:>3}%)",
                 z_bar = z_bar,
                 z_pct_str = z_pct_str,
                 zram_u = zram_used,
-                zram_t = zram_size
+                zram_t = zram_size,
+                z_peak = z_peak,
+                z_peak_pct = z_peak_pct
             );
             let v_use = format!(
-                "{v_bar} {v_pct_str} ( {vram_u:>4} MB / {vram_t} MB )",
+                "{v_bar} {v_pct_str} ( {vram_u:>4} MB / {vram_t} MB ) │ Peak: {v_peak:>4} MB ({v_peak_pct:>3}%)",
                 v_bar = v_bar,
                 v_pct_str = v_pct_str,
                 vram_u = vram_used,
-                vram_t = vram_size
+                vram_t = vram_size,
+                v_peak = v_peak,
+                v_peak_pct = v_peak_pct
             );
             let d_use = format!(
-                "{d_bar} {d_pct_str} ( {disk_u:>4} MB / {disk_t} MB )",
+                "{d_bar} {d_pct_str} ( {disk_u:>4} MB / {disk_t} MB ) │ Peak: {d_peak:>4} MB ({d_peak_pct:>3}%)",
                 d_bar = d_bar,
                 d_pct_str = d_pct_str,
                 disk_u = disk_used,
-                disk_t = disk_size
+                disk_t = disk_size,
+                d_peak = d_peak,
+                d_peak_pct = d_peak_pct
             );
 
             let z_rate = format!(
