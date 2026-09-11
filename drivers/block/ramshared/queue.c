@@ -173,6 +173,7 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	kunmap_local(mem);
 	atomic64_inc(&rs_dev->dma_transfers_total);
 	page_endio(page, is_write, 0);
+	/* Optimized synchronous single-page swap bypass */
 	return 0;
 }
 
