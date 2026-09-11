@@ -11,6 +11,9 @@
 //! per-request, **serve-only**) + §9.4 (content/free probe).
 //! Backoff remains as future work.
 
+mod config;
+use config::*;
+
 use core::ffi::c_int;
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -71,17 +74,10 @@ const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const COMMAND_REAP_GRACE: Duration = Duration::from_millis(500);
 const COMMAND_CAPTURE_GRACE: Duration = Duration::from_millis(500);
 
-const GIB: u64 = 1024 * 1024 * 1024;
-const DEFAULT_SIZE: u64 = 256 * 1024 * 1024;
-const DEFAULT_ORIGIN_SIZE: u64 = 4 * GIB;
-const MIN_ORIGIN_LOGICAL_SIZE: u64 = GIB;
-const MAX_ORIGIN_LOGICAL_SIZE: u64 = 24 * GIB;
-const BLOCK_SIZE: u32 = 4096;
 const UBLK_CONTROL: &str = "/dev/ublk-control";
 const CACHE_TARGET_REQUEST_PATH: &str = "/run/ramshared/cache-target.json";
 const RECLAIM_REQUEST_PATH: &str = "/run/ramshared/reclaim-request.json";
 const CONTROL_REQUEST_MAX_AGE_MS: u64 = 15_000;
-const ORIGIN_MANIFEST_PATH: &str = "/etc/ramshared/origin.conf";
 const HOST_ORIGIN_MANIFEST_PATH: &str =
     "/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json";
 const ORIGIN_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
@@ -90,23 +86,13 @@ const SECTOR: u64 = 512;
 
 /// VRAM tier transport: NBD (Unix socket) or ublk (direct block device).
 #[derive(Clone, Copy)]
-enum Transport {
-    Nbd,
-    Ublk,
-}
+
 
 /// VRAM/tier backend: `Vram` (CUDA, with residency §9/§9.4), `Vulkan` (any GPU via
 /// `ramshared-vulkan`, RF-G2) or `Ram` (without GPU). `Ram` exists to validate the **lifecycle/teardown**
 /// of the ublk daemon in **QEMU** (where there is no GPU); the teardown bug that hung
 /// WSL2 is independent of the backend. `Vulkan` covers broker + NBD single (generic paths); ublk
 /// with Vulkan is deferred (DT-11: the ublk residency server is CUDA-fixed).
-#[derive(Clone, Copy)]
-enum BackendKind {
-    Vram,
-    Vulkan,
-    Ram,
-}
-
 struct UnavailableVramProvider;
 struct UnavailableVramMemory;
 
@@ -198,59 +184,6 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn documented_private_listener_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(ip) => {
-            let [a, b, _, _] = ip.octets();
-            a == 127
-                || a == 10
-                || (a == 172 && (16..=31).contains(&b))
-                || (a == 192 && b == 168)
-                || (a == 100 && (64..=127).contains(&b))
-        }
-        std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.octets()[0] & 0xfe == 0xfc,
-    }
-}
-
-/// Parses `IP:PORT` (accepts `tcp://`) and permits only loopback, RFC1918
-/// IPv4, IPv6 ULA, and the exact Tailscale CGNAT 100.64.0.0/10 range.
-fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
-    let raw = s.strip_prefix("tcp://").unwrap_or(s);
-    let addr: std::net::SocketAddr = raw
-        .parse()
-        .map_err(|_| format!("invalid address '{s}' (use IP:PORT)"))?;
-    if !documented_private_listener_ip(addr.ip()) {
-        return Err(format!(
-            "bind on {} refused — RNF-2 permits only loopback, RFC1918, IPv6 ULA, or Tailscale 100.64.0.0/10",
-            addr.ip()
-        ));
-    }
-    Ok(addr)
-}
-
-/// Validates the combo of slice flags (DT-3: ublk is single-device in WSL2; `--slice-mb` mandatory).
-/// Slices ceiling: `StatusReply` embeds `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` in a single
-/// JSON line; above ~430 slices it exceeds the protocol's `MAX_LINE_BYTES` (64 KiB) and the other
-/// end rejects the line (ADR-0005). 256 gives margins (~38 KiB) and covers any real use case.
-fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
-    if slices > 0 && is_ublk {
-        return Err(
-            "--slices does not combine with --transport ublk (DT-3: ublk single-device on WSL2)"
-                .into(),
-        );
-    }
-    if slices > 0 && slice_mb == 0 {
-        return Err("--slices > 0 requires --slice-mb N".into());
-    }
-    if slices > ramshared_broker::slices::MAX_SLICES {
-        return Err(format!(
-            "--slices {slices} > {}: StatusReply would exceed the protocol line ceiling \
-             (MAX_LINE_BYTES 64 KiB, ADR-0005)",
-            ramshared_broker::slices::MAX_SLICES
-        ));
-    }
-    Ok(())
-}
 
 /// Zeroes the `[base, base+len)` window of the backend in 1 MiB chunks (slice hygiene, DT-17).
 /// Runs on the thread owning the backend (single CUDA worker) — `WMsg::ZeroExport`.
@@ -1647,245 +1580,10 @@ fn critical_cache_reclaim_requested_at(
             .is_some()
 }
 
-struct AppArgs {
-    size: u64,
-    origin: Option<String>,
-    sock: String,
-    force: bool,
-    nbd_dev: String,
-    transport: Transport,
-    queue_depth: u16,
-    backend: BackendKind,
-    slices: u16,
-    slice_bytes: u64,
-    listen_nbd_addr: Option<std::net::SocketAddr>,
-    arbiter_addr: Option<std::net::SocketAddr>,
-    advertise_tcp: Option<(String, u16)>,
-    telemetry_jsonl: Option<std::path::PathBuf>,
-}
 
-impl AppArgs {
-    /// Parses an explicit argv vector before any backend selection or side effect.
-    /// Keeping this boundary injectable makes all public refusals testable without
-    /// loading CUDA/Vulkan or touching swap, NBD, or ublk state (memory-broker DT-46).
-    fn parse_from(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut size = DEFAULT_SIZE;
-        let mut size_explicit = false;
-        let mut origin = None;
-        let mut sock = "/run/ramshared/wsl2d.sock".to_string();
-        let mut force = false;
-        let mut nbd_dev = "/dev/nbd0".to_string();
-        let mut transport = Transport::Nbd;
-        let mut queue_depth = 1u16;
-        let mut backend = BackendKind::Vram;
-        let mut slices = 0u16;
-        let mut slice_mb = 0u64;
-        let mut listen_nbd: Option<String> = None;
-        let mut arbiter: Option<String> = None;
-        let mut advertise_nbd: Option<String> = None;
-        let mut telemetry_jsonl: Option<String> = None;
 
-        let mut i = 1;
-        while i < args.len() {
-            match args[i].as_str() {
-                "--size" => {
-                    i += 1;
-                    let mb: u64 = args
-                        .get(i)
-                        .ok_or("--size requires a value (MiB)")?
-                        .parse()?;
-                    size = mb
-                        .checked_mul(1024 * 1024)
-                        .ok_or("--size: MiB value overflow")?;
-                    size_explicit = true;
-                }
-                "--sock" => {
-                    i += 1;
-                    sock = args.get(i).ok_or("--sock requires a path")?.clone();
-                }
-                "--origin-manifest" => {
-                    i += 1;
-                    origin = Some(
-                        args.get(i)
-                            .ok_or("--origin-manifest requires a path")?
-                            .clone(),
-                    );
-                }
-                "--origin" => {
-                    return Err("--origin is unsafe; use the sealed --origin-manifest path".into());
-                }
-                "--force" => force = true,
-                "--nbd" => {
-                    i += 1;
-                    nbd_dev = args.get(i).ok_or("--nbd requires a path")?.clone();
-                }
-                "--transport" => {
-                    i += 1;
-                    transport = match args.get(i).map(String::as_str) {
-                        Some("nbd") => Transport::Nbd,
-                        Some("ublk") => Transport::Ublk,
-                        _ => return Err("--transport requires 'nbd' or 'ublk'".into()),
-                    };
-                }
-                "--queue-depth" => {
-                    i += 1;
-                    queue_depth = args
-                        .get(i)
-                        .ok_or("--queue-depth requires a value")?
-                        .parse()
-                        .map_err(|_| "--queue-depth is invalid")?;
-                }
-                "--backend" => {
-                    i += 1;
-                    backend = match args.get(i).map(String::as_str) {
-                        Some("vram") => BackendKind::Vram,
-                        Some("vulkan") => BackendKind::Vulkan,
-                        Some("ram") => BackendKind::Ram,
-                        _ => return Err("--backend requires 'vram', 'vulkan', or 'ram'".into()),
-                    };
-                }
-                "--slices" => {
-                    i += 1;
-                    slices = args
-                        .get(i)
-                        .ok_or("--slices requires a value")?
-                        .parse()
-                        .map_err(|_| "--slices is invalid")?;
-                }
-                "--slice-mb" => {
-                    i += 1;
-                    slice_mb = args
-                        .get(i)
-                        .ok_or("--slice-mb requires a value (MiB)")?
-                        .parse()
-                        .map_err(|_| "--slice-mb is invalid")?;
-                }
-                "--listen-nbd" => {
-                    i += 1;
-                    listen_nbd = Some(
-                        args.get(i)
-                            .ok_or("--listen-nbd requires tcp://IP:PORT")?
-                            .clone(),
-                    );
-                }
-                "--arbiter-listen" => {
-                    i += 1;
-                    arbiter = Some(
-                        args.get(i)
-                            .ok_or("--arbiter-listen requires IP:PORT")?
-                            .clone(),
-                    );
-                }
-                "--advertise-nbd" => {
-                    i += 1;
-                    advertise_nbd = Some(
-                        args.get(i)
-                            .ok_or("--advertise-nbd requires HOST:PORT")?
-                            .clone(),
-                    );
-                }
-                "--telemetry-jsonl" => {
-                    i += 1;
-                    telemetry_jsonl = Some(
-                        args.get(i)
-                            .ok_or("--telemetry-jsonl requires a path")?
-                            .clone(),
-                    );
-                }
-                other => return Err(format!("unknown argument: {other}").into()),
-            }
-            i += 1;
-        }
-        if origin.is_some() && !size_explicit {
-            size = DEFAULT_ORIGIN_SIZE;
-        }
-        size -= size % BLOCK_SIZE as u64; // align to the block size
-        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size)
-        {
-            return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
-        }
-        if origin.as_deref().is_some_and(|p| p != ORIGIN_MANIFEST_PATH) {
-            return Err(format!(
-                "--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path"
-            )
-            .into());
-        }
 
-        validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))?;
 
-        let listen_nbd_addr = listen_nbd
-            .as_deref()
-            .map(parse_private_listen)
-            .transpose()?;
-        let arbiter_addr = arbiter.as_deref().map(parse_private_listen).transpose()?;
-        let advertise_nbd_addr = advertise_nbd
-            .as_deref()
-            .map(parse_private_listen)
-            .transpose()?;
-
-        if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
-            return Err(
-                "--advertise-nbd requires --listen-nbd (cannot advertise an unserved endpoint)"
-                    .into(),
-            );
-        }
-
-        if slices > 0 && arbiter_addr.is_none() {
-            return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
-        }
-        if slices == 0 && (arbiter_addr.is_some() || listen_nbd_addr.is_some()) {
-            return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
-        }
-
-        let advertise_tcp = advertise_nbd_addr
-            .or(listen_nbd_addr)
-            .map(|a| (a.ip().to_string(), a.port()));
-        let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
-
-        let slice_bytes = if slices > 0 {
-            slice_mb
-                .checked_mul(1024 * 1024)
-                .ok_or("--slice-mb: MiB value overflow")?
-        } else {
-            0
-        };
-
-        Ok(Self {
-            size,
-            origin,
-            sock,
-            force,
-            nbd_dev,
-            transport,
-            queue_depth,
-            backend,
-            slices,
-            slice_bytes,
-            listen_nbd_addr,
-            arbiter_addr,
-            advertise_tcp,
-            telemetry_jsonl,
-        })
-    }
-}
-
-fn daemon_version_requested(args: &[String]) -> bool {
-    matches!(args, [_, flag] if flag == "--version" || flag == "-V" || flag == "version")
-}
-
-/// A validated daemon action. The parser and selector decide this before any
-/// driver, swap, NBD-client, or ublk side effect (memory-broker DT-46).
-enum DaemonAction {
-    Broker(AppArgs),
-    Nbd(AppArgs),
-    Ublk(AppArgs),
-}
-
-/// The production shell is deliberately behind this small interface so the
-/// safety-critical argv/plan boundary can be tested with a recording runner.
-trait DaemonActionRunner {
-    fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>>;
-}
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let raw_args = std::env::args().collect::<Vec<_>>();
@@ -1906,40 +1604,6 @@ fn run_with<R: DaemonActionRunner>(
     runner.execute(action)
 }
 
-fn select_daemon_action(args: AppArgs) -> Result<DaemonAction, Box<dyn std::error::Error>> {
-    if args.slices > 0 && args.origin.is_some() {
-        return Err("--origin-manifest is valid only for the single NBD product path".into());
-    }
-    if args.slices > 0 && args.arbiter_addr.is_none() {
-        return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
-    }
-    if args.slices > 0 {
-        return Ok(DaemonAction::Broker(args));
-    }
-    if args.arbiter_addr.is_some() || args.listen_nbd_addr.is_some() {
-        return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
-    }
-    match (args.transport, args.backend) {
-        (Transport::Nbd, BackendKind::Ram) => Err(
-            "--backend ram has no single NBD path; use --slices (broker) or ublk".into(),
-        ),
-        (Transport::Ublk, BackendKind::Vulkan) => Err(
-            "ublk with --backend vulkan is not supported (DT-11); use --backend vram, or Vulkan via --slices / --transport nbd"
-                .into(),
-        ),
-        (Transport::Nbd, _) if args.origin.is_some() => Ok(DaemonAction::Nbd(args)),
-        (Transport::Nbd, _) => {
-            Err(format!(
-                "product NBD requires --origin-manifest {ORIGIN_MANIFEST_PATH}"
-            )
-            .into())
-        }
-        (Transport::Ublk, _) if args.origin.is_some() => {
-            Err("--origin-manifest is valid only with --transport nbd".into())
-        }
-        (Transport::Ublk, _) => Ok(DaemonAction::Ublk(args)),
-    }
-}
 
 struct ProductionDaemonRunner;
 
@@ -5729,110 +5393,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn daemon_args_refuse_invalid_or_unsafe_combinations_before_backend() {
-        for argv in [
-            daemon_argv(&["ramsharedd", "--unknown"]),
-            daemon_argv(&["ramsharedd", "--slices", "1"]),
-            daemon_argv(&[
-                "ramsharedd",
-                "--slices",
-                "1",
-                "--slice-mb",
-                "1",
-                "--arbiter-listen",
-                "0.0.0.0:7777",
-            ]),
-            daemon_argv(&["ramsharedd", "--slices", "257", "--slice-mb", "1"]),
-            daemon_argv(&["ramsharedd", "--advertise-nbd", "127.0.0.1:10809"]),
-            daemon_argv(&[
-                "ramsharedd",
-                "--transport",
-                "ublk",
-                "--slices",
-                "1",
-                "--slice-mb",
-                "1",
-            ]),
-        ] {
-            assert!(
-                AppArgs::parse_from(&argv).is_err(),
-                "unsafe argv unexpectedly parsed: {argv:?}"
-            );
-        }
-    }
 
-    #[test]
-    fn daemon_args_cover_flag_boundaries_before_backend() {
-        let parsed = AppArgs::parse_from(&daemon_argv(&[
-            "ramsharedd",
-            "--size",
-            "3",
-            "--sock",
-            "/tmp/ramsharedd-boundary.sock",
-            "--force",
-            "--nbd",
-            "/dev/nbd77",
-            "--transport",
-            "nbd",
-            "--queue-depth",
-            "2",
-            "--backend",
-            "vram",
-        ]))
-        .expect("all single-daemon scalar flags must parse before backend selection");
-        assert_eq!(parsed.size, 3 * 1024 * 1024);
-        assert_eq!(parsed.sock, "/tmp/ramsharedd-boundary.sock");
-        assert!(parsed.force);
-        assert_eq!(parsed.nbd_dev, "/dev/nbd77");
-        assert_eq!(parsed.queue_depth, 2);
-        assert!(matches!(parsed.transport, Transport::Nbd));
-        assert!(matches!(parsed.backend, BackendKind::Vram));
-
-        for argv in [
-            daemon_argv(&["ramsharedd", "--size"]),
-            daemon_argv(&["ramsharedd", "--size", "not-a-number"]),
-            daemon_argv(&["ramsharedd", "--size", "18446744073709551615"]),
-            daemon_argv(&["ramsharedd", "--sock"]),
-            daemon_argv(&["ramsharedd", "--nbd"]),
-            daemon_argv(&["ramsharedd", "--transport"]),
-            daemon_argv(&["ramsharedd", "--transport", "tcp"]),
-            daemon_argv(&["ramsharedd", "--queue-depth"]),
-            daemon_argv(&["ramsharedd", "--queue-depth", "zero"]),
-            daemon_argv(&["ramsharedd", "--backend"]),
-            daemon_argv(&["ramsharedd", "--backend", "cpu"]),
-            daemon_argv(&["ramsharedd", "--slices"]),
-            daemon_argv(&["ramsharedd", "--slices", "many"]),
-            daemon_argv(&["ramsharedd", "--slice-mb"]),
-            daemon_argv(&["ramsharedd", "--slice-mb", "many"]),
-            daemon_argv(&["ramsharedd", "--listen-nbd"]),
-            daemon_argv(&["ramsharedd", "--listen-nbd", "not-an-address"]),
-            daemon_argv(&["ramsharedd", "--arbiter-listen"]),
-            daemon_argv(&["ramsharedd", "--arbiter-listen", "not-an-address"]),
-            daemon_argv(&["ramsharedd", "--advertise-nbd"]),
-            daemon_argv(&["ramsharedd", "--advertise-nbd", "not-an-address"]),
-            daemon_argv(&["ramsharedd", "--telemetry-jsonl"]),
-        ] {
-            assert!(
-                AppArgs::parse_from(&argv).is_err(),
-                "invalid argv unexpectedly reached a backend plan: {argv:?}"
-            );
-        }
-
-        let overflow = AppArgs::parse_from(&daemon_argv(&[
-            "ramsharedd",
-            "--slices",
-            "1",
-            "--slice-mb",
-            "18446744073709551615",
-            "--arbiter-listen",
-            "127.0.0.1:7777",
-        ]));
-        assert!(
-            overflow.is_err(),
-            "slice MiB overflow must refuse before a plan"
-        );
-    }
 
     #[test]
     fn daemon_broker_config_preserves_telemetry_and_exact_endpoints() {
@@ -7674,18 +7235,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn daemon_version_flag_is_side_effect_free() {
-        assert!(daemon_version_requested(&[
-            "ramsharedd".to_string(),
-            "--version".to_string()
-        ]));
-        assert!(!daemon_version_requested(&[
-            "ramsharedd".to_string(),
-            "--size".to_string(),
-            "1024".to_string()
-        ]));
-    }
 
     #[test]
     fn daemon_broker_setup_failure_zeroes_allocated_vram_before_return() {
@@ -9250,47 +8799,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn daemon_plan_routes_validated_actions_without_starting_a_backend() {
-        struct CapturingRunner(Option<DaemonAction>);
-
-        impl DaemonActionRunner for CapturingRunner {
-            fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>> {
-                self.0 = Some(action);
-                Ok(())
-            }
-        }
-
-        let args = AppArgs::parse_from(&daemon_argv(&[
-            "ramsharedd",
-            "--backend",
-            "ram",
-            "--slices",
-            "1",
-            "--slice-mb",
-            "1",
-            "--arbiter-listen",
-            "127.0.0.1:7777",
-        ]))
-        .expect("validated broker argv");
-        let mut runner = CapturingRunner(None);
-        run_with(args, &mut runner).expect("capturing runner must receive a plan");
-        assert!(matches!(
-            runner.0,
-            Some(DaemonAction::Broker(AppArgs {
-                slices: 1,
-                backend: BackendKind::Ram,
-                ..
-            }))
-        ));
-
-        let single_ram = AppArgs::parse_from(&daemon_argv(&["ramsharedd", "--backend", "ram"]))
-            .expect("argv itself is syntactically valid");
-        assert!(
-            select_daemon_action(single_ram).is_err(),
-            "single NBD RAM must refuse before a backend is selected"
-        );
-    }
 
     #[test]
     fn daemon_ublk_vulkan_refuses_before_device_mutation() {
@@ -9438,31 +8946,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn private_listen_rejects_garbage() {
-        assert!(parse_private_listen("nao-eh-addr").is_err());
-        assert!(parse_private_listen("127.0.0.1").is_err()); // sem porta
-    }
 
-    #[test]
-    fn slice_flags_reject_ublk_with_slices() {
-        assert!(validate_slice_flags(2, 64, true).is_err()); // DT-3
-        assert!(validate_slice_flags(0, 0, true).is_ok()); // ublk single ok
-    }
 
-    #[test]
-    fn slice_flags_require_slice_mb() {
-        assert!(validate_slice_flags(2, 0, false).is_err());
-        assert!(validate_slice_flags(2, 64, false).is_ok());
-        assert!(validate_slice_flags(0, 0, false).is_ok()); // single-mode ok
-    }
 
-    #[test]
-    fn slice_flags_cap_protects_status_line() {
-        // MED-1: --slices above ramshared_broker::slices::MAX_SLICES would blow the StatusReply (MAX_LINE_BYTES 64 KiB).
-        assert!(validate_slice_flags(ramshared_broker::slices::MAX_SLICES, 64, false).is_ok());
-        assert!(validate_slice_flags(ramshared_broker::slices::MAX_SLICES + 1, 64, false).is_err());
-    }
 
     #[test]
     fn sparse_free_floor_requests_swapoff_but_latency_does_not() {
