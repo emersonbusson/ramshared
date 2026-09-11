@@ -11,9 +11,9 @@ use std::process::{Command, ExitCode};
 
 use ramshared_cuda::Cuda;
 
-mod completion;
 mod bounded_process;
 mod cascade;
+mod completion;
 mod diagnose;
 mod monitor;
 mod stress;
@@ -323,7 +323,8 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
             args: options.to_vec(),
         }),
         "completion" => {
-            let shell = options.first()
+            let shell = options
+                .first()
                 .ok_or_else(|| CliParseError::InvalidOption {
                     command: "completion",
                     options: options.to_vec(),
@@ -387,13 +388,23 @@ trait CliActionRunner {
     ) -> ExitCode;
     fn recover(&mut self, resume: bool, stdout: &mut dyn Write, stderr: &mut dyn Write)
     -> ExitCode;
-    fn completion(&mut self, shell: clap_complete::Shell, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn completion(
+        &mut self,
+        shell: clap_complete::Shell,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
 }
 
 struct SystemCliActions;
 
 impl CliActionRunner for SystemCliActions {
-    fn completion(&mut self, shell: clap_complete::Shell, stdout: &mut dyn Write, _stderr: &mut dyn Write) -> ExitCode {
+    fn completion(
+        &mut self,
+        shell: clap_complete::Shell,
+        stdout: &mut dyn Write,
+        _stderr: &mut dyn Write,
+    ) -> ExitCode {
         crate::completion::generate_script(shell, stdout)
     }
 

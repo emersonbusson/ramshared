@@ -5,7 +5,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::{generate, Shell};
+use clap_complete::{Shell, generate};
 
 /// CLI parser for completions mapping exactly to main.rs legacy args.
 #[derive(Parser)]
