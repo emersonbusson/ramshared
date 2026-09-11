@@ -90,7 +90,8 @@ fn main() {
             {
                 let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let paused = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                if let Err(error) = ramshared_winbroker::service::run_console(config, stop, paused) {
+                if let Err(error) = ramshared_winbroker::service::run_console(config, stop, paused)
+                {
                     eprintln!("console failed: {error}");
                     std::process::exit(3);
                 }

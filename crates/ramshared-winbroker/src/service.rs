@@ -128,14 +128,22 @@ pub fn run_service(config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Err
         }
         ServiceControl::Pause => {
             handler_paused.store(true, Ordering::Release);
-            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Some(handle) = closure_status_handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
                 let _ = set_status(handle, ServiceState::Paused, 0, Duration::ZERO, 0);
             }
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Continue => {
             handler_paused.store(false, Ordering::Release);
-            if let Some(handle) = closure_status_handle.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if let Some(handle) = closure_status_handle
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .as_ref()
+            {
                 let _ = set_status(handle, ServiceState::Running, 0, Duration::ZERO, 0);
             }
             ServiceControlHandlerResult::NoError
@@ -173,7 +181,9 @@ fn set_status(
         service_type: ServiceType::OWN_PROCESS,
         current_state: state,
         controls_accepted: if state == ServiceState::Running || state == ServiceState::Paused {
-            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN | ServiceControlAccept::PAUSE_CONTINUE
+            ServiceControlAccept::STOP
+                | ServiceControlAccept::SHUTDOWN
+                | ServiceControlAccept::PAUSE_CONTINUE
         } else {
             ServiceControlAccept::empty()
         },
@@ -188,7 +198,11 @@ fn set_status(
     })
 }
 
-pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>, paused: Arc<AtomicBool>) -> io::Result<()> {
+pub fn run_console(
+    config: BrokerConfigV1,
+    stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+) -> io::Result<()> {
     let instance_id = broker_instance_id()?;
     let evidence_path = config.evidence_path.clone();
     append_evidence(&evidence_path, &instance_id, "process_ready", None)?;
