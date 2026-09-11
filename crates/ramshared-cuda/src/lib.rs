@@ -31,11 +31,13 @@ mod loader_win;
 use loader_win as loader;
 
 mod driver;
+mod error;
 mod ffi;
 pub mod probe;
 mod vram_impl; // impl VramProvider/VramMemory for CUDA types (RF-G1)
 
-pub use driver::{Context, Cuda, CudaError, Device, DeviceMem};
+pub use driver::{Context, Cuda, Device, DeviceMem};
+pub use error::{CudaError, DriverError};
 pub use probe::{PROBE_PATTERN_LEN, ProbePlanError, pattern_for_offset, plan_probe_offsets};
 
 #[cfg(test)]
@@ -61,7 +63,7 @@ mod tests {
     fn driver_error_carries_op_and_code() {
         let e = CudaError::Driver {
             op: "cuMemAlloc",
-            code: 2,
+            code: DriverError::OutOfMemory,
             msg: "out of memory".to_string(),
         };
         let s = e.to_string();

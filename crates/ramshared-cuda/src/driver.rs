@@ -10,43 +10,12 @@
 //! `goto out_err` pattern into Rust's borrow checker invariants.
 
 use core::ffi::{CStr, c_char, c_void};
-use core::fmt;
 
 use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
+use crate::error::{CudaError, DriverError};
 
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
 #[derive(Debug)]
-pub enum CudaError {
-    /// Dynamic library loading failed to find a candidate library.
-    Load(String),
-    /// Symbol resolution failed for a required symbol.
-    Symbol(String),
-    /// A CUDA Driver API call returned an error code.
-    Driver {
-        op: &'static str,
-        code: i32,
-        msg: String,
-    },
-    /// VRAM memory region access out of bounds (offset + len > size).
-    OutOfRange { off: usize, len: usize, size: usize },
-}
-
-impl fmt::Display for CudaError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CudaError::Load(s) => write!(f, "failed to load CUDA library: {s}"),
-            CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
-            CudaError::Driver { op, code, msg } => {
-                write!(f, "{op} failed (CUresult={code}): {msg}")
-            }
-            CudaError::OutOfRange { off, len, size } => {
-                write!(f, "out of bounds access: off={off} len={len} > size={size}")
-            }
-        }
-    }
-}
-
-impl core::error::Error for CudaError {}
 
 /// RAII wrapper for the loaded dynamic library handle: calls close on `Drop`.
 struct Lib(*mut c_void);
@@ -334,7 +303,7 @@ fn check(syms: &Syms, r: CuResult, op: &'static str) -> Result<(), CudaError> {
     } else {
         Err(CudaError::Driver {
             op,
-            code: r,
+            code: DriverError::from(r),
             msg: err_string(syms, r),
         })
     }

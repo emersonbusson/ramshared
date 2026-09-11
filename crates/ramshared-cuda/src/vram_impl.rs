@@ -4,7 +4,10 @@
 
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
-use crate::driver::{Context, CudaError, DeviceMem};
+use crate::driver::{Context, DeviceMem};
+use crate::error::CudaError;
+#[cfg(test)]
+use crate::error::DriverError;
 
 impl From<CudaError> for VramError {
     fn from(e: CudaError) -> Self {
@@ -87,7 +90,7 @@ mod tests {
     fn test_vram_error_conversion_provider() {
         let cuda_err = CudaError::Driver {
             op: "cuMemAlloc",
-            code: 2,
+            code: DriverError::OutOfMemory,
             msg: "out of memory".to_string(),
         };
         let vram_err: VramError = cuda_err.into();
