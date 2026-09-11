@@ -420,3 +420,6 @@ mod sampler_tests {
         assert_eq!(DemoteReason::IoErrorBurst.to_string(), "IoErrorBurst");
     }
 }
+
+pub mod heatmap;
+pub use heatmap::ResidencyHeatmap;
