@@ -1,6 +1,6 @@
 //! Read-only RamShared observability stream and terminal dashboard.
-pub use monitor_history::MonitorHistory;
 pub mod monitor_history;
+pub use monitor_history::MonitorHistory;
 
 
 use std::collections::BTreeMap;
