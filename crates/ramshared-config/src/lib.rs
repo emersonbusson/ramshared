@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod file;
 pub use error::ConfigError;
 
 use serde::Deserialize;
@@ -94,6 +95,11 @@ fn parse_meminfo(text: &str) -> Option<u64> {
 }
 
 impl Config {
+    pub fn load<P: AsRef<std::path::Path>>(path: P) -> Result<Self, ConfigError> {
+        let text = file::read_secure_config(path)?;
+        Self::parse(&text)
+    }
+
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let deserializer = match toml::Deserializer::parse(text) {
             Ok(d) => d,
