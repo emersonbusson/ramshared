@@ -12,10 +12,7 @@ ramshared-vram = { path = "../ramshared-vram" }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61.2"
-features = [
-    "Win32_System_LibraryLoader",
-    "Win32_Foundation",
-]
+features = ["Win32_System_LibraryLoader", "Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading"]
 
 [lints.clippy]
 unwrap_used = "deny"
