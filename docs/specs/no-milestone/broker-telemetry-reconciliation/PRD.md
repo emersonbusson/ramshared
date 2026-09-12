@@ -267,7 +267,7 @@ protocol** plus **JSONL output**.
 **Extended `StatusReply` — example:**
 ```json
 { "type": "status_reply",
-  "tenants": [ { "tenant_id": 1, "name": "civm", "present": true,
+  "tenants": [ { "tenant_id": 1, "name": "tenant-vm", "present": true,
                  "swap_used_cgroup": 4194304, "page_io_s": 512, "bytes_served": 268435456 } ],
   "slices": [ { "id": 0, "offset": 0, "len": 134217728, "tenant": 1, "state": "active",
                 "bytes_served": 134217728, "io_count": 32768 } ],
@@ -276,7 +276,7 @@ protocol** plus **JSONL output**.
 
 **Telemetry line (JSONL, RF-5) — example:**
 ```json
-{ "t": 1718500000, "tenant": "civm", "slice": 0, "swap_used": 4194304, "page_io_s": 512,
+{ "t": 1718500000, "tenant": "tenant-vm", "slice": 0, "swap_used": 4194304, "page_io_s": 512,
   "vram_alloc_daemon": 134217728, "vram_total_used": 1517445120, "vram_outros": 1383227392,
   "canario_demotes": 0, "demote_reason": null, "reconcile_delta": 0.004, "flag": "none",
   "branch": "feat/p1-hardening", "commit": "1fba443" }
@@ -334,7 +334,7 @@ Slices (each compiles and is independently testable):
 
 **Testable early:** RF-1 + RF-5 (on the live host, without pressure).
 **Environment required:** the end-to-end `eviction` flag (RF-4) needs real
-graphics load on the host (live host, bounded) or the civm session.
+graphics load on the host (live host, bounded) or an isolated VM session.
 **No migration/backfill** (Day-0; no live production).
 
 ## Out of scope

@@ -31,7 +31,7 @@
 | F13 — One decision per tick vs. `-> Vec<Action>` | LOW | ITEM-4: Max 1 Move/Revert per tick; Assign/lease coexist |
 | F14 — "VM remains responsive" without observable criteria | LOW | ITEM-11: Echo < 2s × 3 + no processes in D-state > 10s |
 | F15 — DT-13 (euid == 0) under `forbid(unsafe_code)` | LOW | DT-26: Parse `/proc/self/status`, zero-dep |
-| F16 — civm runbook without NBD module persistence | LOW | ITEM-12 |
+| F16 — tenant runbook without NBD module persistence | LOW | ITEM-12 |
 | F17 — `measure-nbd-tcp.sh` without dependency check | LOW | ITEM-1: Preflight checks with installation suggestions |
 | R1 — Agent command execution blocks heartbeat loop | HIGH | DT-27: Commands run on dedicated thread; watchdog measures liveness, not command latency; ITEM-9 rewritten |
 | R2 — Lease reservation race under multi-tick revocation | MEDIUM | DT-19: Slices reaching Free under pending lease immediately go to Leased, round-robin suppressed |
@@ -59,14 +59,14 @@
 ## Closed Scope of This Implementation
 
 ### Phase 0 & Phase 1 Scope (Active)
-- **P0** — Measurement scripts (no product code) + results template acting as the numeric gate for P1: PSI idle/load (WSL2, civm, host), reachability/RTT VM↔WSL2, raw NBD/TCP p50/p99 in virt-switch, VRAM/RAM render measurement (tester script).
+- **P0** — Measurement scripts (no product code) + results template acting as the numeric gate for P1: PSI idle/load (WSL2, isolated VM, host), reachability/RTT VM↔WSL2, raw NBD/TCP p50/p99 in virt-switch, VRAM/RAM render measurement (tester script).
 - **P1** — RF-B1, RF-B2, RF-B3, RF-B4, RF-L1, RF-L2, RF-L3, RF-L4, RF-P2 (partial: NBD as universal fallback; ublk unchanged), RNF-1..RNF-6:
   - New crate `ramshared-broker` (JSON-lines protocol, model, pure arbiter, slice map);
   - New crate `ramshared-agent` (tenant binary: PSI, nbd-client + mkswap + swapon/swapoff, watchdog);
   - Daemon (`crates/ramshared-wsl2d`) gains `--slices/--slice-mb`, `--listen-nbd tcp://`, `--arbiter-listen`, `--backend ram` NBD support, slice hygiene (zero on release), and binary renamed to `ramsharedd`;
   - Named NBD exports per slice in `ramshared-block::server_handshake`;
   - D-state drill in QEMU (`scripts/kernel/qemu-broker-drill.sh`, 3 phases);
-  - Copiable civm runbook (`docs/runbooks/CIVM-TENANT.md`).
+  - Copiable tenant runbook (`docs/runbooks/TENANT-VM.md`).
 
 ### Phase 2 Scope (Active)
 - **P2** — `ramshared-nvml` (FFI dlopen, RF-W1/W2); `ramshared-config` (TOML, RF-P3); Windows **DccAgent** (`ramshared-host-agent`, RF-W1); generic local workload↔agent↔broker lease bridge (RF-W3); Windows installer (RF-P1).
@@ -309,7 +309,7 @@ Logs are printed to `stderr` in a key-value format prefixed with `[ramsharedd]` 
 
 | Event | Log Example |
 | --- | --- |
-| Rebalance Move | `[ramsharedd] arbiter move slice=s1 from=civm(psi10=14.2) to=wsl2(psi10=0.0) streak=5` |
+| Rebalance Move | `[ramsharedd] arbiter move slice=s1 from=tenant-vm(psi10=14.2) to=wsl2(psi10=0.0) streak=5` |
 | Lease granted | `[ramsharedd] lease granted id=1 holder=dcc-agent bytes=4294967296 slices=[0, 1]` |
 | Watchdog trigger | `[agent] watchdog expired broker=127.0.0.1:7777 cleaning up mounts` |
 | Slice sanitization | `[ramsharedd] zeroed slice=0 duration=45ms status=ok` |

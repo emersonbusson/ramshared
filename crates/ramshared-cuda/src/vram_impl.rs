@@ -46,13 +46,7 @@ impl<'a> VramProvider for Context<'a> {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
-        match Context::alloc(self, bytes) {
-            Ok(mem) => Ok(mem),
-            Err(CudaError::Driver { code, .. }) if code == crate::ffi::CUDA_ERROR_OUT_OF_MEMORY => {
-                Context::alloc_managed(self, bytes).map_err(Into::into)
-            }
-            Err(e) => Err(e.into()),
-        }
+        Context::alloc(self, bytes).map_err(Into::into)
     }
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
@@ -161,3 +155,4 @@ mod tests {
     }
 }
 // dummy comment to force push
+// dummy 2

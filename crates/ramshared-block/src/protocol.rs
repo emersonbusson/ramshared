@@ -28,6 +28,14 @@ pub const NBD_SIMPLE_REPLY_MAGIC: u32 = 0x6744_6698;
 pub const REQUEST_LEN: usize = 28;
 pub const SIMPLE_REPLY_LEN: usize = 16;
 
+// Errno in simple reply (error field, big-endian on wire).
+pub const NBD_OK: u32 = 0;
+pub const NBD_EPERM: u32 = 1;
+pub const NBD_EIO: u32 = 5;
+pub const NBD_EACCES: u32 = 13;
+pub const NBD_EINVAL: u32 = 22;
+pub const NBD_ERANGE: u32 = 34;
+
 /// NBD commands (`type` field).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {

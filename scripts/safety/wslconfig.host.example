@@ -6,7 +6,7 @@
 #   A single backslash starts an escape sequence: I:\wsl → error "invalid escape: w".
 #   Never hand-edit paths with raw Windows backslashes.
 #
-# Sizing policy (shared desktop + Hyper-V/civm):
+# Sizing policy (shared desktop + Hyper-V/guest VMs):
 #   WSL2 system RAM hard cap 16 GiB; remainder of host RAM stays with Windows/other VMs.
 #   Product cascade VRAM tier is NOT set here — see /etc/ramshared/cascade.conf (VRAM_MIB=4096).
 

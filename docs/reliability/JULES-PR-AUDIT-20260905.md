@@ -142,10 +142,10 @@ The evaluation was conducted under project reliability policies (RamShared Day-0
 | [#986](https://github.com/emersonbusson/ramshared/pull/986) | `rust-crates` | **ACCEPT** | 🧹 [code health improvement] Replace unwrap() with ? operator in broker_tenant test helper |
 | [#987](https://github.com/emersonbusson/ramshared/pull/987) | `rust-crates` | **ACCEPT** | 🧪 test(winsvc): add unit test for flush_and_dismount in windows_host |
 | [#988](https://github.com/emersonbusson/ramshared/pull/988) | `rust-crates` | **ACCEPT** | 🧪 test(winsvc): add test coverage for connect_product_pipe and connect_status_pipe |
-| [#989](https://github.com/emersonbusson/ramshared/pull/989) | `codebase-health` | **FINDING_ONLY** | docs: record verification of broker_srv cross-host civm comment |
+| [#989](https://github.com/emersonbusson/ramshared/pull/989) | `codebase-health` | **FINDING_ONLY** | docs: record verification of broker_srv cross-host multi-tenant comment |
 | [#990](https://github.com/emersonbusson/ramshared/pull/990) | `findings` | **FINDING_ONLY** | docs(wsl2d): document dxgkrnl collision kernel BUG incident safeguards |
 | [#991](https://github.com/emersonbusson/ramshared/pull/991) | `rust-crates` | **ACCEPT** | 🧪 test(ramshared-winsvc): add unit test coverage for connect_status_pipe |
-| [#992](https://github.com/emersonbusson/ramshared/pull/992) | `findings` | **ACCEPT** | docs(findings): report finding for residency e2e civm historical note |
+| [#992](https://github.com/emersonbusson/ramshared/pull/992) | `findings` | **ACCEPT** | docs(findings): report finding for residency e2e multi-tenant historical note |
 | [#993](https://github.com/emersonbusson/ramshared/pull/993) | `rust-crates` | **ACCEPT** | 🧹 refactor(winsvc): return Err instead of panic in RawGates volume methods |
 | [#994](https://github.com/emersonbusson/ramshared/pull/994) | `rust-crates` | **ACCEPT** | 🧹 [code health] replace panic!() in service test mock with Result::Err |
 | [#995](https://github.com/emersonbusson/ramshared/pull/995) | `rust-crates` | **ACCEPT** | 🧹 refactor(winsvc): return Err instead of panic in RawGates |

@@ -77,3 +77,11 @@ PR descriptions must be clean, human-explanatory, and include self-contained com
 - No unsupervised thrash pressure on the live WSL2 daily host. Shared-host
   pressure requires the Windows watchdog harness, explicit approval, telemetry,
   bounded cgroup pressure, and cleanup artifacts.
+- **Repository Boundary & Host Isolation**: RamShared is strictly an open-source,
+  self-contained project. Agents and automated scripts must never touch, alter,
+  or delete files, system paths, or virtual machines outside this repository's
+  workspace. Never reference or cross-contaminate with foreign repositories or
+  private host environments.
+- **Reliability Gap Register & Release Parity**: Keep `docs/reliability/GAP-REGISTER.md`
+  semantically synchronized with active CI status and releases (`v0.11.0`). Phantom
+  blockers (such as resolved Guard repairs) are strictly forbidden when CI gates pass.

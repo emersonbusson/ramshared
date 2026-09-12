@@ -60,3 +60,149 @@ test('checkDocStalenessAndRedundancy: passes on clean fixture', () => {
   assert.equal(result.ok, true, `Expected pass, got: ${result.findings.join(', ')}`)
   assert.equal(result.findings.length, 0)
 })
+
+test('checkDocStalenessAndRedundancy: detects raw Windows host drive paths and out-of-tree WSL mounts', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
+  mkdirSync(path.join(temp, '.claude', 'rules'), { recursive: true })
+  writeFileSync(
+    path.join(temp, '.claude', 'rules', 'test-rule.md'),
+    '# Rule\nDeploy at C:\\private\\workstation\\path or mount /mnt/c/Users/dev/data.'
+  )
+
+  const result = checkDocStalenessAndRedundancy({
+    root: temp,
+    boundaryFiles: [],
+    boundaryDirs: ['.claude/rules'],
+    skipBrokenLinks: true,
+  })
+  assert.equal(result.ok, false)
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('host-path-leak') && f.includes('C:\\private\\workstation\\path')
+    )
+  )
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('host-path-leak') && f.includes('/mnt/c/Users/dev/data')
+    )
+  )
+})
+
+test('checkDocStalenessAndRedundancy: detects foreign project cross-contamination', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
+  writeFileSync(
+    path.join(temp, 'AGENTS.md'),
+    '# Agents\nRun tests on civm or deploy via jules-operator for advoq.'
+  )
+
+  const result = checkDocStalenessAndRedundancy({
+    root: temp,
+    boundaryFiles: ['AGENTS.md'],
+    boundaryDirs: [],
+    skipBrokenLinks: true,
+  })
+  assert.equal(result.ok, false)
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('foreign-project-cross-contamination') && f.includes('civm')
+    )
+  )
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('foreign-project-cross-contamination') && f.includes('jules-operator')
+    )
+  )
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('foreign-project-cross-contamination') && f.includes('advoq')
+    )
+  )
+})
+
+test('checkDocStalenessAndRedundancy: detects unredacted private lab VM identities and private network IPs', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
+  writeFileSync(
+    path.join(temp, 'CLAUDE.md'),
+    '# Claude\nConnect to gha-ubuntu-2404 at 192.168.0.100 or 10.0.1.5 or Tailscale 100.123.10.20.'
+  )
+
+  const result = checkDocStalenessAndRedundancy({
+    root: temp,
+    boundaryFiles: ['CLAUDE.md'],
+    boundaryDirs: [],
+    skipBrokenLinks: true,
+  })
+  assert.equal(result.ok, false)
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('unredacted-private-vm-identity') && f.includes('gha-ubuntu-2404')
+    )
+  )
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('private-network-address') && f.includes('192.168.0.100')
+    )
+  )
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('private-network-address') && f.includes('10.0.1.5')
+    )
+  )
+  assert.ok(
+    result.findings.some(
+      (f) => f.includes('private-network-address') && f.includes('100.123.10.20')
+    )
+  )
+})
+
+test('checkDocStalenessAndRedundancy: detects developer username, volume labels, and hostname leaks', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
+  const userPath = ['/', 'home', 'emedev', 'test'].join('/')
+  writeFileSync(
+    path.join(temp, 'AGENTS.md'),
+    `# Agents\nRun script on ${userPath} or \\Users\\emdev\\data, mount ESPANHA or RUSSIA label, workstation EMEDEV.`
+  )
+
+  const result = checkDocStalenessAndRedundancy({
+    root: temp,
+    boundaryFiles: ['AGENTS.md'],
+    boundaryDirs: [],
+    skipBrokenLinks: true,
+  })
+  assert.equal(result.ok, false)
+  assert.ok(
+    result.findings.some((f) => f.includes('developer-username-leak') && f.includes('emedev'))
+  )
+  assert.ok(
+    result.findings.some((f) => f.includes('private-volume-label') && f.includes('ESPANHA'))
+  )
+  assert.ok(
+    result.findings.some((f) => f.includes('private-volume-label') && f.includes('RUSSIA'))
+  )
+  assert.ok(
+    result.findings.some((f) => f.includes('workstation-hostname-leak') && f.includes('EMEDEV'))
+  )
+})
+
+test('checkDocStalenessAndRedundancy: allows canonical paths, placeholders, and sanitized generic terms', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
+  writeFileSync(
+    path.join(temp, 'README.md'),
+    '# RamShared\nConfig is in C:\\ProgramData\\RamShared\\config.toml.\nDouble slash: kernel=C:\\\\path\\\\to\\\\wsl\\kernel-ramshared.\nWSL mount: /mnt/c/Windows/System32/wsl.exe and /mnt/c/path/to/wsl.\nSystem file: C:\\Windows\\System32\\drivers.\nExample: C:\\path\\to\\dir.\nVirtual swap: X:\\pagefile.sys.\nRun in isolated VM or QEMU environment.'
+  )
+
+  const result = checkDocStalenessAndRedundancy({
+    root: temp,
+    boundaryFiles: ['README.md'],
+    boundaryDirs: [],
+    skipBrokenLinks: true,
+  })
+  assert.equal(result.ok, true, `Expected pass, got: ${result.findings.join(', ')}`)
+  assert.equal(result.findings.length, 0)
+})
+
+test('checkDocStalenessAndRedundancy: passes on live repository tree', () => {
+  const result = checkDocStalenessAndRedundancy()
+  assert.equal(result.ok, true, `Expected repo to be clean, got: ${result.findings.join('\n')}`)
+  assert.equal(result.findings.length, 0)
+})

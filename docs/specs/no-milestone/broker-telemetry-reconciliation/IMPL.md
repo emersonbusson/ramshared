@@ -55,19 +55,19 @@
   gauge → `vram_outros`. Medido: **total=6143, free=5040, used=1103, daemon=64, outros=1039 MiB** — o
   `vram_outros` por subtração capta corretamente **~1 GB de VRAM de gráficos** (desktop/OBS), que é o
   sinal de "consumidor externo". Seguro (CUDA-only, sem daemon).
-- **Calibração `tol_frac`/`streak` (DT-7) — resolvida por estrutura + unit.** `Unaccounted` só dispara
-  se `ocupado > emprestado·(1+tol)`; sob operação normal `ocupado ≤ emprestado` ⇒ `delta ≤ 0` (no drill,
-  swap vazio ⇒ `ocupado≈0` ⇒ `delta≈-1.0`, longe de +0.10). Fronteira unit-testada
-  (`unaccounted_when_occupied_exceeds_alloc` dispara só acima; `reconcile_idle_none` fica em `none`).
-  → `tol_frac=0.10` **não dá falso-positivo**; a distribuição exata ao vivo fica como refinamento no civm.
+- **Calibration `tol_frac`/`streak` (DT-7) — resolved by structure + unit.** `Unaccounted` triggers
+  only if `occupied > borrowed·(1+tol)`; under normal operation `occupied ≤ borrowed` ⇒ `delta ≤ 0` (in drill,
+  empty swap ⇒ `occupied≈0` ⇒ `delta≈-1.0`, far from +0.10). Boundary unit-tested
+  (`unaccounted_when_occupied_exceeds_alloc` triggers only above; `reconcile_idle_none` stays at `none`).
+  → `tol_frac=0.10` **yields zero false positives**; the exact live distribution remains a refinement in an isolated VM.
 
 ## Gap genuinamente env-bound (mesmo trap do ublk+VRAM)
 
-- **Flag `eviction` e2e sob carga WDDM real:** o canário só dispara com a VRAM do daemon sendo evictada
-  por pressão gráfica — precisa do **daemon + GPU + carga juntos**, e a GPU só é alcançável no WSL2 (onde
-  daemon é arriscado) e o qemu não tem GPU (mesmo trap do ublk+VRAM). A LÓGICA está coberta por
-  composição: canário (P1, latência→`Verdict::Demote`) + `reconcile_eviction_when_demotes` +
-  `eviction_flag_after_demote` (DEMOTE→flag). Observação ao vivo = host GPU não-WSL2 (RF-G2) ou civm.
+- **Flag `eviction` e2e under real WDDM load:** the canary only triggers with daemon VRAM being evicted
+  by graphics pressure — requires **daemon + GPU + load together**, where GPU is reachable in WSL2 (where
+  daemon is risky) and QEMU has no GPU. LOGIC is covered by
+  composition: canary (P1, latency→`Verdict::Demote`) + `reconcile_eviction_when_demotes` +
+  `eviction_flag_after_demote` (DEMOTE→flag). Live observation = host GPU non-WSL2 (RF-G2) or isolated VM.
 
 ## Pente-fino (revisão multi-agente Opus 4.8) — bugs achados e corrigidos
 
@@ -95,4 +95,4 @@ Pós-fix: wsl2d lib **61** testes, clippy/fmt limpos, drill qemu broker **PASS**
 RF-1 ✓ (ITEM-1/2/5 + `status_reply_includes_slice_io`) · RF-2 ✓ (ITEM-1/6 + parsers) · RF-3 ✓
 (ITEM-3/7, gauge por composição) · RF-4 ✓ (ITEM-7 + `reconcile`/`eviction`/`unaccounted` tests) ·
 RF-5 ✓ (ITEM-8 + sink test in-process + **JSONL e2e no daemon em qemu**). Resta só: eviction-sob-carga
-+ números VRAM reais + calibração = sessão civm/GPU.
++ números VRAM reais + calibração = sessão isolated-vm/GPU.

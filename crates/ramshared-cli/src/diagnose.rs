@@ -36,6 +36,10 @@ struct Event {
     reconcile_delta: Option<f64>,
     #[serde(default)]
     flag: Option<String>,
+    #[serde(default)]
+    acpi_sleep_state: Option<String>,
+    #[serde(default)]
+    gpu_power_mgmt: Option<String>,
 }
 
 #[derive(Debug)]
@@ -43,6 +47,7 @@ pub enum DiagnoseError {
     InvalidArgs(String),
     Io(std::io::Error, std::path::PathBuf),
     ParseJson(String),
+    Timeout(String),
 }
 
 impl std::fmt::Display for DiagnoseError {
@@ -51,6 +56,7 @@ impl std::fmt::Display for DiagnoseError {
             Self::InvalidArgs(msg) => write!(f, "{msg}"),
             Self::Io(err, path) => write!(f, "read {}: {err}", path.display()),
             Self::ParseJson(msg) => write!(f, "{msg}"),
+            Self::Timeout(msg) => write!(f, "timeout: {msg}"),
         }
     }
 }
@@ -61,6 +67,7 @@ impl DiagnoseError {
             Self::InvalidArgs(_) => 22, // EINVAL
             Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
             Self::ParseJson(_) => 22, // EINVAL for malformed json
+            Self::Timeout(_) => 110,  // ETIMEDOUT
         }
     }
 }
@@ -75,14 +82,33 @@ struct Diagnosis {
     max_swap_used: Option<u64>,
     max_page_io_s: Option<u64>,
     flags: Vec<String>,
+    acpi_sleep_states: Vec<String>,
+    gpu_power_mgmt: Vec<String>,
     timeline: Vec<String>,
     recommendations: Vec<String>,
+}
+
+pub fn run_probe_with_timeout<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(
+    name: &str,
+    timeout: std::time::Duration,
+    probe: F,
+) -> Result<T, DiagnoseError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe());
+    });
+    rx.recv_timeout(timeout)
+        .map_err(|_| DiagnoseError::Timeout(format!("probe '{name}' timed out")))
 }
 
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let (path, json) = parse_args(args)?;
     let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
-    let diagnosis = diagnose_jsonl(&text)?;
+    let diagnosis = run_probe_with_timeout(
+        "diagnose_jsonl",
+        std::time::Duration::from_secs(5),
+        move || diagnose_jsonl(&text),
+    )??;
     if json {
         println!("{}", render_json(&diagnosis));
     } else {
@@ -184,6 +210,24 @@ fn diagnose_events(events: &[Event]) -> Diagnosis {
                 event.slice
             ));
         }
+
+        if let Some(state) = event.acpi_sleep_state.as_deref()
+            && !diagnosis.acpi_sleep_states.iter().any(|s| s == state)
+        {
+            diagnosis.acpi_sleep_states.push(state.to_string());
+            diagnosis
+                .timeline
+                .push(format!("{} ACPI sleep state={state}", ts(event)));
+        }
+
+        if let Some(mgmt) = event.gpu_power_mgmt.as_deref()
+            && !diagnosis.gpu_power_mgmt.iter().any(|m| m == mgmt)
+        {
+            diagnosis.gpu_power_mgmt.push(mgmt.to_string());
+            diagnosis
+                .timeline
+                .push(format!("{} GPU power management={mgmt}", ts(event)));
+        }
     }
     diagnosis.flags = flags;
     diagnosis.recommendations = recommendations(&diagnosis);
@@ -212,6 +256,18 @@ fn recommendations(d: &Diagnosis) -> Vec<String> {
     }
     if d.max_page_io_s.unwrap_or(0) > 10_000 {
         recs.push("Page I/O is high. Compare zram, VRAM, and disk tier priorities before increasing VRAM capacity.".to_string());
+    }
+    if d.acpi_sleep_states.iter().any(|s| s == "S3" || s == "S4") {
+        recs.push(
+            "ACPI sleep state observed. Ensure write caches were flushed before suspend."
+                .to_string(),
+        );
+    }
+    if d.gpu_power_mgmt
+        .iter()
+        .any(|m| m == "disabled" || m == "none")
+    {
+        recs.push("GPU power management disabled. High power draw may trigger thermal throttling or PCIe resets.".to_string());
     }
     if recs.is_empty() {
         recs.push("No anomaly detected in the provided event window.".to_string());
@@ -254,6 +310,22 @@ fn print_text(d: &Diagnosis) {
             d.flags.join(",")
         }
     );
+    println!(
+        "acpi_sleep_states: {}",
+        if d.acpi_sleep_states.is_empty() {
+            "none".into()
+        } else {
+            d.acpi_sleep_states.join(",")
+        }
+    );
+    println!(
+        "gpu_power_mgmt: {}",
+        if d.gpu_power_mgmt.is_empty() {
+            "none".into()
+        } else {
+            d.gpu_power_mgmt.join(",")
+        }
+    );
     println!("timeline:");
     for item in &d.timeline {
         println!("  - {item}");
@@ -280,6 +352,8 @@ fn render_json(d: &Diagnosis) -> String {
         "max_swap_used": d.max_swap_used,
         "max_page_io_s": d.max_page_io_s,
         "flags": d.flags,
+        "acpi_sleep_states": d.acpi_sleep_states,
+        "gpu_power_mgmt": d.gpu_power_mgmt,
         "timeline": d.timeline,
         "recommendations": d.recommendations,
     })
@@ -364,5 +438,51 @@ mod tests {
     fn malformed_json_returns_error() {
         let res = diagnose_jsonl("not json\n");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn diagnostic_probe_timeout_isolation_prevents_hang() {
+        let err = run_probe_with_timeout(
+            "hanging_probe",
+            std::time::Duration::from_millis(10),
+            || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                "done"
+            },
+        );
+
+        assert!(matches!(err, Err(DiagnoseError::Timeout(_))));
+    }
+
+    #[test]
+    fn diagnostic_probe_success_returns_value() {
+        let val = run_probe_with_timeout("fast", std::time::Duration::from_millis(100), || 42);
+        assert!(matches!(val, Ok(42)));
+    }
+
+    #[test]
+    fn diagnoses_power_management_and_acpi_events() {
+        let input = r#"{"t":1,"acpi_sleep_state":"S3","gpu_power_mgmt":"disabled"}
+{"t":2,"acpi_sleep_state":"S4","gpu_power_mgmt":"none"}"#;
+        let d = match diagnose_jsonl(input) {
+            Ok(d) => d,
+            Err(e) => panic!("diagnose failed: {e}"),
+        };
+        assert_eq!(d.samples, 2);
+        assert!(d.acpi_sleep_states.contains(&"S3".to_string()));
+        assert!(d.gpu_power_mgmt.contains(&"disabled".to_string()));
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("ACPI sleep state observed"))
+        );
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("GPU power management disabled"))
+        );
+        let json_str = render_json(&d);
+        assert!(json_str.contains("S3"));
+        print_text(&d);
     }
 }

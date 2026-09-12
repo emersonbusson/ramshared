@@ -34,7 +34,7 @@ pub struct ArbiterConfig {
 impl Default for ArbiterConfig {
     fn default() -> Self {
         Self {
-            delta_psi: 10.0,                       // P0: was 15; civm idle ~1.2 vs WSL2 load 14
+            delta_psi: 10.0,                       // P0: was 15; idle tenant ~1.2 vs WSL2 load 14
             streak: 5,                             // 5 ticks (tick=2s → 10s)
             cooldown: Duration::from_secs(60),     // PRD §14
             psi_floor: 5.0,                        // idle <5, load ≥14
