@@ -219,6 +219,10 @@ fn cli_stress_subcommand_and_json_report() {
         Some("PASS_ZERO_PANIC")
     );
     assert!(val.get("reclaim_speed_gbs").is_some());
+    assert!(val.get("avg_cycle_latency_ms").is_some());
+    assert!(val.get("p50_cycle_latency_ms").is_some());
+    assert!(val.get("p99_cycle_latency_ms").is_some());
+    assert!(val.get("estimated_page_fault_lat_us").is_some());
 
     let refusal = run_cli(&["stress", "--invalid-flag"]);
     assert_eq!(refusal.status.code(), Some(2));

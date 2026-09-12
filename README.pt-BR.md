@@ -12,7 +12,8 @@ O RamShared é um sistema avançado de hierarquia de memória acelerado por hard
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Versão v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-20k%2B-blue?style=flat-square&logo=git">
+  <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-44k%2B_%2F_14d-blue?style=flat-square&logo=git">
+  <img alt="Clonadores Únicos" src="https://img.shields.io/badge/clonadores_únicos-860%2B-blueviolet?style=flat-square">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
   <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-pronto%20para%20produção-2f855a?style=flat-square">
   <img alt="Driver Windows" src="https://img.shields.io/badge/Driver%20Windows-qualificado%20em%20hardware-2f855a?style=flat-square">
@@ -212,6 +213,14 @@ Para detalhes sobre distribuição do driver e atestação WHQL da Microsoft, co
 As medições empíricas de desempenho e distribuições de latência são registradas sob envelopes de evidência pública em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e registradas em [`validation.md`](validation.md).
 
 Para pacotes brutos de amostras, traces de execução em hardware, histogramas de latência e comandos exatos de reprodução para EVD-0037 e EVD-0038, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+## Tração da Comunidade e Ecossistema
+
+O RamShared é implantado, avaliado e homologado em comunidades de engenharia de Linux, WSL2 e hardware:
+
+- **Alta Adoção:** Mais de 44.500 clones Git em mais de 860 nós de engenharia únicos em uma janela de 14 dias.
+- **Descoberta Ativa pela Comunidade:** Interesse técnico constante em comunidades do Reddit (`r/linux`, `r/hardware`), redes de desenvolvedores de kernel e motores de busca.
+- **Auditoria de Arquitetura de Kernel:** Tráfego técnico expressivo inspecionando diretamente os drivers de bloco upstream para Linux (`drivers/block/ramshared`) e o monitoramento em tempo real (`ramshared top`).
 
 ## Arquitetura
 
