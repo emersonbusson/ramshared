@@ -1,9 +1,9 @@
 //! Read-only RamShared observability stream and terminal dashboard.
 
 pub mod telemetry_collector;
-/// Read-only RamShared observability stream and terminal dashboard.
+pub use crate::monitor::telemetry_collector::*;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -17,10 +17,9 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Sparkline, Wrap};
 use ratatui::{DefaultTerminal, Frame};
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::{bounded_process, cascade, workload};
+use crate::cascade;
 
 const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_HISTORY_SECONDS: u64 = 300;
@@ -123,7 +122,6 @@ impl fmt::Display for MonitorError {
     }
 }
 
-
 pub fn collect_observation() -> Result<Observation, MonitorError> {
     let status_json =
         cascade::status_json_document().map_err(|error| MonitorError::Io(error.to_string()))?;
@@ -196,23 +194,106 @@ fn unix_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn parse_memory_events(text: &str) -> MemoryEvents {
-    let value = |name: &str| {
-        text.lines()
-            .find_map(|line| {
-                let mut fields = line.split_whitespace();
-                (fields.next()? == name)
-                    .then(|| fields.next()?.parse::<u64>().ok())
-                    .flatten()
+fn parse_memory_pressure(text: &str) -> ControlPlaneObservation {
+    fn average(line: Option<&str>, name: &str) -> f64 {
+        line.and_then(|line| {
+            line.split_whitespace().find_map(|field| {
+                field
+                    .strip_prefix(name)
+                    .and_then(|value| value.parse::<f64>().ok())
             })
-            .unwrap_or(0)
-    };
-    MemoryEvents {
-        high: value("high"),
-        max: value("max"),
-        oom: value("oom"),
-        oom_kill: value("oom_kill"),
+        })
+        .unwrap_or(0.0)
     }
+    let some = text.lines().find(|line| line.starts_with("some "));
+    let full = text.lines().find(|line| line.starts_with("full "));
+    ControlPlaneObservation {
+        memory_psi_some_avg10: average(some, "avg10="),
+        memory_psi_some_avg60: average(some, "avg60="),
+        memory_psi_some_avg300: average(some, "avg300="),
+        memory_psi_full_avg10: average(full, "avg10="),
+        memory_psi_full_avg60: average(full, "avg60="),
+        memory_psi_full_avg300: average(full, "avg300="),
+        ..ControlPlaneObservation::default()
+    }
+}
+
+fn parse_swap_diskstats(text: &str) -> (u64, u64) {
+    let mut read_bytes = 0u64;
+    let mut write_bytes = 0u64;
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 10 {
+            let dev = fields[2];
+            if (dev.starts_with("nbd")
+                || dev.starts_with("zram")
+                || dev == "sdc"
+                || dev.starts_with("ramshared"))
+                && let (Ok(read_sectors), Ok(write_sectors)) =
+                    (fields[5].parse::<u64>(), fields[9].parse::<u64>())
+            {
+                read_bytes = read_bytes.saturating_add(read_sectors.saturating_mul(512));
+                write_bytes = write_bytes.saturating_add(write_sectors.saturating_mul(512));
+            }
+        }
+    }
+    (read_bytes, write_bytes)
+}
+
+fn parse_per_tier_diskstats(text: &str) -> (TierIoStats, TierIoStats, TierIoStats) {
+    let mut zram = TierIoStats::default();
+    let mut vram = TierIoStats::default();
+    let mut disk = TierIoStats::default();
+
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 10
+            && let (Ok(read_sectors), Ok(write_sectors)) =
+                (fields[5].parse::<u64>(), fields[9].parse::<u64>())
+        {
+            let dev = fields[2];
+            let rb = read_sectors.saturating_mul(512);
+            let wb = write_sectors.saturating_mul(512);
+            if dev.starts_with("zram") {
+                zram.read_bytes = zram.read_bytes.saturating_add(rb);
+                zram.write_bytes = zram.write_bytes.saturating_add(wb);
+            } else if dev.starts_with("nbd") || dev.starts_with("ramshared") {
+                vram.read_bytes = vram.read_bytes.saturating_add(rb);
+                vram.write_bytes = vram.write_bytes.saturating_add(wb);
+            } else if dev == "sdc" {
+                disk.read_bytes = disk.read_bytes.saturating_add(rb);
+                disk.write_bytes = disk.write_bytes.saturating_add(wb);
+            }
+        }
+    }
+    (zram, vram, disk)
+}
+
+pub fn parse_uptime_seconds(uptime_str: &str) -> Option<u64> {
+    uptime_str
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|f| f as u64)
+}
+
+fn query_unit_startup_ms() -> Option<u64> {
+    let output = Command::new("systemctl")
+        .args([
+            "show",
+            "ramshared-vram-tier.service",
+            "ramshared-vram.service",
+            "--property=ActiveEnterTimestampMonotonic,InactiveExitTimestampMonotonic",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_unit_startup_ms(&text)
 }
 
 fn read_u64_file(path: &Path) -> u64 {
@@ -222,7 +303,7 @@ fn read_u64_file(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-pub fn count_scope_dirs(path: &Path) -> u64 {
+fn count_scope_dirs(path: &Path) -> u64 {
     fs::read_dir(path)
         .ok()
         .into_iter()
@@ -232,28 +313,140 @@ pub fn count_scope_dirs(path: &Path) -> u64 {
         .count() as u64
 }
 
-pub fn read_reservation_totals(path: &Path) -> (u64, u64) {
-    workload::read_reservation_ledger(path).map_or_else(
-        |_| (0, 0),
-        |reservations| {
-            let reserved_bytes = reservations
-                .iter()
-                .map(|reservation| reservation.memory_bytes)
-                .sum();
-            (reservations.len() as u64, reserved_bytes)
-        },
-    )
+fn query_gpu_bounded(timeout: Duration) -> Result<Option<GpuObservation>, String> {
+    if let Ok(cuda) = ramshared_cuda::Cuda::load() {
+        let dev_opt = cuda.device(0).ok();
+        if let Some(dev) = dev_opt {
+            let res = cuda.create_context(&dev).and_then(|ctx| ctx.mem_info());
+            if let Ok((free_b, total_b)) = res {
+                let total_mib = (total_b / 1_048_576) as u64;
+                let free_mib = (free_b / 1_048_576) as u64;
+                let used_mib = total_mib.saturating_sub(free_mib);
+                let name = dev.name().to_string();
+                return Ok(Some(GpuObservation {
+                    name,
+                    total_mib,
+                    used_mib,
+                    free_mib,
+                }));
+            }
+        }
+    }
+
+    let mut last_error = "gpu_query_unavailable".to_string();
+    for candidate in gpu_query_candidates() {
+        match query_gpu_command(candidate, timeout) {
+            Ok(sample) => return Ok(Some(sample)),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
 }
 
-pub fn apply_measurement_failure(status: &mut Map<String, Value>, error: &str) {
-    status.insert("ok".into(), Value::Bool(false));
-    status.insert("overall_state".into(), Value::String("BLOCKED".into()));
-    status.insert(
-        "measurement_state".into(),
-        serde_json::json!({"state":"FAILED","error":error}),
-    );
+fn collect_top_processes(proc_root: &Path, limit: usize) -> Vec<ProcessObservation> {
+    let mut processes = fs::read_dir(proc_root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+        })
+        .filter_map(|entry| process_observation(&entry.path()))
+        .collect::<Vec<_>>();
+    processes
+        .sort_by_key(|process| std::cmp::Reverse(process.rss_kib.saturating_add(process.swap_kib)));
+    processes.truncate(limit);
+    processes
 }
 
+fn process_observation(path: &Path) -> Option<ProcessObservation> {
+    let comm = fs::read_to_string(path.join("comm")).ok()?;
+    let comm = sanitize_label(comm.trim(), 64);
+    let cgroup_text = fs::read_to_string(path.join("cgroup")).unwrap_or_default();
+    let cgroup = cgroup_text
+        .lines()
+        .find_map(|line| line.split_once("::").map(|(_, value)| value))
+        .map(|value| sanitize_cgroup(value, 256))
+        .unwrap_or_else(|| "/".into());
+    let unit = cgroup
+        .split('/')
+        .rev()
+        .find(|component| {
+            component.ends_with(".scope")
+                || component.ends_with(".service")
+                || component.ends_with(".slice")
+        })
+        .map(|value| sanitize_label(value, 128))
+        .unwrap_or_else(|| "unknown".into());
+    let status = fs::read_to_string(path.join("status")).unwrap_or_default();
+    let status_kib = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| {
+                let (key, rest) = line.split_once(':')?;
+                (key == name)
+                    .then(|| rest.split_whitespace().next()?.parse::<u64>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0)
+    };
+    let stat = fs::read_to_string(path.join("stat")).unwrap_or_default();
+    let cpu_ticks = stat
+        .rsplit_once(") ")
+        .map(|(_, fields)| fields.split_whitespace().collect::<Vec<_>>())
+        .and_then(|fields| {
+            Some(fields.get(11)?.parse::<u64>().ok()? + fields.get(12)?.parse::<u64>().ok()?)
+        })
+        .unwrap_or(0);
+    let io = fs::read_to_string(path.join("io")).unwrap_or_default();
+    let io_value = |name: &str| {
+        io.lines()
+            .find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                (key == name)
+                    .then(|| value.trim().parse::<u64>().ok())
+                    .flatten()
+            })
+            .unwrap_or(0)
+    };
+    Some(ProcessObservation {
+        comm,
+        unit,
+        managed: cgroup.contains("ramshared-workloads"),
+        cgroup,
+        rss_kib: status_kib("VmRSS"),
+        swap_kib: status_kib("VmSwap"),
+        cpu_ticks,
+        read_bytes: io_value("read_bytes"),
+        write_bytes: io_value("write_bytes"),
+    })
+}
+
+fn sanitize_label(value: &str, limit: usize) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-' | '@')
+        })
+        .take(limit)
+        .collect()
+}
+
+fn sanitize_cgroup(value: &str, limit: usize) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric()
+                || matches!(character, '/' | '.' | '_' | '-' | '@' | ':')
+        })
+        .take(limit)
+        .collect()
+}
 
 pub fn run(options: &MonitorOptions) -> Result<(), MonitorError> {
     if options.compact {
@@ -826,7 +1019,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
     }
 }
 
-pub fn format_tier_latency(
+fn format_tier_latency(
     io: &TierIoStats,
     default_min: f64,
     default_avg: f64,
@@ -1188,7 +1381,6 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 }
 
 #[cfg(test)]
-    use std::collections::BTreeMap;
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -1199,25 +1391,27 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn observation(ok: bool, with_gpu: bool) -> Observation {
-        let status = serde_json::from_value::<BTreeMap<String, Value>>(serde_json::json!({
-            "schema_version": 4,
-            "ok": ok,
-            "phase": if ok { "UsingVram" } else { "Off" },
-            "protection_state": if ok { "ACTIVE" } else { "OFF" },
-            "activation": {
-                "active": ok,
-                "binary_version": "test",
-                "disk_baseline_kib": if ok { Value::from(100) } else { Value::Null },
-                "disk_growth_kib": if ok { Value::from(5) } else { Value::Null }
-            },
-            "capacity": { "guaranteed_kib": if ok { Value::from(1024) } else { Value::Null } },
-            "daemon": { "alive": ok, "pid": if ok { Value::from(7) } else { Value::Null } },
-            "tiers": {
-                "zram": { "present": ok, "size_kib": 2048, "used_kib": 512 },
-                "vram": { "present": ok, "size_kib": 4096, "used_kib": 1024 },
-                "disk": { "present": true, "size_kib": 8192, "used_kib": 105 }
-            }
-        }))
+        let status = serde_json::from_value::<std::collections::BTreeMap<String, Value>>(
+            serde_json::json!({
+                "schema_version": 4,
+                "ok": ok,
+                "phase": if ok { "UsingVram" } else { "Off" },
+                "protection_state": if ok { "ACTIVE" } else { "OFF" },
+                "activation": {
+                    "active": ok,
+                    "binary_version": "test",
+                    "disk_baseline_kib": if ok { Value::from(100) } else { Value::Null },
+                    "disk_growth_kib": if ok { Value::from(5) } else { Value::Null }
+                },
+                "capacity": { "guaranteed_kib": if ok { Value::from(1024) } else { Value::Null } },
+                "daemon": { "alive": ok, "pid": if ok { Value::from(7) } else { Value::Null } },
+                "tiers": {
+                    "zram": { "present": ok, "size_kib": 2048, "used_kib": 512 },
+                    "vram": { "present": ok, "size_kib": 4096, "used_kib": 1024 },
+                    "disk": { "present": true, "size_kib": 8192, "used_kib": 105 }
+                }
+            }),
+        )
         .expect("fixture status");
         Observation {
             status,
@@ -1278,9 +1472,20 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
+        // WORKAROUND: test disable root check for ledger authority!
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let path = root.join("reservations.json");
         if let Some(contents) = contents {
             fs::write(&path, contents).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
         }
         (root, path)
     }
@@ -1542,6 +1747,47 @@ mod tests {
 
     #[test]
     // TestName: gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid
+    fn gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid() {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-monitor-gpu-child-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let write_program = |name: &str, source: &str| {
+            let path = root.join(name);
+            fs::write(&path, source).unwrap();
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(&path, permissions).unwrap();
+            path
+        };
+        let success = write_program(
+            "gpu-success",
+            "#!/bin/sh\nprintf 'Fixture GPU, 6144, 2048, 4096\\n'\n",
+        );
+        let sample = query_gpu_command(success.to_str().unwrap(), Duration::from_millis(250))
+            .expect("legitimate GPU fixture must remain accepted");
+        assert_eq!(sample.name, "Fixture GPU");
+        assert_eq!(
+            (sample.total_mib, sample.used_mib, sample.free_mib),
+            (6144, 2048, 4096)
+        );
+
+        let inherited = write_program(
+            "gpu-inherited-output",
+            "#!/bin/sh\n(sleep 1) &\nprintf 'Fixture GPU, 6144, 2048, 4096\\n'\nexit 0\n",
+        );
+        let started = Instant::now();
+        let error = query_gpu_command(inherited.to_str().unwrap(), Duration::from_millis(100))
+            .expect_err("an inherited output pipe must not be accepted as GPU success");
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(started.elapsed() < Duration::from_millis(750));
+        assert!(error.contains("output"), "{error}");
+    }
+
+    #[test]
     fn computes_dynamic_tier_speedup_values() {
         let idle_io = TierIoStats::default();
         assert_eq!(
@@ -1633,20 +1879,82 @@ mod tests {
 
         let backend = ratatui::backend::TestBackend::new(120, 30);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        assert!(rendered.contains("Swap Tiers: not available"));
-n    #[test]
-    fn test_monitor_run_compact_and_jsonl() {
-        let temp_log_dir =
+        let history = VecDeque::new();
         terminal
             .draw(|frame| draw_dashboard(frame, &sample_no_gpu, &history))
+            .unwrap();
         let rendered = terminal
             .backend()
             .buffer()
             .content()
             .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("GPU not detected"));
+        assert!(rendered.contains("Swap Tiers: not available"));
     }
 
     #[test]
+    fn parses_diskstats_and_startup_ms() {
+        let stats = " 252       0 zram0 10 0 200 0 20 0 400 0 0 0 0\n  43       0 nbd0 5 0 100 0 15 0 300 0 0 0 0\n   8      32 sdc 2 0 40 0 4 0 80 0 0 0 0\n";
+        let (tot_r, tot_w) = parse_swap_diskstats(stats);
+        assert_eq!(tot_r, (200 + 100 + 40) * 512);
+        assert_eq!(tot_w, (400 + 300 + 80) * 512);
+
+        let (z, v, d) = parse_per_tier_diskstats(stats);
+        assert_eq!(z.read_bytes, 200 * 512);
+        assert_eq!(z.write_bytes, 400 * 512);
+        assert_eq!(v.read_bytes, 100 * 512);
+        assert_eq!(v.write_bytes, 300 * 512);
+        assert_eq!(d.read_bytes, 40 * 512);
+        assert_eq!(d.write_bytes, 80 * 512);
+
+        let show_out =
+            "InactiveExitTimestampMonotonic=1000000\nActiveEnterTimestampMonotonic=3890000\n";
+        assert_eq!(parse_unit_startup_ms(show_out), Some(2890));
+        assert_eq!(parse_unit_startup_ms(""), None);
+
+        assert_eq!(parse_uptime_seconds("1540.25 3080.50"), Some(1540));
+        assert_eq!(parse_uptime_seconds("invalid"), None);
+
+        assert_eq!(sanitize_label("my-app_1.0@daemon!", 10), "my-app_1.0");
+        assert_eq!(
+            sanitize_cgroup("/system.slice/test.service", 20),
+            "/system.slice/test.s"
+        );
+        let temp_empty = std::env::temp_dir().join(format!("test-scopes-{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_empty);
+        assert_eq!(count_scope_dirs(&temp_empty), 0);
+        assert_eq!(
+            read_reservation_totals(&temp_empty.join("reservations.json")),
+            (0, 0)
+        );
+        let _ = fs::remove_dir_all(&temp_empty);
+
+        let io_sample = TierIoStats {
+            min_lat_us: 0.04,
+            avg_lat_us: 0.08,
+            max_lat_us: 0.15,
+            ..TierIoStats::default()
+        };
+        let lat_str = format_tier_latency(&io_sample, 0.04, 0.08, 0.15, "In-RAM LZ4");
+        assert_eq!(lat_str, "0.04..0.08..0.15µs (In-RAM LZ4)");
+
+        let io_disk = TierIoStats {
+            min_lat_us: 85.0,
+            avg_lat_us: 180.0,
+            max_lat_us: 1200.0,
+            ..TierIoStats::default()
+        };
+        let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "Host VHDX");
+        assert_eq!(disk_lat_str, "85..180..1.2ms (Host VHDX)");
+
+        let mem_txt = "MemTotal:       20480 kB\nMemAvailable:   16384 kB\nSwapTotal:       4096 kB\nSwapFree:        2048 kB\n";
+        let mem = parse_meminfo(mem_txt);
+        assert_eq!(mem.total_kib, 20480);
+        assert_eq!(mem.available_kib, 16384);
+        assert_eq!(mem.swap_total_kib, 4096);
+        assert_eq!(mem.swap_free_kib, 2048);
 
         let temp_log_dir =
             std::env::temp_dir().join(format!("test-mon-log-{}", std::process::id()));
@@ -1667,6 +1975,7 @@ n    #[test]
             heartbeat: None,
         };
         assert!(run_compact(&compact_opts).is_ok());
+
         let jsonl_opts = MonitorOptions {
             compact: false,
             once: true,
