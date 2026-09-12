@@ -33,7 +33,6 @@ pub const NBD_OK: u32 = 0;
 pub const NBD_EPERM: u32 = 1;
 pub const NBD_EIO: u32 = 5;
 pub const NBD_EACCES: u32 = 13;
-pub const NBD_EBUSY: u32 = 16;
 pub const NBD_EINVAL: u32 = 22;
 pub const NBD_ERANGE: u32 = 34;
 

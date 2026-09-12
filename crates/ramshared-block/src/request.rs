@@ -4,9 +4,7 @@
 use crate::protocol::{Command, NBD_CMD_FLAG_FUA, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
 
 // errno in simple reply (re-exported from protocol for backward compatibility).
-pub use crate::protocol::{
-    NBD_EACCES, NBD_EBUSY, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK,
-};
+pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK};
 
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
@@ -106,26 +104,12 @@ pub fn serve<B: BlockBackend + ?Sized>(
     payload: &[u8],
     backend: &mut B,
 ) -> ServeOutcome {
-    serve_with_limiter(None, req, payload, backend)
-}
-
-/// Dispatches an already parsed request with optional rate limiting.
-pub fn serve_with_limiter<B: BlockBackend + ?Sized>(
-    limiter: Option<&mut crate::rate_limit::RateLimiter>,
-    req: &Request,
-    payload: &[u8],
-    backend: &mut B,
-) -> ServeOutcome {
     let reply = |error: u32| encode_simple_reply(error, req.handle);
     let plain = |error: u32| ServeOutcome {
         reply: reply(error),
         read_data: Vec::new(),
         disconnect: false,
     };
-
-    if limiter.is_some_and(|l| !l.acquire()) {
-        return plain(NBD_EBUSY);
-    }
 
     let options = match validate_command_flags(req) {
         Ok(options) => options,
@@ -378,35 +362,6 @@ mod tests {
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_ERANGE
-        );
-    }
-
-    #[test]
-    fn serve_with_limiter_rejects_when_rate_limited() {
-        let mut b = MemBackend {
-            data: vec![0u8; 8192],
-            bs: 4096,
-        };
-        let mut limiter = crate::rate_limit::RateLimiter::new(1, 1);
-        let ok = serve_with_limiter(
-            Some(&mut limiter),
-            &req(Command::Read, 0, 4096),
-            &[],
-            &mut b,
-        );
-        assert_eq!(
-            u32::from_be_bytes([ok.reply[4], ok.reply[5], ok.reply[6], ok.reply[7]]),
-            NBD_OK
-        );
-        let busy = serve_with_limiter(
-            Some(&mut limiter),
-            &req(Command::Read, 0, 4096),
-            &[],
-            &mut b,
-        );
-        assert_eq!(
-            u32::from_be_bytes([busy.reply[4], busy.reply[5], busy.reply[6], busy.reply[7]]),
-            NBD_EBUSY
         );
     }
 }

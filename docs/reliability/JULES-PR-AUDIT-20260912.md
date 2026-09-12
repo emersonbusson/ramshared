@@ -5,9 +5,9 @@
 This document records the comprehensive census, verification, and disposition of the 503 automated Jules pull requests opened against the repository between PR #1216 and #1719 across Waves 3 to 7.
 
 - **Total PRs Audited:** 503
-- **Directly Consolidated Code & Test Improvements:** 356 PRs
+- **Directly Consolidated Code & Test Improvements:** 353 PRs
 - **Packaging & Infrastructure Hardening:** 50 PRs
-- **Triaged Finding-Only Reports:** 70 PRs
+- **Triaged Finding-Only Reports:** 73 PRs
 - **Documentation Updates:** 2 PRs
 - **Superseded Iterations / Inadmissible Variations:** 23 PRs
 - **Isolated Dependabot Maintenance:** 2 PRs
@@ -481,11 +481,11 @@ All verified code changes, unit tests, bounds protections, packaging enhancement
 | #1672 | feat(gpu): handle Windows WoW64 compatibility and driver version | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/Cargo.toml, crates/ramshared-cuda/src/loader_win.rs |
 | #1673 | refactor(gpu-backends): replace unwrap and expect with error propagation in CUDA calls | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/src/lib.rs, crates/ramshared-cuda/src/probe.rs |
 | #1674 | security-hardening: ublk control device ioctl input sanitization | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-wsl2d/src/ublk_control.rs |
-| #1675 | refactor: extract Vulkan buffer and transfer operations into transfer module | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-vulkan/src/lib.rs, crates/ramshared-vulkan/src/transfer.rs |
+| #1675 | refactor: extract Vulkan buffer and transfer operations into transfer module | Wave 7 (Security, GPU & Windows) | FINDING_ONLY | Triaged & Cataloged | Cataloged finding; unmocked Vulkan module split deferred to preserve headless CI coverage matrix |
 | #1676 | feat(gpu-backends): implement dxg adapter enumeration and capability query | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching .github/workflows/security-scans.yml, crates/ramshared-dxg/src/lib.rs |
 | #1677 | feat(gpu): implement CUDA unified memory fallback on VRAM exhaustion | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/src/driver.rs, crates/ramshared-cuda/src/ffi.rs |
 | #1678 | feat(gpu-backends): implement DXG allocation and sync wrappers | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-dxg/src/alloc.rs, crates/ramshared-dxg/src/error.rs |
-| #1679 | feat(core): add per-client rate limiting to protect NBD broker from request floods | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-block/src/lib.rs, crates/ramshared-block/src/rate_limit.rs |
+| #1679 | feat(core): add per-client rate limiting to protect NBD broker from request floods | Wave 7 (Security, GPU & Windows) | FINDING_ONLY | Triaged & Cataloged | Cataloged finding; speculative rate limiter in block crate deferred pending dedicated benchmark qualification |
 | #1680 | feat(gpu-backends): implement CUDA peer-to-peer memory access | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/src/driver.rs, crates/ramshared-cuda/src/ffi.rs |
 | #1681 | feat(gpu-backends): enforce minimum CUDA compute capability via cuDeviceGetAttribute | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/src/driver.rs, crates/ramshared-cuda/src/ffi.rs |
 | #1682 | feat(vulkan): support multi-GPU device groups for pooled VRAM | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-vulkan/src/device_group.rs, crates/ramshared-vulkan/src/lib.rs |
@@ -499,7 +499,7 @@ All verified code changes, unit tests, bounds protections, packaging enhancement
 | #1690 | feat(cuda): implement event-based timing instrumentation for transfer latency | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/src/driver.rs, crates/ramshared-cuda/src/event.rs |
 | #1691 | refactor: extract request routing to dispatcher module | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-wsl2d/src/broker_srv.rs, crates/ramshared-wsl2d/src/broker_srv/dispatcher.rs |
 | #1692 | feat(winbroker): support service pause and continue state transitions | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-winbroker/src/main.rs, crates/ramshared-winbroker/src/service.rs |
-| #1693 | feat(gpu): add per-thread CUDA context push-pop isolation | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-cuda/src/context_scope.rs, crates/ramshared-cuda/src/driver.rs |
+| #1693 | feat(gpu): add per-thread CUDA context push-pop isolation | Wave 7 (Security, GPU & Windows) | FINDING_ONLY | Triaged & Cataloged | Cataloged finding; unmocked CUDA context scope deferred to preserve headless Linux CI slice coverage matrix |
 | #1694 | feat(winsvc): add nvml fallback for gpu health monitoring | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-winsvc/src/cuda_probe/health.rs, crates/ramshared-winsvc/src/cuda_probe.rs |
 | #1695 | feat(winsvc): implement host memory pressure detection via Performance Counters | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-winsvc/Cargo.toml, crates/ramshared-winsvc/src/lib.rs |
 | #1696 | feat(winsvc): add minidump generation on assertion failure and panic | Wave 7 (Security, GPU & Windows) | CODE_AND_TESTS | Consolidated & Verified | Verified code & tests touching crates/ramshared-winsvc/Cargo.toml, crates/ramshared-winsvc/src/evidence/minidump.rs |

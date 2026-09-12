@@ -63,7 +63,7 @@ impl Drop for Lib {
 /// CUDA library loaded and initialized successfully (`cuInit(0)`).
 pub struct Cuda {
     _lib: Lib,
-    pub(crate) syms: Syms,
+    syms: Syms,
 }
 
 #[cfg(unix)]
@@ -105,8 +105,6 @@ impl Cuda {
                 device_get_name: load_sym(handle, c"cuDeviceGetName")?,
                 ctx_create: load_sym(handle, c"cuCtxCreate_v2")?,
                 ctx_destroy: load_sym(handle, c"cuCtxDestroy_v2")?,
-                ctx_push_current: load_sym(handle, c"cuCtxPushCurrent_v2")?,
-                ctx_pop_current: load_sym(handle, c"cuCtxPopCurrent_v2")?,
                 ctx_synchronize: load_sym(handle, c"cuCtxSynchronize")?,
                 mem_alloc: load_sym(handle, c"cuMemAlloc_v2")?,
                 mem_free: load_sym(handle, c"cuMemFree_v2")?,
@@ -192,17 +190,11 @@ impl Device {
 /// This is why the daemon executes all VRAM I/O on a single thread. Accessing from another thread
 /// would require calling `cuCtxSetCurrent` (not implemented here). The DEMOTE thread only calls `swapoff`.
 pub struct Context<'a> {
-    pub(crate) cuda: &'a Cuda,
-    pub(crate) raw: CuContext,
+    cuda: &'a Cuda,
+    raw: CuContext,
 }
 
 impl<'a> Context<'a> {
-    /// Creates a push-pop scope making this context current for the thread.
-    /// Returns a `ContextScope` which pops the context when dropped.
-    pub fn push_scope(&self) -> Result<crate::ContextScope<'_, 'a>, CudaError> {
-        crate::context_scope::ContextScope::new(self)
-    }
-
     /// Returns the free and total VRAM capacities in bytes (`cuMemGetInfo`).
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
         let (mut free, mut total) = (0_usize, 0_usize);
@@ -336,7 +328,7 @@ fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
     unsafe { load_sym(handle, name).ok() }
 }
 
-pub(crate) fn check(syms: &Syms, r: CuResult, op: &'static str) -> Result<(), CudaError> {
+fn check(syms: &Syms, r: CuResult, op: &'static str) -> Result<(), CudaError> {
     if r == CUDA_SUCCESS {
         Ok(())
     } else {
