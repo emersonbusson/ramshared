@@ -1,6 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 post_install() {
-    systemctl daemon-reload
-    udevadm control --reload-rules && udevadm trigger || true
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+    fi
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger || true
+    fi
     echo "==> RamShared installed. The VRAM memory tier activates automatically upon GPU detection."
 }
 
@@ -9,6 +17,9 @@ post_upgrade() {
 }
 
 pre_remove() {
-    systemctl stop ramshared-vram.service 2>/dev/null || true
-    systemctl disable ramshared-vram.service 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl stop ramshared-vram.service 2>/dev/null || true
+        systemctl disable ramshared-vram.service 2>/dev/null || true
+    fi
 }
+
