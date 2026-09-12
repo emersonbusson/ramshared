@@ -114,6 +114,7 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-09-05 | WSL2 Kernel Fork Sync | Synchronized capacity, BAR0 alignment, queue depth [16..1024], and bio bounds hardening to `WSL2-Linux-Kernel` fork (`feature/ramshared-driver-6.18`), validated 0 errors 0 warnings 0 checks via strict checkpatch | Commit `5b95fb1cf` / `drivers/block/ramshared/` |
 | 2026-09-05 | In-Tree Driver Docs | Authored comprehensive `drivers/block/ramshared/README.md` and qualified WSL2 2.7.13.0 with NVIDIA driver 615.65.07 (CUDA 13.4, KMD 616.64) | `drivers/block/ramshared/README.md` |
 | 2026-09-05 | Tier 3 (SSD) Qualification | Empirically qualified 100% Tier 3 (SSD) saturation (4,096 MB) alongside Tier 1 (1,024 MB ZRAM) and Tier 2 (4,096 MB VRAM) with 180s sustained hold, NBD swap immunity (-swap -timeout 0), and fail-closed CI merge blocker | PR #1049 / `latest.json` |
+| 2026-09-12 | WSL2 & Kernel Qualification | Qualified WSL2 2.7.14.0 with bundled kernel 6.18.33.2-2, Windows 10.0.26200.9445, and NVIDIA driver 615.71.08 (KMD 616.92, CUDA 13.4) under 100% 3-tier cascade resilience | `trovaldo.md` / `drivers/block/ramshared/` |
 
 
 
