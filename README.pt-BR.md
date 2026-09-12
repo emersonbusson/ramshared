@@ -270,7 +270,7 @@ O RamShared é implantado, avaliado e homologado em comunidades de engenharia de
 | `ramshared-vram` | Alocação DMA travada em página e gerenciamento de memória |
 | `ramshared-wsl2d` | Coordenação de pressão e telemetria do host WSL2 |
 | `ramshared-agent` | Observações locais do host e explicações |
-| `drivers/block/ramshared` | Driver de bloco nativo para Linux upstream |
+| [`drivers/block/ramshared`](drivers/block/ramshared/README.md) | Driver de bloco nativo para Linux upstream |
 | `drivers/windows/ramshared` | Driver virtual miniport StorPort de alta performance para Windows |
 
 A arquitetura de baixo nível está documentada em

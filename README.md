@@ -266,7 +266,7 @@ RamShared is deployed, evaluated, and benchmarked across global Linux, WSL2, and
 | `ramshared-vram` | Page-locked DMA allocation and memory management |
 | `ramshared-wsl2d` | WSL2 host-pressure coordination and telemetry |
 | `ramshared-agent` | Local host observations and explanations |
-| `drivers/block/ramshared` | Native upstream Linux kernel block driver |
+| [`drivers/block/ramshared`](drivers/block/ramshared/README.md) | Native upstream Linux kernel block driver |
 | `drivers/windows/ramshared` | High-performance Windows StorPort virtual miniport driver |
 
 Low-level architecture is documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
