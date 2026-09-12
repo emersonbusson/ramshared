@@ -255,3 +255,12 @@ nomeadas em `docs/specs/`.
 | Contexto dos benchmarks | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
 | Relatórios de confiabilidade e livros de qualificação | [`docs/reliability/`](docs/reliability/) |
 | Regras de contribuição | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
+## Autor e Mantenedor
+
+**Emerson Busson**
+- GitHub: [@emersonbusson](https://github.com/emersonbusson)
+- LinkedIn: [linkedin.com/in/emersonbusson](https://www.linkedin.com/in/emersonbusson)
+- Repositório: [https://github.com/emersonbusson/ramshared](https://github.com/emersonbusson/ramshared)
+
+Copyright (c) 2024–2026 Emerson Busson. Todos os direitos reservados.

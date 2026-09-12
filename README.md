@@ -250,3 +250,12 @@ specification and named evidence under `docs/specs/`.
 | Benchmark context | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
 | Reliability audits and qualification ledgers | [`docs/reliability/`](docs/reliability/) |
 | Contribution rules | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
+
+## Author & Maintainer
+
+**Emerson Busson**
+- GitHub: [@emersonbusson](https://github.com/emersonbusson)
+- LinkedIn: [linkedin.com/in/emersonbusson](https://www.linkedin.com/in/emersonbusson)
+- Repository: [https://github.com/emersonbusson/ramshared](https://github.com/emersonbusson/ramshared)
+
+Copyright (c) 2024–2026 Emerson Busson. All rights reserved.
