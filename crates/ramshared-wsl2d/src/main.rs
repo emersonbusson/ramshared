@@ -6235,9 +6235,8 @@ mod tests {
     #[test]
     fn daemon_broker_ram_binds_loopback_and_cleans_owned_socket() {
         let path = std::env::temp_dir().join(format!(
-            "ramshared-daemon-broker-{}-{}.sock",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            "rs-d-broker-{}.sock",
+            std::process::id()
         ));
         let _ = std::fs::remove_file(&path);
         let listeners = bind_broker_listeners(
