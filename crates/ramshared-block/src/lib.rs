@@ -14,6 +14,7 @@ pub mod inflight;
 pub mod isolated_origin;
 pub mod origin_cache;
 pub mod protocol;
+pub mod rate_limit;
 pub mod request;
 pub mod sparse_vram;
 pub mod vram_backend;
@@ -34,7 +35,8 @@ pub use protocol::{
     Command, NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK, ProtocolError,
     Request, encode_simple_reply, parse_request,
 };
-pub use request::{BlockBackend, IoError, ServeOutcome, WriteOptions, serve};
+pub use rate_limit::RateLimiter;
+pub use request::{BlockBackend, IoError, ServeOutcome, WriteOptions, serve, serve_with_limiter};
 pub use sparse_vram::{
     CommitBudgetGate, DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env,
     commit_cap_bytes_from_env, idle_free_secs_from_env, reserve_floor_bytes_from_env,
