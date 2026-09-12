@@ -147,6 +147,14 @@ jobs:
               if (!/PASS_ZERO_PANIC/i.test(body)) {
                 core.setFailed('Hardware table missing mandatory stability verdict: PASS_ZERO_PANIC.');
               }
+              const hasFourCategories =
+                /1\.\s*Workload\s*&\s*Capacity/i.test(body) &&
+                /2\.\s*Speed\s*&\s*Transfer\s*Latency/i.test(body) &&
+                /3\.\s*Pressure\s*&\s*Stalls/i.test(body) &&
+                /4\.\s*Integrity\s*&\s*Stability/i.test(body);
+              if (!hasFourCategories) {
+                core.setFailed('Hardware table must contain all 4 evaluation categories from benchmark JSON (1. Workload & Capacity, 2. Speed & Transfer Latency, 3. Pressure & Stalls, 4. Integrity & Stability).');
+              }
               if (body.includes('🔴 ALARM') && !/\[alarm-waiver-justified:[^\]]+\]/i.test(body)) {
                 core.setFailed('Hardware table contains 🔴 ALARM regressions. Fix root-cause per docs/reliability/HARDWARE-METRICS-TRIAGE.md or add [alarm-waiver-justified: <reason>].');
               }
