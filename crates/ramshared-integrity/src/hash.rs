@@ -162,4 +162,66 @@ mod tests {
         assert!(t.record(2, &data_65536));
         assert_eq!(t.verify(2, &data_65536), Some(true));
     }
+
+    #[test]
+    fn test_hash_empty_input_success() {
+        let h = block_hash(&[]);
+        assert_eq!(h, FNV_OFFSET);
+    }
+
+    #[test]
+    fn test_hash_small_input_success() {
+        let data = [1u8, 2, 3];
+        let h1 = block_hash(&data);
+        let h2 = block_hash(&data);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_large_input_success() {
+        let data = vec![0x42; 1024 * 1024];
+        let h1 = block_hash(&data);
+        let h2 = block_hash(&data);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_equality_matches() {
+        let data1 = vec![0x12; 512];
+        let data2 = vec![0x12; 512];
+        assert_eq!(block_hash(&data1), block_hash(&data2));
+    }
+
+    #[test]
+    fn test_hash_inequality_differs() {
+        let data1 = vec![0x12; 512];
+        let mut data2 = vec![0x12; 512];
+        data2[256] = 0x13;
+        assert_ne!(block_hash(&data1), block_hash(&data2));
+    }
+
+    #[test]
+    fn test_hash_mismatch_error_format_correct() {
+        let err = ChecksumMismatchError::Mismatch {
+            idx: 5,
+            expected: 0x1234,
+            computed: 0x5678,
+        };
+        assert_eq!(
+            err.to_string(),
+            "checksum mismatch at block 5: expected 0x1234, got 0x5678"
+        );
+    }
+
+    #[test]
+    fn test_hash_oob_error_format_correct() {
+        let err = ChecksumMismatchError::OutOfBounds { idx: 10 };
+        assert_eq!(err.to_string(), "block index 10 out of bounds");
+    }
+
+    #[test]
+    fn test_hash_invalid_len_error_format_correct() {
+        let err = ChecksumMismatchError::InvalidBufferLength { len: 123 };
+        assert_eq!(err.to_string(), "invalid checksum buffer length 123");
+    }
 }

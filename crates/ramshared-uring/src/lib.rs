@@ -172,6 +172,35 @@ impl Drop for MmapRo {
 // `Sync` (no shared concurrent access).
 unsafe impl Send for MmapRo {}
 
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
+use std::thread::{self, JoinHandle};
+
+/// Spawns a resilient worker thread that wraps the given event loop with `catch_unwind`.
+/// If the worker panics, the panic is contained, and a fresh worker thread is spawned
+/// to resume the event loop, ensuring idempotent recovery from panics.
+pub fn spawn_resilient_worker<F>(mut worker_fn: F) -> JoinHandle<()>
+where
+    F: FnMut() + Send + 'static + UnwindSafe,
+{
+    thread::spawn(move || {
+        loop {
+            // Run the worker inside catch_unwind on the current thread
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                worker_fn();
+            }));
+
+            match result {
+                Ok(_) => break, // Event loop completed successfully
+                Err(_) => {
+                    // Thread panicked. Apply backoff to prevent fast spin/OOM.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue; // Restart the loop
+                }
+            }
+        }
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmokeReport {
     pub entries: u32,
@@ -495,6 +524,36 @@ impl UblkServer {
         Ok(())
     }
 
+    /// Drains pending CQEs and re-arms io_uring submission queues with FETCH commands
+    /// after a host resume or recovery event.
+    pub fn drain_and_rearm_after_wake(&mut self) -> io::Result<Vec<UblkCompletion>> {
+        let completions = self.drain();
+        self.submit_initial_fetch()?;
+        Ok(completions)
+    }
+
+    /// Submits `IORING_OP_ASYNC_CANCEL` for a specific user_data to cancel a pending SQE.
+    pub fn cancel_request(
+        &mut self,
+        target_user_data: u64,
+        cancel_user_data: u64,
+    ) -> io::Result<()> {
+        let cancel_entry = opcode::AsyncCancel::new(target_user_data)
+            .build()
+            .user_data(cancel_user_data);
+
+        let mut sq = self.ring.submission();
+        if sq.is_full() {
+            return Err(io::Error::from_raw_os_error(libc::EBUSY));
+        }
+        unsafe {
+            let _ = sq.push(&cancel_entry.into());
+        }
+        drop(sq);
+        self.ring.submit()?;
+        Ok(())
+    }
+
     /// Drains available CQEs (non-blocking).
     pub fn drain(&mut self) -> Vec<UblkCompletion> {
         self.ring
@@ -787,9 +846,6 @@ mod tests {
             .user_data(100);
         let timeout_entry2: squeue::Entry128 = entry2.into();
 
-        let centry = opcode::AsyncCancel::new(100).build().user_data(101);
-        let cancel_entry: squeue::Entry128 = centry.into();
-
         // SAFETY: The timespec lives in the same frame, we wait before drop.
         unsafe {
             server
@@ -797,12 +853,9 @@ mod tests {
                 .submission()
                 .push(&timeout_entry2)
                 .expect("push long timeout");
-            server
-                .ring
-                .submission()
-                .push(&cancel_entry)
-                .expect("push cancel");
         }
+
+        server.cancel_request(100, 101).expect("push cancel");
 
         // Wait for both the cancellation and the cancelled timeout
         server.ring.submit_and_wait(2).expect("submit cancel");
@@ -820,6 +873,59 @@ mod tests {
         drop(file);
         fs::remove_file(path).expect("remove fixture");
     }
+
+    #[test]
+    fn resilient_worker_restarts_on_panic_and_completes() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let handle = spawn_resilient_worker(move || {
+            let count = attempts_clone.fetch_add(1, Ordering::SeqCst) + 1;
+            if count < 3 {
+                panic!("Simulated worker panic");
+            }
+        });
+
+        handle.join().expect("join resilient worker thread");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn ublk_server_drain_and_rearm_after_wake_recovers_ring() {
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-drain-rearm", page);
+        let mut server = UblkServer::new(file.as_raw_fd(), 2, page).expect("server fixture");
+
+        // Simulate a pending completion
+        let ts = types::Timespec::new().sec(0).nsec(1_000_000); // 1ms
+        let entry = opcode::Timeout::new(&ts as *const _).build().user_data(42);
+        let timeout_entry: squeue::Entry128 = entry.into();
+
+        // SAFETY: The timespec struct outlives the kernel submission, and the server ring is local.
+        unsafe {
+            server
+                .ring
+                .submission()
+                .push(&timeout_entry)
+                .expect("push timeout");
+        }
+        server.ring.submit_and_wait(1).expect("submit timeout");
+
+        let completions = server
+            .drain_and_rearm_after_wake()
+            .expect("drain and rearm");
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].tag, 42);
+        assert_eq!(completions[0].result, -libc::ETIME);
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove fixture");
+    }
+
     #[test]
     fn ublk_server_push_guard_clause_rejects_full_ring() {
         let page = page_size();

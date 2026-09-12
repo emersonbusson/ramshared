@@ -1,6 +1,9 @@
 [Unit]
 Description=RamShared Zero-Copy GPU VRAM Memory Tier Service
 Documentation=https://github.com/emersonbusson/ramshared
+DefaultDependencies=no
+Before=umount.target swap.target
+Requires=local-fs.target
 After=systemd-udevd.service local-fs.target
 StopWhenUnneeded=yes
 
@@ -10,6 +13,7 @@ ExecStart=/usr/bin/ramsharedd --daemon --origin-ssd
 ExecStop=/usr/bin/ramshared cascade down
 Restart=on-failure
 RestartSec=5s
+WatchdogSec=15s
 KillMode=process
 SendSIGKILL=no
 TimeoutStartSec=60s

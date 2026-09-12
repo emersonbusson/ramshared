@@ -142,6 +142,61 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_lease_construction_valid() {
+        let l = Lease {
+            id: 42,
+            holder: 7,
+            bytes: 1024,
+            slices: vec![1, 2],
+            revocable: true,
+        };
+        assert_eq!(l.id, 42);
+        assert_eq!(l.holder, 7);
+        assert_eq!(l.bytes, 1024);
+        assert_eq!(l.slices, vec![1, 2]);
+        assert!(l.revocable);
+
+        let dbg = format!("{l:?}");
+        assert!(dbg.contains("Lease"));
+        assert!(dbg.contains("id: 42"));
+        assert!(dbg.contains("holder: 7"));
+        assert!(dbg.contains("bytes: 1024"));
+        assert!(dbg.contains("revocable: true"));
+    }
+
+    #[test]
+    fn test_lease_construction_boundary_zero() {
+        let l = Lease {
+            id: 0,
+            holder: 0,
+            bytes: 0,
+            slices: vec![],
+            revocable: false,
+        };
+        assert_eq!(l.id, 0);
+        assert_eq!(l.holder, 0);
+        assert_eq!(l.bytes, 0);
+        assert!(l.slices.is_empty());
+        assert!(!l.revocable);
+    }
+
+    #[test]
+    fn test_lease_construction_boundary_max() {
+        let l = Lease {
+            id: u32::MAX,
+            holder: u32::MAX,
+            bytes: u64::MAX,
+            slices: vec![u16::MAX],
+            revocable: true,
+        };
+        assert_eq!(l.id, u32::MAX);
+        assert_eq!(l.holder, u32::MAX);
+        assert_eq!(l.bytes, u64::MAX);
+        assert_eq!(l.slices, vec![u16::MAX]);
+        assert!(l.revocable);
+    }
+
+    #[test]
     fn slice_state_roundtrips() {
         for st in [
             SliceState::Free,

@@ -205,6 +205,82 @@ mod tests {
     }
 
     #[test]
+    fn test_protocol_error_source_none() {
+        use std::error::Error;
+        let e = super::ProtocolError::ConnectionClosed(std::io::Error::other("foo"));
+        assert!(e.source().is_some());
+
+        let e = super::ProtocolError::BadMagic("test".into());
+        assert!(e.source().is_none());
+
+        let e = super::ProtocolError::UnsupportedVersion(42);
+        assert!(e.source().is_none());
+
+        let e = super::ProtocolError::PayloadTooLarge;
+        assert!(e.source().is_none());
+    }
+
+    #[test]
+    fn test_protocol_write_io_error_connection_closed() {
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("write error"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = FailingWriter;
+        let res = write_msg(&mut w, &Msg::Ack);
+        assert!(matches!(
+            res,
+            Err(super::ProtocolError::ConnectionClosed(_))
+        ));
+    }
+
+    #[test]
+    fn test_protocol_write_flush_error_connection_closed() {
+        struct FailingFlushWriter;
+        impl std::io::Write for FailingFlushWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("flush error"))
+            }
+        }
+        let mut w = FailingFlushWriter;
+        let res = write_msg(&mut w, &Msg::Ack);
+        assert!(matches!(
+            res,
+            Err(super::ProtocolError::ConnectionClosed(_))
+        ));
+    }
+
+    #[test]
+    fn test_protocol_read_io_error_connection_closed() {
+        struct FailingReader;
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("read error"))
+            }
+        }
+        impl std::io::BufRead for FailingReader {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                Err(std::io::Error::other("read error"))
+            }
+            fn consume(&mut self, _: usize) {}
+        }
+        let mut r = FailingReader;
+        let res = read_msg(&mut r);
+        assert!(matches!(
+            res,
+            Err(super::ProtocolError::ConnectionClosed(_))
+        ));
+    }
+
+    #[test]
     fn protocol_error_display() {
         let e = super::ProtocolError::BadMagic("test".into());
         assert_eq!(e.to_string(), "bad magic: test");

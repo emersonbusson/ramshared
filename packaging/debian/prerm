@@ -1,0 +1,24 @@
+#!/bin/bash
+set -euo pipefail
+
+# Deactivate active ramshared swap devices safely before systemd service shutdown on package remove.
+# Strict guard clauses and validation.
+
+if [ "${1:-}" = "remove" ]; then
+    if command -v swapoff >/dev/null 2>&1; then
+        # Find active swaps and filter for ublkb or ramshared devices
+        while read -r swap_dev _rest; do
+            if [[ "$swap_dev" == /dev/ublkb* ]] || [[ "$swap_dev" == /dev/ramshared* ]]; then
+                echo "Deactivating ramshared swap device: $swap_dev"
+                swapoff "$swap_dev" || true
+            fi
+        done < <(grep -v "^Filename" /proc/swaps || true)
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-active --quiet ramshared-vram.service; then
+            echo "Stopping ramshared-vram.service"
+            systemctl stop ramshared-vram.service || true
+        fi
+    fi
+fi
