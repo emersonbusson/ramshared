@@ -157,6 +157,7 @@ Empirical benchmarks on physical host hardware (NVIDIA GeForce RTX 2060 over PCI
 • Tier 3 (SSD origin) Qualification: 2,367 MB durable swap capacity and usage documented.
 • Host Stability & Reclaim Status: Successfully restored 9.8 GB free host RAM with zero leak (10.17 GB/s reclaim throughput).
 • Stability Verdict: PASS_ZERO_PANIC
+• Kernel Evolution (Stock WSL2 vs Custom 6.18+): Stock WSL2 NBD yields 6.33 GB/s reclaim and ~80 µs latency; RamShared Custom Kernel 6.18.40.1 (in-tree ramshared.ko + native ublk/io_uring) accelerates reclaim to 10.17 GB/s (+60.7%) and achieves 0.6 µs sub-microsecond allocation latency with 61.47 ms instant VRAM discharge.
 ```
 
 ## Workspace Topology (15 Crates)

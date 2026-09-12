@@ -160,6 +160,7 @@ Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via
 • Qualificação de Tier 3 (origem SSD): 2.367 MB de capacidade e uso durável de swap documentados.
 • Estabilidade do Host e Liberação: Sucesso na restauração de 9,8 GB de RAM livre no host com zero vazamento (10,17 GB/s de vazão de liberação).
 • Veredito de Estabilidade: PASS_ZERO_PANIC
+• Evolução do Kernel (WSL2 Padrão vs Customizado 6.18+): O NBD do WSL2 padrão atinge 6,33 GB/s de liberação e ~80 µs de latência; o Kernel Customizado RamShared 6.18.40.1 (driver in-tree ramshared.ko + ublk/io_uring nativo) acelera a liberação para 10,17 GB/s (+60,7%) e atinge 0,6 µs de latência sub-microssegundo com descarga instantânea de VRAM em 61,47 ms.
 ```
 
 ## Topologia do Workspace (15 Crates)
