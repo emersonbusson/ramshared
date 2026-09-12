@@ -51,7 +51,7 @@ pub fn validate_hardware_specs(
     minor: i32,
     total_memory: usize,
 ) -> Result<(), ProbePlanError> {
-    if !(1..=99).contains(&major) || !(0..=99).contains(&minor) {
+    if !(6..=99).contains(&major) || !(0..=99).contains(&minor) {
         return Err(ProbePlanError::InvalidComputeCapability { major, minor });
     }
     if total_memory == 0 || total_memory > MAX_TOTAL_MEMORY_BYTES {
@@ -158,9 +158,9 @@ mod tests {
             })
         ));
         assert!(matches!(
-            validate_hardware_specs(1, -1, 1024),
+            validate_hardware_specs(6, -1, 1024),
             Err(ProbePlanError::InvalidComputeCapability {
-                major: 1,
+                major: 6,
                 minor: -1
             })
         ));

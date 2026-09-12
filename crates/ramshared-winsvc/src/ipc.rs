@@ -2,6 +2,156 @@
 use std::io;
 use std::time::{Duration, Instant};
 
+/// Magic bytes identifying a ramshared IPC message ('RAMS').
+pub const IPC_MAGIC: u32 = 0x52414D53; // 'RAMS'
+/// Legacy IPC protocol version.
+pub const IPC_VERSION_1: u32 = 1;
+/// Current IPC protocol version with flags support.
+pub const IPC_VERSION_2: u32 = 2;
+/// Defense-in-depth maximum payload size limit (1MB).
+pub const MAX_PAYLOAD_LEN: u32 = 1024 * 1024; // 1MB defense-in-depth
+
+/// Backward-compatible IPC message version header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IpcMessageHeader {
+    /// Magic identifier.
+    pub magic: u32,
+    /// Protocol version.
+    pub version: u32,
+    /// Payload length in bytes.
+    pub payload_len: u32,
+    /// Protocol flags (V2+ only).
+    pub flags: u32,
+}
+
+/// Errors encountered during IPC message deserialization.
+#[derive(Debug, PartialEq, Eq)]
+pub enum IpcDeserializeError {
+    /// Underlying IO error.
+    Io(std::io::ErrorKind),
+    /// Invalid magic bytes received.
+    InvalidMagic(u32),
+    /// Protocol version is outside the supported range.
+    UnsupportedVersion(u32),
+    /// Claimed payload length exceeds `MAX_PAYLOAD_LEN`.
+    PayloadTooLarge(u32),
+    /// Stream ended prematurely before header could be read.
+    IncompleteMessage,
+    /// Graceful stream disconnect.
+    Disconnect,
+}
+
+impl std::fmt::Display for IpcDeserializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(k) => write!(f, "IO error: {:?}", k),
+            Self::InvalidMagic(m) => write!(f, "Invalid magic bytes: {:#X}", m),
+            Self::UnsupportedVersion(v) => write!(f, "Unsupported IPC version: {}", v),
+            Self::PayloadTooLarge(l) => write!(f, "Payload too large: {} bytes", l),
+            Self::IncompleteMessage => write!(f, "Incomplete message header"),
+            Self::Disconnect => write!(f, "Client disconnected gracefully"),
+        }
+    }
+}
+
+impl std::error::Error for IpcDeserializeError {}
+
+impl IpcMessageHeader {
+    /// Creates a new IPC message header for the specified version.
+    pub fn new(version: u32, payload_len: u32) -> Self {
+        Self {
+            magic: IPC_MAGIC,
+            version,
+            payload_len,
+            flags: 0,
+        }
+    }
+
+    /// Deserializes the header from a byte stream, handling backward compatibility.
+    pub fn read_from<R: std::io::Read>(mut reader: R) -> Result<Self, IpcDeserializeError> {
+        let mut first_byte = [0u8; 1];
+        match reader.read_exact(&mut first_byte) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(IpcDeserializeError::Disconnect);
+            }
+            Err(e) => return Err(IpcDeserializeError::Io(e.kind())),
+        }
+
+        let mut remaining_magic = [0u8; 3];
+        if let Err(e) = reader.read_exact(&mut remaining_magic) {
+            return match e.kind() {
+                std::io::ErrorKind::UnexpectedEof => Err(IpcDeserializeError::IncompleteMessage),
+                _ => Err(IpcDeserializeError::Io(e.kind())),
+            };
+        }
+
+        let mut magic_bytes = [0u8; 4];
+        magic_bytes[0] = first_byte[0];
+        magic_bytes[1..].copy_from_slice(&remaining_magic);
+        let magic = u32::from_le_bytes(magic_bytes);
+        if magic != IPC_MAGIC {
+            return Err(IpcDeserializeError::InvalidMagic(magic));
+        }
+
+        let mut version_bytes = [0u8; 4];
+        if let Err(e) = reader.read_exact(&mut version_bytes) {
+            return match e.kind() {
+                std::io::ErrorKind::UnexpectedEof => Err(IpcDeserializeError::IncompleteMessage),
+                _ => Err(IpcDeserializeError::Io(e.kind())),
+            };
+        }
+        let version = u32::from_le_bytes(version_bytes);
+        if !(IPC_VERSION_1..=IPC_VERSION_2).contains(&version) {
+            return Err(IpcDeserializeError::UnsupportedVersion(version));
+        }
+
+        let mut len_bytes = [0u8; 4];
+        if let Err(e) = reader.read_exact(&mut len_bytes) {
+            return match e.kind() {
+                std::io::ErrorKind::UnexpectedEof => Err(IpcDeserializeError::IncompleteMessage),
+                _ => Err(IpcDeserializeError::Io(e.kind())),
+            };
+        }
+        let payload_len = u32::from_le_bytes(len_bytes);
+        if payload_len > MAX_PAYLOAD_LEN {
+            return Err(IpcDeserializeError::PayloadTooLarge(payload_len));
+        }
+
+        let mut flags = 0;
+        if version >= IPC_VERSION_2 {
+            let mut flags_bytes = [0u8; 4];
+            if let Err(e) = reader.read_exact(&mut flags_bytes) {
+                return match e.kind() {
+                    std::io::ErrorKind::UnexpectedEof => {
+                        Err(IpcDeserializeError::IncompleteMessage)
+                    }
+                    _ => Err(IpcDeserializeError::Io(e.kind())),
+                };
+            }
+            flags = u32::from_le_bytes(flags_bytes);
+        }
+
+        Ok(Self {
+            magic,
+            version,
+            payload_len,
+            flags,
+        })
+    }
+
+    /// Serializes the header to a byte stream.
+    pub fn write_to<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
+        writer.write_all(&self.magic.to_le_bytes())?;
+        writer.write_all(&self.version.to_le_bytes())?;
+        writer.write_all(&self.payload_len.to_le_bytes())?;
+        if self.version >= IPC_VERSION_2 {
+            writer.write_all(&self.flags.to_le_bytes())?;
+        }
+        Ok(())
+    }
+}
+
 pub trait BrokerStream: std::io::BufRead + std::io::Write {}
 
 #[derive(Debug, PartialEq, Eq)]
@@ -222,6 +372,7 @@ impl BrokerStream for NamedPipeBrokerStream {}
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     #[test]
     fn only_not_found_and_busy_retry() {
@@ -251,5 +402,93 @@ mod tests {
             result,
             Err(BrokerConnectError::Deadline) | Err(BrokerConnectError::NonTransient(_))
         ));
+    }
+
+    #[test]
+    fn ipc_header_serialization_v1() {
+        let header = IpcMessageHeader::new(IPC_VERSION_1, 42);
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        assert_eq!(buffer.len(), 12);
+
+        let read_header = IpcMessageHeader::read_from(&buffer[..]).unwrap();
+        assert_eq!(read_header.magic, IPC_MAGIC);
+        assert_eq!(read_header.version, IPC_VERSION_1);
+        assert_eq!(read_header.payload_len, 42);
+        assert_eq!(read_header.flags, 0); // V1 doesn't have flags on wire, defaults to 0
+    }
+
+    #[test]
+    fn ipc_header_serialization_v2() {
+        let mut header = IpcMessageHeader::new(IPC_VERSION_2, 42);
+        header.flags = 0xDEADBEEF;
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        assert_eq!(buffer.len(), 16);
+
+        let read_header = IpcMessageHeader::read_from(&buffer[..]).unwrap();
+        assert_eq!(read_header.magic, IPC_MAGIC);
+        assert_eq!(read_header.version, IPC_VERSION_2);
+        assert_eq!(read_header.payload_len, 42);
+        assert_eq!(read_header.flags, 0xDEADBEEF);
+    }
+
+    #[test]
+    fn ipc_header_backward_compatibility() {
+        // V1 payload
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.extend_from_slice(&100u32.to_le_bytes());
+
+        // Reading a V1 payload using the general read_from (which supports up to V2)
+        let read_header = IpcMessageHeader::read_from(&buffer[..]).unwrap();
+        assert_eq!(read_header.version, IPC_VERSION_1);
+        assert_eq!(read_header.payload_len, 100);
+        assert_eq!(read_header.flags, 0);
+    }
+
+    #[test]
+    fn ipc_header_invalid_magic() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&0xBADBADu32.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.extend_from_slice(&100u32.to_le_bytes());
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::InvalidMagic(0xBADBAD));
+    }
+
+    #[test]
+    fn ipc_header_unsupported_version() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&999u32.to_le_bytes());
+        buffer.extend_from_slice(&100u32.to_le_bytes());
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::UnsupportedVersion(999));
+    }
+
+    #[test]
+    fn ipc_header_payload_too_large() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.extend_from_slice(&(MAX_PAYLOAD_LEN + 1).to_le_bytes());
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(
+            err,
+            IpcDeserializeError::PayloadTooLarge(MAX_PAYLOAD_LEN + 1)
+        );
+    }
+
+    #[test]
+    fn ipc_header_incomplete_message() {
+        let buffer = IPC_MAGIC.to_le_bytes(); // Only magic, missing version and len
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::IncompleteMessage);
     }
 }

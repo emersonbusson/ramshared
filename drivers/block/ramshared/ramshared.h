@@ -60,4 +60,22 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 			 struct device *parent_dev, unsigned int q_depth);
 void ramshared_queue_cleanup(struct ramshared_device *rs_dev);
 
+
+struct ramshared_info {
+	u64 capacity_bytes;
+	u32 queue_depth;
+	u32 reserved;
+};
+
+struct ramshared_param {
+	u32 param_id;
+	u32 value;
+};
+
+#define RAMSHARED_IOC_MAGIC 'R'
+#define RAMSHARED_IOC_GET_INFO	_IOR(RAMSHARED_IOC_MAGIC, 1, struct ramshared_info)
+#define RAMSHARED_IOC_SET_PARAM	_IOW(RAMSHARED_IOC_MAGIC, 2, struct ramshared_param)
+
+int ramshared_ioctl(struct block_device *bdev, fmode_t mode,
+		    unsigned int cmd, unsigned long arg);
 #endif /* _RAMSHARED_H */
