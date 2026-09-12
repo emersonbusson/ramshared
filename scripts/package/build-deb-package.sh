@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.11.0}}"
 VERSION_CLEAN="${VERSION#v}"
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
 ARCH="amd64"
@@ -87,6 +87,19 @@ if [[ -f "$ROOT/packaging/systemd/65-ramshared-observability.rules" ]]; then
   install -m 0644 "$ROOT/packaging/systemd/65-ramshared-observability.rules" "$STAGE_DIR/lib/udev/rules.d/"
 fi
 
+# Install tmpfiles and sysusers if available
+if [[ -f "$ROOT/packaging/tmpfiles.d/ramshared.conf" ]]; then
+  mkdir -p "$STAGE_DIR/usr/lib/tmpfiles.d"
+  install -m 0644 "$ROOT/packaging/tmpfiles.d/ramshared.conf" "$STAGE_DIR/usr/lib/tmpfiles.d/"
+fi
+if [[ -f "$ROOT/packaging/systemd-sysusers.d/ramshared.conf" ]]; then
+  mkdir -p "$STAGE_DIR/usr/lib/sysusers.d"
+  install -m 0644 "$ROOT/packaging/systemd-sysusers.d/ramshared.conf" "$STAGE_DIR/usr/lib/sysusers.d/"
+fi
+if [[ -f "$ROOT/packaging/debian/conffiles" ]]; then
+  install -m 0644 "$ROOT/packaging/debian/conffiles" "$STAGE_DIR/DEBIAN/conffiles"
+fi
+
 # Install documentation & licenses
 install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
 install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
@@ -127,10 +140,18 @@ chmod 0755 "$STAGE_DIR/DEBIAN/postinst"
 
 # Generate DEBIAN/prerm (pre-removal script)
 cat << 'PRERM_EOF' > "$STAGE_DIR/DEBIAN/prerm"
-#!/bin/sh
-set -e
+#!/bin/bash
+set -euo pipefail
 
-if [ "$1" = "remove" ]; then
+if [ "${1:-}" = "remove" ]; then
+  if command -v swapoff >/dev/null 2>&1; then
+    while read -r swap_dev _rest; do
+      if [[ "$swap_dev" == /dev/ublkb* ]] || [[ "$swap_dev" == /dev/ramshared* ]]; then
+        echo "Deactivating ramshared swap device: $swap_dev"
+        swapoff "$swap_dev" || true
+      fi
+    done < <(grep -v "^Filename" /proc/swaps 2>/dev/null || true)
+  fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl stop ramshared-vram.service 2>/dev/null || true
     systemctl stop ramshared-cascade.service 2>/dev/null || true

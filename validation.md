@@ -65,10 +65,10 @@
 
 **What:** Audit the workspace for native language leakage, local filesystem paths, or credentials in comments and documents.
 **Category:** local-check
-**How to measure:** Run recursive `grep` searches for local host paths `<legacy-private-root>/` and workstation hostname `EMEDEV` across the workspace.
+**How to measure:** Run recursive `grep` searches for local host paths `<legacy-private-root>/` and workstation hostname `<legacy-workstation>` across the workspace.
 **Measured data:**
 - Comments translated to English across all 10 workspace crates (47 files modified).
-- Local hostname `EMEDEV` replaced with `dev-workstation` in `docs/BENCHMARKS.md`.
+- Local hostname `<legacy-workstation>` replaced with `dev-workstation` in `docs/BENCHMARKS.md`.
 - File paths `file://<legacy-private-root>/` in specs rewritten to relative directories (`../../`).
 - 0 raw matching files found for confidential host indicators in `git ls-files` tracker.
 **Verdict:** ✅ works
@@ -374,7 +374,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 
 ## 2026-07-10 — Passo 0 inventory + cascade desktop app
 
-**What:** (1) Kernel track lab inventory on emedev WSL2. (2) Desktop control app (zenity/CLI) for cascade.
+**What:** (1) Kernel track lab inventory on host WSL2. (2) Desktop control app (zenity/CLI) for cascade.
 **Category:** local-check + integration
 **Measured data:**
 - WSL_YES; GPU RTX 2060 via GPU-PV (PCI vendor 0x1414); no /dev/dri; kernel-true Gate A1 **FAIL**
@@ -385,7 +385,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **Verdict:** ✅ inventory blocks LKM on this lab; ✅ control app MVP ready
 **Next action:** user may `sudo cascade-app.sh start` or --gui; trilha K waits bare-metal.
 
-## 2026-07-10 — Hyper-V lab on R: RUSSIA (3 paths)
+## 2026-07-10 — Hyper-V lab on secondary storage (3 paths)
 
 **What:** Path1 VM+ISO; Path2 DDA inventory; Path3 dual-boot shrink attempt; mainline PRD.
 **Category:** integration / local-check
@@ -426,7 +426,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **Verdict:** ✅ lab Linux usable via SSH from Windows (not via WSL NAT)
 **Next action:** none for user; optional detach CIDATA ISO after first boot
 
-## 2026-07-10 — Dual-boot unblocked on E: (ESPANHA), not R:
+## 2026-07-10 — Dual-boot unblocked on secondary storage, not R:
 
 **What:** Explain and fix dual-boot/kernel-true blocker (NTFS shrink).
 **Category:** integration / host-safety
@@ -999,7 +999,7 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 ```bash
 ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\tmp-guest-lab-drill.ps1
 # or re-run with Machine env RAMSHARED_DRILL_PASSWORD set
-cat /mnt/c/Users/emedev/ramshared-drill/agent-guest-lab-20260714-results.json
+cat /mnt/c/Users/<user>/ramshared-drill/agent-guest-lab-20260714-results.json
 ```
 **Measured data:**
 - package: ramshared.sys 31120, poolstress.sys 9104; backend exe 8704
@@ -1087,7 +1087,7 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 .\scripts\windows\Format-RamSharedLun.ps1 -ExpectedSizeBytes 67108864 -DriveLetter S -Force
 .\scripts\windows\Measure-RamSharedDiskIo.ps1 -Seconds 6 -DriveLetter S
 ```
-**Measured data (host EMEDEV, elevated, 2026-07-14):**
+**Measured data (host dev-workstation, elevated, 2026-07-14):**
 - Backend: CREATE_DISK ok REGISTER_QUEUE ok (pid alive)
 - Disk5: RAMSHARE VRAMDISK 67108864 RAW → **GPT + NTFS** letter **S:** label RAMSHARED Size~64 MiB
 - Direct 8 MiB probe: **write ≈ 1224 MB/s**, **read ≈ 146 MB/s**, **match=True**
@@ -1117,17 +1117,17 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 - Direct probe (guest): **write ≈ 101.9 MB/s**, **read ≈ 64.9 MB/s**, **match=True** (4 MiB fallback; full `Measure-RamSharedDiskIo.ps1` hit guest ExecutionPolicy block — numbers from inline probe)
 - Teardown: backend STOP_OK; VM **Off** (no host pagefile on LUN; no thrash)
 - Artifacts: `C:\ramshared\artifacts\agent-guest-tm-reload-20260714-122717.json` (also earlier attempts 121725 pnputil-only FAIL, 122425 Trim parse FAIL — fixed)
-- Prior same-day host path (EMEDEV): Disk5 RAMSHARE RAW→S: NTFS; probe 8 MiB write≈1224 / read≈146 match=True (validation 11:52 entry)
+- Prior same-day host path (dev-workstation): Disk5 RAMSHARE RAW→S: NTFS; probe 8 MiB write≈1224 / read≈146 match=True (validation 11:52 entry)
 **Verdict:** ✅ Guest signed reload + CREATE/FORMAT/MEASURE **PASS** (pass=9 fail=0)
 **Next action:** optional Bypass execution policy on guest for CIM measure script; optional INF/PnP FriendlyName branding (RAMSHARE vs Msft Virtual Disk)
 
 ## 2026-07-14 13:27 -03 — host memory policy: WSL 16G RAM + 4G VRAM cascade (no wsl --shutdown)
 
-**What:** Apply shared-host policy so WSL2 does not starve Windows/Hyper-V (civm, win11-drill): system RAM cap 16 GiB in `.wslconfig`; cascade VRAM tier 4 GiB; GPU free floor 1 GiB. Applied cascade-down/up live without `wsl --shutdown` (user mid-work).
+**What:** Apply shared-host policy so WSL2 does not starve Windows/Hyper-V (isolated guest VMs): system RAM cap 16 GiB in `.wslconfig`; cascade VRAM tier 4 GiB; GPU free floor 1 GiB. Applied cascade-down/up live without `wsl --shutdown` (user mid-work).
 **Category:** config / e2e
 **How to measure:**
 ```bash
-cat /mnt/c/Users/emedev/.wslconfig
+cat /mnt/c/Users/<user>/.wslconfig
 cat /etc/ramshared/cascade.conf
 swapon --show
 ./target/release/ramshared status
@@ -1143,7 +1143,7 @@ nvidia-smi --query-gpu=memory.total,memory.free --format=csv
 - residual: disk used ~650 MiB after swapoff-first down (pages from prior zram) → phase UsingDisk expected until reclaimed
 - GPU free ~4.5 GiB (>= 1 GiB headroom policy)
 - **WSL MemTotal still ~15–16 GiB this session** — `.wslconfig` already 16G; full re-read of limits only needs later `wsl --shutdown` if Windows still held old 28G attempt (current session already ~16G)
-**Verdict:** ✅ Cascade 4G VRAM path LIVE without killing WSL session; host residual RAM policy documented for Windows+civm
+**Verdict:** ✅ Cascade 4G VRAM path LIVE without killing WSL session; host residual RAM policy documented for Windows + guest VMs
 **Next action:** when idle, optional `wsl --shutdown` once to ensure Windows fully reloads `.wslconfig`; avoid demote/pressure thrash on daily host
 
 ## 2026-07-14 16:41 -03 — .wslconfig escape-safe manage (platform guard)
@@ -2246,7 +2246,7 @@ access path for the Hyper-V Linux lab.
 
 - Historical record found: 2026-07-10 validation said SSH worked from the
   Windows host, not from WSL NAT.
-- Local access file confirms user `emedev`, SSH keys installed, passwordless
+- Local access file confirms user `<user>`, SSH keys installed, passwordless
   sudo, and MAC lookup fallback.
 - `Get-VMNetworkAdapter.IPAddresses` remained empty, but Windows neighbor
   table mapped VM MAC `00-15-5D-00-FA-04` to `172.23.18.42`.

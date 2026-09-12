@@ -108,8 +108,8 @@ kernel is worthwhile; **P2/P3** must not block day-to-day use.
 ### 3.3 Dual boot in this PRD
 
 **Optional.** It is not the “turn on WSL and use it” path.
-Space on **E: ESPANHA (~32 GB unallocated)** exists if P2 requires bare metal.
-R: RUSSIA remains bad for NTFS shrinking (~2.7 GB shrinkable).
+Space on **Secondary Storage 1 (~32 GB unallocated)** exists if P2 requires bare metal.
+Secondary Storage 2 remains bad for NTFS shrinking (~2.7 GB shrinkable).
 
 ---
 

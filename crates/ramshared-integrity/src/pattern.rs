@@ -13,6 +13,7 @@ pub enum Pattern {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IntegrityError {
     CorruptedMemory { offset: usize, bit_flip_mask: u8 },
+    SingleBitError { offset: usize, bit_index: u8 },
     InvalidStride { stride: usize, page_size: usize },
 }
 
@@ -26,6 +27,12 @@ impl fmt::Display for IntegrityError {
                 write!(
                     f,
                     "corrupted memory at offset {offset}: bit flip mask {bit_flip_mask:#04x}"
+                )
+            }
+            IntegrityError::SingleBitError { offset, bit_index } => {
+                write!(
+                    f,
+                    "single-bit error detected at offset {offset} (bit {bit_index})"
                 )
             }
             IntegrityError::InvalidStride { stride, page_size } => {
@@ -75,10 +82,18 @@ pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), Integrity
     fill_block(&mut expected, idx, kind);
     for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
         if actual != exp {
-            return Err(IntegrityError::CorruptedMemory {
-                offset,
-                bit_flip_mask: actual ^ exp,
-            });
+            let diff = actual ^ exp;
+            if diff.count_ones() == 1 {
+                return Err(IntegrityError::SingleBitError {
+                    offset,
+                    bit_index: diff.trailing_zeros() as u8,
+                });
+            } else {
+                return Err(IntegrityError::CorruptedMemory {
+                    offset,
+                    bit_flip_mask: diff,
+                });
+            }
         }
     }
     Ok(())
@@ -120,7 +135,7 @@ mod tests {
     fn corruption_breaks_verify() {
         let mut buf = vec![0u8; 4096];
         fill_block(&mut buf, 7, Pattern::Random);
-        buf[1234] ^= 0x01;
+        buf[1234] ^= 0x03; // multi-bit flip
         let Err(err) = verify_block(&buf, 7, Pattern::Random) else {
             panic!("Expected an error for corrupted buffer");
         };
@@ -128,7 +143,20 @@ mod tests {
             err,
             IntegrityError::CorruptedMemory {
                 offset: 1234,
-                bit_flip_mask: 0x01,
+                bit_flip_mask: 0x03,
+            }
+        );
+
+        buf[1234] ^= 0x03; // restore
+        buf[2345] ^= 0x08; // single-bit flip (bit 3)
+        let Err(err2) = verify_block(&buf, 7, Pattern::Random) else {
+            panic!("Expected an error for corrupted buffer");
+        };
+        assert_eq!(
+            err2,
+            IntegrityError::SingleBitError {
+                offset: 2345,
+                bit_index: 3,
             }
         );
     }
@@ -141,5 +169,78 @@ mod tests {
         fill_block(&mut b, 2, Pattern::Random);
         assert_ne!(a, b); // pattern differs by block index
         assert!(verify_block(&a, 2, Pattern::Random).is_err()); // wrong index verification fails
+    }
+
+    #[test]
+    fn test_pattern_error_display_formats_correctly() {
+        let err_corr = IntegrityError::CorruptedMemory {
+            offset: 42,
+            bit_flip_mask: 0xab,
+        };
+        assert_eq!(
+            err_corr.to_string(),
+            "corrupted memory at offset 42: bit flip mask 0xab"
+        );
+
+        let err_single = IntegrityError::SingleBitError {
+            offset: 100,
+            bit_index: 5,
+        };
+        assert_eq!(
+            err_single.to_string(),
+            "single-bit error detected at offset 100 (bit 5)"
+        );
+
+        let err_stride = IntegrityError::InvalidStride {
+            stride: 123,
+            page_size: 4096,
+        };
+        assert_eq!(
+            err_stride.to_string(),
+            "pattern scanning stride (123) does not evenly divide memory page size (4096)"
+        );
+    }
+
+    #[test]
+    fn test_pattern_generation_known_seed_ok() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, 0, Pattern::Sequential);
+        assert_eq!(buf[0], 0);
+        assert_eq!(buf[1], 1);
+        assert_eq!(buf[255], 255);
+        assert_eq!(buf[256], 0); // wraps around
+    }
+
+    #[test]
+    fn test_pattern_boundary_zero_ok() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, 0, Pattern::Zero);
+        assert!(buf.iter().all(|&b| b == 0));
+        assert!(verify_block(&buf, 0, Pattern::Zero).is_ok());
+    }
+
+    #[test]
+    fn test_pattern_boundary_max_ok() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, u64::MAX, Pattern::Random);
+        assert!(verify_block(&buf, u64::MAX, Pattern::Random).is_ok());
+
+        let mut buf_seq = vec![0u8; 4096];
+        fill_block(&mut buf_seq, u64::MAX, Pattern::Sequential);
+        assert!(verify_block(&buf_seq, u64::MAX, Pattern::Sequential).is_ok());
+        assert_eq!(buf_seq[0], 255);
+        assert_eq!(buf_seq[1], 0);
+    }
+
+    #[test]
+    fn test_pattern_misaligned_err() {
+        let odd_buf = vec![0u8; 123];
+        assert_eq!(
+            verify_block(&odd_buf, 42, Pattern::Zero),
+            Err(IntegrityError::InvalidStride {
+                stride: 123,
+                page_size: 4096
+            })
+        );
     }
 }

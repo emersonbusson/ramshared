@@ -160,7 +160,7 @@ Spec pipeline that *uses* these disciplines: [`docs/SSDV3-PROMPTS.md`](../SSDV3-
 **Rule:**
 
 1. **Safe failure is default** — missing protection fails loud (no silent leak/UAF).  
-2. **Cure must not depend on the resource being healthy** — demote/reclaim under full VRAM; host-safety must not use unsupervised live WSL2 pressure (qemu/civm preferred, shared-host watchdog harness when explicit). Abort-threshold ≠ trigger-threshold; measure **live** at the gate.
+2. **Cure must not depend on the resource being healthy** — demote/reclaim under full VRAM; host-safety must not use unsupervised live WSL2 pressure (QEMU/isolated VM preferred, shared-host watchdog harness when explicit). Abort-threshold ≠ trigger-threshold; measure **live** at the gate.
 
 PR checklist for guards / watchdogs / demote:
 
@@ -186,7 +186,7 @@ PR checklist for guards / watchdogs / demote:
 **Bias:** #9 both ways — “make it pass now” glues wrong layer; Day-0 cleanup deletes only defense of an uncovered class.  
 **Rule:**
 
-1. Fix where the root lives (eviction → demote engine; uAPI layout → header+handler; thrash → safety/civm policy).  
+1. Fix where the root lives (eviction → demote engine; uAPI layout → header+handler; thrash → safety/isolated-VM policy).
 2. Never reconstruct authoritative identity downstream of a lossy transform.  
 3. Sunset workarounds only with proof the source covers **this** failure class (two failures → two proofs; multi-lens before deleting “redundant” paths).
 
