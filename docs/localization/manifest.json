@@ -15,8 +15,8 @@
     {
       "canonical_source": "README.md",
       "localized_path": "README.pt-BR.md",
-      "source_sha256": "7dbabbef2f4605585e9f701599dd65dc517b0c51fd9753d02da0ad8c550958d8",
-      "translation_sha256": "93d732ef7adc562505398714f3132f015c5988e816f2dc013f4cc68b75e84e42",
+      "source_sha256": "538f1fb3de8bae761c77a3a9724362172e0fe75641f291843aa37b33efe89522",
+      "translation_sha256": "3ead1cfe96ff7f0425f1ac4cf59492035afec52f975fee4335bb5f14a9a8ddfc",
       "state": "stale",
       "state_reason": "The canonical README changed after the last recorded review; no current human review receipt exists.",
       "policy": "informational-non-normative",
@@ -27,7 +27,7 @@
     {
       "canonical_source": "README.md",
       "localized_path": "docs/pt-BR/README.md",
-      "source_sha256": "7dbabbef2f4605585e9f701599dd65dc517b0c51fd9753d02da0ad8c550958d8",
+      "source_sha256": "538f1fb3de8bae761c77a3a9724362172e0fe75641f291843aa37b33efe89522",
       "translation_sha256": "f5e2a396ff0b04bad61610e58bc006210ee56d17cb006b0a0f3a39d934500718",
       "state": "partial",
       "state_reason": "Structural coverage is checked, but no human translation review receipt exists for the current canonical source.",
