@@ -193,7 +193,7 @@ revert this ITEM and keep the cascade disabled pending investigation.
 
 | Path | Change | RF / DT | Tests / cover |
 | --- | --- | --- | --- |
-| `crates/ramshared-cli/src/bounded_process.rs` | private process groups, finite capture, bounded reap, fatal containment seam | RF-T6; DT-T1 | named matrix below; ≥80% line coverage |
+| `crates/ramshared-cli/src/bounded_process/mod.rs,crates/ramshared-cli/src/bounded_process/sandbox.rs` | private process groups, finite capture, bounded reap, fatal containment seam | RF-T6; DT-T1 | named matrix below; ≥80% line coverage |
 | `crates/ramshared-cli/src/cascade/cascade_io.rs` | shared bounded runner integration, exact daemon identity/cleanup, strict zram output parse, transactional tier records and rollback, English diagnostics | RF-T3..RF-T6; DT-T1..DT-T6 | named matrix below; ≥80% line coverage |
 | `docs/governance/rust-slice-coverage.json` | exact `cascade-transport-orchestration` owner | DT-T1..DT-T6 | canonical command below |
 | `tools/ci/plan-rust-slice-coverage.test.mjs` | exact owner and named-test assertion | DT-T5/DT-T6 | Node planner test |
@@ -231,7 +231,7 @@ revert this ITEM and keep the cascade disabled pending investigation.
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-cli \
-  --files crates/ramshared-cli/src/bounded_process.rs,crates/ramshared-cli/src/cascade/cascade_io.rs \
+  --files crates/ramshared-cli/src/bounded_process/mod.rs,crates/ramshared-cli/src/bounded_process/sandbox.rs,crates/ramshared-cli/src/cascade/cascade_io.rs \
   --min 80 \
   --report-json tmp/cascade-transport-orchestration-cov.json
 ```

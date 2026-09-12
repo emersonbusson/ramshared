@@ -143,7 +143,7 @@ Tests: `monitor_v4_records_full_pressure_and_sanitized_topn`,
 `gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid`.
 Cover ≥80%.
 
-**CREATE `crates/ramshared-cli/src/bounded_process.rs`** — shared private-group
+**CREATE `crates/ramshared-cli/src/bounded_process/mod.rs,crates/ramshared-cli/src/bounded_process/sandbox.rs`** — shared private-group
 spawn, bounded concurrent capture, exact group termination, bounded reap, and
 fatal-controller seam. Tests: `capture_runner_keeps_legitimate_success_and_nonzero_status_typed`,
 `capture_runner_rejects_bounded_output_overflow`, and

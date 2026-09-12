@@ -58,8 +58,7 @@ mod tests {
 
     #[test]
     fn isolate_filesystem_namespace_replaces_command_with_unshare() {
-        std::fs::write("/tmp/ramshared_test_unshare_bypass.marker", b"1")
-            .unwrap_or_else(|_| panic!("failed to write bypass marker"));
+        std::fs::write("/tmp/ramshared_test_unshare_bypass.marker", b"1").unwrap_or_else(|_| panic!("failed to write bypass marker"));
         let mut command = Command::new("echo");
         command.arg("hello");
         command.env("TEST_ENV", "1");

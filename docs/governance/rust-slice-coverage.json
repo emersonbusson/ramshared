@@ -65,7 +65,7 @@
         "-p",
         "ramshared-cli",
         "--files",
-        "crates/ramshared-cli/src/bounded_process.rs,crates/ramshared-cli/src/cascade/cascade_io.rs",
+        "crates/ramshared-cli/src/bounded_process/mod.rs,crates/ramshared-cli/src/bounded_process/sandbox.rs,crates/ramshared-cli/src/cascade/cascade_io.rs",
         "--min",
         "80",
         "--report-json",
@@ -75,7 +75,8 @@
         "ramshared-cli"
       ],
       "files": [
-        "crates/ramshared-cli/src/bounded_process.rs",
+        "crates/ramshared-cli/src/bounded_process/mod.rs",
+        "crates/ramshared-cli/src/bounded_process/sandbox.rs",
         "crates/ramshared-cli/src/cascade/cascade_io.rs"
       ],
       "min": 80

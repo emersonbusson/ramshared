@@ -599,7 +599,7 @@ where
         ));
     }
     for arg in command.get_args() {
-        if arg.as_bytes().contains(&0) || arg.as_bytes() == b"<string-with-nul>" {
+        if arg.as_bytes().contains(&0) {
             return Err(ProcessSpawnError::spawn(
                 label,
                 io::Error::new(io::ErrorKind::InvalidInput, "nul byte"),
