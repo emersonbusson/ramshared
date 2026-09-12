@@ -76,6 +76,10 @@ struct ramshared_param {
 #define RAMSHARED_IOC_GET_INFO	_IOR(RAMSHARED_IOC_MAGIC, 1, struct ramshared_info)
 #define RAMSHARED_IOC_SET_PARAM	_IOW(RAMSHARED_IOC_MAGIC, 2, struct ramshared_param)
 
-int ramshared_ioctl(struct block_device *bdev, fmode_t mode,
+#include "compat.h"
+
+extern const struct attribute_group *ramshared_attr_groups[];
+
+int ramshared_ioctl(struct block_device *bdev, ramshared_blk_mode_t mode,
 		    unsigned int cmd, unsigned long arg);
 #endif /* _RAMSHARED_H */

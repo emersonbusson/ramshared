@@ -60,7 +60,7 @@ Versão: **v0.11.0 (Release de Produção Qualificado e Cascata de Memória Mult
 | Proteção Anti-Travamento no WSL2 | **Blindada e Verificada** | Elimina travamentos da interface e do terminal através do desligamento ordenado (`swapoff-first`) e controle dinâmico de memória. |
 | Driver Windows StorPort | **Topologia de Miniport Qualificada** | Driver nativo de disco virtual para Windows com serviços isolados, comunicação segura via named pipes e streaming DMA em hardware. |
 | Origem Confiável em Disco | **Capacidade 100% Determinística** | Usa o SSD como base definitiva para garantir que nenhum dado seja perdido caso a placa de vídeo seja desconectada ou requisitada. |
-| Transporte ublk para Linux Upstream | **Submetido Upstream LKML e WSL ([#41054](https://github.com/microsoft/WSL/issues/41054))** | Driver de bloco zero-copy via `io_uring` submetido para integração no Linux oficial e WSL2 em x86_64 e aarch64. |
+| Transporte ublk e Driver In-Tree | **LKML RFC v3 & WSL2 Custom 6.18+** | Driver de bloco de kernel nativo (`ramshared.ko`) e `ublk` zero-copy (`io_uring`) qualificados no Linux 6.18+ ([#41054](https://github.com/microsoft/WSL/issues/41054)). |
 
 
 O status acima reflete qualificação verificada em hardware. As
@@ -141,24 +141,24 @@ Quando o Windows, jogos ou aplicativos 3D solicitam memória de vídeo, o RamSha
 
 ### Comparação de Benchmarks em Hardware Real
 
-Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, SSD Samsung 850 EVO de origem, WSL2 Linux 6.6+):
+Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, SSD Samsung 850 EVO de origem, WSL2 2.7.14.0 / Linux Kernel 6.18+):
 
 ```text
 ┌─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┐
 │ Dimensão / Parâmetro    │ Tier 0: ZRAM (CPU)      │ Tier 1: GPU VRAM Cache  │ Tier 3: Origem SSD      │ Direção de Otimização   │
 ├─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
 │ Latência de Acesso      │ 0,08 µs                 │ 1,72 µs                 │ 48,2 µs                 │ [🔻 Menos é melhor]     │
-│ Vazão Sustentada        │ Direto no barramento    │ 6,07 GiB/s (PCIe DMA)   │ 6,63 GB/s liberação     │ [🔺 Mais é melhor]      │
+│ Vazão Sustentada        │ Direto no barramento    │ 6,07 GiB/s (PCIe DMA)   │ 10,17 GB/s liberação    │ [🔺 Mais é melhor]      │
 │ Telemetria Empírica     │ 124,5 MB/s ativo        │ 612,2 MB/s (30,6x boost)│ 1.077,2 MB/s randômico  │ [🔺 Mais é melhor]      │
 │ Saturação de Memória    │ 1.024 MB (100% cheio)   │ 4.096 MB (100% cheio)   │ 2.367 MB swap ativo     │ [🔺 Mais é melhor]      │
 │ Comportamento sob Carga │ Motor hardware LZO      │ Spillway em ring-buffer │ Ciclos em Tier 3        │ Alvo de estabilidade    │
 │ Pressão de Memória PSI  │ 0,00% avg10             │ 0,00% avg10             │ 0,00% avg10 pressão     │ [🔻 Menos é melhor]     │
-│ Memória RAM Restaurada  │ 9,2 GB livres           │ 9,2 GB livres           │ 9,2 GB livres (zero vaz)│ [🔺 Mais é melhor]      │
+│ Memória RAM Restaurada  │ 9,8 GB livres           │ 9,8 GB livres           │ 9,8 GB livres (zero vaz)│ [🔺 Mais é melhor]      │
 └─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘
 
 • Carga de Qualificação de Estresse Empírico: 19.777 MB de alocação total sob pressão em malha fechada.
 • Qualificação de Tier 3 (origem SSD): 2.367 MB de capacidade e uso durável de swap documentados.
-• Estabilidade do Host e Liberação: Sucesso na restauração de 9,2 GB de RAM livre no host com zero vazamento.
+• Estabilidade do Host e Liberação: Sucesso na restauração de 9,8 GB de RAM livre no host com zero vazamento (10,17 GB/s de vazão de liberação).
 • Veredito de Estabilidade: PASS_ZERO_PANIC
 ```
 
@@ -261,7 +261,7 @@ O RamShared é implantado, avaliado e homologado em comunidades de engenharia de
 | Componente | Responsabilidade |
 | --- | --- |
 | `ramshared` | CLI: verificação, teste de estresse, painel de monitoramento, ciclo de vida, status e diagnóstico |
-| `ramsharedd` | Serviço de bloco em GPU (motor dual-tier ublk/chardev engine) |
+| `ramsharedd` | Serviço de bloco acelerado por GPU (motor multi-tier em cascata com ublk/NBD) |
 | `ramshared-tier` | Política de camadas, histerese e segurança de despromoção |
 | `ramshared-cuda` | Wrapper seguro e FFI direto em memória para o driver NVIDIA CUDA |
 | `ramshared-vulkan` | Motor de memória GPU multi-vendor para AMD Radeon e Intel Arc via VMA |

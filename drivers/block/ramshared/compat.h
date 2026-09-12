@@ -116,4 +116,10 @@ static inline void ramshared_set_capacity(struct gendisk *disk, sector_t sectors
 #endif
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+typedef blk_mode_t ramshared_blk_mode_t;
+#else
+typedef fmode_t ramshared_blk_mode_t;
+#endif
+
 #endif /* _RAMSHARED_COMPAT_H */
