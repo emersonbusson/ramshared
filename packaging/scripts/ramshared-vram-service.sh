@@ -53,16 +53,19 @@ detect_vram_capacity() {
     fi
 
     if [[ "$total_mib" =~ ^[0-9]+$ ]] && [[ "$total_mib" -gt 0 ]]; then
-        local reserve_mib=$(( total_mib * 20 / 100 ))
+        local reserve_mib=$(( total_mib * 35 / 100 ))
         if [[ $reserve_mib -lt 2048 ]]; then
             reserve_mib=2048
         fi
-        local target_mib=$(( total_mib - reserve_mib ))
-        if [[ $target_mib -gt $free_mib ]]; then
-            target_mib=$(( free_mib - 512 ))
-        fi
+        # Host reserve floor must remain free on GPU after allocation
+        local target_mib=$(( free_mib - reserve_mib ))
         if [[ $target_mib -lt 512 ]]; then
-            target_mib=512
+            echo 0
+            return 0
+        fi
+        # Cap to 2048 MiB on consumer GPUs (<= 8GB) to guarantee Tier 3 (SSD) cascade spillover
+        if [[ $total_mib -le 8192 && $target_mib -gt 2048 ]]; then
+            target_mib=2048
         fi
         echo "$target_mib"
     else

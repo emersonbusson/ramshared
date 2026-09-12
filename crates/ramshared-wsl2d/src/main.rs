@@ -4541,6 +4541,76 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
     backend
 }
 
+/// Calculates the maximum safe VRAM allocation per slice, respecting the host reserve floor.
+///
+/// Principle 11 (Shared Hardware & Tiering Coexistence Invariant):
+/// On shared-memory environments (such as WSL2/dxgkrnl), GPU VRAM is shared between the host OS
+/// display manager (DWM), host applications, and WSL2. Allocating too much VRAM starves the host
+/// GPU memory manager, leading to driver timeouts (TDR) and system deadlocks.
+///
+/// Rules:
+/// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
+///   environment, and no clamping is applied.
+/// - HOST_RESERVE_FLOOR = max(2048 MB, total_vram * 35%)
+/// - The host floor must remain FREE after our allocation:
+///   `max_safe_total = free_vram.saturating_sub(host_floor)`
+/// - Maximum allowed slice on consumer GPUs (<= 8GB) is capped at 2048 MB to guarantee
+///   proper cascade spillover into Tier 3 (SSD).
+pub fn calculate_safe_vram_slice(
+    requested_slice_bytes: u64,
+    slices: u16,
+    total_vram: u64,
+    free_vram: u64,
+) -> (u64, bool) {
+    const MIN_REAL_GPU_BYTES: u64 = 2048 * 1024 * 1024; // 2048 MiB
+    if slices == 0 || requested_slice_bytes == 0 || total_vram < MIN_REAL_GPU_BYTES {
+        return (requested_slice_bytes, false);
+    }
+
+    let total_requested = match (slices as u64).checked_mul(requested_slice_bytes) {
+        Some(t) => t,
+        None => return (requested_slice_bytes, false),
+    };
+
+    // Calculate host reserve floor: max(2048 MiB, 35% of total VRAM)
+    let floor_35_pct = total_vram.saturating_mul(35) / 100;
+    let min_floor = MIN_REAL_GPU_BYTES;
+    let host_floor = std::cmp::max(min_floor, floor_35_pct);
+
+    // Host floor must remain free on the GPU after our allocation
+    let mut max_safe_total = free_vram.saturating_sub(host_floor);
+
+    // On consumer GPUs (<= 8 GiB total), cap total allocation to 2048 MiB to guarantee
+    // clean Tier 3 (SSD) spillover rather than hogging the GPU
+    let eight_gib = 8 * 1024 * 1024 * 1024;
+    if total_vram <= eight_gib && max_safe_total > MIN_REAL_GPU_BYTES {
+        max_safe_total = MIN_REAL_GPU_BYTES;
+    }
+
+    if max_safe_total == 0 {
+        // GPU is already below safety floor; return minimum viable slice (e.g. 128 MiB)
+        let min_slice = 128 * 1024 * 1024;
+        return (min_slice, true);
+    }
+
+    let max_safe_per_slice = max_safe_total / (slices as u64);
+
+    // Align down to 128 MiB boundary if possible
+    let align = 128 * 1024 * 1024;
+    let aligned_slice = (max_safe_per_slice / align) * align;
+    let final_safe_slice = if aligned_slice > 0 {
+        aligned_slice
+    } else {
+        max_safe_per_slice
+    };
+
+    if total_requested > max_safe_total && final_safe_slice < requested_slice_bytes {
+        (final_safe_slice, true)
+    } else {
+        (requested_slice_bytes, false)
+    }
+}
+
 /// VRAM broker path (ITEM-8): slices VRAM into `slices` NBD exports served by Unix +
 /// (optional) TCP, with the arbiter deciding who uses each slice. The single worker owns the
 /// VRAM/CUDA context and runs residency §9/§9.4. Live execution is the QEMU gate (`--backend
@@ -4557,10 +4627,20 @@ fn run_broker<P: VramProvider>(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let (free, total_vram) = provider.mem_info().unwrap_or((0, 0));
+    let (effective_slice_bytes, was_clamped) =
+        calculate_safe_vram_slice(slice_bytes, slices, total_vram, free);
+    if was_clamped {
+        eprintln!(
+            "[ramsharedd] WARNING: requested VRAM allocation ({} MiB/slice) exceeds host safety ceiling. Clamping to {} MiB to preserve host reserve floor (Principle 11).",
+            slice_bytes >> 20,
+            effective_slice_bytes >> 20
+        );
+    }
     let setup_sock = sock.clone();
     run_broker_with_setup(
         provider,
-        slice_bytes,
+        effective_slice_bytes,
         slices,
         sock,
         force,
@@ -4568,7 +4648,7 @@ fn run_broker<P: VramProvider>(
         move || {
             broker_setup(
                 slices,
-                slice_bytes,
+                effective_slice_bytes,
                 &setup_sock,
                 listen_nbd_addr,
                 advertise_tcp,
@@ -10587,5 +10667,42 @@ Filename Type Size Used Priority
         ]))
         .expect("auto backend must parse");
         assert!(matches!(args.backend, BackendKind::Auto));
+    }
+
+    #[test]
+    fn test_host_vram_clamping_rtx2060() {
+        // RTX 2060: 6144 MiB total, 4800 MiB free
+        let total_vram = 6144 * 1024 * 1024;
+        let free_vram = 4800 * 1024 * 1024;
+        let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(clamped, "allocation must be clamped to protect Windows host");
+        // On <= 8GB GPU, capped to 2048 MiB to protect Windows DWM and enable Tier 3 spillover
+        assert_eq!(safe_slice, 2048 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_unconstrained() {
+        // RTX 4090: 24576 MiB total, 20000 MiB free
+        let total_vram = 24576 * 1024 * 1024;
+        let free_vram = 20000 * 1024 * 1024;
+        let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(!clamped, "RTX 4090 with ample headroom must not be clamped");
+        assert_eq!(safe_slice, requested_slice);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_mock_small() {
+        // Mock provider: 64 MiB total
+        let total_vram = 64 * 1024 * 1024;
+        let free_vram = 64 * 1024 * 1024;
+        let requested_slice = 32 * 1024 * 1024;
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(!clamped, "Mock environment under 2048 MiB must not be clamped");
+        assert_eq!(safe_slice, requested_slice);
     }
 }
