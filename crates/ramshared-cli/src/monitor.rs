@@ -248,8 +248,14 @@ fn read_benchmark_qualification(path: &Path) -> (f64, f64, String) {
     if let Ok(content) = fs::read_to_string(path)
         && let Ok(json) = serde_json::from_str::<Value>(&content)
     {
-        let speed = json.get("reclaim_speed_gbs").and_then(Value::as_f64).unwrap_or(0.0);
-        let duration = json.get("reclaim_duration_ms").and_then(Value::as_f64).unwrap_or(0.0);
+        let speed = json
+            .get("reclaim_speed_gbs")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let duration = json
+            .get("reclaim_duration_ms")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
         let status = json
             .get("status")
             .and_then(Value::as_str)
