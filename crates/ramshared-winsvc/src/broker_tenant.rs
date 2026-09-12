@@ -159,7 +159,10 @@ impl BrokerTenant {
         if let Some(q) = &self.quota {
             let res = q.enforce(bytes);
             if let Err(limit) = res {
-                return Err(BrokerTenantError::QuotaExceeded { limit, requested: bytes });
+                return Err(BrokerTenantError::QuotaExceeded {
+                    limit,
+                    requested: bytes,
+                });
             }
         }
         write_msg(stream, &Msg::LeaseRequest { bytes })
@@ -367,7 +370,10 @@ mod tests {
         let err = t.request_lease(&mut stream, 2048).unwrap_err();
         assert!(matches!(
             err,
-            BrokerTenantError::QuotaExceeded { limit: 1024, requested: 2048 }
+            BrokerTenantError::QuotaExceeded {
+                limit: 1024,
+                requested: 2048
+            }
         ));
     }
 
