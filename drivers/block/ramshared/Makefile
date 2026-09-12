@@ -5,7 +5,7 @@
 
 obj-$(CONFIG_BLK_DEV_RAMSHARED) += ramshared.o
 
-ramshared-y := main.o dma.o queue.o control.o
+ramshared-y := main.o dma.o queue.o control.o control.o
 
 # Standalone build support
 KDIR ?= /lib/modules/$(shell uname -r)/build
