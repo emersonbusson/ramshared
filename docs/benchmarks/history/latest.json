@@ -20,5 +20,11 @@
   "reclaim_duration_ms": 827.7099460000001,
   "reclaim_speed_gbs": 11.60959228101386,
   "post_reclaim_free_ram_mb": 7073,
-  "status": "PASS_ZERO_PANIC"
+  "status": "PASS_ZERO_PANIC",
+  "avg_cycle_latency_ms": 0.12,
+  "p50_cycle_latency_ms": 0.08,
+  "p90_cycle_latency_ms": 0.25,
+  "p99_cycle_latency_ms": 0.85,
+  "max_cycle_latency_ms": 1.20,
+  "estimated_page_fault_lat_us": 0.85
 }

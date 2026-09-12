@@ -89,3 +89,91 @@ test('compare-benchmarks passes on throughput gain', () => {
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+test('compare-benchmarks flags tail latency regression (>10%)', () => {
+  const tmpDir = fs.mkdtempSync('/tmp/bench-test-');
+  const base = path.join(tmpDir, 'base.json');
+  const cand = path.join(tmpDir, 'cand.json');
+
+  const baseData = {
+    battery_mode: true,
+    cascade_mode: false,
+    max_safe_pct: 5,
+    total_allocated_mb: 795,
+    peak_swap_mb: 1182,
+    tier1_zram_mb: 887,
+    tier1_zram_pct: 86,
+    tier2_vram_mb: 295,
+    tier2_vram_pct: 7,
+    tier3_ssd_mb: 0,
+    tier3_ssd_pct: 0,
+    peak_pressure_index: 1.91,
+    telemetry_readings_count: 7,
+    active_io_cycles_completed: 2,
+    reclaim_duration_ms: 300.0,
+    reclaim_speed_gbs: 3.00,
+    post_reclaim_free_ram_mb: 7000,
+    status: 'PASS_ZERO_PANIC',
+    p99_cycle_latency_ms: 1.0,
+  };
+
+  // Degraded P99 tail latency (1.20 ms is +20% increase)
+  const candData = { ...baseData, p99_cycle_latency_ms: 1.20 };
+
+  fs.writeFileSync(base, JSON.stringify(baseData));
+  fs.writeFileSync(cand, JSON.stringify(candData));
+
+  let threw = false;
+  try {
+    execFileSync('node', ['tools/ci/compare-benchmarks.mjs', base, cand, '--json'], { encoding: 'utf8' });
+  } catch (err) {
+    threw = true;
+    const output = JSON.parse(err.stdout);
+    assert.equal(output.passed, false, 'Degraded tail latency must not pass');
+    assert.ok(output.alarms.some(a => a.includes('P99 tail latency')), 'Must flag P99 tail latency');
+  }
+  assert.equal(threw, true, 'Degraded run must exit with non-zero code');
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('compare-benchmarks passes on tail latency reduction', () => {
+  const tmpDir = fs.mkdtempSync('/tmp/bench-test-');
+  const base = path.join(tmpDir, 'base.json');
+  const cand = path.join(tmpDir, 'cand.json');
+
+  const baseData = {
+    battery_mode: true,
+    cascade_mode: false,
+    max_safe_pct: 5,
+    total_allocated_mb: 795,
+    peak_swap_mb: 1182,
+    tier1_zram_mb: 887,
+    tier1_zram_pct: 86,
+    tier2_vram_mb: 295,
+    tier2_vram_pct: 7,
+    tier3_ssd_mb: 0,
+    tier3_ssd_pct: 0,
+    peak_pressure_index: 1.91,
+    telemetry_readings_count: 7,
+    active_io_cycles_completed: 2,
+    reclaim_duration_ms: 300.0,
+    reclaim_speed_gbs: 3.00,
+    post_reclaim_free_ram_mb: 7000,
+    status: 'PASS_ZERO_PANIC',
+    p99_cycle_latency_ms: 1.0,
+  };
+
+  // Improved P99 tail latency (0.80 ms is -20% decrease)
+  const candData = { ...baseData, p99_cycle_latency_ms: 0.80 };
+
+  fs.writeFileSync(base, JSON.stringify(baseData));
+  fs.writeFileSync(cand, JSON.stringify(candData));
+
+  const out = execFileSync('node', ['tools/ci/compare-benchmarks.mjs', base, cand, '--json'], { encoding: 'utf8' });
+  const parsed = JSON.parse(out);
+  assert.equal(parsed.passed, true);
+  assert.equal(parsed.alarms.length, 0);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});

@@ -185,6 +185,8 @@ pub struct ControlPlaneObservation {
     pub reclaim_speed_gbs: f64,
     pub reclaim_duration_ms: f64,
     pub benchmark_status: String,
+    pub benchmark_p50_lat_ms: f64,
+    pub benchmark_p99_lat_ms: f64,
     pub estimated_page_fault_lat_us: f64,
 }
 
@@ -244,7 +246,7 @@ impl Observation {
     }
 }
 
-fn read_benchmark_qualification(path: &Path) -> (f64, f64, String) {
+fn read_benchmark_qualification(path: &Path) -> (f64, f64, f64, f64, String) {
     if let Ok(content) = fs::read_to_string(path)
         && let Ok(json) = serde_json::from_str::<Value>(&content)
     {
@@ -256,14 +258,22 @@ fn read_benchmark_qualification(path: &Path) -> (f64, f64, String) {
             .get("reclaim_duration_ms")
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
+        let p50 = json
+            .get("p50_cycle_latency_ms")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let p99 = json
+            .get("p99_cycle_latency_ms")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
         let status = json
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("UNKNOWN")
             .to_string();
-        (speed, duration, status)
+        (speed, duration, p50, p99, status)
     } else {
-        (0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
     }
 }
 
@@ -313,10 +323,12 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
         read_reservation_totals(Path::new("/run/ramshared/admission/reservations.json"));
     control_plane.managed_reservations = reservations;
     control_plane.managed_reserved_bytes = reserved_bytes;
-    let (reclaim_speed, reclaim_duration, bench_status) =
+    let (reclaim_speed, reclaim_duration, bench_p50, bench_p99, bench_status) =
         read_benchmark_qualification(Path::new("docs/benchmarks/history/latest.json"));
     control_plane.reclaim_speed_gbs = reclaim_speed;
     control_plane.reclaim_duration_ms = reclaim_duration;
+    control_plane.benchmark_p50_lat_ms = bench_p50;
+    control_plane.benchmark_p99_lat_ms = bench_p99;
     control_plane.benchmark_status = bench_status;
     let top_processes = collect_top_processes(Path::new("/proc"), 10);
     let (unmanaged_state, unmanaged_kib, unmanaged_count) =
@@ -1769,12 +1781,23 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let minor_faults = pgfault_rate.saturating_sub(pgmajfault_rate);
 
     let bench_info = if observation.control_plane.reclaim_speed_gbs > 0.0 {
-        format!(
-            "⚡ {:.2} GB/s ({:.0} ms) │ {}",
-            observation.control_plane.reclaim_speed_gbs,
-            observation.control_plane.reclaim_duration_ms,
-            observation.control_plane.benchmark_status
-        )
+        if observation.control_plane.benchmark_p50_lat_ms > 0.0 {
+            format!(
+                "⚡ {:.2} GB/s ({:.0} ms │ P50 {:.2}ms / P99 {:.2}ms) │ {}",
+                observation.control_plane.reclaim_speed_gbs,
+                observation.control_plane.reclaim_duration_ms,
+                observation.control_plane.benchmark_p50_lat_ms,
+                observation.control_plane.benchmark_p99_lat_ms,
+                observation.control_plane.benchmark_status
+            )
+        } else {
+            format!(
+                "⚡ {:.2} GB/s ({:.0} ms) │ {}",
+                observation.control_plane.reclaim_speed_gbs,
+                observation.control_plane.reclaim_duration_ms,
+                observation.control_plane.benchmark_status
+            )
+        }
     } else {
         "⚡ Multi-GB/s Qualified (Zero-Leak)".to_string()
     };

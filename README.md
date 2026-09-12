@@ -9,7 +9,8 @@ RamShared is an advanced hardware-accelerated memory tiering system that opportu
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Release v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-20k%2B-blue?style=flat-square&logo=git">
+  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-44k%2B_%2F_14d-blue?style=flat-square&logo=git">
+  <img alt="Unique Cloners" src="https://img.shields.io/badge/unique_cloners-860%2B-blueviolet?style=flat-square">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
   <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-production%20ready-2f855a?style=flat-square">
   <img alt="Windows Driver" src="https://img.shields.io/badge/Windows%20driver-hardware%20qualified-2f855a?style=flat-square">
@@ -208,6 +209,14 @@ For driver distribution and WHQL attestation details, refer to [`docs/packaging/
 Empirical performance measurements and latency distributions are recorded under public evidence envelopes in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and registered in [`validation.md`](validation.md).
 
 For raw sample bundles, hardware execution traces, latency histograms, and exact reproduction steps for EVD-0037 and EVD-0038, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+
+## Community Traction & Ecosystem
+
+RamShared is deployed, evaluated, and benchmarked across global Linux, WSL2, and hardware engineering communities:
+
+- **High Adoption:** Over 44,500 Git clones across 860+ unique engineering systems in a 14-day window.
+- **Active Community Discovery:** Consistent inbound discovery from technical communities on Reddit (`r/linux`, `r/hardware`), kernel developer networks, and search indexes.
+- **Kernel Architecture Auditing:** Substantial deep-dive traffic specifically inspecting upstream Linux block drivers (`drivers/block/ramshared`) and TUI real-time monitoring (`ramshared top`).
 
 ## Architecture
 
