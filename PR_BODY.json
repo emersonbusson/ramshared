@@ -1,0 +1,32 @@
+{"branch": "jules/inbox", "title": "feat(gpu-backends): safe wrapper types around raw CUDA pointers with Drop cleanup", "body": "## Summary
+
+Create CuDevicePtr and CuContext RAII wrapper types implementing Drop for automatic CUDA resource cleanup in crates/ramshared-cuda/src/ffi.rs.
+
+## Commits
+
+| Commit | What was done | Why it was done | Details |
+|---|---|---|---|
+
+## Issue
+
+Closes #031
+
+## Assignee
+
+@jules
+
+## Labels
+
+type:feat
+area:core
+
+## Validation
+
+- [x] cargo fmt --all, cargo clippy --workspace, cargo test
+- [x] Tested with dummy data
+- [ ] SSDV3: N/A
+
+## Rollback trigger
+
+Rollback if cargo test fails or memory leaks occur.
+"}
