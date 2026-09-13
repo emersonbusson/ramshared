@@ -174,10 +174,105 @@ mod tests {
     }
 
     #[test]
+    fn validate_threshold_boundary_conditions() {
+        // Lower and upper boundaries inclusive
+        assert!(validate_threshold(10, 10, 50).is_ok());
+        assert!(validate_threshold(50, 10, 50).is_ok());
+
+        // Off-by-one outside boundaries
+        assert_eq!(
+            validate_threshold(9, 10, 50),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 9,
+                min: 10,
+                max: 50
+            })
+        );
+        assert_eq!(
+            validate_threshold(51, 10, 50),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 51,
+                min: 10,
+                max: 50
+            })
+        );
+    }
+
+    #[test]
+    fn validate_threshold_extreme_and_single_value_ranges() {
+        // Zero range & values
+        assert!(validate_threshold(0, 0, 0).is_ok());
+        assert_eq!(
+            validate_threshold(1, 0, 0),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 1,
+                min: 0,
+                max: 0
+            })
+        );
+
+        // Single value non-zero range
+        assert!(validate_threshold(10, 10, 10).is_ok());
+        assert_eq!(
+            validate_threshold(9, 10, 10),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 9,
+                min: 10,
+                max: 10
+            })
+        );
+        assert_eq!(
+            validate_threshold(11, 10, 10),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 11,
+                min: 10,
+                max: 10
+            })
+        );
+
+        // u64::MAX boundary
+        assert!(validate_threshold(u64::MAX, 0, u64::MAX).is_ok());
+        assert_eq!(
+            validate_threshold(u64::MAX, 0, u64::MAX - 1),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: u64::MAX,
+                min: 0,
+                max: u64::MAX - 1
+            })
+        );
+
+        // Inverted min > max range always rejects
+        assert_eq!(
+            validate_threshold(15, 50, 10),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 15,
+                min: 50,
+                max: 10
+            })
+        );
+    }
+
+    #[test]
     fn validate_threshold_accepts_valid() {
         assert!(validate_threshold(10, 10, 50).is_ok());
         assert!(validate_threshold(50, 10, 50).is_ok());
         assert!(validate_threshold(25, 10, 50).is_ok());
+    }
+
+    #[test]
+    fn priority_error_display_formatting() {
+        let err_threshold = PriorityError::ThresholdOutOfRange {
+            val: 5,
+            min: 10,
+            max: 50,
+        };
+        assert_eq!(
+            err_threshold.to_string(),
+            "threshold 5 out of range (10..=50)"
+        );
+
+        let err_weight = PriorityError::InvalidWeight(-1);
+        assert_eq!(err_weight.to_string(), "invalid weight: -1");
     }
 
     #[test]
