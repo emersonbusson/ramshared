@@ -47,7 +47,6 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
 | A stale environmental result is treated as current capability | Time → capability claim | Explicit lifecycle, freshness/review fields, `PARTIAL` for blocked or stale proof | Live hardware availability still limits revalidation. |
 | A cleanup note is interpreted as permission for host mutation | Documentation → privileged host | Read-only runbook/checkers, explicit operator authority, no automatic reclaim action | An authorized operator can still make a human error; command-level safeguards remain necessary. |
 | A checker passes while its own policy has drifted | Policy → CI outcome | Deterministic fixtures, negative tests, reviewable policy files, no network dependency | A checker cannot independently establish the truth of a physical measurement. |
-| Unprivileged userspace escalation via ublk control device | Userspace → Kernel (`CAP_SYS_ADMIN`) | Strict `CAP_SYS_ADMIN` enforcement on `/dev/ublk-control` IOCTLs, restricted permissions, least-privilege isolated WSL2 namespace mapping | Root operator inside WSL2 can still orchestrate malicious block payloads to crash the kernel. |
 
 ## Required handling rules
 
