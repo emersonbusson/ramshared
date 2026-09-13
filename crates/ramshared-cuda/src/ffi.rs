@@ -65,3 +65,44 @@ pub struct Syms {
     pub mem_host_unregister: Option<FnMemHostUnregister>,
     pub mem_host_get_device_pointer: Option<FnMemHostGetDevicePointer>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_registration_flags_are_disjoint_single_bits() {
+        let flags = [
+            CU_MEMHOSTREGISTER_PORTABLE,
+            CU_MEMHOSTREGISTER_DEVICEMAP,
+            CU_MEMHOSTREGISTER_IOMEMORY,
+            CU_MEMHOSTREGISTER_READ_ONLY,
+        ];
+        for (index, flag) in flags.iter().enumerate() {
+            assert_eq!(flag.count_ones(), 1);
+            for other in flags.iter().skip(index + 1) {
+                assert_eq!(flag & other, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn driver_handle_types_match_the_cuda_abi_widths() {
+        assert_eq!(
+            core::mem::size_of::<CuResult>(),
+            core::mem::size_of::<c_int>()
+        );
+        assert_eq!(
+            core::mem::size_of::<CuDevice>(),
+            core::mem::size_of::<c_int>()
+        );
+        assert_eq!(
+            core::mem::size_of::<CuDevicePtr>(),
+            core::mem::size_of::<u64>()
+        );
+        assert_eq!(
+            core::mem::size_of::<CuContext>(),
+            core::mem::size_of::<*mut c_void>()
+        );
+    }
+}

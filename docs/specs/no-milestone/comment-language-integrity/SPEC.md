@@ -682,44 +682,6 @@ projection differs only in comments. A malformed source, spoofed attribute,
 unbalanced delimiter, undeclared path, changed production token/string/control
 flow, or moved module header is a refusal.
 
-The package tests are executable local checks. Each named GPU function must
-carry adjacent `#[test]` and `#[ignore]` attributes. The ignored GPU commands
-are historical live evidence already recorded as terminal `**PASS**` commands
-in the immutable base's `validation.md`; the planner validates that record but
-never reruns them. The WSL2 backend is intentionally absent from this
-no-behavior-change owner; its production behavior and one-time ignored-test
-relocation have independent memory-broker contracts.
-
-<!-- rust-slice-test-only-localization-differential-v1
-{
-  "schema_version": 1,
-  "id": "comment-language-rust-test-only-localization",
-  "kind": "rust-test-only-localization-differential",
-  "files": [
-    "crates/ramshared-cuda/src/lib.rs"
-  ],
-  "verifications": [
-    {
-      "source": "crates/ramshared-cuda/src/lib.rs",
-      "package": "ramshared-cuda",
-      "test_module": "tests",
-      "cargo_test": ["cargo", "test", "-p", "ramshared-cuda", "--lib"],
-      "ignored_gpu_tests": [
-        {
-          "name": "gpu_roundtrip_256mib",
-          "command": ["cargo", "test", "-p", "ramshared-cuda", "--", "--ignored", "--test-threads=1"],
-          "evidence": "validation.md"
-        }
-      ]
-    }
-  ]
-}
--->
-
-```bash
-cargo test -p ramshared-cuda --lib
-```
-
 No business path from this historical localization set remains outside a
 line-coverage or test-only map entry. Every former lower-coverage production
 path now has an exact feature owner; any future unmapped business path remains

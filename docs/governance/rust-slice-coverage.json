@@ -330,27 +330,30 @@
       "min": 80
     },
     {
-      "id": "comment-language-rust-test-only-localization",
-      "kind": "rust-test-only-localization-differential",
-      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "id": "cuda-pinned-host-mapping-coverage",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-swap-driver/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cuda",
+        "--files",
+        "crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/lib.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cuda-pinned-host-mapping-cov.json"
+      ],
+      "packages": [
+        "ramshared-cuda"
+      ],
       "files": [
+        "crates/ramshared-cuda/src/driver.rs",
+        "crates/ramshared-cuda/src/ffi.rs",
         "crates/ramshared-cuda/src/lib.rs"
       ],
-      "verifications": [
-        {
-          "source": "crates/ramshared-cuda/src/lib.rs",
-          "package": "ramshared-cuda",
-          "test_module": "tests",
-          "cargo_test": ["cargo", "test", "-p", "ramshared-cuda", "--lib"],
-          "ignored_gpu_tests": [
-            {
-              "name": "gpu_roundtrip_256mib",
-              "command": ["cargo", "test", "-p", "ramshared-cuda", "--", "--ignored", "--test-threads=1"],
-              "evidence": "validation.md"
-            }
-          ]
-        }
-      ]
+      "min": 80
     },
     {
       "id": "memory-broker-wsl2d-backend",
