@@ -483,6 +483,7 @@ mod tests {
         let mut v = Vec::new();
         v.extend_from_slice(&50u64.to_be_bytes()); // stale ts
         v.extend_from_slice(&200u64.to_be_bytes()); // new nonce
+        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
         let mut r = Cursor::new(v);
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1, Some(&auth));
@@ -491,6 +492,7 @@ mod tests {
         let mut v2 = Vec::new();
         v2.extend_from_slice(&200u64.to_be_bytes()); // new ts
         v2.extend_from_slice(&100u64.to_be_bytes()); // old nonce
+        v2.extend_from_slice(&0u32.to_be_bytes()); // client_flags
         let mut r2 = Cursor::new(v2);
         let mut out2 = Vec::new();
         let res2 = server_handshake(&mut r2, &mut out2, &one(4096), 1, Some(&auth));
