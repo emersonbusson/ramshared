@@ -229,6 +229,55 @@ mod tests {
     }
 
     #[test]
+    fn validate_order_accepts_custom_and_negative_valid_hierarchies() {
+        let custom_pos = TierPriorities {
+            zram: 300,
+            vram: 200,
+            vhdx: 100,
+        };
+        assert!(validate_order(custom_pos).is_ok());
+
+        let custom_neg = TierPriorities {
+            zram: -1,
+            vram: -2,
+            vhdx: -3,
+        };
+        assert!(validate_order(custom_neg).is_ok());
+
+        let minimal_gap = TierPriorities {
+            zram: 1,
+            vram: 0,
+            vhdx: -1,
+        };
+        assert!(validate_order(minimal_gap).is_ok());
+    }
+
+    #[test]
+    fn validate_order_precedence_zram_error_first_when_both_invalid() {
+        let double_invalid = TierPriorities {
+            zram: 10,
+            vram: 20,
+            vhdx: 30,
+        };
+        assert_eq!(
+            validate_order(double_invalid),
+            Err(OrderError::ZramNotAboveVram)
+        );
+    }
+
+    #[test]
+    fn order_error_display_formatting() {
+        assert_eq!(
+            OrderError::ZramNotAboveVram.to_string(),
+            "invalid swap cascade: zram priority must be greater than VRAM"
+        );
+        assert_eq!(
+            OrderError::VramNotAboveVhdx.to_string(),
+            "invalid swap cascade: VRAM priority must be greater than VHDX"
+        );
+    }
+
+    #[test]
     fn validate_purge_age_enforces_uptime() {
         assert!(validate_purge_age(100, 200).is_ok());
         assert!(validate_purge_age(200, 200).is_ok());
