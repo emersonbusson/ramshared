@@ -1435,6 +1435,47 @@ fn format_tier_latency(
     }
 }
 
+fn format_tier_usage(used_mb: u64, size_mb: u64, peak_mb: u64, bar_len: u64) -> String {
+    let pct = used_mb
+        .saturating_mul(100)
+        .checked_div(size_mb)
+        .unwrap_or(0);
+    let bar = make_tier_bar(used_mb, size_mb, bar_len);
+    let pct_str = if used_mb > 0 && pct == 0 {
+        "<1%".to_string()
+    } else {
+        format!("{pct:>2}%")
+    };
+    let peak = peak_mb.max(used_mb);
+    let peak_pct = peak
+        .saturating_mul(100)
+        .checked_div(size_mb)
+        .unwrap_or(0);
+    format!(
+        "{bar} {pct_str} ( {used_mb:>4} MB / {size_mb} MB ) │ Peak: {peak:>4} MB ({peak_pct:>3}%)"
+    )
+}
+
+fn format_tier_speed(read_mbs: f64, write_mbs: f64, used_mb: u64) -> String {
+    if read_mbs < 0.1 && write_mbs < 0.1 {
+        if used_mb > 0 {
+            format!("Read:   0.0 │ Write:   0.0 MB/s (💤 Retaining {used_mb:>4} MB)")
+        } else {
+            "Read:   0.0 │ Write:   0.0 MB/s (💤 Standby)".to_string()
+        }
+    } else {
+        format!("Read: {read_mbs:>5.1} │ Write: {write_mbs:>5.1} MB/s (⚡ Paging Active)")
+    }
+}
+
+fn format_tier_rate(r_peak: f64, w_peak: f64, max_mbs: f64, avg_mbs: f64) -> String {
+    if max_mbs >= 5.0 || r_peak >= 1.0 || w_peak >= 1.0 {
+        format!("Peak: ⬇️ {r_peak:>4.0} │ ⬆️ {w_peak:>4.0} │ Burst: {max_mbs:>4.0} MB/s (Avg: {avg_mbs:>3.0})")
+    } else {
+        "Idle (Awaiting Workload)".to_string()
+    }
+}
+
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let width = area.width;
     let bar_len = ((width as u64) / 8).clamp(8, 20);
@@ -1445,7 +1486,6 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         .value("tiers")
         .and_then(Value::as_object)
         .map(|tiers| {
-            // Helper to extract tier data with proper rounding
             let get = |name: &str| -> (bool, u64, u64) {
                 let tier = tiers.get(name).and_then(Value::as_object);
                 let present = tier
@@ -1493,35 +1533,6 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "🔵 STANDBY [3rd Fallback]"
             };
 
-            let zram_pct = zram_used
-                .saturating_mul(100)
-                .checked_div(zram_size)
-                .unwrap_or(0);
-            let vram_pct = vram_used
-                .saturating_mul(100)
-                .checked_div(vram_size)
-                .unwrap_or(0);
-            let disk_pct = disk_used
-                .saturating_mul(100)
-                .checked_div(disk_size)
-                .unwrap_or(0);
-
-            let z_r = observation.control_plane.zram_io.read_mbs;
-            let z_w = observation.control_plane.zram_io.write_mbs;
-            let v_r = observation.control_plane.vram_io.read_mbs;
-            let v_w = observation.control_plane.vram_io.write_mbs;
-            let d_r = observation.control_plane.disk_io.read_mbs;
-            let d_w = observation.control_plane.disk_io.write_mbs;
-
-            let z_avg = observation.control_plane.zram_io.avg_mbs;
-            let z_max = observation.control_plane.zram_io.max_mbs;
-
-            let v_avg = observation.control_plane.vram_io.avg_mbs;
-            let v_max = observation.control_plane.vram_io.max_mbs;
-
-            let d_avg = observation.control_plane.disk_io.avg_mbs;
-            let d_max = observation.control_plane.disk_io.max_mbs;
-
             let zram_speedup = compute_tier_speedup(&observation.control_plane.zram_io, 100);
             let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
             let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
@@ -1548,114 +1559,66 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "Host VHDX",
             );
 
-            let z_bar = make_tier_bar(zram_used, zram_size, bar_len);
-            let v_bar = make_tier_bar(vram_used, vram_size, bar_len);
-            let d_bar = make_tier_bar(disk_used, disk_size, bar_len);
-
-            let z_pct_str = if zram_used > 0 && zram_pct == 0 {
-                "<1%".to_string()
-            } else {
-                format!("{zram_pct:>2}%")
-            };
-            let v_pct_str = if vram_used > 0 && vram_pct == 0 {
-                "<1%".to_string()
-            } else {
-                format!("{vram_pct:>2}%")
-            };
-            let d_pct_str = if disk_used > 0 && disk_pct == 0 {
-                "<1%".to_string()
-            } else {
-                format!("{disk_pct:>2}%")
-            };
-
-            let z_peak = observation.control_plane.zram_peak_used_mb.max(zram_used);
-            let v_peak = observation.control_plane.vram_peak_used_mb.max(vram_used);
-            let d_peak = observation.control_plane.disk_peak_used_mb.max(disk_used);
-
-            let z_peak_pct = z_peak
-                .saturating_mul(100)
-                .checked_div(zram_size)
-                .unwrap_or(0);
-            let v_peak_pct = v_peak
-                .saturating_mul(100)
-                .checked_div(vram_size)
-                .unwrap_or(0);
-            let d_peak_pct = d_peak
-                .saturating_mul(100)
-                .checked_div(disk_size)
-                .unwrap_or(0);
-
-            let z_use = format!(
-                "{z_bar} {z_pct_str} ( {zram_u:>4} MB / {zram_t} MB ) │ Peak: {z_peak:>4} MB ({z_peak_pct:>3}%)",
-                z_bar = z_bar,
-                z_pct_str = z_pct_str,
-                zram_u = zram_used,
-                zram_t = zram_size,
-                z_peak = z_peak,
-                z_peak_pct = z_peak_pct
+            let z_use = format_tier_usage(
+                zram_used,
+                zram_size,
+                observation.control_plane.zram_peak_used_mb,
+                bar_len,
             );
-            let v_use = format!(
-                "{v_bar} {v_pct_str} ( {vram_u:>4} MB / {vram_t} MB ) │ Peak: {v_peak:>4} MB ({v_peak_pct:>3}%)",
-                v_bar = v_bar,
-                v_pct_str = v_pct_str,
-                vram_u = vram_used,
-                vram_t = vram_size,
-                v_peak = v_peak,
-                v_peak_pct = v_peak_pct
+            let v_use = format_tier_usage(
+                vram_used,
+                vram_size,
+                observation.control_plane.vram_peak_used_mb,
+                bar_len,
             );
-            let d_use = format!(
-                "{d_bar} {d_pct_str} ( {disk_u:>4} MB / {disk_t} MB ) │ Peak: {d_peak:>4} MB ({d_peak_pct:>3}%)",
-                d_bar = d_bar,
-                d_pct_str = d_pct_str,
-                disk_u = disk_used,
-                disk_t = disk_size,
-                d_peak = d_peak,
-                d_peak_pct = d_peak_pct
+            let d_use = format_tier_usage(
+                disk_used,
+                disk_size,
+                observation.control_plane.disk_peak_used_mb,
+                bar_len,
             );
 
-            let format_speed = |read_mbs: f64, write_mbs: f64, used_mb: u64| {
-                if read_mbs < 0.1 && write_mbs < 0.1 {
-                    if used_mb > 0 {
-                        format!("Read:   0.0 │ Write:   0.0 MB/s (💤 Retaining {used_mb:>4} MB)")
-                    } else {
-                        "Read:   0.0 │ Write:   0.0 MB/s (💤 Standby)".to_string()
-                    }
-                } else {
-                    format!("Read: {read_mbs:>5.1} │ Write: {write_mbs:>5.1} MB/s (⚡ Paging Active)")
-                }
-            };
-            let z_speed = format_speed(z_r, z_w, zram_used);
-            let v_speed = format_speed(v_r, v_w, vram_used);
-            let d_speed = format_speed(d_r, d_w, disk_used);
+            let z_speed = format_tier_speed(
+                observation.control_plane.zram_io.read_mbs,
+                observation.control_plane.zram_io.write_mbs,
+                zram_used,
+            );
+            let v_speed = format_tier_speed(
+                observation.control_plane.vram_io.read_mbs,
+                observation.control_plane.vram_io.write_mbs,
+                vram_used,
+            );
+            let d_speed = format_tier_speed(
+                observation.control_plane.disk_io.read_mbs,
+                observation.control_plane.disk_io.write_mbs,
+                disk_used,
+            );
 
-            let format_rate = |r_peak: f64, w_peak: f64, max: f64, avg: f64| {
-                if max >= 5.0 || r_peak >= 1.0 || w_peak >= 1.0 {
-                    format!("Peak: ⬇️ {r_peak:>4.0} │ ⬆️ {w_peak:>4.0} │ Burst: {max:>4.0} MB/s (Avg: {avg:>3.0})")
-                } else {
-                    "Idle (Awaiting Workload)".to_string()
-                }
-            };
-            let z_rate = format_rate(
+            let z_rate = format_tier_rate(
                 observation.control_plane.zram_io.read_peak_mbs,
                 observation.control_plane.zram_io.write_peak_mbs,
-                z_max,
-                z_avg,
+                observation.control_plane.zram_io.max_mbs,
+                observation.control_plane.zram_io.avg_mbs,
             );
-            let v_rate = format_rate(
+            let v_rate = format_tier_rate(
                 observation.control_plane.vram_io.read_peak_mbs,
                 observation.control_plane.vram_io.write_peak_mbs,
-                v_max,
-                v_avg,
+                observation.control_plane.vram_io.max_mbs,
+                observation.control_plane.vram_io.avg_mbs,
             );
-            let d_rate = format_rate(
+            let d_rate = format_tier_rate(
                 observation.control_plane.disk_io.read_peak_mbs,
                 observation.control_plane.disk_io.write_peak_mbs,
-                d_max,
-                d_avg,
+                observation.control_plane.disk_io.max_mbs,
+                observation.control_plane.disk_io.avg_mbs,
             );
 
             let format_vol = |rb: u64, wb: u64| {
-                format!("⬇️ {} Read │ ⬆️ {} Written", format_volume_bytes(rb), format_volume_bytes(wb))
+                format!(
+                    "⬇️ {} Read │ ⬆️ {} Written",
+                    format_volume_bytes(rb),
+                    format_volume_bytes(wb)
+                )
             };
             let z_vol = format_vol(
                 observation.control_plane.zram_io.read_bytes,
