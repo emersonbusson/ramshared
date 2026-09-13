@@ -158,6 +158,20 @@ impl SliceMap {
     }
 
     /// NBD export names per slice: `("s0", len), ("s1", len), ...` (DT-3/DT-21).
+    /// Atomic slice reclamation on peer connection drop (chaos recovery).
+    /// Reclaims all slices belonging to a disconnected tenant atomically, returning them to Free.
+    pub fn reclaim_disconnect(&mut self, tenant: TenantId) -> Vec<SliceId> {
+        let mut reclaimed = Vec::new();
+        for s in &mut self.slices {
+            if s.tenant == Some(tenant) {
+                s.state = SliceState::Free;
+                s.tenant = None;
+                reclaimed.push(s.id);
+            }
+        }
+        reclaimed
+    }
+
     pub fn exports(&self) -> Vec<(String, u64)> {
         self.slices
             .iter()
@@ -264,6 +278,27 @@ mod tests {
         // lease cannot be drained (not Active).
         m.lease(0).unwrap();
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
+    }
+
+    #[test]
+    fn reclaim_disconnect_reclaims_all_tenant_slices_atomically() {
+        let mut m = SliceMap::new(3, 64, 192).unwrap();
+        m.assign(0, 7).unwrap();
+        m.assign(1, 7).unwrap();
+        m.drain(1).unwrap();
+        m.assign(2, 8).unwrap();
+
+        let reclaimed = m.reclaim_disconnect(7);
+        assert_eq!(reclaimed, vec![0, 1]);
+        assert_eq!(m.get(0).unwrap().state, SliceState::Free);
+        assert_eq!(m.get(0).unwrap().tenant, None);
+        assert_eq!(m.get(1).unwrap().state, SliceState::Free);
+        assert_eq!(m.get(1).unwrap().tenant, None);
+        assert_eq!(m.get(2).unwrap().state, SliceState::Active);
+        assert_eq!(m.get(2).unwrap().tenant, Some(8));
+
+        let reclaimed_again = m.reclaim_disconnect(7);
+        assert!(reclaimed_again.is_empty());
     }
 
     #[test]
