@@ -26,31 +26,34 @@ impl fmt::Display for ConfigError {
                 column: Some(c),
                 key_path,
             } => {
+                let safe_msg = crate::redact::redact(message);
                 if key_path.is_empty() {
-                    write!(f, "parse error at line {}, col {}: {}", l, c, message)
+                    write!(f, "parse error at line {}, col {}: {}", l, c, safe_msg)
                 } else {
                     write!(
                         f,
                         "parse error at line {}, col {} for key '{}': {}",
-                        l, c, key_path, message
+                        l, c, key_path, safe_msg
                     )
                 }
             }
             Self::Parse {
                 message, key_path, ..
             } => {
+                let safe_msg = crate::redact::redact(message);
                 if key_path.is_empty() {
-                    write!(f, "parse error: {}", message)
+                    write!(f, "parse error: {}", safe_msg)
                 } else {
-                    write!(f, "parse error for key '{}': {}", key_path, message)
+                    write!(f, "parse error for key '{}': {}", key_path, safe_msg)
                 }
             }
             Self::Invalid { key_path, reason } => {
-                write!(f, "invalid configuration at '{}': {}", key_path, reason)
+                let safe_reason = crate::redact::redact(reason);
+                write!(f, "invalid configuration at '{}': {}", key_path, safe_reason)
             }
-            Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
-            Self::OutOfRange(msg) => write!(f, "out of range: {msg}"),
-            Self::UnsupportedBackend(msg) => write!(f, "unsupported backend: {msg}"),
+            Self::InvalidInput(msg) => write!(f, "invalid input: {}", crate::redact::redact(msg)),
+            Self::OutOfRange(msg) => write!(f, "out of range: {}", crate::redact::redact(msg)),
+            Self::UnsupportedBackend(msg) => write!(f, "unsupported backend: {}", crate::redact::redact(msg)),
         }
     }
 }
@@ -99,5 +102,17 @@ mod tests {
 
         let e6 = ConfigError::UnsupportedBackend("directx".into());
         assert_eq!(e6.to_string(), "unsupported backend: directx");
+    }
+
+    #[test]
+    fn redacts_sensitive_data() {
+        let e1 = ConfigError::InvalidInput("Failed on /etc/shadow".into());
+        assert_eq!(e1.to_string(), "invalid input: Failed on [REDACTED]");
+
+        let e2 = ConfigError::InvalidInput("Failed on 0xdeadbeef".into());
+        assert_eq!(e2.to_string(), "invalid input: Failed on [REDACTED]");
+
+        let e3 = ConfigError::InvalidInput("Failed on PCI 0000:01:00.0".into());
+        assert_eq!(e3.to_string(), "invalid input: Failed on PCI [REDACTED]");
     }
 }

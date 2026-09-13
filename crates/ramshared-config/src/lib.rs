@@ -4,6 +4,7 @@
 //! validation can be tested without sockets, root, or a GPU.
 #![forbid(unsafe_code)]
 
+pub(crate) mod redact;
 pub mod error;
 pub use error::ConfigError;
 
