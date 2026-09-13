@@ -388,8 +388,31 @@ mod tests {
 
     #[test]
     fn artifact_path_cannot_escape() {
-        for path in ["../x", r"C:\x", "/x", "a/../x", "./x", ""] {
-            assert!(validate_artifact_path(path).is_err(), "{path}");
+        for path in [
+            "../x",
+            r"C:\x",
+            "/x",
+            r"\x",
+            "a/../x",
+            "./x",
+            "x/.",
+            "",
+            "a//b",
+            "a/",
+            r"a\b\..\c",
+            "C:x",
+        ] {
+            assert!(
+                validate_artifact_path(path).is_err(),
+                "expected err for path: {path}"
+            );
+        }
+
+        for path in ["artifact-0", "sub/dir/artifact", "a/b/c.exe"] {
+            assert!(
+                validate_artifact_path(path).is_ok(),
+                "expected ok for path: {path}"
+            );
         }
     }
 
