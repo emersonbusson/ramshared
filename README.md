@@ -11,7 +11,7 @@ Best of all: if you launch a game, 3D app, or AI workload (like PyTorch or Ollam
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Release v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0"><img alt="Release v0.12.0" src="https://img.shields.io/badge/release-v0.12.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-46.9k%2B_%2F_14d-blue?style=flat-square&logo=git">
   <img alt="Unique Cloners" src="https://img.shields.io/badge/unique_cloners-910%2B-blueviolet?style=flat-square">
@@ -45,7 +45,7 @@ ramshared top
 
 ## Current Status
 
-Release: **v0.11.0 (Production Qualified Release & Multi-Tier Memory Cascade)**. Fully tested and verified under 100% memory saturation and heavy host workload pressure on physical hardware.
+Release: **v0.12.0 (Production Qualified Release & Multi-Tier Memory Cascade)**. Fully tested and verified under 100% memory saturation and heavy host workload pressure on physical hardware.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -208,7 +208,7 @@ scripts, systemd service templates, documentation, and `SHA256SUMS` cryptographi
 Build caches, credentials, and transient environment artifacts are excluded by policy. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-Official Linux release distributions (including v0.11.0 and prior milestones) and
+Official Linux release distributions (including v0.12.0 and prior milestones) and
 their detached checksums are qualified through the automated release promotion workflow.
 
 ## Windows StorPort Driver Architecture
