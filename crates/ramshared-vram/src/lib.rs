@@ -81,6 +81,55 @@ pub trait VramProvider {
     fn mem_info(&self) -> Result<(u64, u64), VramError>;
 }
 
+
+
+/// A unified vRAM allocation dispatcher that checks hardware constraints
+/// upfront using guard clauses instead of nested matching.
+pub struct VramDispatcher<P> {
+    provider: P,
+}
+
+impl<P> VramDispatcher<P> {
+    pub fn new(provider: P) -> Self {
+        Self { provider }
+    }
+}
+
+impl<P: VramProvider> VramProvider for VramDispatcher<P> {
+    type Mem<'p> = P::Mem<'p> where Self: 'p;
+
+    fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+        if bytes == 0 {
+            return Err(VramError::InvalidAlignment);
+        }
+
+        // Use #[allow(clippy::manual_is_multiple_of)] to suppress the warning without using the unstable feature
+        #[allow(clippy::manual_is_multiple_of)]
+        if bytes % 4096 != 0 {
+            return Err(VramError::InvalidAlignment);
+        }
+
+        // 4 GiB VRAM allocation safety bound
+        let max_alloc = 4 * 1024 * 1024 * 1024;
+        if bytes > max_alloc {
+            return Err(VramError::OutOfMemory);
+        }
+
+        let (free, _total) = self.provider.mem_info()?;
+
+        if (bytes as u64) > free {
+            return Err(VramError::OutOfMemory);
+        }
+
+        // Flattened happy path dispatch
+        self.provider.alloc(bytes)
+    }
+
+    fn mem_info(&self) -> Result<(u64, u64), VramError> {
+        self.provider.mem_info()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,4 +156,56 @@ mod tests {
         );
         assert_eq!(VramError::Busy.to_string(), "vram busy");
     }
+
+    struct DummyMem;
+    impl VramMemory for DummyMem {
+        fn len(&self) -> usize { 4096 }
+        fn zero(&mut self) -> Result<(), VramError> { Ok(()) }
+        fn read_at(&self, _off: u64, _dst: &mut [u8]) -> Result<(), VramError> { Ok(()) }
+        fn write_at(&mut self, _off: u64, _src: &[u8]) -> Result<(), VramError> { Ok(()) }
+    }
+
+    struct DummyProvider { free: u64 }
+    impl VramProvider for DummyProvider {
+        type Mem<'p> = DummyMem where Self: 'p;
+        fn alloc(&self, _bytes: usize) -> Result<Self::Mem<'_>, VramError> { Ok(DummyMem) }
+        fn mem_info(&self) -> Result<(u64, u64), VramError> { Ok((self.free, 8 * 1024 * 1024 * 1024)) }
+    }
+
+    #[test]
+    fn test_vram_dispatcher_guard_clauses() {
+        let provider = DummyProvider { free: 8 * 1024 * 1024 * 1024 };
+        let dispatcher = VramDispatcher::new(provider);
+
+        // Valid allocation
+        assert!(dispatcher.alloc(4096).is_ok());
+
+        // Invalid alignment
+        match dispatcher.alloc(4095) {
+            Err(VramError::InvalidAlignment) => (),
+            _ => panic!("Expected InvalidAlignment for 4095"),
+        }
+
+        // Invalid size (0)
+        match dispatcher.alloc(0) {
+            Err(VramError::InvalidAlignment) => (),
+            _ => panic!("Expected InvalidAlignment for 0"),
+        }
+
+        // Exceeds 4 GiB max
+        let over_4gib = (4 * 1024 * 1024 * 1024) + 4096;
+        match dispatcher.alloc(over_4gib) {
+            Err(VramError::OutOfMemory) => (),
+            _ => panic!("Expected OutOfMemory for > 4 GiB"),
+        }
+
+        // Exceeds free memory
+        let tight_provider = DummyProvider { free: 4096 };
+        let tight_dispatcher = VramDispatcher::new(tight_provider);
+        match tight_dispatcher.alloc(8192) {
+            Err(VramError::OutOfMemory) => (),
+            _ => panic!("Expected OutOfMemory for exceeding free memory"),
+        }
+    }
+
 }
