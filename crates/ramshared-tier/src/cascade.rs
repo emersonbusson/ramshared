@@ -56,12 +56,10 @@ impl SafetyNet {
 /// **or** free system RAM headroom is large enough to absorb a total VRAM evacuation
 /// (`mem_available >= vram_size`).
 pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -> SafetyNet {
-    // Check tier availability upfront
     if vhdx_present {
         return SafetyNet::VhdxBelow;
     }
 
-    // Check capacity upfront
     if mem_available >= vram_size {
         return SafetyNet::RamHeadroom;
     }
