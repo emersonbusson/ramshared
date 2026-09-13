@@ -47,6 +47,7 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
 | A stale environmental result is treated as current capability | Time → capability claim | Explicit lifecycle, freshness/review fields, `PARTIAL` for blocked or stale proof | Live hardware availability still limits revalidation. |
 | A cleanup note is interpreted as permission for host mutation | Documentation → privileged host | Read-only runbook/checkers, explicit operator authority, no automatic reclaim action | An authorized operator can still make a human error; command-level safeguards remain necessary. |
 | A checker passes while its own policy has drifted | Policy → CI outcome | Deterministic fixtures, negative tests, reviewable policy files, no network dependency | A checker cannot independently establish the truth of a physical measurement. |
+| Untrusted peripheral initiates rogue DMA write via GPU BAR swap space | Hardware → Host RAM | Enable IOMMU strict mode, use ACS (Access Control Services) for PCIe isolation, validate 64-bit DMA masks, fail-closed on IOMMU faults | A compromised peripheral with ACS-bypass capabilities or legacy non-ACS bridges may still attempt lateral movement. |
 
 ## Required handling rules
 
