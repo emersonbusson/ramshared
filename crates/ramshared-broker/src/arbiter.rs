@@ -120,6 +120,7 @@ pub struct Arbiter {
     last_move: Option<MoveRecord>,
     cooldown_until: Option<Instant>,
     rr_cursor: usize,
+    starvation_ticks: std::collections::HashMap<TenantId, u32>,
 }
 
 fn owner_psi(tenants: &[TenantView], id: TenantId) -> Option<f32> {
@@ -145,6 +146,7 @@ impl Arbiter {
             last_move: None,
             cooldown_until: None,
             rr_cursor: 0,
+            starvation_ticks: std::collections::HashMap::new(),
         }
     }
 
@@ -282,12 +284,34 @@ impl Arbiter {
             // never-zero (RF-B2/DT-8): does not drain a donor UNDER PRESSURE to zero slices.
             let can_move = !(donor_pressured && donor.slices <= 1);
 
-            if can_move && let Some(slice) = first_active_of(slices, donor.id) {
+            if !can_move && donor_pressured {
+                let ticks = self.starvation_ticks.entry(donor.id).or_insert(0);
+                *ticks += 1;
+                metrics::counter!("arbiter_starvations_prevented_total").increment(1);
+            } else {
+                self.starvation_ticks.remove(&donor.id);
+            }
+
+            if donor_pressured {
+                metrics::counter!("arbiter_ticks_under_pressure_total").increment(1);
+            }
+
+            // Aging mechanism: if a tenant has been protected from starvation for a long time
+            // (e.g. > 30 ticks), they are forced to yield one slice to unblock the system.
+            let aging_yield = self.starvation_ticks.get(&donor.id).copied().unwrap_or(0) > 30;
+
+            if (can_move || aging_yield) && let Some(slice) = first_active_of(slices, donor.id) {
+                if aging_yield {
+                    self.starvation_ticks.remove(&donor.id);
+                    metrics::counter!("arbiter_aging_yield_total").increment(1);
+                }
+
                 actions.push(Action::MoveSlice {
                     slice,
                     from: donor.id,
                     to: receiver.id,
                 });
+                metrics::counter!("arbiter_moves_executed_total").increment(1);
                 self.last_move = Some(MoveRecord {
                     slice,
                     from: donor.id,
@@ -435,6 +459,35 @@ mod tests {
             count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()),
             0
         );
+    }
+
+    #[test]
+    fn aging_mechanism_yields_slice_after_30_ticks() {
+        let mut c = cfg();
+        c.streak = 1;
+        let mut arb = Arbiter::new(c);
+        let t0 = Instant::now();
+
+        // Setup a starved tenant (donor has 1 slice, is pressured)
+        let tenants = [tv(1, 8.0, 1), tv(2, 20.0, 1)];
+        let slices = [
+            slice(0, Some(1), SliceState::Active),
+            slice(1, Some(2), SliceState::Active),
+        ];
+
+        // First 30 ticks should be protected
+        for i in 0..30 {
+            arb.cooldown_until = None;
+            arb.streak = 100;
+            let a = arb.tick(t0 + Duration::from_secs(i as u64), &tenants, &slices, None).unwrap();
+            assert_eq!(count_moves(&a), 0);
+        }
+
+        // 31st tick should trigger the aging yield
+        arb.cooldown_until = None;
+        arb.streak = 100;
+        let a = arb.tick(t0 + Duration::from_secs(31), &tenants, &slices, None).unwrap();
+        assert_eq!(count_moves(&a), 1);
     }
 
     #[test]
