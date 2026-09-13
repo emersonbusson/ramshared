@@ -5,6 +5,7 @@ Refactored the clamping logic for the `queue_depth` module parameter in `drivers
 | Commit | What was done | Why it was done | Details |
 |--------|---------------|-----------------|---------|
 | 325918f | refactor(main): clamp queue_depth module parameter cleanly | Replaces nested if/else logic with clamp() for queue_depth bounds checking [16..1024]. | <details>Files: drivers/block/ramshared/main.c<br>Validation: Patch applies cleanly.<br>Risk/rollback: If compilation fails due to minmax.h availability.</details> |
+| 15c65ca | refactor(main): clamp queue_depth module parameter cleanly | Replaces nested if/else logic with clamp() for queue_depth bounds checking [16..1024]. | <details>Files: drivers/block/ramshared/main.c<br>Validation: Patch applies cleanly.<br>Risk/rollback: If compilation fails due to minmax.h availability.</details> |
 
 ## Issue
 N/A
