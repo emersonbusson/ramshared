@@ -1767,6 +1767,23 @@ mod tests {
         assert_eq!(n_leased(&c), 0); // lease released (DT-19)
     }
 
+    #[test]
+    fn client_sigkill_during_active_write_cleans_resources() {
+        let mut c = core(2);
+        reg(&mut c, 10, "dcc");
+        psi(&mut c, 10, 0.0);
+        lease_req(&mut c, 10, SLICE);
+        c.handle(CoreEvent::Tick, Instant::now()); // grant
+        assert_eq!(n_leased(&c), 1);
+
+        // Simulate active multi-megabyte write in progress, then SIGKILL disconnect
+        c.handle(CoreEvent::Disconnected(10), Instant::now());
+
+        // The disconnect must clean up leased resources
+        assert_eq!(n_leased(&c), 0);
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
+    }
+
     fn reg_transport(
         c: &mut BrokerCore,
         sid: usize,
