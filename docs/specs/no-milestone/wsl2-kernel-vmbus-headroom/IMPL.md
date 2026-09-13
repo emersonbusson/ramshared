@@ -14,5 +14,10 @@ Authored an upstream-ready Linux kernel patch for `microsoft/WSL2-Linux-Kernel` 
 ## 3. Evidence & Verification
 
 - **Syntax & Patch Format**: Conforms to standard `git format-patch` with DCO sign-off (`Signed-off-by: Emerson Busson`).
-- **Dry-run validation**: Patch structure verified against Linux 6.6 / 6.18+ Hyper-V trees.
+- **Compilation**: Compiled `vmlinux` (190 MiB) and `arch/x86/boot/bzImage` (15 MiB) under `6.18.40.1-microsoft-standard-WSL2+` with zero errors.
+- **Binary Symbol Verification**: Verified kernel strings in `vmlinux` and `bzImage`:
+  - `Hyper-V: Calibrating min_free_kbytes from %d kB to %lu kB for VMBus resilience`
+  - `hv_balloon: balloon inflation deferred; guest memory constrained`
+- **Host Staging**: Deployed `arch/x86/boot/bzImage` to `C:\wsl\kernel-ramshared-new` (with `C:\wsl\kernel-ramshared.bak` preserved).
+- **WSL Configuration**: Configured `%USERPROFILE%\.wslconfig` to boot `kernel=C:\\wsl\\kernel-ramshared-new` on next WSL restart.
 - **Documentation check**: Passed `./scripts/docs-check.sh` (`✓ docs-check OK`).
