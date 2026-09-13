@@ -12,6 +12,7 @@ pub const MAX_SLICES: u16 = 256;
 /// Map of VRAM slices (sole owner of truth about the state; no locks — ITEM-8 is single-threaded).
 pub struct SliceMap {
     slices: Vec<Slice>,
+    backing_bytes: u64,
 }
 
 /// Slice transition/lookup error.
@@ -23,6 +24,7 @@ pub enum SliceError {
     TooManySlices { requested: u16, max: u16 },
     CapacityExceeded { required: u64, available: u64 },
     AlreadyAllocated,
+    NotPowerOfTwo { provided: u64 },
 }
 
 impl std::fmt::Display for SliceError {
@@ -44,6 +46,7 @@ impl std::fmt::Display for SliceError {
                 )
             }
             Self::AlreadyAllocated => write!(f, "slice is already allocated"),
+            Self::NotPowerOfTwo { provided } => write!(f, "slice_bytes must be a power of two, got {}", provided),
         }
     }
 }
@@ -53,6 +56,9 @@ impl std::error::Error for SliceError {}
 impl SliceMap {
     /// K slices of `slice_bytes`, offsets `i * slice_bytes`, all `Free`.
     pub fn new(k: u16, slice_bytes: u64, backing_bytes: u64) -> Result<Self, SliceError> {
+        if !slice_bytes.is_power_of_two() {
+            return Err(SliceError::NotPowerOfTwo { provided: slice_bytes });
+        }
         if k > MAX_SLICES {
             return Err(SliceError::TooManySlices {
                 requested: k,
@@ -82,7 +88,19 @@ impl SliceMap {
                 state: SliceState::Free,
             })
             .collect();
-        Ok(Self { slices })
+        Ok(Self { slices, backing_bytes })
+    }
+
+    /// Ratio of unallocable backing bytes to total backing bytes.
+    pub fn fragmentation_ratio(&self) -> f64 {
+        if self.backing_bytes == 0 {
+            return 0.0;
+        }
+        let used = self.total_bytes();
+        if used >= self.backing_bytes {
+            return 0.0;
+        }
+        (self.backing_bytes - used) as f64 / self.backing_bytes as f64
     }
 
     /// Sum of sizes (total exportable capacity).
@@ -172,6 +190,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn new_rejects_non_power_of_two() {
+        assert!(matches!(
+            SliceMap::new(2, 63, 128),
+            Err(SliceError::NotPowerOfTwo { provided: 63 })
+        ));
+    }
+
+    #[test]
     fn new_rejects_exceeding_max_slices() {
         assert!(matches!(
             SliceMap::new(MAX_SLICES + 1, 64, u64::MAX),
@@ -205,6 +231,17 @@ mod tests {
             assert_eq!(s.state, SliceState::Free);
             assert_eq!(s.tenant, None);
         }
+    }
+
+    #[test]
+    fn fragmentation_ratio_calculation() {
+        let m1 = SliceMap::new(2, 64, 128).unwrap();
+        assert_eq!(m1.fragmentation_ratio(), 0.0);
+
+        let m2 = SliceMap::new(2, 64, 150).unwrap();
+        // used = 128, backing = 150. frag = 22. 22/150 = 0.146666...
+        let ratio = m2.fragmentation_ratio();
+        assert!((ratio - 22.0 / 150.0).abs() < f64::EPSILON);
     }
 
     #[test]
