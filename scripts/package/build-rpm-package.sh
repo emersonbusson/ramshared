@@ -49,12 +49,16 @@ URL:            https://github.com/emersonbusson/ramshared
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
 memory tiers backed by discrete GPU VRAM with fail-safe SSD origin fallback.
 
+BuildRequires:  systemd-rpm-macros
+%{?systemd_requires}
+
 %install
 mkdir -p %{buildroot}/usr/bin
 mkdir -p %{buildroot}/usr/share/ramshared/scripts
 mkdir -p %{buildroot}/usr/lib/systemd/system
 mkdir -p %{buildroot}/lib/udev/rules.d
 mkdir -p %{buildroot}/etc/ramshared
+install -m 0644 ${ROOT}/packaging/systemd/ramshared-vram.service %{buildroot}/usr/lib/systemd/system/ramshared-vram.service
 
 install -m 0755 ${CLI_BIN} %{buildroot}/usr/bin/ramshared
 install -m 0755 ${DAEMON_BIN} %{buildroot}/usr/bin/ramsharedd
@@ -66,9 +70,19 @@ if [ -f ${ROOT}/packaging/systemd/65-ramshared-observability.rules ]; then
   install -m 0644 ${ROOT}/packaging/systemd/65-ramshared-observability.rules %{buildroot}/lib/udev/rules.d/65-ramshared-observability.rules
 fi
 
+%post
+%systemd_post ramshared-vram.service
+
+%preun
+%systemd_preun ramshared-vram.service
+
+%postun
+%systemd_postun_with_restart ramshared-vram.service
+
 %files
 /usr/bin/ramshared
 /usr/bin/ramsharedd
+%attr(0644, root, root) /usr/lib/systemd/system/ramshared-vram.service
 /usr/share/ramshared
 /etc/ramshared
 /lib/udev/rules.d/60-ramshared.rules
