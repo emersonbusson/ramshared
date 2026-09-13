@@ -1,0 +1,24 @@
+[package]
+name = "ramshared-block-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.ramshared-block]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "parse-request"
+path = "fuzz_targets/parse-request.rs"
+test = false
+doc = false
