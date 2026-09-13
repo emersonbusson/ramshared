@@ -237,4 +237,27 @@ mod tests {
             Err(PurgeAgeError::AgeExceedsUptime)
         );
     }
+
+    #[test]
+    fn validate_purge_age_edge_cases() {
+        // Zero age and zero uptime
+        assert!(validate_purge_age(0, 0).is_ok());
+        // Zero age with non-zero uptime
+        assert!(validate_purge_age(0, 100).is_ok());
+        // Max u64 boundary tests
+        assert!(validate_purge_age(u64::MAX, u64::MAX).is_ok());
+        assert_eq!(
+            validate_purge_age(u64::MAX, u64::MAX - 1),
+            Err(PurgeAgeError::AgeExceedsUptime)
+        );
+    }
+
+    #[test]
+    fn purge_age_error_display() {
+        let err = PurgeAgeError::AgeExceedsUptime;
+        assert_eq!(
+            err.to_string(),
+            "invalid purge age: cannot exceed system uptime"
+        );
+    }
 }
