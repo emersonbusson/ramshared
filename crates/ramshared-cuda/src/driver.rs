@@ -54,6 +54,33 @@ impl fmt::Display for CudaError {
 
 impl core::error::Error for CudaError {}
 
+const HOST_PAGE_BYTES: usize = 4096;
+
+pub(super) fn validate_host_registration(
+    host_ptr: *mut c_void,
+    len: usize,
+) -> Result<(), CudaError> {
+    if host_ptr.is_null() {
+        return Err(CudaError::InvalidValue("host_ptr cannot be null".into()));
+    }
+    if len == 0 {
+        return Err(CudaError::InvalidValue(
+            "length must be greater than zero".into(),
+        ));
+    }
+    if !len.is_multiple_of(HOST_PAGE_BYTES) {
+        return Err(CudaError::InvalidValue(format!(
+            "length {len} must be a multiple of page size {HOST_PAGE_BYTES}"
+        )));
+    }
+    if !(host_ptr as usize).is_multiple_of(HOST_PAGE_BYTES) {
+        return Err(CudaError::InvalidValue(format!(
+            "host_ptr {host_ptr:p} must be aligned to {HOST_PAGE_BYTES}-byte page boundary"
+        )));
+    }
+    Ok(())
+}
+
 /// RAII wrapper for the loaded dynamic library handle: calls close on `Drop`.
 struct Lib(*mut c_void);
 
@@ -243,30 +270,16 @@ impl<'a> Context<'a> {
         len: usize,
         flags: u32,
     ) -> Result<PinnedHostMapping<'c, 'a>, CudaError> {
-        if host_ptr.is_null() {
-            return Err(CudaError::InvalidValue("host_ptr cannot be null".into()));
-        }
-        if len == 0 {
-            return Err(CudaError::InvalidValue(
-                "length must be greater than zero".into(),
-            ));
-        }
-        if !len.is_multiple_of(4096) {
-            return Err(CudaError::InvalidValue(format!(
-                "length {len} must be a multiple of page size 4096"
-            )));
-        }
-        if !(host_ptr as usize).is_multiple_of(4096) {
-            return Err(CudaError::InvalidValue(format!(
-                "host_ptr {host_ptr:p} must be aligned to 4096-byte page boundary"
-            )));
-        }
+        validate_host_registration(host_ptr, len)?;
 
         let fn_register = self.cuda.syms.mem_host_register.ok_or_else(|| {
             CudaError::Unsupported("cuMemHostRegister not supported by driver".into())
         })?;
         let fn_get_dptr = self.cuda.syms.mem_host_get_device_pointer.ok_or_else(|| {
             CudaError::Unsupported("cuMemHostGetDevicePointer not supported by driver".into())
+        })?;
+        let fn_unreg = self.cuda.syms.mem_host_unregister.ok_or_else(|| {
+            CudaError::Unsupported("cuMemHostUnregister not supported by driver".into())
         })?;
 
         // SAFETY: host_ptr is non-null, 4096-aligned, and points to len valid bytes.
@@ -277,11 +290,9 @@ impl<'a> Context<'a> {
         // SAFETY: dev_ptr points to a valid local u64; host_ptr was successfully registered.
         let r = unsafe { fn_get_dptr(&mut dev_ptr, host_ptr, 0) };
         if r != CUDA_SUCCESS {
-            if let Some(fn_unreg) = self.cuda.syms.mem_host_unregister {
-                // Rollback registration on failure to resolve device pointer
-                unsafe {
-                    let _ = fn_unreg(host_ptr);
-                }
+            // SAFETY: host_ptr was successfully registered and fn_unreg is required above.
+            unsafe {
+                let _ = fn_unreg(host_ptr);
             }
             check(&self.cuda.syms, r, "cuMemHostGetDevicePointer")?;
         }
@@ -311,10 +322,6 @@ pub struct PinnedHostMapping<'c, 'a> {
     dev_ptr: CuDevicePtr,
     len: usize,
 }
-
-// SAFETY: Host mapping points to pinned host memory accessible by device.
-unsafe impl Send for PinnedHostMapping<'_, '_> {}
-unsafe impl Sync for PinnedHostMapping<'_, '_> {}
 
 impl<'c, 'a> PinnedHostMapping<'c, 'a> {
     /// Returns the mapped CUDA device virtual pointer.
