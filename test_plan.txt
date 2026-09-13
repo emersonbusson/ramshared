@@ -1,0 +1,33 @@
+1. RULES
+   - ORTHOGONAL SCOPE: Modify strictly the targeted files and tests.
+   - PHYSICAL BOUNDS & SAFETY: Validate pointer boundaries, memory limits, alignment, DMA masks.
+   - TYPED ERROR HANDLING: Precise domain errors.
+   - REPRODUCIBLE VALIDATION: Run compilation checks.
+
+2. MAIN_DIFF
+   - Update `ramshared_dma_cleanup` in `drivers/block/ramshared/dma.c` to use linear guard clauses, explicitly nullifying `cpu_addr` and `size`, without nested if structures.
+
+3. FILES
+   - `drivers/block/ramshared/dma.c`
+
+4. INVARIANTS
+   - `rs_dev` null check is linear.
+   - `cpu_addr` is checked and then set to `NULL` alongside `size = 0` explicitly.
+
+5. COUNTERFACTUAL
+   - If we don't modify it, we have nested `if` and it does not follow the requested linear guard clause style strictly.
+
+6. RED_TEST
+   - Compile driver (mock) before changes. (Make fails because kernel headers aren't available, but we can syntax check using gcc or similar).
+
+7. COVERAGE
+   - The function `ramshared_dma_cleanup` covers the cleanup state.
+
+8. REAL_PROOF
+   - Compile using `gcc -fsyntax-only` or verify using static analysis / review.
+
+9. ROLLBACK
+   - Commit body will include: "Rollback trigger: Kernel panic during device teardown or module unload."
+
+10. PR_BOUNDARY
+    - Only `drivers/block/ramshared/dma.c` is modified.
