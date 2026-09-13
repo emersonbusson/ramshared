@@ -29,12 +29,25 @@ static blk_status_t ramshared_errno_to_blk_status(int err)
 }
 
 static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
-					  struct bio *bio, loff_t pos)
+					  struct bio *bio)
 {
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	unsigned int op = bio_op(bio);
+	loff_t pos, end_pos;
 	void __iomem *vram_ptr;
+
+	if (unlikely(check_shl_overflow((loff_t)bio->bi_iter.bi_sector, RAMSHARED_SECTOR_SHIFT, &pos))) {
+		dev_err_ratelimited(rs_dev->dev, "Bio sector overflow: %llu\n",
+				    (u64)bio->bi_iter.bi_sector);
+		return ramshared_errno_to_blk_status(-ERANGE);
+	}
+
+	if (unlikely(check_add_overflow(pos, (loff_t)bio->bi_iter.bi_size, &end_pos))) {
+		dev_err_ratelimited(rs_dev->dev, "Bio length overflow: pos=%lld len=%u\n",
+				    pos, bio->bi_iter.bi_size);
+		return ramshared_errno_to_blk_status(-ERANGE);
+	}
 
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
 		     !IS_ALIGNED(bio->bi_iter.bi_size, RAMSHARED_SECTOR_SIZE))) {
@@ -46,7 +59,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     bio->bi_iter.bi_size > rs_dev->dma.size - pos ||
-		     pos + bio->bi_iter.bi_size > rs_dev->capacity_bytes)) {
+		     end_pos > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 				    "Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
 				    pos, bio->bi_iter.bi_size,
@@ -83,7 +96,7 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 {
 	struct request *rq = bd->rq;
 	struct ramshared_device *rs_dev = rq->q->queuedata;
-	loff_t pos;
+	loff_t pos, end_pos;
 	size_t len = blk_rq_bytes(rq);
 	blk_status_t status = BLK_STS_OK;
 	struct bio *bio;
@@ -92,6 +105,9 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 		return ramshared_errno_to_blk_status(-EIO);
 
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
+		return ramshared_errno_to_blk_status(-ERANGE);
+
+	if (unlikely(check_add_overflow(pos, (loff_t)len, &end_pos)))
 		return ramshared_errno_to_blk_status(-ERANGE);
 
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
@@ -104,7 +120,7 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
-		     pos + len > rs_dev->capacity_bytes)) {
+		     end_pos > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 				    "I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
 				    pos, len, rs_dev->capacity_bytes,
@@ -118,10 +134,9 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	case REQ_OP_READ:
 	case REQ_OP_WRITE:
 		__rq_for_each_bio(bio, rq) {
-			status = ramshared_process_bio(rs_dev, bio, pos);
+			status = ramshared_process_bio(rs_dev, bio);
 			if (status != BLK_STS_OK)
 				break;
-			pos += bio->bi_iter.bi_size;
 		}
 		break;
 	case REQ_OP_FLUSH:
@@ -153,7 +168,7 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 				  struct page *page, enum req_op op)
 {
 	struct ramshared_device *rs_dev = bdev->bd_disk->private_data;
-	loff_t pos;
+	loff_t pos, end_pos;
 	size_t len = PAGE_SIZE;
 	void __iomem *vram_ptr;
 	void *mem;
@@ -165,9 +180,16 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
 		return -EIO;
 
+	if (unlikely(check_add_overflow(pos, (loff_t)len, &end_pos)))
+		return -ERANGE;
+
+	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
+		     !IS_ALIGNED(len, RAMSHARED_SECTOR_SIZE)))
+		return -EINVAL;
+
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
-		     pos + len > rs_dev->capacity_bytes))
+		     end_pos > rs_dev->capacity_bytes))
 		return -ERANGE;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
