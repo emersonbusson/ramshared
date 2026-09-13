@@ -566,16 +566,7 @@ impl Drop for SpawnedChildGuard {
     }
 }
 
-pub(crate) fn run_capture_command<F>(
-    command: &mut Command,
-    label: &str,
-    timeout: Duration,
-    output_limit: usize,
-    on_spawn: F,
-) -> Result<BoundedOutput, ProcessSpawnError>
-where
-    F: FnOnce(u32),
-{
+fn validate_command_inputs(command: &Command, label: &str) -> Result<(), ProcessSpawnError> {
     let program = command.get_program();
     if program.is_empty() {
         return Err(ProcessSpawnError::spawn(
@@ -604,16 +595,14 @@ where
             ));
         }
     }
+    Ok(())
+}
 
-    configure_process_group(command)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = command
-        .spawn()
-        .map_err(|error| ProcessSpawnError::spawn(label, error))?;
-    let mut child = SpawnedChildGuard::new(child, label);
-    let group_id = child.id();
-    on_spawn(group_id);
+fn setup_capture_workers(
+    child: &mut SpawnedChildGuard,
+    label: &str,
+    output_limit: usize,
+) -> Result<(CaptureWorker, CaptureWorker), ProcessSpawnError> {
     let stdout = match child.child_mut().stdout.take() {
         Some(stdout) => stdout,
         None => {
@@ -646,11 +635,11 @@ where
             )));
         }
     };
-    let mut stderr = match CaptureWorker::spawn("stderr", stderr, output_limit) {
+    let stderr = match CaptureWorker::spawn("stderr", stderr, output_limit) {
         Ok(worker) => worker,
         Err(error) => {
             let proof = force_exit_observed(child.child_mut(), label, REAP_GRACE, &ExitController)?;
-            account_single_capture_before_reap(group_id, label, &mut stdout, &ExitController)?;
+            account_single_capture_before_reap(child.id(), label, &mut stdout, &ExitController)?;
             let _ = reap_observed_target(child.child_mut(), label, REAP_GRACE, &ExitController)?;
             child.disarm();
             contain_group_errors(proof, &ExitController)?;
@@ -659,8 +648,24 @@ where
             )));
         }
     };
+    Ok((stdout, stderr))
+}
+
+type ExitPollResult = (
+    Option<ProcessSpawnError>,
+    GroupTerminationProof,
+    Option<(Option<CapturedBytes>, Option<CapturedBytes>)>,
+);
+
+fn poll_child_until_exit(
+    child: &mut SpawnedChildGuard,
+    label: &str,
+    timeout: Duration,
+    stdout: &CaptureWorker,
+    stderr: &CaptureWorker,
+) -> Result<ExitPollResult, ProcessSpawnError> {
     let deadline = Instant::now() + timeout;
-    let (completion_error, proof, initial_capture) = loop {
+    loop {
         match ReapTarget::observe_exit(child.child_mut()) {
             Ok(true) => {
                 // Before stopping residual descendants, distinguish a pipe
@@ -675,20 +680,20 @@ where
                 if let Err(error) = ReapTarget::signal_group_kill(child.child_mut()) {
                     proof.record(label, "after normal exit observation", error);
                 }
-                break (None, proof, Some(initial_capture));
+                return Ok((None, proof, Some(initial_capture)));
             }
             Ok(false) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
             Ok(false) => {
                 let proof =
                     force_exit_observed(child.child_mut(), label, REAP_GRACE, &ExitController)?;
-                break (
+                return Ok((
                     Some(ProcessSpawnError::ExecutionTimeout {
                         command: label.to_string(),
                         timeout,
                     }),
                     proof,
                     None,
-                );
+                ));
             }
             Err(error) => {
                 return Err(fatal_error(
@@ -697,7 +702,36 @@ where
                 ));
             }
         }
-    };
+    }
+}
+
+pub(crate) fn run_capture_command<F>(
+    command: &mut Command,
+    label: &str,
+    timeout: Duration,
+    output_limit: usize,
+    on_spawn: F,
+) -> Result<BoundedOutput, ProcessSpawnError>
+where
+    F: FnOnce(u32),
+{
+    validate_command_inputs(command, label)?;
+
+    configure_process_group(command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child = command
+        .spawn()
+        .map_err(|error| ProcessSpawnError::spawn(label, error))?;
+    let mut child = SpawnedChildGuard::new(child, label);
+    let group_id = child.id();
+    on_spawn(group_id);
+
+    let (mut stdout, mut stderr) = setup_capture_workers(&mut child, label, output_limit)?;
+
+    let (completion_error, proof, initial_capture) =
+        poll_child_until_exit(&mut child, label, timeout, &stdout, &stderr)?;
+
     let capture = collect_captures_before_reap(
         group_id,
         label,
