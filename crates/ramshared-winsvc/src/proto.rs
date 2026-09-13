@@ -23,6 +23,60 @@ pub const IOCTL_FN_COMMIT_AND_FETCH: u32 = 2;
 pub const IOCTL_FN_CREATE_DISK: u32 = 3;
 pub const IOCTL_FN_DESTROY_DISK: u32 = 4;
 
+/// Perform protocol handshake over a blocking stream with timeout.
+pub fn negotiate_protocol<S: std::io::Read>(
+    stream: &mut S,
+    timeout: std::time::Duration,
+) -> std::io::Result<u32> {
+    let start = std::time::Instant::now();
+    let mut buf = [0u8; 4];
+    let mut bytes_read = 0;
+
+    while bytes_read < 4 {
+        if start.elapsed() >= timeout {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "handshake timeout",
+            ));
+        }
+
+        let mut chunk = [0u8; 1];
+        match stream.read(&mut chunk) {
+            Ok(0) => {
+                if bytes_read == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "clean disconnect",
+                    ));
+                } else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "incomplete handshake",
+                    ));
+                }
+            }
+            Ok(n) => {
+                buf[bytes_read] = chunk[0];
+                bytes_read += n;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    let version = u32::from_le_bytes(buf);
+    if version != ABI_VERSION {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "incompatible version",
+        ));
+    }
+
+    Ok(version)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sqe {
@@ -131,5 +185,51 @@ mod tests {
         assert_eq!(MAX_QD, 256);
         assert_eq!(MAX_IO, 1 << 20);
         assert_eq!(RING_MAGIC, 0x5253_5244);
+    }
+
+    #[test]
+    fn test_proto_version_negotiation() {
+        let data = ABI_VERSION.to_le_bytes().to_vec();
+        let mut stream = std::io::Cursor::new(data);
+        assert_eq!(
+            negotiate_protocol(&mut stream, std::time::Duration::from_secs(1)).unwrap(),
+            ABI_VERSION
+        );
+    }
+
+    #[test]
+    fn test_proto_incompatible_version_rejection() {
+        let data = 999u32.to_le_bytes().to_vec();
+        let mut stream = std::io::Cursor::new(data);
+        let err = negotiate_protocol(&mut stream, std::time::Duration::from_secs(1)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "incompatible version");
+    }
+
+    #[test]
+    fn test_proto_timeout_on_incomplete_handshake() {
+        struct BlockingStream;
+        impl std::io::Read for BlockingStream {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::WouldBlock,
+                    "blocking",
+                ))
+            }
+        }
+
+        let mut stream = BlockingStream;
+        let err = negotiate_protocol(&mut stream, std::time::Duration::from_millis(10)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn test_proto_handshake_clean_disconnect() {
+        let data = vec![];
+        let mut stream = std::io::Cursor::new(data);
+        let err = negotiate_protocol(&mut stream, std::time::Duration::from_secs(1)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+        assert_eq!(err.to_string(), "clean disconnect");
     }
 }
