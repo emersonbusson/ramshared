@@ -97,7 +97,9 @@ impl ChecksumTable {
         let Some(expected) = slot else {
             return None;
         };
-        Some(*expected == block_hash(data))
+        use subtle::ConstantTimeEq;
+        let computed = block_hash(data);
+        Some(expected.ct_eq(&computed).into())
     }
 }
 
