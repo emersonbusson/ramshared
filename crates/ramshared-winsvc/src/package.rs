@@ -418,6 +418,24 @@ mod tests {
     }
 
     #[test]
+    fn validate_cross_config_success_and_edge_cases() {
+        // Valid matching config succeeds
+        assert!(validate_cross_config(&broker_config(4096, "t"), &fake_config(4096, "t")).is_ok());
+
+        // Zero capacity is rejected
+        assert_eq!(
+            validate_cross_config(&broker_config(0, "t"), &fake_config(0, "t")).unwrap_err(),
+            "broker capacity must be nonzero and block aligned"
+        );
+
+        // Capacity not aligned to block_size is rejected
+        assert_eq!(
+            validate_cross_config(&broker_config(4095, "t"), &fake_config(4095, "t")).unwrap_err(),
+            "broker capacity must be nonzero and block aligned"
+        );
+    }
+
+    #[test]
     fn same_version_repair_is_idempotent() {
         let candidate = manifest();
         assert!(plan_install(Some(&candidate), &candidate).idempotent);
