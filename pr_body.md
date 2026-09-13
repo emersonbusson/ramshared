@@ -4,8 +4,8 @@ Implemented the `SysInfo` trait and associated safety checks (`memory_threshold_
 ## Commits
 | Commit | What was done | Why it was done | Details |
 |--------|---------------|-----------------|---------|
-| a667497 | Add unit tests for host safety guard validations | Validates safety bounds and error handling | <details>Files: crates/ramshared-winsvc/src/host_safety.rs<br>Validation: cargo test<br>Risk/rollback: Rollback on CI failures</details> |
-| 7dfd485 | Run cargo fmt | Enforce style guidelines | <details>Files: crates/ramshared-winsvc/src/host_safety.rs<br>Validation: cargo fmt<br>Risk/rollback: Rollback on CI failures</details> |
+| a667497 | Add unit tests for host safety guard validations | Validates safety bounds and error handling | <details><summary>Details</summary>Files: crates/ramshared-winsvc/src/host_safety.rs<br>Validation: cargo test<br>Risk/rollback: Rollback on CI failures</details> |
+| 7dfd485 | Run cargo fmt | Enforce style guidelines | <details><summary>Details</summary>Files: crates/ramshared-winsvc/src/host_safety.rs<br>Validation: cargo fmt<br>Risk/rollback: Rollback on CI failures</details> |
 
 ## Issue
 test-winsvc-009
