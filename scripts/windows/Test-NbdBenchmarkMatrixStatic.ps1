@@ -302,7 +302,7 @@ try {
     }
     foreach ($cell in @($plan.cells)) {
         if ($cell.measurement -ne "allocation_to_hold_ms" -or
-            $cell.allocation_chunk_bytes -ne 67108864 -or $cell.worker_threads -ne 1 -or
+            $cell.allocation_chunk_bytes -ne 67108864 -or $cell.worker_threads -ne [Environment]::ProcessorCount -or
             $cell.workload -ne "anonymous_memory_sequential_write" -or
             $null -ne $cell.PSObject.Properties["block_size_bytes"] -or
             $null -ne $cell.PSObject.Properties["queue_depth"]) {
@@ -553,7 +553,7 @@ try {
                 type = $lowerType; identity_sha256 = $lowerIdentity; sink_type = "directory"; sink_identity_sha256 = $sinkIdentity
             }
             workload = [ordered]@{
-                pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = 1; allocated_mib = 3584
+                pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount; allocated_mib = 3584
             }
         }
         if ($Mode -eq "nbd") {
