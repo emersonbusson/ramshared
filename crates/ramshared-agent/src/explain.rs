@@ -13,6 +13,9 @@ pub struct DemoteEvidence {
     pub swapoff_ms: Option<u64>,
     pub pages_moved: Option<u64>,
     pub process_attribution: Option<String>,
+    pub chosen_tier: Option<String>,
+    pub chosen_capacity_bytes: Option<u64>,
+    pub reasoning: Option<String>,
 }
 
 pub fn explain_demote(e: &DemoteEvidence) -> String {
@@ -35,7 +38,15 @@ pub fn explain_demote(e: &DemoteEvidence) -> String {
         || "duration not observed".into(),
         |ms| format!("swapoff took {ms} ms"),
     );
-    format!("{trigger}; {duration}; process: {attribution}.")
+    let mut explanation = format!("{trigger}; {duration}; process: {attribution}.");
+
+    if e.chosen_tier.is_some() || e.chosen_capacity_bytes.is_some() || e.reasoning.is_some() {
+        let tier = e.chosen_tier.as_deref().unwrap_or("unknown tier");
+        let cap = e.chosen_capacity_bytes.map(|c| format!("{} bytes", c)).unwrap_or_else(|| "unknown capacity".into());
+        let r = e.reasoning.as_deref().unwrap_or("no reasoning provided");
+        explanation.push_str(&format!(" Reasoning chain: selected {tier} with {cap} because {r}."));
+    }
+    explanation
 }
 
 #[cfg(test)]
@@ -51,6 +62,9 @@ mod tests {
             swapoff_ms: Some(20),
             pages_moved: Some(4),
             process_attribution: None,
+            chosen_tier: None,
+            chosen_capacity_bytes: None,
+            reasoning: None,
         });
         assert!(text.contains("128 < 512"));
         assert!(text.contains("process not attributed"));
@@ -66,6 +80,9 @@ mod tests {
             swapoff_ms: None,
             pages_moved: None,
             process_attribution: Some("GpuApp.exe".into()),
+            chosen_tier: None,
+            chosen_capacity_bytes: None,
+            reasoning: None,
         });
         assert!(text.contains("GpuApp.exe"));
         assert!(text.contains("not observed"));
@@ -80,9 +97,28 @@ mod tests {
             swapoff_ms: Some(15),
             pages_moved: Some(2),
             process_attribution: None,
+            chosen_tier: None,
+            chosen_capacity_bytes: None,
+            reasoning: None,
         });
         assert!(text.contains("DEMOTE requested by AppRequest with 1024 free bytes"));
         assert!(!text.contains("fell below the floor"));
         assert!(text.contains("process not attributed"));
+    }
+
+    #[test]
+    fn explanation_reports_reasoning_chain() {
+        let text = explain_demote(&DemoteEvidence {
+            reason: "PolicyRequest".into(),
+            vram_free_bytes: Some(2048),
+            free_floor_bytes: 1024,
+            swapoff_ms: None,
+            pages_moved: None,
+            process_attribution: None,
+            chosen_tier: Some("NVMe".into()),
+            chosen_capacity_bytes: Some(8192),
+            reasoning: Some("latency requirements allow NVMe tier".into()),
+        });
+        assert!(text.contains("Reasoning chain: selected NVMe with 8192 bytes because latency requirements allow NVMe tier."));
     }
 }
