@@ -1065,38 +1065,8 @@ fn cache_status_shape_is_valid(value: &serde_json::Value) -> bool {
         )
 }
 
-fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
-    let Some(status) = value.as_object() else {
-        return false;
-    };
-    const STATUS_KEYS: &[&str] = &[
-        "schema_version",
-        "control_state",
-        "healthy_samples",
-        "action_results",
-        "daemon_instance_id",
-        "supervisor_identity",
-        "written_at_unix_ms",
-    ];
-    if status.len() != STATUS_KEYS.len()
-        || STATUS_KEYS.iter().any(|key| !status.contains_key(*key))
-        || status
-            .get("schema_version")
-            .and_then(serde_json::Value::as_u64)
-            != Some(3)
-        || status
-            .get("healthy_samples")
-            .and_then(serde_json::Value::as_u64)
-            .is_none_or(|samples| samples > u64::from(u32::MAX))
-        || status
-            .get("written_at_unix_ms")
-            .and_then(serde_json::Value::as_u64)
-            .is_none()
-    {
-        return false;
-    }
-
-    let daemon_identity_is_valid = match status.get("daemon_instance_id") {
+fn daemon_instance_id_is_valid(id: Option<&serde_json::Value>) -> bool {
+    match id {
         Some(serde_json::Value::Null) => true,
         Some(serde_json::Value::String(value)) => {
             !value.is_empty()
@@ -1106,15 +1076,11 @@ fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
         }
         _ => false,
-    };
-    if !daemon_identity_is_valid {
-        return false;
     }
+}
 
-    let Some(identity) = status
-        .get("supervisor_identity")
-        .and_then(serde_json::Value::as_object)
-    else {
+fn supervisor_identity_is_valid(identity: Option<&serde_json::Value>) -> bool {
+    let Some(identity) = identity.and_then(serde_json::Value::as_object) else {
         return false;
     };
     const IDENTITY_KEYS: &[&str] = &["boot_id", "pid", "start_time", "nonce"];
@@ -1139,43 +1105,25 @@ fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
     {
         return false;
     }
+    true
+}
 
-    let Some(control_state) = status
-        .get("control_state")
-        .and_then(serde_json::Value::as_str)
-    else {
-        return false;
-    };
-    if !matches!(
-        control_state,
-        "HEALTHY" | "GUARDED" | "CRITICAL" | "EMERGENCY" | "SAFE_MODE"
-    ) {
-        return false;
-    }
-
-    let Some(results) = status
-        .get("action_results")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return false;
-    };
+fn parse_and_validate_action_results<'a>(
+    results: &'a [serde_json::Value],
+) -> Option<Vec<&'a str>> {
     if results.len() > 7 {
-        return false;
+        return None;
     }
     let mut actions = Vec::with_capacity(results.len());
     for result in results {
-        let Some(result) = result.as_object() else {
-            return false;
-        };
+        let result = result.as_object()?;
         const RESULT_KEYS: &[&str] = &["action", "status", "error"];
         if result.len() != RESULT_KEYS.len()
             || RESULT_KEYS.iter().any(|key| !result.contains_key(*key))
         {
-            return false;
+            return None;
         }
-        let Some(action) = result.get("action").and_then(serde_json::Value::as_str) else {
-            return false;
-        };
+        let action = result.get("action").and_then(serde_json::Value::as_str)?;
         if !matches!(
             action,
             "close_admission"
@@ -1187,7 +1135,7 @@ fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
                 | "kill_discardable"
         ) || actions.contains(&action)
         {
-            return false;
+            return None;
         }
         let valid_outcome = match result.get("status").and_then(serde_json::Value::as_str) {
             Some("succeeded") => result.get("error").is_some_and(serde_json::Value::is_null),
@@ -1200,11 +1148,14 @@ fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
             _ => false,
         };
         if !valid_outcome {
-            return false;
+            return None;
         }
         actions.push(action);
     }
+    Some(actions)
+}
 
+fn control_state_matches_actions(control_state: &str, actions: &[&str]) -> bool {
     match control_state {
         "HEALTHY" => actions.is_empty(),
         "GUARDED" => {
@@ -1221,7 +1172,7 @@ fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
         }
         "EMERGENCY" => {
             matches!(
-                actions.as_slice(),
+                actions,
                 ["close_admission", "reduce_vram_cache", "request_reclaim"]
                     | [
                         "close_admission",
@@ -1260,6 +1211,66 @@ fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
         "SAFE_MODE" => actions.is_empty(),
         _ => false,
     }
+}
+
+fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
+    let Some(status) = value.as_object() else {
+        return false;
+    };
+    const STATUS_KEYS: &[&str] = &[
+        "schema_version",
+        "control_state",
+        "healthy_samples",
+        "action_results",
+        "daemon_instance_id",
+        "supervisor_identity",
+        "written_at_unix_ms",
+    ];
+    if status.len() != STATUS_KEYS.len()
+        || STATUS_KEYS.iter().any(|key| !status.contains_key(*key))
+        || status
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(3)
+        || status
+            .get("healthy_samples")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|samples| samples > u64::from(u32::MAX))
+        || status
+            .get("written_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .is_none()
+    {
+        return false;
+    }
+
+    if !daemon_instance_id_is_valid(status.get("daemon_instance_id")) {
+        return false;
+    }
+
+    if !supervisor_identity_is_valid(status.get("supervisor_identity")) {
+        return false;
+    }
+
+    let Some(control_state) = status
+        .get("control_state")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+
+    let Some(results) = status
+        .get("action_results")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+
+    let Some(actions) = parse_and_validate_action_results(results) else {
+        return false;
+    };
+
+    control_state_matches_actions(control_state, &actions)
 }
 
 fn cache_status_matches_current_daemon(
