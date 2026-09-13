@@ -61,6 +61,13 @@ detect_vram_capacity() {
         if [[ $target_mib -gt 4096 ]]; then
             target_mib=4096
         fi
+        # If active free VRAM is reported and below target, preserve 512 MiB free buffer
+        if [[ "$free_mib" =~ ^[0-9]+$ ]] && [[ $free_mib -gt 0 && $free_mib -lt $target_mib ]]; then
+            local safe_free=$(( free_mib - 512 ))
+            if [[ $safe_free -gt 0 ]]; then
+                target_mib=$safe_free
+            fi
+        fi
         if [[ $target_mib -lt 512 ]]; then
             echo 0
             return 0

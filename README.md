@@ -13,8 +13,8 @@ Best of all: if you launch a game, 3D app, or AI workload (like PyTorch or Ollam
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Release v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-44k%2B_%2F_14d-blue?style=flat-square&logo=git">
-  <img alt="Unique Cloners" src="https://img.shields.io/badge/unique_cloners-860%2B-blueviolet?style=flat-square">
+  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-46.9k%2B_%2F_14d-blue?style=flat-square&logo=git">
+  <img alt="Unique Cloners" src="https://img.shields.io/badge/unique_cloners-910%2B-blueviolet?style=flat-square">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
   <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-production%20ready-2f855a?style=flat-square">
   <img alt="Windows Driver" src="https://img.shields.io/badge/Windows%20driver-hardware%20qualified-2f855a?style=flat-square">
@@ -249,7 +249,7 @@ For raw sample bundles, hardware execution traces, latency histograms, and exact
 
 RamShared is deployed, evaluated, and benchmarked across global Linux, WSL2, and hardware engineering communities:
 
-- **High Adoption:** Over 44,500 Git clones across 860+ unique engineering systems in a 14-day window.
+- **High Adoption:** Over 46,900 Git clones across 910+ unique engineering systems in a 14-day window.
 - **Active Community Discovery:** Consistent inbound discovery from technical communities on Reddit (`r/linux`, `r/hardware`), kernel developer networks, and search indexes.
 - **Kernel Architecture Auditing:** Substantial deep-dive traffic specifically inspecting upstream Linux block drivers (`drivers/block/ramshared`) and TUI real-time monitoring (`ramshared top`).
 

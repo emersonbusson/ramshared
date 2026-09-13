@@ -2,7 +2,8 @@
 /*
  * RamShared - Multi-Kernel Compatibility Abstraction Layer
  * Supports: Linux 5.15 LTS (Ubuntu 22.04) -> 6.8 (Ubuntu 24.04) ->
- *           6.10 (Fedora 40) -> 6.12 LTS (Arch) -> 6.13+ Mainline
+ *           6.10 (Fedora 40) -> 6.12 LTS (Arch) -> 6.18 LTS (WSL2 / Rolling LTS) ->
+ *           6.19+ Mainline
  *
  * Copyright (C) 2026 Emerson Busson
  */

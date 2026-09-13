@@ -4547,22 +4547,26 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
 /// On shared-memory environments (such as WSL2/dxgkrnl), GPU VRAM is shared between the host OS
 /// display manager (DWM), host applications, and WSL2. Allocating too much VRAM starves the host
 /// GPU memory manager, leading to driver timeouts (TDR) and system deadlocks.
-///
 /// Rules:
 /// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
 ///   environment, and no clamping is applied.
-/// - HOST_RESERVE_FLOOR = max(2048 MB, total_vram * 35%)
-/// - The host floor must remain FREE after our allocation:
-///   `max_safe_total = free_vram.saturating_sub(host_floor)`
-/// - Maximum allowed slice on consumer GPUs (<= 8GB) is capped at 2048 MB to guarantee
-///   proper cascade spillover into Tier 3 (SSD).
+/// - HOST_RESERVE_FLOOR = max(1536 MB, total_vram * 20%) preserves dedicated headroom for the
+///   host Desktop Window Manager (DWM) while allowing a full 4 GiB slice on 6GB+ GPUs (SSDV3 Principle 11).
+/// - If `free_vram` is known and lower than the ceiling, allocation respects runtime free headroom (512 MiB)
+///   to prevent runtime CUDA allocation failures under external graphics pressure.
+/// - Slices are aligned to 128 MiB boundaries.
 pub fn calculate_safe_vram_slice(
     requested_slice_bytes: u64,
     slices: u16,
     total_vram: u64,
-    _free_vram: u64,
+    free_vram: u64,
 ) -> (u64, bool) {
     const MIN_REAL_GPU_BYTES: u64 = 2048 * 1024 * 1024; // 2048 MiB
+    const MIN_HOST_RESERVE_BYTES: u64 = 1536 * 1024 * 1024; // 1536 MiB for Windows DWM
+    const HOST_RESERVE_PERCENT: u64 = 20; // 20% of total VRAM
+    const RUNTIME_FREE_HEADROOM_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB runtime buffer
+    const SLICE_ALIGNMENT_BYTES: u64 = 128 * 1024 * 1024; // 128 MiB boundary
+
     if slices == 0 || requested_slice_bytes == 0 || total_vram < MIN_REAL_GPU_BYTES {
         return (requested_slice_bytes, false);
     }
@@ -4572,20 +4576,24 @@ pub fn calculate_safe_vram_slice(
         None => return (requested_slice_bytes, false),
     };
 
-    // Calculate host reserve floor: preserve at least 1536 MiB or 20% of total VRAM
-    // for Windows display manager (DWM) while allowing a full 4 GiB slice on 6GB+ GPUs
-    let floor_20_pct = total_vram.saturating_mul(20) / 100;
-    let min_floor = 1536 * 1024 * 1024;
-    let host_floor = std::cmp::max(min_floor, floor_20_pct);
+    let floor_pct = total_vram.saturating_mul(HOST_RESERVE_PERCENT) / 100;
+    let host_floor = std::cmp::max(MIN_HOST_RESERVE_BYTES, floor_pct);
+    let mut max_safe_total = total_vram.saturating_sub(host_floor);
 
-    let max_safe_total = total_vram.saturating_sub(host_floor);
+    // If active free VRAM is reported and below the theoretical ceiling, respect active free headroom
+    if free_vram > 0 && free_vram < max_safe_total {
+        let safe_by_free = free_vram.saturating_sub(RUNTIME_FREE_HEADROOM_BYTES);
+        if safe_by_free > 0 {
+            max_safe_total = safe_by_free;
+        }
+    }
+
     let max_safe_per_slice = max_safe_total / (slices as u64);
 
     if total_requested <= max_safe_total {
         (requested_slice_bytes, false)
     } else {
-        let align = 128 * 1024 * 1024;
-        let aligned_slice = (max_safe_per_slice / align) * align;
+        let aligned_slice = (max_safe_per_slice / SLICE_ALIGNMENT_BYTES) * SLICE_ALIGNMENT_BYTES;
         let final_safe_slice = if aligned_slice > 0 {
             aligned_slice
         } else {

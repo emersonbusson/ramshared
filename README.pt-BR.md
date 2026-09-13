@@ -16,8 +16,8 @@ E o melhor: se você abrir um jogo, aplicativo 3D ou modelo de IA (como PyTorch 
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Versão v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-44k%2B_%2F_14d-blue?style=flat-square&logo=git">
-  <img alt="Clonadores Únicos" src="https://img.shields.io/badge/clonadores_únicos-860%2B-blueviolet?style=flat-square">
+  <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-46.9k%2B_%2F_14d-blue?style=flat-square&logo=git">
+  <img alt="Clonadores Únicos" src="https://img.shields.io/badge/clonadores_únicos-910%2B-blueviolet?style=flat-square">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
   <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-pronto%20para%20produção-2f855a?style=flat-square">
   <img alt="Driver Windows" src="https://img.shields.io/badge/Driver%20Windows-qualificado%20em%20hardware-2f855a?style=flat-square">
@@ -253,7 +253,7 @@ Para pacotes brutos de amostras, traces de execução em hardware, histogramas d
 
 O RamShared é implantado, avaliado e homologado em comunidades de engenharia de Linux, WSL2 e hardware:
 
-- **Alta Adoção:** Mais de 44.500 clones Git em mais de 860 nós de engenharia únicos em uma janela de 14 dias.
+- **Alta Adoção:** Mais de 46.900 clones Git em mais de 910 nós de engenharia únicos em uma janela de 14 dias.
 - **Descoberta Ativa pela Comunidade:** Interesse técnico constante em comunidades do Reddit (`r/linux`, `r/hardware`), redes de desenvolvedores de kernel e motores de busca.
 - **Auditoria de Arquitetura de Kernel:** Tráfego técnico expressivo inspecionando diretamente os drivers de bloco upstream para Linux (`drivers/block/ramshared`) e o monitoramento em tempo real (`ramshared top`).
 
