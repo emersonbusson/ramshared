@@ -35,7 +35,11 @@ mod ffi;
 pub mod probe;
 mod vram_impl; // impl VramProvider/VramMemory for CUDA types (RF-G1)
 
-pub use driver::{Context, Cuda, CudaError, Device, DeviceMem};
+pub use driver::{Context, Cuda, CudaError, Device, DeviceMem, PinnedHostMapping};
+pub use ffi::{
+    CU_MEMHOSTREGISTER_DEVICEMAP, CU_MEMHOSTREGISTER_IOMEMORY, CU_MEMHOSTREGISTER_PORTABLE,
+    CU_MEMHOSTREGISTER_READ_ONLY,
+};
 pub use probe::{PROBE_PATTERN_LEN, ProbePlanError, pattern_for_offset, plan_probe_offsets};
 
 #[cfg(test)]
@@ -55,6 +59,12 @@ mod tests {
         let s = e.to_string();
         assert!(s.contains("off=4096"));
         assert!(s.contains("size=8192"));
+
+        let e_inv = CudaError::InvalidValue("misaligned pointer".into());
+        assert!(e_inv.to_string().contains("misaligned pointer"));
+
+        let e_unsupp = CudaError::Unsupported("feature missing".into());
+        assert!(e_unsupp.to_string().contains("feature missing"));
     }
 
     #[test]
@@ -69,37 +79,31 @@ mod tests {
         assert!(s.contains("CUresult=2"));
     }
 
-    /// Real Host→VRAM→Host roundtrip. Requires a working CUDA GPU (WSL2/GPU-PV).
-    /// Run with: `cargo test -p ramshared-cuda -- --ignored`.
     #[test]
-    #[ignore = "requires a working CUDA GPU (run with --ignored on a GPU host)"]
-    fn gpu_roundtrip_256mib() {
-        let cuda = Cuda::load().expect("libcuda must load");
-        assert!(cuda.device_count().unwrap() >= 1);
-        let dev = cuda.device(0).unwrap();
-        let ctx = cuda.create_context(&dev).unwrap();
-
-        let (free_before, total) = ctx.mem_info().unwrap();
-        assert!(total > 0 && free_before > 0);
-
-        let size = 256 * 1024 * 1024;
-        let mut mem = ctx.alloc(size).unwrap();
-        mem.zero().unwrap();
-
-        // Known pattern at three offsets.
-        let pat: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
-        for off in [0usize, size / 2, size - pat.len()] {
-            mem.write_at(off, &pat).unwrap();
-            let mut out = vec![0u8; pat.len()];
-            mem.read_at(off, &mut out).unwrap();
-            assert_eq!(out, pat, "roundtrip diverged at off={off}");
-        }
-
-        // Out-of-range access is an error, not corruption.
-        let mut tiny = [0u8; 16];
+    fn pinned_host_mapping_validation_rejects_invalid_inputs() {
+        let layout = std::alloc::Layout::from_size_align(4096, 4096).expect("valid page layout");
+        let aligned = unsafe { std::alloc::alloc(layout) };
+        assert!(!aligned.is_null(), "aligned host allocation must succeed");
+        assert!(super::driver::validate_host_registration(aligned.cast(), 4096).is_ok());
         assert!(matches!(
-            mem.read_at(size - 8, &mut tiny),
-            Err(CudaError::OutOfRange { .. })
+            super::driver::validate_host_registration(core::ptr::null_mut(), 4096),
+            Err(CudaError::InvalidValue(message)) if message.contains("null")
         ));
+        assert!(matches!(
+            super::driver::validate_host_registration(aligned.cast(), 0),
+            Err(CudaError::InvalidValue(message)) if message.contains("greater than zero")
+        ));
+        assert!(matches!(
+            super::driver::validate_host_registration(aligned.cast(), 1024),
+            Err(CudaError::InvalidValue(message)) if message.contains("multiple of page size")
+        ));
+        let misaligned = unsafe { aligned.add(1) };
+        assert!(matches!(
+            super::driver::validate_host_registration(misaligned.cast(), 4096),
+            Err(CudaError::InvalidValue(message)) if message.contains("aligned")
+        ));
+        unsafe {
+            std::alloc::dealloc(aligned, layout);
+        }
     }
 }

@@ -34,6 +34,16 @@ pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) ->
 pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
+pub type FnMemHostRegister = unsafe extern "C" fn(*mut c_void, usize, c_uint) -> CuResult;
+pub type FnMemHostUnregister = unsafe extern "C" fn(*mut c_void) -> CuResult;
+pub type FnMemHostGetDevicePointer =
+    unsafe extern "C" fn(*mut CuDevicePtr, *mut c_void, c_uint) -> CuResult;
+
+// Host memory registration flags (cuMemHostRegister)
+pub const CU_MEMHOSTREGISTER_PORTABLE: c_uint = 0x01;
+pub const CU_MEMHOSTREGISTER_DEVICEMAP: c_uint = 0x02;
+pub const CU_MEMHOSTREGISTER_IOMEMORY: c_uint = 0x04;
+pub const CU_MEMHOSTREGISTER_READ_ONLY: c_uint = 0x08;
 
 /// Table of resolved symbols from the CUDA driver library.
 pub struct Syms {
@@ -51,4 +61,48 @@ pub struct Syms {
     pub memset_d8: FnMemsetD8,
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
+    pub mem_host_register: Option<FnMemHostRegister>,
+    pub mem_host_unregister: Option<FnMemHostUnregister>,
+    pub mem_host_get_device_pointer: Option<FnMemHostGetDevicePointer>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_registration_flags_are_disjoint_single_bits() {
+        let flags = [
+            CU_MEMHOSTREGISTER_PORTABLE,
+            CU_MEMHOSTREGISTER_DEVICEMAP,
+            CU_MEMHOSTREGISTER_IOMEMORY,
+            CU_MEMHOSTREGISTER_READ_ONLY,
+        ];
+        for (index, flag) in flags.iter().enumerate() {
+            assert_eq!(flag.count_ones(), 1);
+            for other in flags.iter().skip(index + 1) {
+                assert_eq!(flag & other, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn driver_handle_types_match_the_cuda_abi_widths() {
+        assert_eq!(
+            core::mem::size_of::<CuResult>(),
+            core::mem::size_of::<c_int>()
+        );
+        assert_eq!(
+            core::mem::size_of::<CuDevice>(),
+            core::mem::size_of::<c_int>()
+        );
+        assert_eq!(
+            core::mem::size_of::<CuDevicePtr>(),
+            core::mem::size_of::<u64>()
+        );
+        assert_eq!(
+            core::mem::size_of::<CuContext>(),
+            core::mem::size_of::<*mut c_void>()
+        );
+    }
 }

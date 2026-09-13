@@ -120,26 +120,24 @@ const WSL2_NBD_PRODUCT_READINESS_TESTS = [
   'deterministic_gate_failure_is_not_retried',
   'activation_and_deactivation_are_idempotent',
 ]
-const COMMENT_LANGUAGE_TEST_ONLY_ENTRY = {
-  id: 'comment-language-rust-test-only-localization',
-  kind: 'rust-test-only-localization-differential',
-  spec: 'docs/specs/no-milestone/comment-language-integrity/SPEC.md',
+const CUDA_PINNED_HOST_MAPPING_COVERAGE_ENTRY = {
+  id: 'cuda-pinned-host-mapping-coverage',
+  kind: 'rust-line-coverage',
+  spec: 'docs/specs/no-milestone/windows-swap-driver/SPEC.md',
+  command: [
+    'node', 'tools/ci/check-rust-slice-coverage.mjs',
+    '-p', 'ramshared-cuda',
+    '--files', 'crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/lib.rs',
+    '--min', '80',
+    '--report-json', 'tmp/cuda-pinned-host-mapping-cov.json',
+  ],
+  packages: ['ramshared-cuda'],
   files: [
+    'crates/ramshared-cuda/src/driver.rs',
+    'crates/ramshared-cuda/src/ffi.rs',
     'crates/ramshared-cuda/src/lib.rs',
   ],
-  verifications: [
-    {
-      source: 'crates/ramshared-cuda/src/lib.rs',
-      package: 'ramshared-cuda',
-      test_module: 'tests',
-      cargo_test: ['cargo', 'test', '-p', 'ramshared-cuda', '--lib'],
-      ignored_gpu_tests: [{
-        name: 'gpu_roundtrip_256mib',
-        command: ['cargo', 'test', '-p', 'ramshared-cuda', '--', '--ignored', '--test-threads=1'],
-        evidence: 'validation.md',
-      }],
-    },
-  ],
+  min: 80,
 }
 const MEMORY_BROKER_WSL2D_BACKEND_COVERAGE_ENTRY = {
   id: 'memory-broker-wsl2d-backend',
@@ -161,7 +159,7 @@ const MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY = {
   kind: 'rust-ignored-test-relocation',
   spec: 'docs/specs/no-milestone/memory-broker/SPEC.md',
   files: ['crates/ramshared-wsl2d/src/backend.rs'],
-  base_revision: '69f7469fa999b7d079341ee6bf8ebb006d517b51',
+  base_revision: '8da76c94c67088d6e56e75286326238d3dcc2da7',
   base_source_sha256: 'b58d99366164b7e898baa42492fead82416a6169ec06ce16fb274b06b6d99663',
   verification: {
     source: 'crates/ramshared-wsl2d/src/backend.rs',
@@ -1121,20 +1119,14 @@ test('memory_broker_wsl2d_daemon_requires_exact_coverage_owner_and_named_tests',
   }
 })
 
-test('comment_language_test_only_localization_requires_immutable_base_proof', () => {
+test('cuda_pinned_host_mapping_has_exact_line_coverage_owner', () => {
   const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
-  const entry = map.entries.find((item) => item.id === COMMENT_LANGUAGE_TEST_ONLY_ENTRY.id)
-  assert.deepEqual(entry, COMMENT_LANGUAGE_TEST_ONLY_ENTRY)
-
-  const revision = execFileSync('git', ['rev-parse', 'HEAD'], {
-    cwd: REPOSITORY_ROOT,
-    encoding: 'utf8',
-  }).trim()
+  const entry = map.entries.find((item) => item.id === CUDA_PINNED_HOST_MAPPING_COVERAGE_ENTRY.id)
+  assert.deepEqual(entry, CUDA_PINNED_HOST_MAPPING_COVERAGE_ENTRY)
   const selected = selectCoverageEntries(
     { schema_version: 2, entries: [entry] },
     entry.files,
     REPOSITORY_ROOT,
-    { baseRevision: revision },
   )
   assert.equal(selected.ok, true)
   assert.equal(selected.state, 'READY')

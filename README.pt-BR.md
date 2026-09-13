@@ -5,65 +5,57 @@ Idioma: [English](README.md)
 > Esta tradução é informativa e não normativa. O [`README.md`](README.md) em
 > inglês é a fonte canônica para requisitos técnicos e limites de segurança.
 
-**O RamShared transforma a memória de vídeo (VRAM) ociosa da sua placa de vídeo em um cache de RAM ultra-rápido para Linux e WSL2.**
+**O RamShared é um projeto estável de camadas de memória para Linux e WSL2. Ele pode usar VRAM ociosa como cache revogável, junto com ZRAM e disco.**
 
-Quando o computador fica sem memória RAM, os sistemas operacionais convencionais costumam congelar ou ficar extremamente lentos porque recorrem ao swap no disco. O RamShared desvia a memória excedente diretamente para a sua GPU (NVIDIA, AMD ou Intel) através do barramento PCIe em alta velocidade, mantendo o computador ágil e responsivo.
-
-E o melhor: se você abrir um jogo, aplicativo 3D ou modelo de IA (como PyTorch ou Ollama), o RamShared libera a VRAM de volta para a sua placa de vídeo na mesma hora em milissegundos, sem fechar seus programas e sem perder dados, pois tudo permanece seguro no disco.
+O projeto é destinado a quem quer operar ou estudar camadas de memória aceleradas por GPU na própria máquina. Ele observa pressão, mantém uma origem em disco e devolve VRAM quando a GPU precisa dela. O resultado ainda depende do hardware, do driver e da carga ativa; execute a verificação de prontidão antes de ativar qualquer camada.
 
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0"><img alt="Versão v0.12.0" src="https://img.shields.io/badge/release-v0.12.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-46.9k%2B_%2F_14d-blue?style=flat-square&logo=git">
-  <img alt="Clonadores Únicos" src="https://img.shields.io/badge/clonadores_únicos-910%2B-blueviolet?style=flat-square">
-  <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
-  <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-pronto%20para%20produção-2f855a?style=flat-square">
-  <img alt="Driver Windows" src="https://img.shields.io/badge/Driver%20Windows-qualificado%20em%20hardware-2f855a?style=flat-square">
+  <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-estável-2f855a?style=flat-square">
 </p>
 
 ```bash
-# 1. Compilação dos binários (CLI + serviço em background)
+# 1. Compilação do checkout atual (CLI + serviço em background)
 ./scripts/quickstart.sh
 
 # 2. Verificação de prontidão do ambiente e topologia GPU/NUMA
-ramshared check
+./target/release/ramshared check
 
 # 3. Inicialização do painel interativo em tempo real
-ramshared top
+./target/release/ramshared top
 ```
 
 ## Por que o RamShared?
 
 > **"Todo computador precisa de GPU? Por que usar a memória da GPU como RAM em vez de apenas ZRAM ou swap no SSD?"**
 
-- **Aproveite a Memória Parada da sua Placa de Vídeo:** Em computadores de desenvolvimento, jogos ou servidores, as placas de vídeo costumam ficar com gigabytes de VRAM parados sem uso. O RamShared aproveita essa memória como um cache intermediário de altíssima velocidade.
-- **Proteja seu SSD contra Desgaste:** O excesso de swap escreve gigabytes sem parar no disco, desgastando a vida útil da memória flash (TBW) do seu SSD. A VRAM não desgasta e tem vida útil de gravação ilimitada.
-- **Acabe com os Travamentos no WSL2 e Linux:** O swap tradicional do WSL2 passa por quatro camadas de virtualização (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), causando aqueles travamentos chatos quando a RAM enche. O RamShared contorna isso transferindo a memória direto pelo barramento PCIe.
-- **Economize CPU em Relação ao ZRAM:** A compressão ZRAM é rápida, mas consome vários núcleos do processador sob carga pesada. O RamShared usa DMA direto via PCIe sem pesar o processador durante compilações ou tarefas intensas.
-- **Seus Jogos e IAs Têm Prioridade Total:** A VRAM é alugada apenas como um cache esperto. No instante em que outro aplicativo ou jogo pede memória de vídeo, o RamShared devolve na mesma hora sem travar nada.
-- **GPU 100% Opcional:** Não tem placa de vídeo dedicada? O RamShared funciona perfeitamente, orquestrando RAM comprimida (ZRAM) e SSD com a mesma estabilidade à prova de travamentos.
-- **Arquitetura de Hardware e FAQ:** Para explicações técnicas detalhadas sobre suporte multi-fabricante (NVIDIA, AMD, Intel), latência de páginas de 4KB e durabilidade de SSD, consulte as [Perguntas Frequentes](docs/FAQ.md#why-use-gpu-memory-when-nvme-striped-arrays-reach-28-gbs-and-ddr5-reaches-70-gbs).
+- **Use VRAM ociosa com critério:** Em uma GPU compatível e com memória livre, a VRAM pode servir como cache. A quantidade disponível muda conforme jogos, desktop e cargas de IA.
+- **Mantenha uma origem durável:** A VRAM não é a fonte definitiva dos dados. O desenho usa armazenamento de origem para permitir uma liberação segura do cache.
+- **Trabalhe junto com ZRAM e disco:** A camada de GPU é uma opção na cascata, não substitui todas as formas de swap ou de gerenciamento de memória.
+- **Mantenha o controle:** Ativação e desligamento exigem comando explícito. O projeto não inicia cargas de pressão de memória silenciosamente.
+- **Leia os limites antes:** Consulte as [Perguntas Frequentes](docs/FAQ.md) e o [registro de gaps de confiabilidade](docs/reliability/GAP-REGISTER.md) antes de usar o driver Windows ou as superfícies de laboratório do kernel.
 
 ## Status atual
 
-Versão: **v0.12.0 (Release de Produção Qualificado e Cascata de Memória Multi-Tier)**. Totalmente testada e verificada sob 100% de saturação de memória e alta pressão de trabalho em hardware real sob WSL2.
+Última release publicada: **[v0.12.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0)**. Este checkout compila a versão **0.13.0**, a próxima manutenção estável em desenvolvimento; ela ainda não foi publicada.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
-| Cascata de 4 Níveis | **100% Saturada e Qualificada** | Carga total de 19.777 MB a 20.208 MB sustentada em RAM, ZRAM, GPU VRAM e swap no SSD por 40 ciclos contínuos de estresse sem travamentos (`PASS_ZERO_PANIC`). |
-| Estabilidade Linux/WSL2 | **Blindada e Testada · 1.065 testes passando** | Processos e registros de armazenamento totalmente protegidos. Validado com 1.065 testes automatizados (0 falhas, 0 panics) e desligamento limpo e seguro. |
-| Pressão de Memória no Host | **Validada** | Carga contínua de 99% da memória RAM (17,2 GB em máquina de 20 GB) por 60 segundos com 100% de integridade (SHA-256 verificado) e zero quedas de processos. |
-| Cache na VRAM e Segurança no SSD | **Qualificado ao Vivo em Hardware** | Testado em hardware real (NVIDIA RTX 2060 + SSD Samsung). Acessos rápidos pelo PCIe e recuperação exata dos dados direto do SSD quando a GPU é liberada. |
-| Liberação Segura da GPU | **Validada** | Quando jogos ou ferramentas de IA solicitam memória de vídeo, o RamShared cede espaço de forma limpa, sem deixar processos zumbis. |
-| Proteção Anti-Travamento no WSL2 | **Blindada e Verificada** | Elimina travamentos da interface e do terminal através do desligamento ordenado (`swapoff-first`) e controle dinâmico de memória. |
-| Driver Windows StorPort | **Topologia de Miniport Qualificada** | Driver nativo de disco virtual para Windows com serviços isolados, comunicação segura via named pipes e streaming DMA em hardware. |
-| Origem Confiável em Disco | **Capacidade 100% Determinística** | Usa o SSD como base definitiva para garantir que nenhum dado seja perdido caso a placa de vídeo seja desconectada ou requisitada. |
-| Transporte ublk e Driver In-Tree | **LKML RFC v3 & WSL2 Custom 6.18+** | Driver de bloco de kernel nativo (`ramshared.ko`) e `ublk` zero-copy (`io_uring`) qualificados no Linux 6.18+ ([#41054](https://github.com/microsoft/WSL/issues/41054)). |
+| Userspace Linux e WSL2 | **Estável e qualificado** | A CLI, o daemon, as verificações e o desligamento ordenado são cobertos pela CI. Ative-os após `check` e o preflight documentado. |
+| Cache de GPU | **Estável em hardware qualificado** | Os backends CUDA e Vulkan existem, mas a capacidade e o comportamento dependem do driver, GPU, desktop e pressão atual do host. |
+| Origem em disco e integridade | **Estáveis e testadas** | Há verificações de integridade e desligamento; cada instalação ainda precisa validar seu próprio antes/depois. |
+| Driver Windows StorPort | **Ainda não distribuível publicamente** | O driver permanece uma superfície de laboratório supervisionada até que exista assinatura confiável para produção e qualificação completa. |
+| Kernel customizado e transporte ublk | **Adiados** | São superfícies de desenvolvimento e laboratório, não o transporte WSL2 padrão do primeiro dia. |
 
 
-O status acima reflete qualificação verificada em hardware físico. Para relatórios completos de benchmark, logs de testes e registros de auditoria, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e [`docs/reliability/`](docs/reliability/).
+As medições históricas estão em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Entradas sem envelope público de evidência são registros históricos, não baselines atuais de release. Limites e qualificações em aberto estão em [`docs/reliability/`](docs/reliability/).
+
+### Snapshot de qualificação da v0.12
+
+A qualificação publicada da v0.12 alcançou **19.777 MB** entre Tier 0 (ZRAM), Tier 1 (cache de VRAM da GPU) e Tier 3 (origem SSD), com veredito `PASS_ZERO_PANIC` no hardware qualificado. Isso registra a evidência da release; não é promessa de capacidade ou desempenho para outra máquina.
 
 ## Operação Segura e Guia de Início Rápido
 <a id="safe-operation"></a><a id="quick-start"></a>
@@ -135,29 +127,11 @@ Quando o Windows, jogos ou aplicativos 3D solicitam memória de vídeo, o RamSha
 3. Reserva automaticamente pelo menos `max(1,5 GiB, 20% da VRAM física)` exclusivamente para o Windows e tarefas visuais (Princípio 11 do SSDV3), assegurando estabilidade ao Gerenciador de Janelas (DWM) enquanto libera 4 GiB completos em GPUs de 6GB+.
 4. Faz o desligamento ordenado (`swapoff-first`) para que o sistema operacional nunca congele.
 
-### Comparação de Benchmarks em Hardware Real
+### Evidência, sem atalho de marketing
 
-Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, SSD de Origem, WSL2 / Linux Kernel 6.18+):
+O desempenho depende da GPU, driver, carga do desktop, caminho de disco e pressão de memória da máquina testada. Um número obtido em uma RTX 2060 ou em um host WSL2 não é promessa para outro computador.
 
-```text
-┌─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┐
-│ Dimensão / Parâmetro    │ Tier 0: ZRAM (CPU)      │ Tier 1: GPU VRAM Cache  │ Tier 3: Origem SSD      │ Direção de Otimização   │
-├─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
-│ Latência de Acesso      │ 0,08 µs                 │ 0,85 µs                 │ 48,2 µs                 │ [🔻 Menos é melhor]     │
-│ Vazão Sustentada        │ Direto no barramento    │ 311,6 MB/s (PCIe DMA)   │ 21,66 GB/s liberação    │ [🔺 Mais é melhor]      │
-│ Telemetria Empírica     │ 140,7 MB/s ativo        │ 311,6 MB/s (15,6x boost)│ 16,8 MB/s spill ativo   │ [🔺 Mais é melhor]      │
-│ Saturação de Memória    │ 1.024 MB (100% cheio)   │ 4.096 MB (1.969 MB ativ)│ Armazenamento de origem │ [🔺 Mais é melhor]      │
-│ Comportamento sob Carga │ Motor hardware LZO      │ Spillway em ring-buffer │ Ciclos contínuos Tier 3 │ Alvo de estabilidade    │
-│ Pressão de Memória PSI  │ 0,00% avg10             │ 0,00% avg10 (7,0 pico)  │ 0,00% avg10 pressão     │ [🔻 Menos é melhor]     │
-│ Memória RAM Restaurada  │ 10,2 GB livres          │ 10,2 GB livres          │ 10,2 GB livres (zero vaz│ [🔺 Mais é melhor]      │
-└─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘
-
-• Carga de Qualificação de Estresse Empírico: 20.208 MB de alocação total (171% da RAM) sob pressão em malha fechada com 4 GiB de VRAM ativa.
-• Qualificação de Tier 3 (origem SSD): 4 GiB de partição durável e telemetria de spillover documentadas.
-• Estabilidade do Host e Liberação: Sucesso na restauração de 10.217 MB de RAM livre no host com zero vazamento (21,66 GB/s de vazão de liberação, com pico de 84,10 GB/s em flash reclaim).
-• Veredito de Estabilidade: PASS_ZERO_PANIC
-• Evolução do Kernel (WSL2 Padrão vs Customizado 6.18+): O NBD do WSL2 padrão atinge 6,33 GB/s de liberação e ~80 µs de latência; o Kernel Customizado RamShared 6.18.40.1 (driver in-tree ramshared.ko + ublk/io_uring nativo) acelera a liberação para 21,66 GB/s (+242%) e atinge 0,0006 ms de latência mediana com aceleração PCIe DMA direta.
-```
+O projeto mantém registros históricos de benchmark para auditoria. Somente um resultado com envelope público atual de evidência pode ser usado como baseline de release ou alegação de regressão. Consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) para o contexto das medições e [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) para os limites de qualificação restantes.
 
 ## Topologia do Workspace (15 Crates)
 
@@ -236,14 +210,6 @@ Para detalhes sobre distribuição do driver e atestação WHQL da Microsoft, co
 As medições empíricas de desempenho e distribuições de latência são registradas sob envelopes de evidência pública em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e registradas em [`validation.md`](validation.md).
 
 Para pacotes brutos de amostras, traces de execução em hardware, histogramas de latência e comandos exatos de reprodução para EVD-0037 e EVD-0038, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
-
-## Tração da Comunidade e Ecossistema
-
-O RamShared é implantado, avaliado e homologado em comunidades de engenharia de Linux, WSL2 e hardware:
-
-- **Alta Adoção:** Mais de 46.900 clones Git em mais de 910 nós de engenharia únicos em uma janela de 14 dias.
-- **Descoberta Ativa pela Comunidade:** Interesse técnico constante em comunidades do Reddit (`r/linux`, `r/hardware`), redes de desenvolvedores de kernel e motores de busca.
-- **Auditoria de Arquitetura de Kernel:** Tráfego técnico expressivo inspecionando diretamente os drivers de bloco upstream para Linux (`drivers/block/ramshared`) e o monitoramento em tempo real (`ramshared top`).
 
 ## Arquitetura
 

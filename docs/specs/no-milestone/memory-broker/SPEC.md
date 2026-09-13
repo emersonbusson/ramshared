@@ -458,7 +458,7 @@ commands below are declarations and are never executed by the planner.
   "id": "memory-broker-wsl2d-backend-gpu-test-relocation",
   "kind": "rust-ignored-test-relocation",
   "files": ["crates/ramshared-wsl2d/src/backend.rs"],
-  "base_revision": "69f7469fa999b7d079341ee6bf8ebb006d517b51",
+  "base_revision": "8da76c94c67088d6e56e75286326238d3dcc2da7",
   "base_source_sha256": "b58d99366164b7e898baa42492fead82416a6169ec06ce16fb274b06b6d99663",
   "verification": {
     "source": "crates/ramshared-wsl2d/src/backend.rs",

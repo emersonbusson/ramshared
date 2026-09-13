@@ -20,6 +20,28 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 600;
+const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
+const MULTI_TIER_MIN_USABLE_AVAIL_MB: u64 = 100;
+const SINGLE_TIER_MIN_USABLE_AVAIL_MB: u64 = 200;
+const TIER1_AND_TIER2_QUALIFICATION_PCT: u64 = 95;
+const TIER3_HEADROOM_RESERVE_MB: u64 = 16;
+const TIER3_FULL_STEP_HEADROOM_MB: u64 = 48;
+const TIER3_MAX_STEP_MB: u64 = 32;
+const PRE_TIER3_FULL_STEP_HEADROOM_MB: u64 = 200;
+const PRE_TIER3_HEADROOM_RESERVE_MB: u64 = 50;
+const PRE_TIER3_MAX_STEP_MB: u64 = 128;
+const WSL2_TIER3_STEP_INTERVAL_MS: u64 = 500;
+const TIER3_HEAVY_LOAD_PCT: u64 = 80;
+const TIER3_HEAVY_HOLD_INTERVAL_MS: u64 = 1_000;
+const NORMAL_HOLD_INTERVAL_MS: u64 = 500;
+const TIER3_HEAVY_TOUCH_BYTES: usize = 2 * 1024 * 1024;
+const NORMAL_TOUCH_BYTES: usize = 16 * 1024 * 1024;
+const TIER3_HEAVY_TOUCH_STRIDE_BYTES: usize = 32 * 1024;
+const NORMAL_TOUCH_STRIDE_BYTES: usize = 16 * 1024;
+const CASCADE_RAMP_LIMIT_PCT: u64 = 1_000;
+const TIER3_QUALIFICATION_RAMP_LIMIT_PCT: u64 = 3_000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct StressOptions {
     pub start_pct: u64,
@@ -134,6 +156,7 @@ pub struct StressReport {
 
 pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     let mut opts = StressOptions::default();
+    let mut target_explicit = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -152,6 +175,7 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                     .ok_or_else(|| "--target requires a value (1-99)".to_string())?
                     .parse()
                     .map_err(|_| "invalid --target value")?;
+                target_explicit = true;
             }
             "--step" => {
                 i += 1;
@@ -191,20 +215,40 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
             "--cascade" => {
                 opts.cascade = true;
                 opts.battery = true;
+                if !target_explicit {
+                    opts.target_pct = 100;
+                }
                 if opts.tier3_target_pct.is_none() {
-                    opts.tier3_target_pct = Some(30);
+                    opts.tier3_target_pct = Some(15);
+                }
+                opts.max_psi_full = opts.max_psi_full.max(50.0);
+                if opts.step_pct == 1 {
+                    opts.step_pct = 5;
+                }
+                if opts.interval_ms == 1500 {
+                    opts.interval_ms = 500;
                 }
             }
             "--tier3-target-pct" => {
                 i += 1;
                 let val: u64 = args
                     .get(i)
-                    .ok_or_else(|| "--tier3-target-pct requires a value (1-99)".to_string())?
+                    .ok_or_else(|| "--tier3-target-pct requires a value (1-100)".to_string())?
                     .parse()
                     .map_err(|_| "invalid --tier3-target-pct value")?;
-                opts.tier3_target_pct = Some(val.clamp(1, 99));
+                opts.tier3_target_pct = Some(val.clamp(1, 100));
                 opts.cascade = true;
                 opts.battery = true;
+                if !target_explicit {
+                    opts.target_pct = 100;
+                }
+                opts.max_psi_full = opts.max_psi_full.max(50.0);
+                if opts.step_pct == 1 {
+                    opts.step_pct = 5;
+                }
+                if opts.interval_ms == 1500 {
+                    opts.interval_ms = 500;
+                }
             }
             "--max-psi-full" => {
                 i += 1;
@@ -260,6 +304,15 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
     Ok(opts)
+}
+
+/// True when running under Microsoft WSL2 (shared kernel VM).
+pub fn is_wsl2() -> bool {
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.contains("microsoft") || s.contains("WSL"))
+        .unwrap_or(false)
+        || std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+        || std::env::var_os("WSL_INTEROP").is_some()
 }
 
 pub fn read_mem_info() -> (u64, u64) {
@@ -425,6 +478,52 @@ pub fn probe_allocation_latency_ms() -> f64 {
     page[4095] = 2;
     std::hint::black_box(&page);
     t0.elapsed().as_secs_f64() * 1000.0
+}
+
+fn safe_allocation_mb(
+    is_multi_tier: bool,
+    tier3_active: bool,
+    avail_mb: u64,
+    hard_floor: u64,
+    one_pct_mb: u64,
+) -> u64 {
+    if !is_multi_tier {
+        return one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
+    }
+
+    if tier3_active {
+        if avail_mb > hard_floor + TIER3_FULL_STEP_HEADROOM_MB {
+            one_pct_mb
+                .min(avail_mb.saturating_sub(hard_floor + TIER3_HEADROOM_RESERVE_MB))
+                .min(TIER3_MAX_STEP_MB)
+        } else if avail_mb > hard_floor + TIER3_HEADROOM_RESERVE_MB {
+            TIER3_HEADROOM_RESERVE_MB
+        } else {
+            0
+        }
+    } else if avail_mb > hard_floor + PRE_TIER3_FULL_STEP_HEADROOM_MB {
+        one_pct_mb
+            .min(avail_mb.saturating_sub(hard_floor + PRE_TIER3_HEADROOM_RESERVE_MB))
+            .min(PRE_TIER3_MAX_STEP_MB)
+    } else if avail_mb > hard_floor + 20 {
+        TIER3_MAX_STEP_MB
+    } else if avail_mb > hard_floor {
+        TIER3_HEADROOM_RESERVE_MB
+    } else {
+        0
+    }
+}
+
+fn step_interval_ms(is_wsl2_host: bool, tier3_active: bool, requested_ms: u64) -> u64 {
+    if is_wsl2_host && tier3_active {
+        requested_ms.max(WSL2_TIER3_STEP_INTERVAL_MS)
+    } else {
+        requested_ms
+    }
+}
+
+fn tier3_target_reached(tier3_pct: u64, target_pct: u64) -> bool {
+    tier3_pct >= target_pct
 }
 
 pub fn compute_latency_percentiles(latencies: &[f64]) -> (f64, f64, f64, f64, f64) {
@@ -609,7 +708,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     // Phase 1: 1%-by-1% Micro-Step Ramp
     let effective_target =
         if (opts.tier3_target_pct.is_some() || opts.cascade) && opts.target_pct == 100 {
-            1000
+            if opts.tier3_target_pct.is_some() {
+                TIER3_QUALIFICATION_RAMP_LIMIT_PCT
+            } else {
+                CASCADE_RAMP_LIMIT_PCT
+            }
         } else {
             opts.target_pct
         };
@@ -642,17 +745,30 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         append_telemetry_log(&opts.telemetry_log, &reading);
 
         let sysctl_min_free_mb = read_sysctl_min_free_mb();
-        let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
         let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
-        const MULTI_TIER_HARD_FLOOR_MB: u64 = 200;
         const SWAP_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(150);
         const MAX_SWAP_DRAIN_IDLE_CYCLES: usize = 80; // 80 * 150ms = 12.0s of zero swap growth before declaring limit
 
-        let hard_floor = if is_multi_tier {
-            MULTI_TIER_HARD_FLOOR_MB
+        // Under WSL2, Hyper-V synthetic devices (hv_balloon, vmicvmswitch) and host-guest
+        // heartbeat require at least 600 MB of total physical memory headroom.
+        // In Linux, /proc/meminfo MemAvailable ALREADY discounts sysctl_min_free_mb (reserved pages).
+        // Therefore: physical_headroom = MemAvailable + sysctl_min_free_mb.
+        // We calibrate hard_floor against MemAvailable such that:
+        //   hard_floor + sysctl_min_free_mb >= target_physical_floor (600 MB on WSL2).
+        let target_physical_floor = if is_wsl2() {
+            opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB)
         } else {
-            opts.min_ram_mb.max(dynamic_kernel_floor)
+            opts.min_ram_mb.max(BARE_METAL_MULTI_TIER_FLOOR_MB)
         };
+
+        let min_usable_avail = if is_multi_tier {
+            MULTI_TIER_MIN_USABLE_AVAIL_MB
+        } else {
+            SINGLE_TIER_MIN_USABLE_AVAIL_MB
+        };
+        let hard_floor = target_physical_floor
+            .saturating_sub(sysctl_min_free_mb)
+            .max(min_usable_avail);
 
         let mut avail_mb = avail_mb;
         let mut last_swap_val = tot_swap;
@@ -663,6 +779,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             if term_signal.load(Ordering::Relaxed) {
                 break;
             }
+            last_heartbeat.store(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                Ordering::Relaxed,
+            );
             thread::sleep(SWAP_DRAIN_POLL_INTERVAL);
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
@@ -788,49 +911,68 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             break;
         }
 
-        let (tot_swap_mb, _, _, _) = read_swap_tiers();
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
-        let total_swap_cap = cap1.total_mb + cap2.total_mb + cap3.total_mb;
-        if let Some(t3_target) = opts.tier3_target_pct {
-            if (cap1.pct >= 95 || cap1.total_mb == 0)
-                && (cap2.pct >= 95 || cap2.total_mb == 0)
-                && cap3.pct >= t3_target
-            {
-                if !opts.json {
-                    println!(
-                        "\n[🎯 ALL TIERS QUALIFIED] Tier 1: {}%, Tier 2: {}%, Tier 3: {}% (Target: {}%).",
-                        cap1.pct, cap2.pct, cap3.pct, t3_target
-                    );
-                }
-                break;
+        if let Some(t3_target) = opts.tier3_target_pct
+            && (cap1.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT || cap1.total_mb == 0)
+            && (cap2.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT || cap2.total_mb == 0)
+            && tier3_target_reached(cap3.pct, t3_target)
+        {
+            if !opts.json {
+                println!(
+                    "\n[🎯 ALL TIERS QUALIFIED] Tier 1: {}%, Tier 2: {}%, Tier 3: {}% (Target: {}%).",
+                    cap1.pct, cap2.pct, cap3.pct, t3_target
+                );
             }
-            if total_swap_cap > 0 && tot_swap_mb >= (total_swap_cap * 99) / 100 {
-                if !opts.json {
-                    println!(
-                        "\n[🎯 CEILING REACHED] Multi-tier swap reached 99% capacity ({} MB).",
-                        tot_swap_mb
-                    );
-                }
-                break;
-            }
+            break;
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let mut safe_alloc_mb = if is_multi_tier {
-            if avail_mb > 400 {
-                one_pct_mb.min(avail_mb.saturating_sub(250)).min(128)
-            } else if avail_mb >= 220 {
-                32
-            } else {
-                0
-            }
-        } else {
-            one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128)
-        };
+        let safe_alloc_mb = safe_allocation_mb(
+            is_multi_tier,
+            cap3.used_mb > 0,
+            avail_mb,
+            hard_floor,
+            one_pct_mb,
+        );
 
         if safe_alloc_mb == 0 {
-            if is_multi_tier && avail_mb > hard_floor && psi_full < opts.max_psi_full {
-                safe_alloc_mb = 16;
+            if is_multi_tier && !floor_breached && psi_full < opts.max_psi_full {
+                // Headroom is temporarily below allocation threshold.
+                // Wait for kswapd to complete ongoing writebacks and recover headroom above hard_floor.
+                let mut recovered = false;
+                for _ in 0..60 {
+                    // 60 * 100ms = 6.0s max wait for disk writeback
+                    if term_signal.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(100));
+                    last_heartbeat.store(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs(),
+                        Ordering::Relaxed,
+                    );
+                    let (_, fresh_avail) = read_mem_info();
+                    let threshold = hard_floor + TIER3_HEADROOM_RESERVE_MB;
+                    if fresh_avail > threshold {
+                        avail_mb = fresh_avail;
+                        recovered = true;
+                        break;
+                    }
+                }
+                if !recovered {
+                    if !opts.json {
+                        println!(
+                            "\n[🛑 RAM FLOOR BOUND] Memory headroom cannot recover above safe floor ({} MB <= {} MB). Halting ramp safely at {}%.",
+                            avail_mb, hard_floor, max_safe_pct
+                        );
+                    }
+                    break;
+                }
+                // Re-read swap capacity and headroom before allocating. The values that
+                // triggered the wait are stale after writeback recovery.
+                continue;
             } else {
                 break;
             }
@@ -843,6 +985,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             let base = (current_target as u8).wrapping_add((i & 0xFF) as u8);
             for offset in (0..4096).step_by(128) {
                 slice[i + offset] = base.wrapping_add((offset as u8) ^ 0xA5);
+            }
+            if (i & 0x1FFFFF) == 0 {
+                // Every 2 MiB, yield CPU so Hyper-V VMBus IC heartbeat interrupt handler is never starved
+                thread::yield_now();
             }
         }
 
@@ -874,7 +1020,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             );
         }
 
-        thread::sleep(Duration::from_millis(opts.interval_ms));
+        // Adaptive StorVSC I/O Pacing:
+        // Tier 3 is backed by Hyper-V synthetic SCSI (storvsc) writing to swap.vhdx on NTFS.
+        // If Tier 3 is active, pace steps by at least 500ms to allow StorVSC ring buffer completions.
+        let step_interval = step_interval_ms(is_wsl2(), cap3.used_mb > 0, opts.interval_ms);
+        thread::sleep(Duration::from_millis(step_interval));
         let now = Instant::now();
         let dt = now.duration_since(prev_sample_time).as_secs_f64();
         if dt > 0.05 {
@@ -911,6 +1061,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let hold_end = Instant::now() + Duration::from_secs(opts.hold_sec);
         let mut cycle: usize = 0;
+        let (_, _, init_cap3) = read_swap_tier_capacities();
+        let mut hold_cap3_pct = init_cap3.pct;
         while Instant::now() < hold_end && !term_signal.load(Ordering::Relaxed) {
             cycle += 1;
             last_heartbeat.store(
@@ -921,16 +1073,33 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 Ordering::Relaxed,
             );
 
-            // Modify chunk pages smoothly to stimulate active tier traffic without saturating kernel queues
+            // Modify chunk pages smoothly to stimulate active tier traffic without saturating kernel queues.
+            // If Tier 3 is heavily loaded, touch ONLY recent resident pages to avoid
+            // triggering a catastrophic swap-in/swap-out thrash cycle against a near-full swap device.
             if let Ok(mut guard) = chunks.lock()
                 && !guard.is_empty()
             {
                 let len = guard.len();
-                let idx = (cycle.wrapping_mul(7)) % len;
-                let target_chunk = &mut guard[idx];
+                let target_chunk = if hold_cap3_pct >= TIER3_HEAVY_LOAD_PCT {
+                    if let Some(last) = guard.last_mut() {
+                        last
+                    } else {
+                        continue;
+                    }
+                } else {
+                    let idx = (cycle.wrapping_mul(7)) % len;
+                    &mut guard[idx]
+                };
                 let chunk_len = target_chunk.len();
-                let limit = chunk_len.min(16 * 1024 * 1024);
-                for offset in (0..limit).step_by(16384) {
+                let (limit, stride) = if hold_cap3_pct >= TIER3_HEAVY_LOAD_PCT {
+                    (
+                        chunk_len.min(TIER3_HEAVY_TOUCH_BYTES),
+                        TIER3_HEAVY_TOUCH_STRIDE_BYTES,
+                    )
+                } else {
+                    (chunk_len.min(NORMAL_TOUCH_BYTES), NORMAL_TOUCH_STRIDE_BYTES)
+                };
+                for offset in (0..limit).step_by(stride) {
                     target_chunk[offset] = (cycle as u8).wrapping_add((offset & 0xFF) as u8);
                 }
             }
@@ -946,6 +1115,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             latencies_ms.push(lat_ms);
 
             let (cap1, cap2, cap3) = read_swap_tier_capacities();
+            hold_cap3_pct = cap3.pct;
             let reading = compute_telemetry_reading(
                 lat_ms,
                 psi_full,
@@ -972,7 +1142,12 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 );
                 let _ = io::stdout().flush();
             }
-            thread::sleep(Duration::from_millis(500));
+            let hold_sleep_ms = if hold_cap3_pct >= TIER3_HEAVY_LOAD_PCT {
+                TIER3_HEAVY_HOLD_INTERVAL_MS
+            } else {
+                NORMAL_HOLD_INTERVAL_MS
+            };
+            thread::sleep(Duration::from_millis(hold_sleep_ms));
             let now = Instant::now();
             let dt = now.duration_since(prev_sample_time).as_secs_f64();
             if dt > 0.05 {
@@ -1565,5 +1740,43 @@ mod tests {
         assert!(p90 >= p50);
         assert!(p99 >= 1.00);
         assert_eq!(max, 2.00);
+    }
+
+    #[test]
+    fn safe_allocation_never_crosses_the_physical_floor() {
+        assert_eq!(safe_allocation_mb(true, true, 600, 600, 128), 0);
+        assert_eq!(safe_allocation_mb(true, true, 616, 600, 128), 0);
+        assert_eq!(safe_allocation_mb(true, true, 617, 600, 128), 16);
+        assert_eq!(safe_allocation_mb(true, true, 649, 600, 128), 32);
+        assert_eq!(safe_allocation_mb(true, false, 600, 600, 128), 0);
+        assert_eq!(safe_allocation_mb(false, false, 600, 600, 128), 0);
+    }
+
+    #[test]
+    fn tier3_target_requires_the_requested_tier3_percentage() {
+        assert!(!tier3_target_reached(98, 99));
+        assert!(tier3_target_reached(99, 99));
+    }
+
+    #[test]
+    fn tier3_pacing_has_a_wsl2_floor() {
+        assert_eq!(step_interval_ms(true, true, 200), 500);
+        assert_eq!(step_interval_ms(true, true, 800), 800);
+        assert_eq!(step_interval_ms(true, false, 200), 200);
+        assert_eq!(step_interval_ms(false, true, 200), 200);
+    }
+
+    #[test]
+    fn wsl2_hard_floor_enforces_safety_ceiling() {
+        if is_wsl2() {
+            let sysctl_min = read_sysctl_min_free_mb();
+            let opts = StressOptions::default();
+            let target_physical_floor = opts.min_ram_mb.max(600);
+            let hard_floor = target_physical_floor.saturating_sub(sysctl_min).max(100);
+            assert!(
+                hard_floor + sysctl_min >= 600,
+                "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 600 MB"
+            );
+        }
     }
 }
