@@ -83,6 +83,7 @@ pub enum DxgError {
     Io(String),
     DeviceNotFound,
     UnsupportedHardware,
+    IncompatibleVersion(u32),
     BufferOverflow,
     PermissionDenied,
     NoAdapters,
@@ -100,6 +101,7 @@ impl fmt::Display for DxgError {
             Self::Io(message) => write!(f, "dxg ioctl failed: {message}"),
             Self::DeviceNotFound => write!(f, "dxg device not found"),
             Self::UnsupportedHardware => write!(f, "dxg unsupported hardware"),
+            Self::IncompatibleVersion(v) => write!(f, "dxg incompatible adapter version: {v}"),
             Self::BadAddress => write!(f, "dxg bad memory address"),
             Self::BufferOverflow => write!(f, "dxg buffer overflow"),
             Self::PermissionDenied => write!(f, "dxg permission denied"),
@@ -195,6 +197,12 @@ impl DxgBudgetProvider {
             .ok_or(DxgError::AdapterNotFound(selected))?;
         if selected_info.adapter_handle == 0 {
             return Err(DxgError::Malformed("adapter_handle"));
+        }
+        if selected_info.present_move_regions_preferred == 0 {
+            return Err(DxgError::UnsupportedHardware);
+        }
+        if selected_info.num_sources == 0 {
+            return Err(DxgError::IncompatibleVersion(selected_info.num_sources));
         }
         for info in &infos {
             if info.adapter_handle != selected_info.adapter_handle {
@@ -430,6 +438,7 @@ mod tests {
             super::DxgError::Malformed("field"),
             super::DxgError::DeviceNotFound,
             super::DxgError::UnsupportedHardware,
+            super::DxgError::IncompatibleVersion(1),
             super::DxgError::BufferOverflow,
             super::DxgError::PermissionDenied,
             super::DxgError::BadAddress,
@@ -461,6 +470,42 @@ mod tests {
             Err(super::DxgError::AdapterNotFound(value)) if value == missing
         ));
     }
+    #[test]
+    fn live_provider_rejects_unsupported_hardware() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let infos = vec![super::uapi::AdapterInfo {
+            adapter_handle: 1,
+            luid_low: 10,
+            luid_high: 11,
+            num_sources: 1,
+            present_move_regions_preferred: 0,
+            ..Default::default()
+        }];
+        assert_eq!(DxgBudgetProvider::from_infos(file, infos, None).err(), Some(super::DxgError::UnsupportedHardware));
+    }
+
+    #[test]
+    fn live_provider_rejects_incompatible_version() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let infos = vec![super::uapi::AdapterInfo {
+            adapter_handle: 1,
+            luid_low: 10,
+            luid_high: 11,
+            num_sources: 0,
+            present_move_regions_preferred: 1,
+            ..Default::default()
+        }];
+        assert_eq!(DxgBudgetProvider::from_infos(file, infos, None).err(), Some(super::DxgError::IncompatibleVersion(0)));
+    }
+
 
     #[test]
     fn injected_multi_adapter_closes_unselected_and_builds_selected() {
@@ -474,12 +519,16 @@ mod tests {
                 adapter_handle: 1,
                 luid_low: 10,
                 luid_high: 11,
+                num_sources: 1,
+                present_move_regions_preferred: 1,
                 ..Default::default()
             },
             super::uapi::AdapterInfo {
                 adapter_handle: 2,
                 luid_low: 20,
                 luid_high: 21,
+                num_sources: 1,
+                present_move_regions_preferred: 1,
                 ..Default::default()
             },
         ];
