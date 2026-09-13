@@ -418,6 +418,29 @@ mod tests {
     }
 
     #[test]
+    fn validate_cross_config_valid_returns_ok() {
+        let broker = broker_config(4096, "tenant1");
+        let winsvc = fake_config(4096, "tenant1");
+        assert!(validate_cross_config(&broker, &winsvc).is_ok());
+    }
+
+    #[test]
+    fn validate_cross_config_zero_capacity_returns_err() {
+        let broker = broker_config(0, "tenant1");
+        let winsvc = fake_config(0, "tenant1");
+        let err = validate_cross_config(&broker, &winsvc).unwrap_err();
+        assert_eq!(err, "broker capacity must be nonzero and block aligned");
+    }
+
+    #[test]
+    fn validate_cross_config_unaligned_capacity_returns_err() {
+        let broker = broker_config(4097, "tenant1");
+        let winsvc = fake_config(4097, "tenant1");
+        let err = validate_cross_config(&broker, &winsvc).unwrap_err();
+        assert_eq!(err, "broker capacity must be nonzero and block aligned");
+    }
+
+    #[test]
     fn same_version_repair_is_idempotent() {
         let candidate = manifest();
         assert!(plan_install(Some(&candidate), &candidate).idempotent);
