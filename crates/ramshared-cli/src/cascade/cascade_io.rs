@@ -610,23 +610,24 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
                 "detached NBD node and sysfs dev_t disagree".into(),
             ));
         }
-        match fs::read_to_string(sysfs.join("pid")) {
-            Ok(value) => {
-                let value = value.trim();
-                if !value.is_empty()
-                    && value.parse::<u32>().map_err(|_| {
-                        CascadeError::Precondition("detached NBD owner PID is malformed".into())
-                    })? != 0
-                {
-                    return Err(CascadeError::UnsafeContainment(format!(
-                        "NBD target {path} still has a kernel owner PID"
-                    )));
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        let pid_res = match fs::read_to_string(sysfs.join("pid")) {
+            Ok(value) => Some(value),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => {
                 return Err(CascadeError::Precondition(format!(
                     "read detached NBD owner PID: {error}"
+                )));
+            }
+        };
+        if let Some(value) = pid_res {
+            let value = value.trim();
+            if !value.is_empty()
+                && value.parse::<u32>().map_err(|_| {
+                    CascadeError::Precondition("detached NBD owner PID is malformed".into())
+                })? != 0
+            {
+                return Err(CascadeError::UnsafeContainment(format!(
+                    "NBD target {path} still has a kernel owner PID"
                 )));
             }
         }
