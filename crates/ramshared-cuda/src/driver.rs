@@ -29,6 +29,10 @@ pub enum CudaError {
     },
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
+    /// Invalid argument supplied to driver wrapper.
+    InvalidValue(String),
+    /// The requested feature is unsupported by the loaded driver version.
+    Unsupported(String),
 }
 
 impl fmt::Display for CudaError {
@@ -42,11 +46,40 @@ impl fmt::Display for CudaError {
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
             }
+            CudaError::InvalidValue(s) => write!(f, "invalid argument: {s}"),
+            CudaError::Unsupported(s) => write!(f, "unsupported driver feature: {s}"),
         }
     }
 }
 
 impl core::error::Error for CudaError {}
+
+const HOST_PAGE_BYTES: usize = 4096;
+
+pub(super) fn validate_host_registration(
+    host_ptr: *mut c_void,
+    len: usize,
+) -> Result<(), CudaError> {
+    if host_ptr.is_null() {
+        return Err(CudaError::InvalidValue("host_ptr cannot be null".into()));
+    }
+    if len == 0 {
+        return Err(CudaError::InvalidValue(
+            "length must be greater than zero".into(),
+        ));
+    }
+    if !len.is_multiple_of(HOST_PAGE_BYTES) {
+        return Err(CudaError::InvalidValue(format!(
+            "length {len} must be a multiple of page size {HOST_PAGE_BYTES}"
+        )));
+    }
+    if !(host_ptr as usize).is_multiple_of(HOST_PAGE_BYTES) {
+        return Err(CudaError::InvalidValue(format!(
+            "host_ptr {host_ptr:p} must be aligned to {HOST_PAGE_BYTES}-byte page boundary"
+        )));
+    }
+    Ok(())
+}
 
 /// RAII wrapper for the loaded dynamic library handle: calls close on `Drop`.
 struct Lib(*mut c_void);
@@ -113,6 +146,11 @@ impl Cuda {
                 memset_d8: load_sym(handle, c"cuMemsetD8_v2")?,
                 mem_get_info: load_sym(handle, c"cuMemGetInfo_v2")?,
                 get_error_string: load_sym_opt(handle, c"cuGetErrorString"),
+                mem_host_register: load_sym_opt(handle, c"cuMemHostRegister_v2")
+                    .or_else(|| load_sym_opt(handle, c"cuMemHostRegister")),
+                mem_host_unregister: load_sym_opt(handle, c"cuMemHostUnregister"),
+                mem_host_get_device_pointer: load_sym_opt(handle, c"cuMemHostGetDevicePointer_v2")
+                    .or_else(|| load_sym_opt(handle, c"cuMemHostGetDevicePointer")),
             }
         };
 
@@ -215,6 +253,113 @@ impl<'a> Context<'a> {
             ptr,
             len: bytes,
         })
+    }
+
+    /// Registers an existing host allocation for zero-copy device access (`cuMemHostRegister`).
+    ///
+    /// Validates that `host_ptr` is non-null, `len > 0`, `len` is a multiple of 4096, and
+    /// `host_ptr` is 4096-byte page aligned (SPEC §RF-1, §DT-2, Kahneman #13).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `host_ptr` points to at least `len` valid, allocated host
+    /// bytes that remain valid and are not deallocated while the returned [`PinnedHostMapping`] is alive.
+    pub unsafe fn register_host<'c>(
+        &'c self,
+        host_ptr: *mut c_void,
+        len: usize,
+        flags: u32,
+    ) -> Result<PinnedHostMapping<'c, 'a>, CudaError> {
+        validate_host_registration(host_ptr, len)?;
+
+        let fn_register = self.cuda.syms.mem_host_register.ok_or_else(|| {
+            CudaError::Unsupported("cuMemHostRegister not supported by driver".into())
+        })?;
+        let fn_get_dptr = self.cuda.syms.mem_host_get_device_pointer.ok_or_else(|| {
+            CudaError::Unsupported("cuMemHostGetDevicePointer not supported by driver".into())
+        })?;
+        let fn_unreg = self.cuda.syms.mem_host_unregister.ok_or_else(|| {
+            CudaError::Unsupported("cuMemHostUnregister not supported by driver".into())
+        })?;
+
+        // SAFETY: host_ptr is non-null, 4096-aligned, and points to len valid bytes.
+        let r = unsafe { fn_register(host_ptr, len, flags) };
+        check(&self.cuda.syms, r, "cuMemHostRegister")?;
+
+        let mut dev_ptr: CuDevicePtr = 0;
+        // SAFETY: dev_ptr points to a valid local u64; host_ptr was successfully registered.
+        let r = unsafe { fn_get_dptr(&mut dev_ptr, host_ptr, 0) };
+        if r != CUDA_SUCCESS {
+            // SAFETY: host_ptr was successfully registered and fn_unreg is required above.
+            unsafe {
+                let _ = fn_unreg(host_ptr);
+            }
+            check(&self.cuda.syms, r, "cuMemHostGetDevicePointer")?;
+        }
+
+        Ok(PinnedHostMapping {
+            ctx: self,
+            host_ptr,
+            dev_ptr,
+            len,
+        })
+    }
+}
+
+/// Zero-copy registered host memory mapping (`cuMemHostRegister`).
+///
+/// ```compile_fail
+/// fn requires_send<T: Send>() {}
+/// requires_send::<ramshared_cuda::PinnedHostMapping<'static, 'static>>();
+/// ```
+///
+/// Borrows the active [`Context`]. The host memory remains mapped into the
+/// GPU virtual address space for the lifetime of this struct and is cleanly
+/// unregistered via `cuMemHostUnregister` on `Drop`.
+pub struct PinnedHostMapping<'c, 'a> {
+    ctx: &'c Context<'a>,
+    host_ptr: *mut c_void,
+    dev_ptr: CuDevicePtr,
+    len: usize,
+}
+
+impl<'c, 'a> PinnedHostMapping<'c, 'a> {
+    /// Returns the mapped CUDA device virtual pointer.
+    pub fn dev_ptr(&self) -> CuDevicePtr {
+        self.dev_ptr
+    }
+
+    /// Returns the length in bytes of the registered mapping.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns true if the mapping is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns a host slice view of the registered memory.
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: host_ptr is non-null and points to at least len valid bytes.
+        unsafe { core::slice::from_raw_parts(self.host_ptr as *const u8, self.len) }
+    }
+
+    /// Returns a mutable host slice view of the registered memory.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: host_ptr is non-null and points to at least len valid bytes.
+        unsafe { core::slice::from_raw_parts_mut(self.host_ptr as *mut u8, self.len) }
+    }
+}
+
+impl Drop for PinnedHostMapping<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(fn_unreg) = self.ctx.cuda.syms.mem_host_unregister {
+            // SAFETY: host_ptr was successfully registered by cuMemHostRegister.
+            unsafe {
+                let _ = fn_unreg(self.host_ptr);
+            }
+        }
     }
 }
 
@@ -351,4 +496,201 @@ fn err_string(syms: &Syms, r: CuResult) -> String {
         }
     }
     format!("CUresult={r}")
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
+
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    static UNREGISTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn success_init(_: u32) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_device_count(count: *mut i32) -> CuResult {
+        unsafe { *count = 1 };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_device(device: *mut CuDevice, ordinal: i32) -> CuResult {
+        unsafe { *device = ordinal };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_device_name(name: *mut c_char, _: i32, _: CuDevice) -> CuResult {
+        unsafe { core::ptr::copy_nonoverlapping(c"mock-gpu".as_ptr(), name, 9) };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_context(context: *mut CuContext, _: u32, _: CuDevice) -> CuResult {
+        unsafe { *context = core::ptr::NonNull::<u8>::dangling().as_ptr().cast() };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_context_drop(_: CuContext) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_synchronize() -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_alloc(ptr: *mut CuDevicePtr, _: usize) -> CuResult {
+        unsafe { *ptr = 0x1000 };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_free(_: CuDevicePtr) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_htod(_: CuDevicePtr, _: *const c_void, _: usize) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_dtoh(_: *mut c_void, _: CuDevicePtr, _: usize) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_memset(_: CuDevicePtr, _: u8, _: usize) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_mem_info(free: *mut usize, total: *mut usize) -> CuResult {
+        unsafe {
+            *free = 4096;
+            *total = 8192;
+        }
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn mock_error(_: CuResult, output: *mut *const c_char) -> CuResult {
+        unsafe { *output = c"mock CUDA error".as_ptr() };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_host_register(_: *mut c_void, _: usize, _: u32) -> CuResult {
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_host_unregister(_: *mut c_void) -> CuResult {
+        UNREGISTER_CALLS.fetch_add(1, Ordering::SeqCst);
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_host_pointer(
+        output: *mut CuDevicePtr,
+        _: *mut c_void,
+        _: u32,
+    ) -> CuResult {
+        unsafe { *output = 0x2000 };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn failed_host_pointer(
+        _: *mut CuDevicePtr,
+        _: *mut c_void,
+        _: u32,
+    ) -> CuResult {
+        7
+    }
+
+    fn mock_cuda(host_pointer: Option<crate::ffi::FnMemHostGetDevicePointer>) -> Cuda {
+        Cuda {
+            _lib: Lib(core::ptr::null_mut()),
+            syms: Syms {
+                init: success_init,
+                device_get_count: success_device_count,
+                device_get: success_device,
+                device_get_name: success_device_name,
+                ctx_create: success_context,
+                ctx_destroy: success_context_drop,
+                ctx_synchronize: success_synchronize,
+                mem_alloc: success_alloc,
+                mem_free: success_free,
+                memcpy_htod: success_htod,
+                memcpy_dtoh: success_dtoh,
+                memset_d8: success_memset,
+                mem_get_info: success_mem_info,
+                get_error_string: Some(mock_error),
+                mem_host_register: Some(success_host_register),
+                mem_host_unregister: Some(success_host_unregister),
+                mem_host_get_device_pointer: host_pointer,
+            },
+        }
+    }
+
+    fn aligned_page() -> (*mut u8, std::alloc::Layout) {
+        let layout = std::alloc::Layout::from_size_align(HOST_PAGE_BYTES, HOST_PAGE_BYTES).unwrap();
+        let page = unsafe { std::alloc::alloc(layout) };
+        assert!(!page.is_null());
+        (page, layout)
+    }
+
+    #[test]
+    fn mock_driver_exercises_memory_and_mapping_raii() {
+        UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        let cuda = mock_cuda(Some(success_host_pointer));
+        assert_eq!(cuda.device_count().unwrap(), 1);
+        let device = cuda.device(0).unwrap();
+        assert_eq!(device.name(), "mock-gpu");
+        let context = cuda.create_context(&device).unwrap();
+        assert_eq!(context.mem_info().unwrap(), (4096, 8192));
+
+        let mut memory = context.alloc(16).unwrap();
+        assert_eq!(memory.len(), 16);
+        assert!(!memory.is_empty());
+        memory.zero().unwrap();
+        memory.write_at(0, &[1, 2, 3]).unwrap();
+        let mut output = [0; 3];
+        memory.read_at(0, &mut output).unwrap();
+        assert!(matches!(
+            memory.write_at(15, &[1, 2]),
+            Err(CudaError::OutOfRange { .. })
+        ));
+
+        let (page, layout) = aligned_page();
+        let mut mapping = unsafe {
+            context
+                .register_host(page.cast(), HOST_PAGE_BYTES, 0)
+                .unwrap()
+        };
+        assert_eq!(mapping.dev_ptr(), 0x2000);
+        assert_eq!(mapping.len(), HOST_PAGE_BYTES);
+        mapping.as_mut_slice()[0] = 0x5A;
+        assert_eq!(mapping.as_slice()[0], 0x5A);
+        drop(mapping);
+        assert_eq!(UNREGISTER_CALLS.load(Ordering::SeqCst), 1);
+        unsafe { std::alloc::dealloc(page, layout) };
+    }
+
+    #[test]
+    fn registration_requires_rollback_capability_and_unwinds_pointer_failures() {
+        let (page, layout) = aligned_page();
+        let mut missing_unregister = mock_cuda(Some(success_host_pointer));
+        missing_unregister.syms.mem_host_unregister = None;
+        let device = missing_unregister.device(0).unwrap();
+        let context = missing_unregister.create_context(&device).unwrap();
+        assert!(matches!(
+            unsafe { context.register_host(page.cast(), HOST_PAGE_BYTES, 0) },
+            Err(CudaError::Unsupported(message)) if message.contains("cuMemHostUnregister")
+        ));
+        drop(context);
+
+        UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        let failed_pointer = mock_cuda(Some(failed_host_pointer));
+        let device = failed_pointer.device(0).unwrap();
+        let context = failed_pointer.create_context(&device).unwrap();
+        assert!(matches!(
+            unsafe { context.register_host(page.cast(), HOST_PAGE_BYTES, 0) },
+            Err(CudaError::Driver {
+                op: "cuMemHostGetDevicePointer",
+                code: 7,
+                ..
+            })
+        ));
+        assert_eq!(UNREGISTER_CALLS.load(Ordering::SeqCst), 1);
+        unsafe { std::alloc::dealloc(page, layout) };
+    }
+
+    #[test]
+    fn error_strings_use_driver_symbol_or_numeric_fallback() {
+        let cuda = mock_cuda(Some(success_host_pointer));
+        assert_eq!(err_string(&cuda.syms, 7), "mock CUDA error");
+        let mut no_symbol = mock_cuda(Some(success_host_pointer));
+        no_symbol.syms.get_error_string = None;
+        assert_eq!(err_string(&no_symbol.syms, 7), "CUresult=7");
+        assert!(matches!(
+            check(&no_symbol.syms, 7, "mock"),
+            Err(CudaError::Driver { .. })
+        ));
+    }
 }

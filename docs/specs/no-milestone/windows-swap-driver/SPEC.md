@@ -438,6 +438,10 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   are untouched. **RNF-8** = gate.
 - **Required tests:** Linux: green `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib --ignored`
   (no regression). Windows: `Cuda::load()` resolves the 13 symbols in `nvcuda.dll`; plausible `mem_info()`.
+- **Pinned host mapping coverage:**
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/lib.rs --min 80 --report-json tmp/cuda-pinned-host-mapping-cov.json
+  ```
 - **Kahneman discipline:** #14 + #1 (ITEM-1 Map).
 
 ### `crates/ramshared-cuda/Cargo.toml`  *(ITEM-1 — RF-4, DT-16)*

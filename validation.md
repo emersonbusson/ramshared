@@ -5540,3 +5540,23 @@ Rust topology residuals remain explicit.
 **Rollback trigger:** Any bit corruption in DMA buffers, ublk ring buffer timeouts, or failure to release pinned page allocations on teardown.
 **Verdict:** ✅ `PASS`. Native Linux ublk and zero-copy hardware DMA are qualified on host hardware.
 
+## 2026-09-13 00:35 -03 — Zero-Copy Host Memory Registration and Byte-Level Page Operations in CUDA-Rust
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0040`.
+**Owner role:** `cuda-rust-tiering`.
+**Observed at:** `2026-09-13T03:35:00Z`.
+**Verified at:** `2026-09-13T03:35:00Z`.
+**Source revision:** `419d259`.
+**Candidate status:** Validated `PinnedHostMapping` RAII registration over `cuMemHostRegister` and Kahneman #13 boundary refusals on NVIDIA GeForce RTX 2060 (`sm_75`, 6144 MiB) under WSL2.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only evidence summary and test receipts.
+**Freshness:** Revalidate after any driver FFI, zero-copy buffer, or cutile upstream changes.
+**What:** Empirically validated zero-copy host memory registration (`cuMemHostRegister`) and RAII unregistration in `crates/ramshared-cuda`, boundary refusal of invalid/misaligned pointers, and upstream patch branches in `scratch/cutile-rs` (`feat/zero-copy-host-mapping` and `feat/tile-bitwise-reductions`).
+**Category:** `local-check`.
+**How to measure:** `cargo test -p ramshared-cuda`; `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/driver.rs --min 80`.
+**Measured data:** 14 unit tests passed (0 failed, 1 ignored). Slice line coverage on `driver.rs`: 85.8% (224/261 lines). Registration refusal verified against null pointer, zero-length, non-4096-multiple length, and misaligned pointer. Legitimate registration verified with 4096-byte aligned host memory and roundtrip data integrity.
+**Refusals:** Refused misaligned host pointers with `CudaError::InvalidValue`; refused zero length; clean unregister on drop with 0 memory leaks.
+**Residual blockers:** None.
+**Rollback trigger:** Any `CUDA_ERROR_OUT_OF_MEMORY` or `CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED` triggers immediate fallback to staged DMA transfer.
+**Verdict:** ✅ `PASS`. Zero-copy host registration and slice coverage gate pass.

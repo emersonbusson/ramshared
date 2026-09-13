@@ -32,7 +32,7 @@ param(
     [switch]$AllowWatchdogShutdown,
     [string]$PackageRoot = "C:\ramshared\artifacts\windows-storage-matrix-packages",
     [string]$PackageRevision = "",
-    [string]$BasePackage = "C:\ramshared\artifacts\active-host-20260725-155910\package",
+    [string]$BasePackage = "",
     [string]$DriverPackage = "C:\ramshared\package",
     [string]$WinsvcBinary = "C:\ramshared\bin\ramshared-winsvc.exe",
     [string]$BrokerBinary = "C:\ramshared\bin\ramshared-winbroker.exe",
@@ -400,6 +400,9 @@ function Assert-OnlineStorageBinding($OnlineEvidence, [string]$ExpectedSerial,
 function New-MatrixPackages {
     if ($PackageRevision -notmatch '^[0-9A-Za-z][0-9A-Za-z-]*$') {
         throw "PackageRevision is required and must be alphanumeric with optional hyphens"
+    }
+    if ([string]::IsNullOrWhiteSpace($BasePackage)) {
+        throw "BasePackage is required and must identify a sealed base product package"
     }
     if (-not (Test-Path (Join-Path $BasePackage "product-manifest.json"))) {
         throw "base product package missing"
