@@ -262,6 +262,15 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     Ok(opts)
 }
 
+/// True when running under Microsoft WSL2 (shared kernel VM).
+pub fn is_wsl2() -> bool {
+    fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.contains("microsoft") || s.contains("WSL"))
+        .unwrap_or(false)
+        || std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+        || std::env::var_os("WSL_INTEROP").is_some()
+}
+
 pub fn read_mem_info() -> (u64, u64) {
     let text = fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let mut total_kib = 0u64;
@@ -644,12 +653,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let sysctl_min_free_mb = read_sysctl_min_free_mb();
         let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
         let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
-        const MULTI_TIER_HARD_FLOOR_MB: u64 = 200;
         const SWAP_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(150);
         const MAX_SWAP_DRAIN_IDLE_CYCLES: usize = 80; // 80 * 150ms = 12.0s of zero swap growth before declaring limit
 
+        // Under WSL2, Hyper-V synthetic devices (hv_balloon, vmicvmswitch) and host-guest
+        // heartbeat require at least 600 MB headroom to avoid VM unresponsiveness and teardown.
+        let multi_tier_floor = if is_wsl2() {
+            opts.min_ram_mb.max(600).max(dynamic_kernel_floor)
+        } else {
+            const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
+            opts.min_ram_mb.max(BARE_METAL_MULTI_TIER_FLOOR_MB).max(dynamic_kernel_floor)
+        };
+
         let hard_floor = if is_multi_tier {
-            MULTI_TIER_HARD_FLOOR_MB
+            multi_tier_floor
         } else {
             opts.min_ram_mb.max(dynamic_kernel_floor)
         };
@@ -817,9 +834,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
         let mut safe_alloc_mb = if is_multi_tier {
-            if avail_mb > 400 {
-                one_pct_mb.min(avail_mb.saturating_sub(250)).min(128)
-            } else if avail_mb >= 220 {
+            if avail_mb > hard_floor + 200 {
+                one_pct_mb.min(avail_mb.saturating_sub(hard_floor + 50)).min(128)
+            } else if avail_mb > hard_floor + 20 {
                 32
             } else {
                 0
@@ -1565,5 +1582,16 @@ mod tests {
         assert!(p90 >= p50);
         assert!(p99 >= 1.00);
         assert_eq!(max, 2.00);
+    }
+
+    #[test]
+    fn wsl2_hard_floor_enforces_safety_ceiling() {
+        if is_wsl2() {
+            let sysctl_min = read_sysctl_min_free_mb();
+            let dynamic_floor = sysctl_min.saturating_add(128).max(512);
+            let opts = StressOptions::default();
+            let multi_tier_floor = opts.min_ram_mb.max(600).max(dynamic_floor);
+            assert!(multi_tier_floor >= 600, "WSL2 floor must never be lower than 600 MB");
+        }
     }
 }
