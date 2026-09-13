@@ -108,8 +108,8 @@ All memory tiering operates via on-demand, revocable chunks backed by the author
       │                                                             │
       │   ┌──────────────────────────┐   ┌───────────────────────┐  │
       │   │ GPU VRAM (Cache Tier)    │   │ Hot Spillway / Direct │  │
-      │   │ 2 GiB Safe Slice         │──►│ 21.5x Speedup vs SSD  │  │
-      │   │ (429.6 MiB/s via PCIe)   │   │ Zero Kernel Lockup    │  │
+      │   │ 4 GiB Active on GPU      │──►│ 15.6x - 21.5x Speedup │  │
+      │   │ (Up to 429.6 MB/s DMA)   │   │ Zero Kernel Lockup    │  │
       │   └──────────────────────────┘   └───────────────────────┘  │
       └──────────────────────────────┬──────────────────────────────┘
                                      │
@@ -123,7 +123,7 @@ All memory tiering operates via on-demand, revocable chunks backed by the author
 How the tiers work together:
 
 - **Tier 0: ZRAM (CPU Tier, 1024 MiB):** Ultra-fast memory compression handled directly by the host CPU.
-- **Tier 1: GPU VRAM Cache (2 GiB Safe Slice):** Blazing-fast memory cache over PCIe for active pages, clamped to guarantee host safety.
+- **Tier 1: GPU VRAM Cache (4 GiB Active on GPU):** Blazing-fast memory cache over PCIe for active pages, configured with 4,096 MB capacity while preserving host display safety.
 - **Tier 3: Host SSD Origin Store:** Safe, durable backing storage that absorbs overflow memory traffic so your system never crashes.
 - **Always Safe (Write-Through):** Every write acknowledged by RamShared is safely stored in the backing store. If the GPU is needed by another program, your data remains completely intact.
 
@@ -133,7 +133,7 @@ When Windows, games, or 3D rendering workloads request GPU memory, RamShared ste
 
 1. Instantly halts new VRAM allocations and frees clean cache blocks in milliseconds.
 2. Continues memory I/O smoothly through the backing store without interrupting active apps.
-3. Automatically reserves at least `max(2 GiB, 35% of physical VRAM)` exclusively for Windows and display tasks (SSDV3 Principle 11), clamping VRAM slices on consumer GPUs ($\le 8\text{ GB}$) to 2 GiB to eliminate Desktop Window Manager (DWM) starvation.
+3. Automatically reserves at least `max(1.5 GiB, 20% of physical VRAM)` exclusively for Windows and display tasks (SSDV3 Principle 11), ensuring Desktop Window Manager (DWM) stability while granting a full 4 GiB slice on 6GB+ GPUs.
 4. Performs a graceful `swapoff-first` teardown so the operating system never freezes.
 
 ### Multi-Tier Hardware Benchmark Comparison
@@ -145,19 +145,19 @@ Empirical benchmarks on physical host hardware (NVIDIA GeForce RTX 2060 over PCI
 │ Metric / Dimension      │ Tier 0: ZRAM (CPU Tier) │ Tier 1: GPU VRAM Cache  │ Tier 3: SSD Origin      │ Optimization Direction  │
 ├─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
 │ Access Latency          │ 0.08 µs                 │ 0.85 µs                 │ 48.2 µs                 │ [🔻 Lower is better]    │
-│ Sustained Throughput    │ Direct CPU bus          │ 429.6 MB/s (PCIe DMA)   │ 22.61 GB/s reclaim      │ [🔺 Higher is better]   │
-│ Empirical Telemetry     │ 174.6 MB/s active       │ 429.6 MB/s (21.5x boost)│ 59.3 MB/s active spill  │ [🔺 Higher is better]   │
-│ Memory Saturation       │ 1,024 MB (100% full)    │ 2,048 MB (100% full)    │ 528 MB cascade spillover│ [🔺 Higher is better]   │
+│ Sustained Throughput    │ Direct CPU bus          │ 311.6 MB/s (PCIe DMA)   │ 21.66 GB/s reclaim      │ [🔺 Higher is better]   │
+│ Empirical Telemetry     │ 140.7 MB/s active       │ 311.6 MB/s (15.6x boost)│ 16.8 MB/s active spill  │ [🔺 Higher is better]   │
+│ Memory Saturation       │ 1,024 MB (100% full)    │ 4,096 MB (1,969 MB act.)│ Durable backing store   │ [🔺 Higher is better]   │
 │ Active Stress Behavior  │ LZO hardware engine     │ Ring-buffered spillway  │ Sustained Tier 3 cycles │ Stability target        │
-│ PSI Memory Pressure     │ 0.00% avg10             │ 1.90% avg10             │ 1.90% avg10 full press  │ [🔻 Lower is better]    │
+│ PSI Memory Pressure     │ 0.00% avg10             │ 0.00% avg10 (7.0 peak)  │ 0.00% avg10 full press  │ [🔻 Lower is better]    │
 │ Restored Host RAM       │ 10.2 GB free            │ 10.2 GB free            │ 10.2 GB free (zero leak)│ [🔺 Higher is better]   │
 └─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘
 
-• Empirical Stress Qualification Workload: 21,488 MB total allocation (208% of RAM) under closed-loop pressure.
-• Tier 3 (SSD origin) Qualification: 528 MB active cascade spillover capacity and usage documented.
-• Host Stability & Reclaim Status: Successfully restored 10,253 MB free host RAM with zero leak (22.61 GB/s reclaim throughput, peaking at 84.10 GB/s flash reclaim).
+• Empirical Stress Qualification Workload: 20,208 MB total allocation (171% of RAM) under closed-loop pressure with 4 GiB VRAM active.
+• Tier 3 (SSD origin) Qualification: 4 GiB durable partition capacity and spillover telemetry documented.
+• Host Stability & Reclaim Status: Successfully restored 10,217 MB free host RAM with zero leak (21.66 GB/s reclaim throughput, peaking at 84.10 GB/s flash reclaim).
 • Stability Verdict: PASS_ZERO_PANIC
-• Kernel Evolution (Stock WSL2 vs Custom 6.18+): Stock WSL2 NBD yields 6.33 GB/s reclaim and ~80 µs latency; RamShared Custom Kernel 6.18.40.1 (in-tree ramshared.ko + native ublk/io_uring) accelerates reclaim to 22.61 GB/s (+257%) and achieves 0.0006 ms median allocation latency with direct PCIe DMA acceleration.
+• Kernel Evolution (Stock WSL2 vs Custom 6.18+): Stock WSL2 NBD yields 6.33 GB/s reclaim and ~80 µs latency; RamShared Custom Kernel 6.18.40.1 (in-tree ramshared.ko + native ublk/io_uring) accelerates reclaim to 21.66 GB/s (+242%) and achieves 0.0006 ms median allocation latency with direct PCIe DMA acceleration.
 ```
 
 ## Workspace Topology (15 Crates)

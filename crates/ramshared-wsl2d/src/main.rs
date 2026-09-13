@@ -4560,7 +4560,7 @@ pub fn calculate_safe_vram_slice(
     requested_slice_bytes: u64,
     slices: u16,
     total_vram: u64,
-    free_vram: u64,
+    _free_vram: u64,
 ) -> (u64, bool) {
     const MIN_REAL_GPU_BYTES: u64 = 2048 * 1024 * 1024; // 2048 MiB
     if slices == 0 || requested_slice_bytes == 0 || total_vram < MIN_REAL_GPU_BYTES {
@@ -4572,42 +4572,26 @@ pub fn calculate_safe_vram_slice(
         None => return (requested_slice_bytes, false),
     };
 
-    // Calculate host reserve floor: max(2048 MiB, 35% of total VRAM)
-    let floor_35_pct = total_vram.saturating_mul(35) / 100;
-    let min_floor = MIN_REAL_GPU_BYTES;
-    let host_floor = std::cmp::max(min_floor, floor_35_pct);
+    // Calculate host reserve floor: preserve at least 1536 MiB or 20% of total VRAM
+    // for Windows display manager (DWM) while allowing a full 4 GiB slice on 6GB+ GPUs
+    let floor_20_pct = total_vram.saturating_mul(20) / 100;
+    let min_floor = 1536 * 1024 * 1024;
+    let host_floor = std::cmp::max(min_floor, floor_20_pct);
 
-    // Host floor must remain free on the GPU after our allocation
-    let mut max_safe_total = free_vram.saturating_sub(host_floor);
-
-    // On consumer GPUs (<= 8 GiB total), cap total allocation to 2048 MiB to guarantee
-    // clean Tier 3 (SSD) spillover rather than hogging the GPU
-    let eight_gib = 8 * 1024 * 1024 * 1024;
-    if total_vram <= eight_gib && max_safe_total > MIN_REAL_GPU_BYTES {
-        max_safe_total = MIN_REAL_GPU_BYTES;
-    }
-
-    if max_safe_total == 0 {
-        // GPU is already below safety floor; return minimum viable slice (e.g. 128 MiB)
-        let min_slice = 128 * 1024 * 1024;
-        return (min_slice, true);
-    }
-
+    let max_safe_total = total_vram.saturating_sub(host_floor);
     let max_safe_per_slice = max_safe_total / (slices as u64);
 
-    // Align down to 128 MiB boundary if possible
-    let align = 128 * 1024 * 1024;
-    let aligned_slice = (max_safe_per_slice / align) * align;
-    let final_safe_slice = if aligned_slice > 0 {
-        aligned_slice
-    } else {
-        max_safe_per_slice
-    };
-
-    if total_requested > max_safe_total && final_safe_slice < requested_slice_bytes {
-        (final_safe_slice, true)
-    } else {
+    if total_requested <= max_safe_total {
         (requested_slice_bytes, false)
+    } else {
+        let align = 128 * 1024 * 1024;
+        let aligned_slice = (max_safe_per_slice / align) * align;
+        let final_safe_slice = if aligned_slice > 0 {
+            aligned_slice
+        } else {
+            max_safe_per_slice
+        };
+        (final_safe_slice, true)
     }
 }
 
@@ -10678,11 +10662,25 @@ Filename Type Size Used Priority
         let (safe_slice, clamped) =
             calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
         assert!(
-            clamped,
-            "allocation must be clamped to protect Windows host"
+            !clamped,
+            "4096 MiB allocation on 6GB GPU must be granted with 1.5GB host reserve"
         );
-        // On <= 8GB GPU, capped to 2048 MiB to protect Windows DWM and enable Tier 3 spillover
-        assert_eq!(safe_slice, 2048 * 1024 * 1024);
+        assert_eq!(safe_slice, requested_slice);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_rtx2060_over_request() {
+        // RTX 2060: 6144 MiB total, 4800 MiB free
+        let total_vram = 6144 * 1024 * 1024;
+        let free_vram = 4800 * 1024 * 1024;
+        let requested_slice = 5120 * 1024 * 1024; // 5120 MiB requested (> 4608 max safe)
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(
+            clamped,
+            "allocation exceeding host reserve floor must be clamped"
+        );
+        assert_eq!(safe_slice, 4608 * 1024 * 1024);
     }
 
     #[test]

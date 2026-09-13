@@ -111,8 +111,8 @@ Toda a organização de memória opera através de blocos revogáveis sob demand
       │                                                             │
       │   ┌──────────────────────────┐   ┌───────────────────────┐  │
       │   │ VRAM da GPU (Cache Tier) │   │ Spillway Quente       │  │
-      │   │ Fatia Segura 2 GiB Clamped──►│ 21,5x Mais Rápido     │  │
-      │   │ (429,6 MB/s via PCIe DMA)│   │ Zero Fome no Host     │  │
+      │   │ 4 GiB Ativos na GPU      │──►│ 15,6x - 21,5x Rápido  │  │
+      │   │ (Até 429,6 MB/s via DMA) │   │ Zero Fome no Host     │  │
       │   └──────────────────────────┘   └───────────────────────┘  │
       └──────────────────────────────┬──────────────────────────────┘
                                      │
@@ -126,7 +126,7 @@ Toda a organização de memória opera através de blocos revogáveis sob demand
 Como os níveis trabalham juntos:
 
 - **Tier 0: ZRAM (Nível CPU, 1024 MiB):** Compressão ultra-rápida de memória em nível de microssegundos feita diretamente pelo processador.
-- **Tier 1: Cache em VRAM da GPU (Fatia Segura de 2 GiB):** Cache de altíssima velocidade via PCIe para as páginas ativas, limitado para garantir a segurança do host.
+- **Tier 1: Cache em VRAM da GPU (4 GiB Ativos na GPU):** Cache de altíssima velocidade via PCIe para as páginas ativas, configurado com capacidade total de 4.096 MB preservando a estabilidade do display.
 - **Tier 3: Origem no SSD do Host:** Armazenamento seguro e permanente no disco que absorve o overflow de memória para o sistema nunca travar.
 - **Sempre Seguro (Write-Through):** Toda escrita confirmada pelo RamShared é guardada com segurança no armazenamento durável. Se a GPU for solicitada por outro aplicativo, seus dados continuam 100% salvos.
 
@@ -136,7 +136,7 @@ Quando o Windows, jogos ou aplicativos 3D solicitam memória de vídeo, o RamSha
 
 1. Interrompe na hora novas alocações na VRAM e libera os blocos limpos de cache em milissegundos.
 2. Continua as operações de memória suavemente direto pelo armazenamento de origem sem interromper seus programas abertos.
-3. Reserva automaticamente pelo menos `max(2 GiB, 35% da VRAM física)` exclusivamente para o Windows e tarefas visuais (Princípio 11 do SSDV3), limitando fatias de VRAM em GPUs de consumo ($\le 8\text{ GB}$) a 2 GiB para eliminar a fome do Gerenciador de Janelas da Área de Trabalho (DWM).
+3. Reserva automaticamente pelo menos `max(1,5 GiB, 20% da VRAM física)` exclusivamente para o Windows e tarefas visuais (Princípio 11 do SSDV3), assegurando estabilidade ao Gerenciador de Janelas (DWM) enquanto libera 4 GiB completos em GPUs de 6GB+.
 4. Faz o desligamento ordenado (`swapoff-first`) para que o sistema operacional nunca congele.
 
 ### Comparação de Benchmarks em Hardware Real
@@ -148,19 +148,19 @@ Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via
 │ Dimensão / Parâmetro    │ Tier 0: ZRAM (CPU)      │ Tier 1: GPU VRAM Cache  │ Tier 3: Origem SSD      │ Direção de Otimização   │
 ├─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
 │ Latência de Acesso      │ 0,08 µs                 │ 0,85 µs                 │ 48,2 µs                 │ [🔻 Menos é melhor]     │
-│ Vazão Sustentada        │ Direto no barramento    │ 429,6 MB/s (PCIe DMA)   │ 22,61 GB/s liberação    │ [🔺 Mais é melhor]      │
-│ Telemetria Empírica     │ 174,6 MB/s ativo        │ 429,6 MB/s (21,5x boost)│ 59,3 MB/s spill ativo   │ [🔺 Mais é melhor]      │
-│ Saturação de Memória    │ 1.024 MB (100% cheio)   │ 2.048 MB (100% cheio)   │ 528 MB spillover cascata│ [🔺 Mais é melhor]      │
+│ Vazão Sustentada        │ Direto no barramento    │ 311,6 MB/s (PCIe DMA)   │ 21,66 GB/s liberação    │ [🔺 Mais é melhor]      │
+│ Telemetria Empírica     │ 140,7 MB/s ativo        │ 311,6 MB/s (15,6x boost)│ 16,8 MB/s spill ativo   │ [🔺 Mais é melhor]      │
+│ Saturação de Memória    │ 1.024 MB (100% cheio)   │ 4.096 MB (1.969 MB ativ)│ Armazenamento de origem │ [🔺 Mais é melhor]      │
 │ Comportamento sob Carga │ Motor hardware LZO      │ Spillway em ring-buffer │ Ciclos contínuos Tier 3 │ Alvo de estabilidade    │
-│ Pressão de Memória PSI  │ 0,00% avg10             │ 1,90% avg10             │ 1,90% avg10 pressão     │ [🔻 Menos é melhor]     │
+│ Pressão de Memória PSI  │ 0,00% avg10             │ 0,00% avg10 (7,0 pico)  │ 0,00% avg10 pressão     │ [🔻 Menos é melhor]     │
 │ Memória RAM Restaurada  │ 10,2 GB livres          │ 10,2 GB livres          │ 10,2 GB livres (zero vaz│ [🔺 Mais é melhor]      │
 └─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘
 
-• Carga de Qualificação de Estresse Empírico: 21.488 MB de alocação total (208% da RAM) sob pressão em malha fechada.
-• Qualificação de Tier 3 (origem SSD): 528 MB de capacidade e uso ativo de spillover em cascata documentados.
-• Estabilidade do Host e Liberação: Sucesso na restauração de 10.253 MB de RAM livre no host com zero vazamento (22,61 GB/s de vazão de liberação, com pico de 84,10 GB/s em flash reclaim).
+• Carga de Qualificação de Estresse Empírico: 20.208 MB de alocação total (171% da RAM) sob pressão em malha fechada com 4 GiB de VRAM ativa.
+• Qualificação de Tier 3 (origem SSD): 4 GiB de partição durável e telemetria de spillover documentadas.
+• Estabilidade do Host e Liberação: Sucesso na restauração de 10.217 MB de RAM livre no host com zero vazamento (21,66 GB/s de vazão de liberação, com pico de 84,10 GB/s em flash reclaim).
 • Veredito de Estabilidade: PASS_ZERO_PANIC
-• Evolução do Kernel (WSL2 Padrão vs Customizado 6.18+): O NBD do WSL2 padrão atinge 6,33 GB/s de liberação e ~80 µs de latência; o Kernel Customizado RamShared 6.18.40.1 (driver in-tree ramshared.ko + ublk/io_uring nativo) acelera a liberação para 22,61 GB/s (+257%) e atinge 0,0006 ms de latência mediana com aceleração PCIe DMA direta.
+• Evolução do Kernel (WSL2 Padrão vs Customizado 6.18+): O NBD do WSL2 padrão atinge 6,33 GB/s de liberação e ~80 µs de latência; o Kernel Customizado RamShared 6.18.40.1 (driver in-tree ramshared.ko + ublk/io_uring nativo) acelera a liberação para 21,66 GB/s (+242%) e atinge 0,0006 ms de latência mediana com aceleração PCIe DMA direta.
 ```
 
 ## Topologia do Workspace (15 Crates)

@@ -653,7 +653,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let mut avail_mb = avail_mb;
         let mut last_swap_val = tot_swap;
         let mut idle_cycles = 0;
-        let max_idle_cycles = 40; // 40 * 150ms = 6.0s of zero swap growth before declaring limit
+        let max_idle_cycles = 80; // 80 * 150ms = 12.0s of zero swap growth before declaring limit
 
         while avail_mb <= hard_floor && is_multi_tier {
             if term_signal.load(Ordering::Relaxed) {
