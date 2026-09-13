@@ -715,6 +715,10 @@ function Invoke-Win11LabMediaWorker {
         [int]$TimeoutSeconds = 90
     )
 
+    if ($Mode -eq "Stage" -and -not [string]::IsNullOrWhiteSpace($StagingRoot)) {
+        Assert-Win11LabMediaPrerequisites -StagingRoot $StagingRoot
+    }
+
     if (-not (Test-Path -LiteralPath $script:Win11LabMediaContractPath -PathType Leaf)) {
         throw "win11_lab_media_contract_worker_missing"
     }
@@ -968,6 +972,30 @@ function Invoke-Win11LabSourceIsoStage {
         throw "win11_lab_media_contract_stage_receipt_invalid"
     }
     return $stageResult
+}
+
+
+function Assert-Win11LabMediaPrerequisites {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$StagingRoot
+    )
+
+    $stagingDrive = (Get-Item $StagingRoot -ErrorAction Stop).Root
+    $stagingVolume = Get-Volume -DriveLetter $stagingDrive.TrimEnd(":\") -ErrorAction Stop
+    if ($stagingVolume.SizeRemaining -lt 15GB) {
+        throw "win11_lab_media_contract_insufficient_disk_space"
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri "https://www.microsoft.com" -UseBasicParsing -Method Head -TimeoutSec 10 -ErrorAction Stop
+        if ($response.StatusCode -ne 200) {
+            throw "win11_lab_media_contract_network_unavailable"
+        }
+    } catch {
+        throw "win11_lab_media_contract_network_unavailable"
+    }
 }
 
 function Assert-Win11LabWorkerResultPath {
