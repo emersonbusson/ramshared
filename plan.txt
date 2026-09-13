@@ -1,0 +1,43 @@
+1. RULES
+   - Ensure all changes are targeted strictly to `crates/ramshared-winsvc/src/ipc.rs` and related to test coverage of IPC boundaries.
+   - Use `#[test]` unit tests to validate exactly max payload (`MAX_PAYLOAD_LEN`), max+1 payload (`MAX_PAYLOAD_LEN + 1`), zero-length payload, and payload with embedded null bytes.
+   - Ensure no unwrap() or expect() panics are used in non-test paths (none modified here).
+   - Ensure the plan covers all required blocks (RULES, MAIN_DIFF, FILES, INVARIANTS, COUNTERFACTUAL, RED_TEST, COVERAGE, REAL_PROOF, ROLLBACK, PR_BOUNDARY).
+
+2. MAIN_DIFF
+   - Add new tests in `crates/ramshared-winsvc/src/ipc.rs` in the `#[cfg(test)] mod tests` module.
+   - The tests will cover:
+     - `ipc_header_payload_exactly_max`: Tests `MAX_PAYLOAD_LEN`.
+     - `ipc_header_payload_zero_length`: Tests zero-length payload.
+     - (Note: `ipc_header_payload_too_large` already tests max+1, but I can add a specific payload testing just to be sure or augment it). I'll add `ipc_payload_with_null_bytes` and `ipc_header_payload_exactly_max`.
+
+3. FILES
+   - `crates/ramshared-winsvc/src/ipc.rs`
+
+4. INVARIANTS
+   - The IPC `read_from` correctly accepts payloads of length up to `MAX_PAYLOAD_LEN` and length 0.
+   - Null bytes in the serialized header shouldn't cause arbitrary crashes. (Wait, the payload limit is just about the header parser checking `payload_len`, not the payload itself. We will just set `payload_len` or pass in a buffer with null bytes to `IpcMessageHeader::read_from`).
+
+5. COUNTERFACTUAL
+   - If we did not add these tests, there would be a gap in test coverage around edge cases (0, MAX_PAYLOAD_LEN, null bytes).
+
+6. RED_TEST
+   - Run `cargo test -p ramshared-winsvc --lib` to ensure the new tests run and pass without issues, and old tests still pass.
+   - If tests fail, fix them before commit.
+
+7. COVERAGE
+   - Extends boundary coverage for `IpcMessageHeader::read_from` logic.
+
+8. REAL_PROOF
+   - The tests execute in the bash session and we verify that `cargo test` succeeds.
+
+9. ROLLBACK
+   - Rollback trigger: test regressions or false positives in IPC parsing CI tests.
+
+10. PR_BOUNDARY
+   - Commits will be scoped to `crates/ramshared-winsvc/src/ipc.rs`. English only. PR to `jules/inbox`.
+
+11. replace_with_git_merge_diff: Update `crates/ramshared-winsvc/src/ipc.rs` to include the requested boundary tests.
+12. run_in_bash_session: Run `cargo test -p ramshared-winsvc --lib` to verify.
+13. pre_commit_instructions: Follow pre-commit instructions.
+14. submit: Submit the PR.
