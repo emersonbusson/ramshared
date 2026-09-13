@@ -2,7 +2,7 @@
 
 ## 1. Summary of Changes
 
-Authored an upstream-ready Linux kernel patch for `microsoft/WSL2-Linux-Kernel` targeting `arch/x86/kernel/cpu/mshyperv.c` and `drivers/hv/hv_balloon.c`. The patch introduces automated late-init calibration of `min_free_kbytes` based on Hyper-V guest RAM topology and implements cooperative balloon backpressure during active direct reclaim.
+Authored an upstream-ready Linux kernel patch for `microsoft/WSL2-Linux-Kernel` targeting `drivers/hv/hv_common.c` and `drivers/hv/hv_balloon.c`. The patch introduces architecture-neutral automated `late_initcall` calibration of `min_free_kbytes` based on Hyper-V guest RAM topology and implements cooperative balloon backpressure during active direct reclaim.
 
 ## 2. Artifacts Produced
 
@@ -18,6 +18,7 @@ Authored an upstream-ready Linux kernel patch for `microsoft/WSL2-Linux-Kernel` 
 - **Binary Symbol Verification**: Verified kernel strings in `vmlinux` and `bzImage`:
   - `Hyper-V: Calibrating min_free_kbytes from %d kB to %lu kB for VMBus resilience`
   - `hv_balloon: balloon inflation deferred; guest memory constrained`
-- **Host Staging**: Deployed `arch/x86/boot/bzImage` to `C:\wsl\kernel-ramshared-new` (with `C:\wsl\kernel-ramshared.bak` preserved).
-- **WSL Configuration**: Configured `%USERPROFILE%\.wslconfig` to boot `kernel=C:\\wsl\\kernel-ramshared-new` on next WSL restart.
+- **Host Staging**: Deployed refined `arch/x86/boot/bzImage` directly to `C:\wsl\kernel-ramshared` (via A/B deployment with `C:\wsl\kernel-ramshared-new` and `C:\wsl\kernel-ramshared.bak` preserved).
+- **WSL Configuration**: Configured `%USERPROFILE%\.wslconfig` to boot `kernel=C:\\wsl\\kernel-ramshared` on next WSL restart.
+- **Live Qualification**: Verified live boot under `6.18.40.1-microsoft-standard-WSL2+` with `ramshared stress` reporting 100% PASS and zero panic.
 - **Documentation check**: Passed `./scripts/docs-check.sh` (`✓ docs-check OK`).

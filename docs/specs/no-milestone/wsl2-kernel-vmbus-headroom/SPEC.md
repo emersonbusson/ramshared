@@ -3,7 +3,7 @@
 ## 1. Closed Scope
 
 - **In Now**:
-  - Implementation of kernel patch for `arch/x86/kernel/cpu/mshyperv.c`: Auto-calibration of `min_free_kbytes` during `late_initcall`.
+  - Implementation of kernel patch for `drivers/hv/hv_common.c`: Architecture-neutral auto-calibration of `min_free_kbytes` during `late_initcall`.
   - Implementation of kernel patch for `drivers/hv/hv_balloon.c`: Pressure check on `balloon_page_alloc` returning `-EBUSY` when `si_mem_available() < 2 * min_free_kbytes`.
   - Standalone unified diff patch file formatted for `microsoft/WSL2-Linux-Kernel`: `docs/upstream/patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch`.
   - Upstream documentation and qualification roadmap in `trovaldo.md`.
@@ -16,7 +16,7 @@
 
 | PRD Requirement | SPEC Implementation Item |
 | :--- | :--- |
-| `RF-1` (Auto-calibration of headroom) | `ITEM-1` (Patch to `arch/x86/kernel/cpu/mshyperv.c`) |
+| `RF-1` (Auto-calibration of headroom) | `ITEM-1` (Patch to `drivers/hv/hv_common.c`) |
 | `RF-2` (Balloon pressure check) | `ITEM-2` (Patch to `drivers/hv/hv_balloon.c`) |
 | `RF-3` (Upstream patch formulation) | `ITEM-3` (`0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch`) |
 | `RF-4` (Upstream tracking) | `ITEM-4` (Update `trovaldo.md` with new workstream progress) |
