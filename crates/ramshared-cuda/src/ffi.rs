@@ -34,6 +34,16 @@ pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) ->
 pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
+pub type FnMemHostRegister = unsafe extern "C" fn(*mut c_void, usize, c_uint) -> CuResult;
+pub type FnMemHostUnregister = unsafe extern "C" fn(*mut c_void) -> CuResult;
+pub type FnMemHostGetDevicePointer =
+    unsafe extern "C" fn(*mut CuDevicePtr, *mut c_void, c_uint) -> CuResult;
+
+// Host memory registration flags (cuMemHostRegister)
+pub const CU_MEMHOSTREGISTER_PORTABLE: c_uint = 0x01;
+pub const CU_MEMHOSTREGISTER_DEVICEMAP: c_uint = 0x02;
+pub const CU_MEMHOSTREGISTER_IOMEMORY: c_uint = 0x04;
+pub const CU_MEMHOSTREGISTER_READ_ONLY: c_uint = 0x08;
 
 /// Table of resolved symbols from the CUDA driver library.
 pub struct Syms {
@@ -51,4 +61,7 @@ pub struct Syms {
     pub memset_d8: FnMemsetD8,
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
+    pub mem_host_register: Option<FnMemHostRegister>,
+    pub mem_host_unregister: Option<FnMemHostUnregister>,
+    pub mem_host_get_device_pointer: Option<FnMemHostGetDevicePointer>,
 }

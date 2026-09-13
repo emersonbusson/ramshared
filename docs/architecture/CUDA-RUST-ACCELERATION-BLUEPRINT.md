@@ -157,6 +157,20 @@ Failure Mode: Non-blocking async Future with cancellation token -> Graceful Demo
 
 ---
 
-## 4. Conclusion
+## 4. Upstream Contributions & Co-Evolution with NVLabs (`cutile-rs`)
+
+To ensure seamless downstream compatibility when RamShared adopts `cuda-core` and `cuda-async`, RamShared actively contributes field-validated runtime stability fixes and platform enhancements directly to the upstream **`NVlabs/cutile-rs`** repository:
+
+| Contribution | Target Surface | Upstream Issue / PR | Impact & Resolution |
+| :--- | :--- | :--- | :--- |
+| **WSL2 & Multiarch Dynamic Loader** | `cuda-bindings` | [Issue #276](https://github.com/NVlabs/cutile-rs/issues/276) / [PR #277](https://github.com/NVlabs/cutile-rs/pull/277) | Upstreamed RamShared's `/usr/lib/wsl/lib/libcuda.so.1` and Debian/Ubuntu multiarch candidate path probing into `cuda-bindings/src/dyn_load.rs`, unblocking zero-toolkit runtime execution for WSL2 developers. |
+| **Stream Deallocator Race Fix** | `cutile` runtime | [Issue #252](https://github.com/NVlabs/cutile-rs/issues/252) / [PR #278](https://github.com/NVlabs/cutile-rs/pull/278) | Fixed Compute-Sanitizer stream-ordered use-after-free in `to_host_vec().sync_on(&stream)` by synchronizing the execution stream in `CopyDeviceToHostVec::execute` before dropping the owned source tensor into the deallocator stream. |
+| **Zero-Copy Host Mapping** | `cuda-core` & `cuda-async` | [PR #279](https://github.com/NVlabs/cutile-rs/pull/279) | Implemented `PinnedHostMapping` RAII registration over `cuMemHostRegister` and `DeviceAllocation` foreign memory bridge, eliminating CPU staging bounce-buffers for 4KB page streaming. |
+| **Tile Bitwise Reductions** | `cutile-compiler` & `cutile` | [PR #280](https://github.com/NVlabs/cutile-rs/pull/280) | Added `reduce_xor`, `reduce_and`, and `reduce_or` intrinsics with `u8`/integer identity constants, enabling GPU-accelerated page zero-detection and CRC/parity verification. |
+
+---
+
+## 5. Conclusion
 
 NVIDIA's CUDA-Rust initiative proves that memory safety and extreme hardware performance are not mutually exclusive. By adopting `cuda-oxide` and `cutile-rs`, RamShared aligns itself with the cutting edge of GPU systems engineering, ensuring that whether running on a consumer workstation with an RTX 2060 or a datacenter cluster of B200s, memory virtualization is safe, robust, and blazingly fast.
+

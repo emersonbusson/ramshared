@@ -29,6 +29,10 @@ pub enum CudaError {
     },
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
+    /// Invalid argument supplied to driver wrapper.
+    InvalidValue(String),
+    /// The requested feature is unsupported by the loaded driver version.
+    Unsupported(String),
 }
 
 impl fmt::Display for CudaError {
@@ -42,6 +46,8 @@ impl fmt::Display for CudaError {
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
             }
+            CudaError::InvalidValue(s) => write!(f, "invalid argument: {s}"),
+            CudaError::Unsupported(s) => write!(f, "unsupported driver feature: {s}"),
         }
     }
 }
@@ -113,6 +119,11 @@ impl Cuda {
                 memset_d8: load_sym(handle, c"cuMemsetD8_v2")?,
                 mem_get_info: load_sym(handle, c"cuMemGetInfo_v2")?,
                 get_error_string: load_sym_opt(handle, c"cuGetErrorString"),
+                mem_host_register: load_sym_opt(handle, c"cuMemHostRegister_v2")
+                    .or_else(|| load_sym_opt(handle, c"cuMemHostRegister")),
+                mem_host_unregister: load_sym_opt(handle, c"cuMemHostUnregister"),
+                mem_host_get_device_pointer: load_sym_opt(handle, c"cuMemHostGetDevicePointer_v2")
+                    .or_else(|| load_sym_opt(handle, c"cuMemHostGetDevicePointer")),
             }
         };
 
@@ -215,6 +226,128 @@ impl<'a> Context<'a> {
             ptr,
             len: bytes,
         })
+    }
+
+    /// Registers an existing host allocation for zero-copy device access (`cuMemHostRegister`).
+    ///
+    /// Validates that `host_ptr` is non-null, `len > 0`, `len` is a multiple of 4096, and
+    /// `host_ptr` is 4096-byte page aligned (SPEC §RF-1, §DT-2, Kahneman #13).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `host_ptr` points to at least `len` valid, allocated host
+    /// bytes that remain valid and are not deallocated while the returned [`PinnedHostMapping`] is alive.
+    pub unsafe fn register_host<'c>(
+        &'c self,
+        host_ptr: *mut c_void,
+        len: usize,
+        flags: u32,
+    ) -> Result<PinnedHostMapping<'c, 'a>, CudaError> {
+        if host_ptr.is_null() {
+            return Err(CudaError::InvalidValue("host_ptr cannot be null".into()));
+        }
+        if len == 0 {
+            return Err(CudaError::InvalidValue(
+                "length must be greater than zero".into(),
+            ));
+        }
+        if !len.is_multiple_of(4096) {
+            return Err(CudaError::InvalidValue(format!(
+                "length {len} must be a multiple of page size 4096"
+            )));
+        }
+        if !(host_ptr as usize).is_multiple_of(4096) {
+            return Err(CudaError::InvalidValue(format!(
+                "host_ptr {host_ptr:p} must be aligned to 4096-byte page boundary"
+            )));
+        }
+
+        let fn_register = self.cuda.syms.mem_host_register.ok_or_else(|| {
+            CudaError::Unsupported("cuMemHostRegister not supported by driver".into())
+        })?;
+        let fn_get_dptr = self.cuda.syms.mem_host_get_device_pointer.ok_or_else(|| {
+            CudaError::Unsupported("cuMemHostGetDevicePointer not supported by driver".into())
+        })?;
+
+        // SAFETY: host_ptr is non-null, 4096-aligned, and points to len valid bytes.
+        let r = unsafe { fn_register(host_ptr, len, flags) };
+        check(&self.cuda.syms, r, "cuMemHostRegister")?;
+
+        let mut dev_ptr: CuDevicePtr = 0;
+        // SAFETY: dev_ptr points to a valid local u64; host_ptr was successfully registered.
+        let r = unsafe { fn_get_dptr(&mut dev_ptr, host_ptr, 0) };
+        if r != CUDA_SUCCESS {
+            if let Some(fn_unreg) = self.cuda.syms.mem_host_unregister {
+                // Rollback registration on failure to resolve device pointer
+                unsafe {
+                    let _ = fn_unreg(host_ptr);
+                }
+            }
+            check(&self.cuda.syms, r, "cuMemHostGetDevicePointer")?;
+        }
+
+        Ok(PinnedHostMapping {
+            ctx: self,
+            host_ptr,
+            dev_ptr,
+            len,
+        })
+    }
+}
+
+/// Zero-copy registered host memory mapping (`cuMemHostRegister`).
+///
+/// Borrows the active [`Context`]. The host memory remains mapped into the
+/// GPU virtual address space for the lifetime of this struct and is cleanly
+/// unregistered via `cuMemHostUnregister` on `Drop`.
+pub struct PinnedHostMapping<'c, 'a> {
+    ctx: &'c Context<'a>,
+    host_ptr: *mut c_void,
+    dev_ptr: CuDevicePtr,
+    len: usize,
+}
+
+// SAFETY: Host mapping points to pinned host memory accessible by device.
+unsafe impl Send for PinnedHostMapping<'_, '_> {}
+unsafe impl Sync for PinnedHostMapping<'_, '_> {}
+
+impl<'c, 'a> PinnedHostMapping<'c, 'a> {
+    /// Returns the mapped CUDA device virtual pointer.
+    pub fn dev_ptr(&self) -> CuDevicePtr {
+        self.dev_ptr
+    }
+
+    /// Returns the length in bytes of the registered mapping.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns true if the mapping is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns a host slice view of the registered memory.
+    pub fn as_slice(&self) -> &[u8] {
+        // SAFETY: host_ptr is non-null and points to at least len valid bytes.
+        unsafe { core::slice::from_raw_parts(self.host_ptr as *const u8, self.len) }
+    }
+
+    /// Returns a mutable host slice view of the registered memory.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        // SAFETY: host_ptr is non-null and points to at least len valid bytes.
+        unsafe { core::slice::from_raw_parts_mut(self.host_ptr as *mut u8, self.len) }
+    }
+}
+
+impl Drop for PinnedHostMapping<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(fn_unreg) = self.ctx.cuda.syms.mem_host_unregister {
+            // SAFETY: host_ptr was successfully registered by cuMemHostRegister.
+            unsafe {
+                let _ = fn_unreg(self.host_ptr);
+            }
+        }
     }
 }
 
