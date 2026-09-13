@@ -117,6 +117,7 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-09-12 | WSL2 & Kernel Qualification | Qualified WSL2 2.7.14.0 with bundled kernel 6.18.33.2-2, Windows 10.0.26200.9445, and NVIDIA driver 615.71.08 (KMD 616.92, CUDA 13.4) under 100% 3-tier cascade resilience | `trovaldo.md` / `drivers/block/ramshared/` |
 | 2026-09-12 | Custom Kernel 6.18.40.1 | Compiled, QEMU-verified, and booted custom WSL2 kernel 6.18.40.1-microsoft-standard-WSL2+ with in-tree `ramshared.ko`, `ublk_drv.ko` (`io_uring`), and `zram-writeback` under live RTX 2060 swap | `trovaldo.md` / `drivers/block/ramshared/` |
 | 2026-09-13 | 4 GiB VRAM & Kernel Qualification | Empirically qualified 4,096 MB active VRAM tier on custom kernel 6.18.40.1, restoring 10,217 MB RAM (21.66 GB/s reclaim, 0.85 µs DMA latency, PASS_ZERO_PANIC), and generated clean RFC v3 LKML patchset with control.c and bounds checks | `trovaldo.md` / `drivers/block/ramshared/` |
+| 2026-09-13 | WSL2 Kernel Headroom Patch | Formulated in-tree VMBus atomic headroom calibration in `mshyperv.c` and balloon veto under pressure in `hv_balloon.c` to eliminate HCS watchdog teardowns | `docs/upstream/patches/` |
 
 
 

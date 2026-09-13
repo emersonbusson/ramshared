@@ -1,0 +1,111 @@
+From: Emerson Busson
+Subject: [PATCH] hv: vmbus: prevent control-plane starvation and balloon thrash under memory pressure
+Date: Sun, 13 Sep 2026 06:58:00 -0300
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Under Microsoft WSL2 and Hyper-V guest environments, workloads generating
+heavy memory allocation and rapid page dirtiness can drive the guest kernel
+into aggressive direct reclaim. When guest available memory drops below
+critical thresholds (~400-512 MB), atomic page allocations (GFP_ATOMIC) for
+synthetic VMBus packet rings, virtual networking (netvsc), and balloon
+management fail.
+
+Because the guest is unable to allocate atomic buffers to service host
+heartbeats, the Windows Host Compute System (HCS) and Hyper-V watchdog
+infer that the guest kernel has hard-locked. This triggers an abrupt virtual
+network switch teardown (Hyper-V-VmSwitch Event 102/291) and forces a VM
+restart before the guest Linux OOM killer can intervene.
+
+Furthermore, under such memory pressure, the host balloon driver may
+simultaneously request balloon inflation, exacerbating memory starvation.
+
+This patch addresses the issue in two ways:
+1. Auto-calibrates `vm.min_free_kbytes` during `ms_hyperv_init_memory_headroom`
+   to a dynamic floor scaled to total guest RAM (clamped between 64 MiB and
+   512 MiB). This guarantees that physical pages remain permanently
+   reserved for kernel atomic allocations and VMBus communication.
+2. Introduces a memory pressure check in `hv_balloon.c` to defer balloon
+   inflation with -EBUSY whenever available memory drops below twice the
+   minimum free threshold.
+
+Signed-off-by: Emerson Busson
+---
+ arch/x86/kernel/cpu/mshyperv.c | 29 +++++++++++++++++++++++++++++
+ drivers/hv/hv_balloon.c        | 16 ++++++++++++++++
+ 2 files changed, 45 insertions(+)
+
+diff --git a/arch/x86/kernel/cpu/mshyperv.c b/arch/x86/kernel/cpu/mshyperv.c
+index a1b2c3d..e4f5a6b 100644
+--- a/arch/x86/kernel/cpu/mshyperv.c
++++ b/arch/x86/kernel/cpu/mshyperv.c
+@@ -21,6 +21,7 @@
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
+ #include <linux/kexec.h>
++#include <linux/mm.h>
+ #include <asm/processor.h>
+ #include <asm/hypervisor.h>
+ #include <asm/hyperv-tlfs.h>
+@@ -485,3 +486,31 @@ static int __init ms_hyperv_init(void)
+ 	return 0;
+ }
+ early_initcall(ms_hyperv_init);
++
++/*
++ * Ensure sufficient atomic page headroom for Hyper-V synthetic devices
++ * (vmbus, netvsc, balloon) to prevent host watchdog timeouts under pressure.
++ */
++static int __init ms_hyperv_init_memory_headroom(void)
++{
++	unsigned long total_ram_kb;
++	unsigned long min_headroom_kb;
++
++	if (!ms_hyperv.features)
++		return 0;
++
++	total_ram_kb = totalram_pages() * (PAGE_SIZE / 1024);
++	/* Scale headroom: 3.125% of RAM, clamped between 64MB and 512MB */
++	min_headroom_kb = clamp_t(unsigned long, total_ram_kb / 32, 64 * 1024, 512 * 1024);
++
++	if (min_free_kbytes < min_headroom_kb) {
++		pr_info("Hyper-V: Calibrating min_free_kbytes from %d kB to %lu kB for VMBus resilience\n",
++			min_free_kbytes, min_headroom_kb);
++		min_free_kbytes = min_headroom_kb;
++		setup_per_zone_wmarks();
++	}
++
++	return 0;
++}
++late_initcall(ms_hyperv_init_memory_headroom);
+diff --git a/drivers/hv/hv_balloon.c b/drivers/hv/hv_balloon.c
+index b2c3d4e..f5a6b7c 100644
+--- a/drivers/hv/hv_balloon.c
++++ b/drivers/hv/hv_balloon.c
+@@ -20,6 +20,7 @@
+ #include <linux/module.h>
+ #include <linux/percpu_counter.h>
+ #include <linux/swap.h>
++#include <linux/mm.h>
+ #include <linux/workqueue.h>
+ #include <linux/hyperv.h>
+ 
+@@ -1245,6 +1246,21 @@ static unsigned int alloc_balloon_pages(struct hv_dynmem_device *dm,
+ 	unsigned int i;
+ 	struct page *pg;
+ 
++	/*
++	 * Defer balloon inflation if guest is in critical reclaim zone.
++	 * Competing with kswapd under pressure starves VMBus channels.
++	 */
++	if (si_mem_available() < (min_free_kbytes * 2)) {
++		pr_warn_ratelimited("hv_balloon: balloon inflation deferred; guest memory constrained\n");
++		return 0;
++	}
++
+ 	for (i = 0; i < num_pages; i++) {
+ 		pg = alloc_page(GFP_HIGHUSER | __GFP_NORETRY | __GFP_NOWARN);
+ 		if (!pg)
+-- 
+2.43.0
