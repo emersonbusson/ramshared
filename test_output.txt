@@ -1,0 +1,274 @@
+TAP version 13
+# Subtest: spec_coverage_map_requires_exact_command_in_spec
+ok 1 - spec_coverage_map_requires_exact_command_in_spec
+  ---
+  duration_ms: 11.363126
+  type: 'test'
+  ...
+# Subtest: changed_business_rust_file_requires_mapped_spec_command
+ok 2 - changed_business_rust_file_requires_mapped_spec_command
+  ---
+  duration_ms: 7.379589
+  type: 'test'
+  ...
+# Subtest: microsoft_native_vram_n3_state_has_exact_coverage_owner
+ok 3 - microsoft_native_vram_n3_state_has_exact_coverage_owner
+  ---
+  duration_ms: 4.665422
+  type: 'test'
+  ...
+# Subtest: microsoft_native_vram_n3_module_export_glue_accepts_exact_projection_and_all_targets
+ok 4 - microsoft_native_vram_n3_module_export_glue_accepts_exact_projection_and_all_targets
+  ---
+  duration_ms: 15.189304
+  type: 'test'
+  ...
+# Subtest: main_all_accepts_unchanged_exact_module_export_glue_projection
+ok 5 - main_all_accepts_unchanged_exact_module_export_glue_projection
+  ---
+  duration_ms: 16.190016
+  type: 'test'
+  ...
+# Subtest: microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_wrong_scope
+ok 6 - microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_wrong_scope
+  ---
+  duration_ms: 39.007707
+  type: 'test'
+  ...
+# Subtest: wsl2_nbd_product_readiness_has_exact_coverage_owner_and_named_tests
+ok 7 - wsl2_nbd_product_readiness_has_exact_coverage_owner_and_named_tests
+  ---
+  duration_ms: 7.241372
+  type: 'test'
+  ...
+# Subtest: comment_language_measured_rust_files_keep_exact_ownership_boundaries
+ok 8 - comment_language_measured_rust_files_keep_exact_ownership_boundaries
+  ---
+  duration_ms: 61.569906
+  type: 'test'
+  ...
+# Subtest: wsl2_control_plane_requires_exact_four_file_coverage_owner
+ok 9 - wsl2_control_plane_requires_exact_four_file_coverage_owner
+  ---
+  duration_ms: 14.792852
+  type: 'test'
+  ...
+# Subtest: memory_broker_agent_cli_requires_exact_coverage_owner_and_named_tests
+ok 10 - memory_broker_agent_cli_requires_exact_coverage_owner_and_named_tests
+  ---
+  duration_ms: 13.962305
+  type: 'test'
+  ...
+# Subtest: memory_broker_wsl2d_daemon_requires_exact_coverage_owner_and_named_tests
+ok 11 - memory_broker_wsl2d_daemon_requires_exact_coverage_owner_and_named_tests
+  ---
+  duration_ms: 35.053278
+  type: 'test'
+  ...
+# Subtest: comment_language_test_only_localization_requires_immutable_base_proof
+ok 12 - comment_language_test_only_localization_requires_immutable_base_proof
+  ---
+  duration_ms: 58.429558
+  type: 'test'
+  ...
+# Subtest: memory_broker_backend_has_exact_coverage_and_pinned_gpu_relocation_owners
+ok 13 - memory_broker_backend_has_exact_coverage_and_pinned_gpu_relocation_owners
+  ---
+  duration_ms: 45.425917
+  type: 'test'
+  ...
+# Subtest: wsl2_connection_transport_requires_exact_canonical_coverage
+ok 14 - wsl2_connection_transport_requires_exact_canonical_coverage
+  ---
+  duration_ms: 2.2196
+  type: 'test'
+  ...
+# Subtest: cascade_lifecycle_cli_dispatch_requires_exact_coverage_owner_and_named_tests
+ok 15 - cascade_lifecycle_cli_dispatch_requires_exact_coverage_owner_and_named_tests
+  ---
+  duration_ms: 4.351361
+  type: 'test'
+  ...
+# Subtest: cascade_transport_orchestration_requires_exact_coverage_owner_and_named_tests
+ok 16 - cascade_transport_orchestration_requires_exact_coverage_owner_and_named_tests
+  ---
+  duration_ms: 7.503518
+  type: 'test'
+  ...
+# Subtest: windows_platform_entry_requires_exact_feature_spec_and_named_checks
+ok 17 - windows_platform_entry_requires_exact_feature_spec_and_named_checks
+  ---
+  duration_ms: 17.024327
+  type: 'test'
+  ...
+# Subtest: windows_platform_entry_refuses_static_harness_outside_windows_ci
+ok 18 - windows_platform_entry_refuses_static_harness_outside_windows_ci
+  ---
+  duration_ms: 5.778096
+  type: 'test'
+  ...
+# Subtest: structural_contract_accepts_only_module_surface_and_runs_package_tests
+ok 19 - structural_contract_accepts_only_module_surface_and_runs_package_tests
+  ---
+  duration_ms: 4.383229
+  type: 'test'
+  ...
+# Subtest: structural_contract_refuses_executable_or_malformed_rust
+ok 20 - structural_contract_refuses_executable_or_malformed_rust
+  ---
+  duration_ms: 48.897107
+  type: 'test'
+  ...
+# Subtest: windows_autonomous_sources_have_exact_structural_or_platform_owners
+ok 21 - windows_autonomous_sources_have_exact_structural_or_platform_owners
+  ---
+  duration_ms: 8.470222
+  type: 'test'
+  ...
+# Subtest: localization_differential_accepts_comment_only_source_change
+ok 22 - localization_differential_accepts_comment_only_source_change
+  ---
+  duration_ms: 4.321672
+  type: 'test'
+  ...
+# Subtest: localization_differential_refuses_semantic_change_or_missing_base
+ok 23 - localization_differential_refuses_semantic_change_or_missing_base
+  ---
+  duration_ms: 4.33021
+  type: 'test'
+  ...
+# Subtest: test_only_localization_differential_accepts_declared_cfg_test_change
+ok 24 - test_only_localization_differential_accepts_declared_cfg_test_change
+  ---
+  duration_ms: 7.545158
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_accepts_exact_pinned_provenance
+ok 25 - ignored_test_relocation_accepts_exact_pinned_provenance
+  ---
+  duration_ms: 5.901067
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_global_owner_relation_allows_one_line_owner_and_one_proof
+ok 26 - ignored_test_relocation_global_owner_relation_allows_one_line_owner_and_one_proof
+  ---
+  duration_ms: 8.809031
+  type: 'test'
+  ...
+# Subtest: global_line_coverage_ownership_refuses_duplicate_pure_owners_including_cli_all
+ok 27 - global_line_coverage_ownership_refuses_duplicate_pure_owners_including_cli_all
+  ---
+  duration_ms: 4.29256
+  type: 'test'
+  ...
+# Subtest: planner_trust_inputs_require_confined_non_symlink_regular_files
+ok 28 - planner_trust_inputs_require_confined_non_symlink_regular_files
+  ---
+  duration_ms: 6.878279
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_global_validation_refuses_duplicate_production_and_integration_owners
+ok 29 - ignored_test_relocation_global_validation_refuses_duplicate_production_and_integration_owners
+  ---
+  duration_ms: 10.945444
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_global_validation_refuses_wrong_cross_owner_overlap
+ok 30 - ignored_test_relocation_global_validation_refuses_wrong_cross_owner_overlap
+  ---
+  duration_ms: 4.305407
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_duplicate_owner_cli_all_is_blocked_and_never_ready
+ok 31 - ignored_test_relocation_duplicate_owner_cli_all_is_blocked_and_never_ready
+  ---
+  duration_ms: 5.472794
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_refuses_wrong_package_path_target_or_command
+ok 32 - ignored_test_relocation_refuses_wrong_package_path_target_or_command
+  ---
+  duration_ms: 18.970936
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_refuses_missing_or_symlinked_head_test
+ok 33 - ignored_test_relocation_refuses_missing_or_symlinked_head_test
+  ---
+  duration_ms: 8.213361
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_refuses_undeclared_import_drift
+ok 34 - ignored_test_relocation_refuses_undeclared_import_drift
+  ---
+  duration_ms: 11.276768
+  type: 'test'
+  ...
+# Subtest: ignored_test_relocation_refuses_base_sha_missing_test_semantic_drift_or_evidence_mismatch
+ok 35 - ignored_test_relocation_refuses_base_sha_missing_test_semantic_drift_or_evidence_mismatch
+  ---
+  duration_ms: 22.715923
+  type: 'test'
+  ...
+# Subtest: test_only_localization_differential_refuses_spoofed_or_production_change
+ok 36 - test_only_localization_differential_refuses_spoofed_or_production_change
+  ---
+  duration_ms: 38.505357
+  type: 'test'
+  ...
+# Subtest: no_rust_change_is_explicit_no_change_not_skip
+ok 37 - no_rust_change_is_explicit_no_change_not_skip
+  ---
+  duration_ms: 2.945126
+  type: 'test'
+  ...
+# Subtest: coverage_runner_uses_no_shell_and_fails_on_command_error
+ok 38 - coverage_runner_uses_no_shell_and_fails_on_command_error
+  ---
+  duration_ms: 0.369625
+  type: 'test'
+  ...
+# Subtest: coverage_map_refuses_malformed_entries_and_unsafe_changed_paths
+ok 39 - coverage_map_refuses_malformed_entries_and_unsafe_changed_paths
+  ---
+  duration_ms: 3.498511
+  type: 'test'
+  ...
+# Subtest: planner_cli_rejects_bom_or_control_changed_paths_without_trimming
+ok 40 - planner_cli_rejects_bom_or_control_changed_paths_without_trimming
+  ---
+  duration_ms: 4.530779
+  type: 'test'
+  ...
+# Subtest: planner_cli_loads_exact_map_and_reports_read_and_execution_failures
+ok 41 - planner_cli_loads_exact_map_and_reports_read_and_execution_failures
+  ---
+  duration_ms: 3.138728
+  type: 'test'
+  ...
+# Subtest: planner_cli_rejects_unknown_arguments_without_running_commands
+ok 42 - planner_cli_rejects_unknown_arguments_without_running_commands
+  ---
+  duration_ms: 0.32969
+  type: 'test'
+  ...
+# Subtest: localization_comment_projector_is_conservative_for_literals_and_nested_comments
+ok 43 - localization_comment_projector_is_conservative_for_literals_and_nested_comments
+  ---
+  duration_ms: 0.361128
+  type: 'test'
+  ...
+# Subtest: ownership_contracts_fail_closed_for_invalid_shapes_and_base_reads
+ok 44 - ownership_contracts_fail_closed_for_invalid_shapes_and_base_reads
+  ---
+  duration_ms: 8.970319
+  type: 'test'
+  ...
+1..44
+# tests 44
+# suites 0
+# pass 44
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 666.714771
