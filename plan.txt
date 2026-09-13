@@ -1,0 +1,31 @@
+1. RULES
+   - Adhere to purely orthogonal modifications (only target crates/ramshared-winsvc/src/host_safety.rs).
+   - Use English for code and comments.
+   - Do not use let_chains, use standard matching.
+   - Run `cargo test -p ramshared-winsvc` to verify.
+2. MAIN_DIFF
+   - Add `SafetyFailure` struct with `check_name: String`, `threshold: String`, and `actual_value: String` fields.
+   - Modify `CampaignVerdict::is_pass` to return `Result<(), SafetyFailure>`.
+   - Update tests in `host_safety.rs` to verify that each missing condition returns a structured error with the correct `check_name`.
+3. FILES
+   - `crates/ramshared-winsvc/src/host_safety.rs`
+4. INVARIANTS
+   - `CampaignVerdict::is_pass` requirements shouldn't change, just the error type.
+5. COUNTERFACTUAL
+   - `is_pass` is only called in `host_safety.rs` based on the grep results. So no other files need to be modified.
+6. RED_TEST
+   - I'll write tests `test_campaign_verdict_fails_online_check`, `test_campaign_verdict_fails_console_exit_check`, etc.
+7. COVERAGE
+   - The test will ensure structured errors are returned.
+8. REAL_PROOF
+   - `cargo test -p ramshared-winsvc` will prove correctness.
+9. ROLLBACK
+   - Rollback trigger: Test or compilation failure on main build pipeline.
+10. PR_BOUNDARY
+   - Modifications are contained to `crates/ramshared-winsvc/src/host_safety.rs`.
+
+11. replace_with_git_merge_diff to add `SafetyFailure` and modify `is_pass` in `crates/ramshared-winsvc/src/host_safety.rs`.
+12. replace_with_git_merge_diff to update tests in `crates/ramshared-winsvc/src/host_safety.rs`.
+13. run_in_bash_session to run `cargo test -p ramshared-winsvc --lib`.
+14. pre_commit_instructions
+15. submit

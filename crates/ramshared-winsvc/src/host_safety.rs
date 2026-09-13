@@ -71,6 +71,14 @@ pub fn lock_wait_decision(
     }
 }
 
+/// Structured error for a failed safety check.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SafetyFailure {
+    pub check_name: String,
+    pub threshold: String,
+    pub actual_value: String,
+}
+
 /// Complete isolated-campaign promotion conjunction (SPEC DT-13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CampaignVerdict {
@@ -87,19 +95,82 @@ pub struct CampaignVerdict {
 }
 
 impl CampaignVerdict {
-    pub fn is_pass(&self, teardown_budget: Duration) -> bool {
-        self.online
-            && self.binary_match
-            && self.rounds_pass
-            && self.console_exit == Some(0)
-            && !self.force_killed
-            && self.lease_released
-            && self.cuda_restored
-            && self.no_new_dump
-            && self.terminal_safe
-            && self
-                .teardown_ms
-                .is_some_and(|ms| u128::from(ms) <= teardown_budget.as_millis())
+    pub fn is_pass(&self, teardown_budget: Duration) -> Result<(), SafetyFailure> {
+        if !self.online {
+            return Err(SafetyFailure {
+                check_name: "online".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        if !self.binary_match {
+            return Err(SafetyFailure {
+                check_name: "binary_match".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        if !self.rounds_pass {
+            return Err(SafetyFailure {
+                check_name: "rounds_pass".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        if self.console_exit != Some(0) {
+            return Err(SafetyFailure {
+                check_name: "console_exit".to_string(),
+                threshold: "Some(0)".to_string(),
+                actual_value: format!("{:?}", self.console_exit),
+            });
+        }
+        if self.force_killed {
+            return Err(SafetyFailure {
+                check_name: "force_killed".to_string(),
+                threshold: "false".to_string(),
+                actual_value: "true".to_string(),
+            });
+        }
+        if !self.lease_released {
+            return Err(SafetyFailure {
+                check_name: "lease_released".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        if !self.cuda_restored {
+            return Err(SafetyFailure {
+                check_name: "cuda_restored".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        if !self.no_new_dump {
+            return Err(SafetyFailure {
+                check_name: "no_new_dump".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        if !self.terminal_safe {
+            return Err(SafetyFailure {
+                check_name: "terminal_safe".to_string(),
+                threshold: "true".to_string(),
+                actual_value: "false".to_string(),
+            });
+        }
+        let threshold_ms = teardown_budget.as_millis();
+        match self.teardown_ms {
+            Some(ms) if u128::from(ms) <= threshold_ms => {}
+            actual => {
+                return Err(SafetyFailure {
+                    check_name: "teardown_ms".to_string(),
+                    threshold: format!("<={}", threshold_ms),
+                    actual_value: format!("{:?}", actual),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -194,18 +265,64 @@ mod tests {
             terminal_safe: true,
             teardown_ms: Some(2_000),
         };
-        assert!(pass.is_pass(Duration::from_secs(30)));
+        assert!(pass.is_pass(Duration::from_secs(30)).is_ok());
 
         let mut crash = pass.clone();
         crash.console_exit = Some(7);
-        assert!(!crash.is_pass(Duration::from_secs(30)));
+        let err = crash.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "console_exit");
+        assert_eq!(err.threshold, "Some(0)");
+        assert_eq!(err.actual_value, "Some(7)");
 
         let mut forced = pass.clone();
         forced.force_killed = true;
-        assert!(!forced.is_pass(Duration::from_secs(30)));
+        let err = forced.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "force_killed");
+        assert_eq!(err.threshold, "false");
+        assert_eq!(err.actual_value, "true");
 
-        let mut slow = pass;
+        let mut slow = pass.clone();
         slow.teardown_ms = Some(30_001);
-        assert!(!slow.is_pass(Duration::from_secs(30)));
+        let err = slow.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "teardown_ms");
+        assert_eq!(err.threshold, "<=30000");
+        assert_eq!(err.actual_value, "Some(30001)");
+
+        let mut online = pass.clone();
+        online.online = false;
+        let err = online.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "online");
+        assert_eq!(err.threshold, "true");
+        assert_eq!(err.actual_value, "false");
+
+        let mut binary = pass.clone();
+        binary.binary_match = false;
+        let err = binary.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "binary_match");
+
+        let mut rounds = pass.clone();
+        rounds.rounds_pass = false;
+        let err = rounds.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "rounds_pass");
+
+        let mut lease = pass.clone();
+        lease.lease_released = false;
+        let err = lease.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "lease_released");
+
+        let mut cuda = pass.clone();
+        cuda.cuda_restored = false;
+        let err = cuda.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "cuda_restored");
+
+        let mut dump = pass.clone();
+        dump.no_new_dump = false;
+        let err = dump.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "no_new_dump");
+
+        let mut terminal = pass;
+        terminal.terminal_safe = false;
+        let err = terminal.is_pass(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "terminal_safe");
     }
 }
