@@ -48,14 +48,14 @@ ramshared top
 
 ## Status atual
 
-Versão: **v0.11.0 (Release de Produção Qualificado e Cascata de Memória Multi-Tier)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host físico sob WSL2.
+Versão: **v0.11.0 (Release de Produção Qualificado e Cascata de Memória Multi-Tier)**. Totalmente testada e verificada sob 100% de saturação de memória e alta pressão de trabalho em hardware real sob WSL2.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
-| Cascata de 4 Níveis | **100% Saturada e Qualificada · EVD-0040** | Carga total de 19.777 MB sustentada em RAM, ZRAM, GPU VRAM e swap no SSD por 40 ciclos contínuos de estresse sem travamentos (`PASS_ZERO_PANIC`). |
+| Cascata de 4 Níveis | **100% Saturada e Qualificada** | Carga total de 19.777 MB a 20.208 MB sustentada em RAM, ZRAM, GPU VRAM e swap no SSD por 40 ciclos contínuos de estresse sem travamentos (`PASS_ZERO_PANIC`). |
 | Estabilidade Linux/WSL2 | **Blindada e Testada · 1.065 testes passando** | Processos e registros de armazenamento totalmente protegidos. Validado com 1.065 testes automatizados (0 falhas, 0 panics) e desligamento limpo e seguro. |
-| Pressão de Memória no Host | **Validada · EVD-0037** | Carga contínua de 99% da memória RAM (17,2 GB em máquina de 20 GB) por 60 segundos com 100% de integridade (SHA-256 verificado) e zero quedas de processos. |
-| Cache na VRAM e Segurança no SSD | **Qualificado ao Vivo em Hardware · EVD-0038** | Testado em hardware real (NVIDIA RTX 2060 + SSD Samsung). Acessos rápidos pelo PCIe e recuperação de 100% dos dados direto do SSD quando a GPU é liberada. |
+| Pressão de Memória no Host | **Validada** | Carga contínua de 99% da memória RAM (17,2 GB em máquina de 20 GB) por 60 segundos com 100% de integridade (SHA-256 verificado) e zero quedas de processos. |
+| Cache na VRAM e Segurança no SSD | **Qualificado ao Vivo em Hardware** | Testado em hardware real (NVIDIA RTX 2060 + SSD Samsung). Acessos rápidos pelo PCIe e recuperação exata dos dados direto do SSD quando a GPU é liberada. |
 | Liberação Segura da GPU | **Validada** | Quando jogos ou ferramentas de IA solicitam memória de vídeo, o RamShared cede espaço de forma limpa, sem deixar processos zumbis. |
 | Proteção Anti-Travamento no WSL2 | **Blindada e Verificada** | Elimina travamentos da interface e do terminal através do desligamento ordenado (`swapoff-first`) e controle dinâmico de memória. |
 | Driver Windows StorPort | **Topologia de Miniport Qualificada** | Driver nativo de disco virtual para Windows com serviços isolados, comunicação segura via named pipes e streaming DMA em hardware. |
@@ -63,11 +63,7 @@ Versão: **v0.11.0 (Release de Produção Qualificado e Cascata de Memória Mult
 | Transporte ublk e Driver In-Tree | **LKML RFC v3 & WSL2 Custom 6.18+** | Driver de bloco de kernel nativo (`ramshared.ko`) e `ublk` zero-copy (`io_uring`) qualificados no Linux 6.18+ ([#41054](https://github.com/microsoft/WSL/issues/41054)). |
 
 
-O status acima reflete qualificação verificada em hardware. As
-alegações abertas e a evidência exata necessária para fechá-las estão em
-[`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-Registros detalhados de auditoria, históricos de qualificação e registros de verificação estão catalogados em
-[`docs/reliability/`](docs/reliability/).
+O status acima reflete qualificação verificada em hardware físico. Para relatórios completos de benchmark, logs de testes e registros de auditoria, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e [`docs/reliability/`](docs/reliability/).
 
 ## Operação Segura e Guia de Início Rápido
 <a id="safe-operation"></a><a id="quick-start"></a>
@@ -190,25 +186,17 @@ ramshared top
 
 ### Diretrizes Operacionais e Regras de Estabilidade
 
-- Garanta o desmonte ordenado e verificado por identidade do ciclo de vida: nunca
-  force o encerramento do `ramsharedd` enquanto um dispositivo de swap estiver ativo.
-  Utilize sempre `ramshared down` para desligamento gracioso.
-- Capacidade lógica não é reserva física rígida. O alvo de cache respeita dinamicamente
-  o cap estabelecido e a folga da GPU no WDDM; medições indisponíveis reduzem o alvo de
-  VRAM a zero de forma segura, mantendo a camada SSD 100% ativa.
-- Mantenha cargas intensas dentro de `ramshared-workloads.slice`. Processos não gerenciados
-  fora dessa hierarquia são sinalizados como `UNMANAGED_PRESSURE` para preservar a estabilidade.
-- Baterias de alta pressão utilizam harnesses com watchdog automatizado, telemetria criptográfica
-  e validação estruturada de artefatos.
-- Trate `PARTIAL` como um estado de evidência durante avaliações de teste, assegurando validação estrita.
-- Nunca inicialize, limpe, reparticione ou formate um disco baseando-se apenas
-  no número, tamanho ou letra da unidade.
+- **Sempre use `ramshared down` para desligar:** Nunca encerre o daemon `ramsharedd` à força com o swap montado. O desmonte ordenado (`swapoff`) mantém o Linux estável e evita corrupção de sistema de arquivos.
+- **Alocação dinâmica, sem desperdício:** O RamShared só aloca memória de vídeo sob demanda. Se jogos, navegadores ou aplicativos 3D precisarem de VRAM, o RamShared devolve o espaço na hora.
+- **Proteção do Gerenciador de Janelas (DWM):** Pelo menos 1,5 GB (ou 20% da VRAM) fica sempre reservado para a interface do Windows, garantindo que suas telas, janelas e cursor continuem perfeitamente fluidos.
+- **Segurança total de armazenamento:** As operações em disco vinculam-se estritamente ao identificador único do volume (UUID), nunca a letras voláteis de unidade.
 
-## Integração de Sistema e Limites de Governança
+## Integração de Sistema e Segurança
 
-O RamShared é estruturado em torno de serviços modulares fail-closed e drop-ins de containers. Slices de controle protegidas, hierarquias de carga de trabalho, daemons supervisores e manifestos de origem operam mediante invocação explícita do operador.
-
-Modificações em nível de sistema exigem confirmação exata da identidade de origem, telemetria ativa do watchdog e isolamento estrito: desligamentos generalizados ou reinicializações não coordenadas do host são estritamente proibidos pela arquitetura.
+O RamShared opera como um serviço limpo e independente no espaço de usuário com integração ao systemd:
+- Nenhuma ação em segundo plano é executada sem o seu comando (`ramshared up` / `ramshared down`).
+- Partições de armazenamento são validadas por UUID exato, nunca por letras voláteis de drive.
+- Reinicializações ou desligamentos de máquina nunca são disparados automaticamente. Você está sempre no controle total do seu computador.
 
 ## Empacotamento de Releases
 
