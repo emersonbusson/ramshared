@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
 VERSION_CLEAN="${VERSION#v}"
-RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
+RPM_VERSION="${VERSION_CLEAN//-beta./.beta.}"
 ARCH="x86_64"
 
 OUT_DIR="$ROOT/artifacts/packages"
@@ -42,8 +42,10 @@ Name:           ramshared
 Version:        ${RPM_VERSION}
 Release:        1%{?dist}
 Summary:        Hardware-accelerated VRAM memory tiering & low-level kernel drivers
-License:        GPL-2.0-only
+License:        Apache-2.0
 URL:            https://github.com/emersonbusson/ramshared
+Source0:        https://github.com/emersonbusson/ramshared/archive/refs/tags/v%{version}.tar.gz
+Source0:        https://github.com/emersonbusson/ramshared/archive/refs/tags/v%{version}.tar.gz
 
 %description
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
@@ -78,6 +80,52 @@ fi
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
+
+# Verify Source Tarball SHA-256 before rpmbuild
+TARBALL_URL="https://github.com/emersonbusson/ramshared/archive/refs/tags/v${VERSION_CLEAN}.tar.gz"
+TARBALL_DEST="$RPM_ROOT/SOURCES/v${VERSION_CLEAN}.tar.gz"
+echo "==> Downloading source tarball for verification..."
+if curl -sL --fail -o "$TARBALL_DEST" "$TARBALL_URL"; then
+  echo "==> Verifying tarball SHA-256..."
+  EXPECTED_SHA256=$(curl -sL --fail "${TARBALL_URL}.sha256" | awk '{print $1}' || true)
+  if [[ -z "$EXPECTED_SHA256" ]]; then
+    echo "ERROR: Could not fetch expected SHA-256 hash." >&2; exit 1
+  else
+    ACTUAL_SHA256=$(sha256sum "$TARBALL_DEST" | awk '{print $1}')
+    if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+      echo "ERROR: Tarball SHA-256 mismatch!" >&2
+      echo "Expected: $EXPECTED_SHA256" >&2
+      echo "Actual:   $ACTUAL_SHA256" >&2
+      exit 1
+    fi
+    echo "✓ Tarball verified."
+  fi
+else
+  echo "ERROR: Could not download tarball from $TARBALL_URL." >&2; exit 1
+fi
+
+# Verify Source Tarball SHA-256 before rpmbuild
+TARBALL_URL="https://github.com/emersonbusson/ramshared/archive/refs/tags/v${VERSION_CLEAN}.tar.gz"
+TARBALL_DEST="$RPM_ROOT/SOURCES/v${VERSION_CLEAN}.tar.gz"
+echo "==> Downloading source tarball for verification..."
+if curl -sL --fail -o "$TARBALL_DEST" "$TARBALL_URL"; then
+  echo "==> Verifying tarball SHA-256..."
+  EXPECTED_SHA256=$(curl -sL --fail "${TARBALL_URL}.sha256" | awk '{print $1}' || true)
+  if [[ -z "$EXPECTED_SHA256" ]]; then
+    echo "ERROR: Could not fetch expected SHA-256 hash." >&2; exit 1
+  else
+    ACTUAL_SHA256=$(sha256sum "$TARBALL_DEST" | awk '{print $1}')
+    if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
+      echo "ERROR: Tarball SHA-256 mismatch!" >&2
+      echo "Expected: $EXPECTED_SHA256" >&2
+      echo "Actual:   $ACTUAL_SHA256" >&2
+      exit 1
+    fi
+    echo "✓ Tarball verified."
+  fi
+else
+  echo "ERROR: Could not download tarball from $TARBALL_URL." >&2; exit 1
+fi
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
