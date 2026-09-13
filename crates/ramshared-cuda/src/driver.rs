@@ -297,6 +297,11 @@ impl<'a> Context<'a> {
 
 /// Zero-copy registered host memory mapping (`cuMemHostRegister`).
 ///
+/// ```compile_fail
+/// fn requires_send<T: Send>() {}
+/// requires_send::<ramshared_cuda::PinnedHostMapping<'static, 'static>>();
+/// ```
+///
 /// Borrows the active [`Context`]. The host memory remains mapped into the
 /// GPU virtual address space for the lifetime of this struct and is cleanly
 /// unregistered via `cuMemHostUnregister` on `Drop`.

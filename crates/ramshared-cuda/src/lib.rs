@@ -81,19 +81,25 @@ mod tests {
 
     #[test]
     fn pinned_host_mapping_validation_rejects_invalid_inputs() {
-        let err_null = CudaError::InvalidValue("host_ptr cannot be null".into());
-        assert!(err_null.to_string().contains("null"));
-
-        let err_align =
-            CudaError::InvalidValue("host_ptr must be aligned to 4096-byte page boundary".into());
-        assert!(err_align.to_string().contains("aligned to 4096"));
-
-        let err_len = CudaError::InvalidValue("length must be greater than zero".into());
-        assert!(err_len.to_string().contains("greater than zero"));
-
-        let err_mult =
-            CudaError::InvalidValue("length must be a multiple of page size 4096".into());
-        assert!(err_mult.to_string().contains("multiple of page size 4096"));
+        let aligned = std::ptr::NonNull::<u8>::dangling().as_ptr();
+        assert!(super::validate_host_registration(aligned.cast(), 4096).is_ok());
+        assert!(matches!(
+            super::validate_host_registration(core::ptr::null_mut(), 4096),
+            Err(CudaError::InvalidValue(message)) if message.contains("null")
+        ));
+        assert!(matches!(
+            super::validate_host_registration(aligned.cast(), 0),
+            Err(CudaError::InvalidValue(message)) if message.contains("greater than zero")
+        ));
+        assert!(matches!(
+            super::validate_host_registration(aligned.cast(), 1024),
+            Err(CudaError::InvalidValue(message)) if message.contains("multiple of page size")
+        ));
+        let misaligned = unsafe { aligned.add(1) };
+        assert!(matches!(
+            super::validate_host_registration(misaligned.cast(), 4096),
+            Err(CudaError::InvalidValue(message)) if message.contains("aligned")
+        ));
     }
 
     #[test]
