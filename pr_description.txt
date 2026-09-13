@@ -1,0 +1,20 @@
+## Summary
+Fix IPC framing parser recovery on truncated and corrupted IPC messages. It now safely skips oversized frames without unbounded allocation to prevent OOM DOS attacks, and it explicitly returns `UnexpectedEof` for abruptly truncated messages.
+
+## Commits
+<will be filled by submit>
+
+## Issue
+Framing parser recovery on truncated and corrupted IPC messages
+
+## Responsavel/Owner
+ResilienceChaos100
+
+## Labels
+bug, resilience
+
+## Validation
+`cargo test -p ramshared-broker --lib`
+
+## Rollback trigger
+Rollback trigger: parser fails to sync or drops legitimate messages.

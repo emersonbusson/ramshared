@@ -1,0 +1,13 @@
+fix(protocol): framing parser recovery on truncated and corrupted IPC messages
+
+This implements robust IPC message parsing to handle chaos scenarios
+like ungraceful peer disconnections or excessively large frames without
+causing hangs or unbounded memory growth.
+
+1. Truncated messages (abrupt disconnects before a newline) correctly
+   yield `UnexpectedEof` instead of a generic parser failure.
+2. Oversized frames correctly yield `PayloadTooLarge` but now safely discard
+   the rest of the line (using a zero-allocation `fill_buf` loop) to resynchronize
+   the stream state for the next message, avoiding infinite allocation vectors.
+
+Rollback trigger: parser fails to sync or drops legitimate messages.

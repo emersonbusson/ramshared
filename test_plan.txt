@@ -1,0 +1,21 @@
+1. RULES
+Modify strictly the targeted files and tests for your assigned task. Return precise domain errors (or Linux kernel errno / Windows NTSTATUS). Write unit/integration tests for every behavioral modification. Run cargo test or bash validation scripts to verify correctness before opening the PR.
+2. MAIN_DIFF
+Modify crates/ramshared-broker/src/protocol.rs to detect truncated frames and discard corrupted payloads up to next message boundary without hanging parser.
+3. FILES
+crates/ramshared-broker/src/protocol.rs
+4. INVARIANTS
+Anti-DoS line cap is respected, zero unhandled crashes.
+5. COUNTERFACTUAL
+If we do not discard the rest of the oversized frame, the parser desynchronizes. If we do not return UnexpectedEof for truncated frames, the parser hangs or corrupts state.
+6. RED_TEST
+test protocol::tests::oversize_line_is_err, test protocol::tests::oversize_line_with_newline_is_err, test protocol::tests::truncated_message_is_err.
+7. COVERAGE
+read_msg function
+8. REAL_PROOF
+cargo test -p ramshared-broker --lib
+cargo clippy -p ramshared-broker --lib -- -D warnings
+9. ROLLBACK
+Rollback trigger: parser fails to sync or drops legitimate messages.
+10. PR_BOUNDARY
+jules/inbox
