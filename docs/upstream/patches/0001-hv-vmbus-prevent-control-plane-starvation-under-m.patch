@@ -47,13 +47,13 @@ index 2b4080e51..cc24eb742 100644
  #include <linux/page_reporting.h>
  #include <linux/sizes.h>
 +#include <linux/mm.h>
- 
+
  #include <linux/hyperv.h>
  #include <hyperv/hvhdk.h>
 @@ -1197,6 +1198,8 @@ static void free_balloon_pages(struct hv_dynmem_device *dm,
  	}
  }
- 
+
 +extern int min_free_kbytes;
 +
  static unsigned int alloc_balloon_pages(struct hv_dynmem_device *dm,
@@ -62,7 +62,7 @@ index 2b4080e51..cc24eb742 100644
 @@ -1205,6 +1208,15 @@ static unsigned int alloc_balloon_pages(struct hv_dynmem_device *dm,
  	unsigned int i, j;
  	struct page *pg;
- 
+
 +	/*
 +	 * Defer balloon inflation if guest is in critical reclaim zone.
 +	 * Competing with kswapd under pressure starves VMBus channels.
@@ -87,11 +87,11 @@ index 71fd3ea4f..8a7ee00b6 100644
 +#include <linux/init.h>
  #include <hyperv/hvhdk.h>
  #include <asm/mshyperv.h>
- 
+
 @@ -397,6 +399,36 @@ int __init hv_common_init(void)
  	return 0;
  }
- 
+
 +extern int min_free_kbytes;
 +extern void setup_per_zone_wmarks(void);
 +
@@ -125,5 +125,5 @@ index 71fd3ea4f..8a7ee00b6 100644
  void __init ms_hyperv_late_init(void)
  {
  	struct acpi_table_header *header;
--- 
+--
 2.43.0

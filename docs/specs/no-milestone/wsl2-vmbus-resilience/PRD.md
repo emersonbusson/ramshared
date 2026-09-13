@@ -9,7 +9,7 @@ issues: ["microsoft/WSL#8768", "microsoft/WSL#4166", "microsoft/WSL#7254", "micr
 
 ## 1. Summary
 
-Under Microsoft WSL2 (a lightweight Hyper-V utility virtual machine), aggressive memory consumption and dirty page allocation (e.g. multi-tier swap thrash, massive builds, or AI model loading) can exhaust the memory required by synthetic Hyper-V kernel drivers (`hv_vmbus`, `vmicvmswitch`, `hv_balloon`, and `virtio-9p`). 
+Under Microsoft WSL2 (a lightweight Hyper-V utility virtual machine), aggressive memory consumption and dirty page allocation (e.g. multi-tier swap thrash, massive builds, or AI model loading) can exhaust the memory required by synthetic Hyper-V kernel drivers (`hv_vmbus`, `vmicvmswitch`, `hv_balloon`, and `virtio-9p`).
 
 When guest available memory drops below ~400–500 MB under rapid dirty page generation, atomic page allocations (`GFP_ATOMIC`) for VMBus ring buffers fail, dropping host-guest heartbeat pings. The Windows host Hyper-V watchdog infers that the guest kernel has hard-locked, abruptly tearing down the virtual network switch (`Hyper-V-VmSwitch Event 102/291`) and rebooting the VM instance.
 

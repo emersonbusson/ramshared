@@ -42,7 +42,7 @@
 **What:** Empirically validate how Windows behaves when the backing storage of an active secondary pagefile is abruptly removed.
 **Category:** fail-safe
 **How to measure:** Perform hot-remove of SCSI virtual disk containing active swapfile in Windows 11 VM. Detail in `docs/runbooks/windows-vram-drive-drill.md`.
-**Measured data:** 
+**Measured data:**
 - **Scenario A (Mounting):** `E:\pagefile.sys` allocation size = 4096 MB active after reboot (`Win32_PageFileUsage`).
 - **Scenario B1 (Displacement):** 3 test runs with active user pageouts (~150-200 MB user-mode memory). Hyper-V VHDX detached abruptly. Guest system remained responsive for 120s with 0 BugChecks/BSODs.
 - **Scenario B2 (Driver IO Error):** Not testable (requires custom miniport driver).
@@ -5547,18 +5547,16 @@ Rust topology residuals remain explicit.
 **Owner role:** `cuda-rust-tiering`.
 **Observed at:** `2026-09-13T03:35:00Z`.
 **Verified at:** `2026-09-13T03:35:00Z`.
-**Source revision:** `419d259`.
+**Source revision:** `fd14fef2`.
 **Candidate status:** Validated `PinnedHostMapping` RAII registration over `cuMemHostRegister` and Kahneman #13 boundary refusals on NVIDIA GeForce RTX 2060 (`sm_75`, 6144 MiB) under WSL2.
 **Lifecycle:** `reviewable`.
 **Retention:** Retain this append-only evidence summary and test receipts.
-**Freshness:** Revalidate after any driver FFI, zero-copy buffer, or cutile upstream changes.
-**What:** Empirically validated zero-copy host memory registration (`cuMemHostRegister`) and RAII unregistration in `crates/ramshared-cuda`, boundary refusal of invalid/misaligned pointers, and upstream patch branches in `scratch/cutile-rs` (`feat/zero-copy-host-mapping` and `feat/tile-bitwise-reductions`).
+**Freshness:** Revalidate after any CUDA driver FFI or zero-copy buffer change.
+**What:** Locally validated zero-copy host memory registration (`cuMemHostRegister`) and RAII unregistration in `crates/ramshared-cuda`, including boundary refusal of invalid and misaligned pointers.
 **Category:** `local-check`.
 **How to measure:** `cargo test -p ramshared-cuda`; `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/driver.rs --min 80`.
-**Measured data:** 14 unit tests passed (0 failed, 1 ignored). Slice line coverage on `driver.rs`: 85.8% (224/261 lines). Registration refusal verified against null pointer, zero-length, non-4096-multiple length, and misaligned pointer. Legitimate registration verified with 4096-byte aligned host memory and roundtrip data integrity.
+**Measured data:** Local validation covered null, zero-length, non-page-multiple, and misaligned-pointer refusal; the live lifecycle used a 4096-byte aligned host page and verified roundtrip data integrity. This record is local validation only and is not a public benchmark baseline.
 **Refusals:** Refused misaligned host pointers with `CudaError::InvalidValue`; refused zero length; clean unregister on drop with 0 memory leaks.
 **Residual blockers:** None.
 **Rollback trigger:** Any `CUDA_ERROR_OUT_OF_MEMORY` or `CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED` triggers immediate fallback to staged DMA transfer.
 **Verdict:** ✅ `PASS`. Zero-copy host registration and slice coverage gate pass.
-
-

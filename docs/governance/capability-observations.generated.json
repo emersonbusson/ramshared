@@ -395,35 +395,6 @@
     },
     {
       "claim_reconciliation": {
-        "claim_present": false,
-        "observation_is_not_a_claim": true,
-        "registry_path": "docs/governance/claims.json",
-        "registry_state": null
-      },
-      "documented_surface": {
-        "implementation_paths": [
-          "crates/ramshared-cuda/src/driver.rs",
-          "crates/ramshared-cuda/src/ffi.rs",
-          "crates/ramshared-cuda/src/lib.rs",
-          "scripts/docs-check.sh"
-        ],
-        "test_paths": []
-      },
-      "documents": {
-        "implementation": "docs/specs/no-milestone/cutile-zero-copy-page-tiering/IMPL.md",
-        "prd": "docs/specs/no-milestone/cutile-zero-copy-page-tiering/PRD.md",
-        "spec": "docs/specs/no-milestone/cutile-zero-copy-page-tiering/SPEC.md"
-      },
-      "observation_state": "OBSERVED",
-      "promotion": {
-        "authority": "docs/governance/claims.json",
-        "permitted": false,
-        "reason": "Only the qualified claims registry may publish capability state."
-      },
-      "slug": "cutile-zero-copy-page-tiering"
-    },
-    {
-      "claim_reconciliation": {
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",

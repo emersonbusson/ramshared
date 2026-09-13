@@ -21,7 +21,6 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`comment-language-integrity`](specs/no-milestone/comment-language-integrity/) | Canonical English and comment-language integrity | — | — | SPEC | — |
 | [`cuda-rust-native-tiering`](specs/no-milestone/cuda-rust-native-tiering/) | Native CUDA-Rust acceleration, in-GPU page compression, and async cancellation | — | — | UNQUALIFIED | — |
 | [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | UNQUALIFIED | — |
-| [`cutile-zero-copy-page-tiering`](specs/no-milestone/cutile-zero-copy-page-tiering/) | Zero-copy host memory streaming and byte-level page tile operations in CUDA-Rust | — | — | UNQUALIFIED | — |
 | [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | PARTIAL | — |
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED | — |

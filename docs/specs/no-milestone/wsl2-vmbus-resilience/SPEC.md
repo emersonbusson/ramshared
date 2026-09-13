@@ -35,7 +35,7 @@
 
 ## 4. Atomicity and Rollback
 
-- **Atomicity Frontier**: 
+- **Atomicity Frontier**:
   - Userspace CLI: The safety floor calculation executes atomically in memory at every 150–200 ms sampling interval before any allocation vector is resized.
   - Kernel / Host: Sysctl settings (`vm.min_free_kbytes`) remain intact; no persistent state changes to `/dev/nbd0` or swap extents.
 - **Rollback**:
