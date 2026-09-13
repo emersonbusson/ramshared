@@ -5,6 +5,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Enforce reproducible builds
+export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || date +%s)}"
+
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
 VERSION_CLEAN="${VERSION#v}"
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
@@ -170,6 +174,12 @@ chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
+
+# Clamp timestamps for all staged files to ensure 100% reproducibility
+if command -v find >/dev/null 2>&1 && command -v xargs >/dev/null 2>&1; then
+  find "$STAGE_DIR" -print0 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH}"
+fi
+
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
 
