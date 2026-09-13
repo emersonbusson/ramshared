@@ -26,7 +26,6 @@ fn vram_backend_serves_nbd_write_then_read() {
         },
         &payload,
         &mut be,
-        None,
     );
     assert_eq!(
         u32::from_be_bytes([w.reply[4], w.reply[5], w.reply[6], w.reply[7]]),
@@ -44,7 +43,6 @@ fn vram_backend_serves_nbd_write_then_read() {
         },
         &[],
         &mut be,
-        None,
     );
     assert_eq!(r.read_data, payload, "READ must return the written payload");
 }

@@ -1,0 +1,22 @@
+## Summary
+Adds a token bucket rate limiter to ServeOutcome processing logic to mitigate NBD request flooding denial-of-service vulnerabilities.
+
+## Issue
+None
+
+## Responsavel/Owner
+Jules
+
+## Labels
+type:security area:backend
+
+## Commits
+| Commit | What was done | Why it was done | Details |
+|---|---|---|---|
+| a676cd1 | feat(security): add token bucket rate limiting for NBD request handlers | To prevent DoS via request floods | <details><summary>Details</summary>Files: protocol.rs, request.rs, main.rs. Validation: cargo test. Risk/rollback: low, revert</details> |
+
+## Validacao/Validation
+cargo clippy and cargo test run clean. All targets compile successfully.
+
+## Rollback trigger
+issues with requests being rejected.

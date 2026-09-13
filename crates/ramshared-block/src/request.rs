@@ -45,10 +45,43 @@ impl TokenBucket {
     }
 }
 
+pub struct RateLimitedBackend<B: BlockBackend> {
+    pub inner: B,
+    pub bucket: TokenBucket,
+}
+
+impl<B: BlockBackend> BlockBackend for RateLimitedBackend<B> {
+    fn size_bytes(&self) -> u64 {
+        self.inner.size_bytes()
+    }
+    fn block_size(&self) -> u32 {
+        self.inner.block_size()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+        self.inner.read_at(off, buf)
+    }
+    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
+        self.inner.write_at(off, data)
+    }
+    fn write_at_with_options(
+        &mut self,
+        off: u64,
+        data: &[u8],
+        options: WriteOptions,
+    ) -> Result<(), IoError> {
+        self.inner.write_at_with_options(off, data, options)
+    }
+    fn flush(&mut self) -> Result<(), IoError> {
+        self.inner.flush()
+    }
+}
+
+
 // errno in simple reply (re-exported from protocol for backward compatibility).
-pub use crate::protocol::{
-    NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_ESHUTDOWN, NBD_OK,
-};
+pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_ESHUTDOWN, NBD_OK};
 
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
@@ -143,13 +176,13 @@ fn validate_command_flags(req: &Request) -> Result<WriteOptions, u32> {
 
 /// Dispatches an already parsed request. `payload` is the WRITE data (empty for
 /// others). Does no socket I/O — only logic (testable without root).
-pub fn serve<B: BlockBackend + ?Sized>(
+pub fn serve_with_rate_limit<B: BlockBackend + ?Sized>(
     req: &Request,
     payload: &[u8],
     backend: &mut B,
     rate_limit: Option<&mut TokenBucket>,
 ) -> ServeOutcome {
-    let reply = |error: u32| encode_simple_reply(error, req.handle);
+
 
     #[allow(clippy::collapsible_if)]
     if let Some(bucket) = rate_limit {
@@ -162,6 +195,15 @@ pub fn serve<B: BlockBackend + ?Sized>(
         }
     }
 
+    serve(req, payload, backend)
+}
+
+pub fn serve<B: BlockBackend + ?Sized>(
+    req: &Request,
+    payload: &[u8],
+    backend: &mut B,
+) -> ServeOutcome {
+    let reply = |error: u32| encode_simple_reply(error, req.handle);
     let plain = |error: u32| ServeOutcome {
         reply: reply(error),
         read_data: Vec::new(),
@@ -218,8 +260,9 @@ pub fn serve<B: BlockBackend + ?Sized>(
     }
 }
 
+
 #[cfg(test)]
-mod rate_limit_tests {
+mod tests {
     use super::*;
     use std::thread::sleep;
     use std::time::Duration;
@@ -232,12 +275,6 @@ mod rate_limit_tests {
         sleep(Duration::from_millis(150));
         assert!(bucket.check_and_consume(1));
     }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
 
     struct MemBackend {
         data: Vec<u8>,
@@ -282,12 +319,12 @@ mod tests {
             data: vec![0u8; 8192],
             bs: 4096,
         };
-        let w = serve(&req(Command::Write, 0, 4096), &[0xEF; 4096], &mut b, None);
+        let w = serve(&req(Command::Write, 0, 4096), &[0xEF; 4096], &mut b);
         assert_eq!(
             u32::from_be_bytes([w.reply[4], w.reply[5], w.reply[6], w.reply[7]]),
             NBD_OK
         );
-        let r = serve(&req(Command::Read, 0, 4096), &[], &mut b, None);
+        let r = serve(&req(Command::Read, 0, 4096), &[], &mut b);
         assert_eq!(r.read_data, vec![0xEF; 4096]);
     }
 
@@ -297,7 +334,7 @@ mod tests {
             data: vec![0u8; 8192],
             bs: 4096,
         };
-        let r = serve(&req(Command::Read, 8192, 4096), &[], &mut b, None);
+        let r = serve(&req(Command::Read, 8192, 4096), &[], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_ERANGE
@@ -332,12 +369,7 @@ mod tests {
     #[test]
     fn read_only_backend_rejects_write_with_eacces() {
         let mut b = ReadOnlyBackend;
-        let r = serve(
-            &req(Command::Write, 0, 4096),
-            &vec![0u8; 4096],
-            &mut b,
-            None,
-        );
+        let r = serve(&req(Command::Write, 0, 4096), &vec![0u8; 4096], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_EACCES
@@ -350,7 +382,7 @@ mod tests {
             data: vec![0u8; 8192],
             bs: 4096,
         };
-        let r = serve(&req(Command::Read, 100, 4096), &[], &mut b, None);
+        let r = serve(&req(Command::Read, 100, 4096), &[], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_EINVAL
@@ -391,7 +423,7 @@ mod tests {
         let mut req = req(Command::Write, 0, 4096);
         req.flags = NBD_CMD_FLAG_FUA;
 
-        let outcome = serve(&req, &[0xAA; 4096], &mut backend, None);
+        let outcome = serve(&req, &[0xAA; 4096], &mut backend);
         assert_eq!(
             u32::from_be_bytes([
                 outcome.reply[4],
@@ -411,7 +443,7 @@ mod tests {
             data: vec![0u8; 4096],
             bs: 0,
         };
-        let r = serve(&req(Command::Read, 0, 0), &[], &mut b, None);
+        let r = serve(&req(Command::Read, 0, 0), &[], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_EINVAL
@@ -424,7 +456,7 @@ mod tests {
             data: vec![0u8; 8192],
             bs: 4096,
         };
-        let r = serve(&req(Command::Read, 0, 100), &[], &mut b, None);
+        let r = serve(&req(Command::Read, 0, 100), &[], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_EINVAL
@@ -437,12 +469,7 @@ mod tests {
             data: vec![0u8; 4096],
             bs: 4096,
         };
-        let r = serve(
-            &req(Command::Read, u64::MAX - 4095, 8192),
-            &[],
-            &mut b,
-            None,
-        );
+        let r = serve(&req(Command::Read, u64::MAX - 4095, 8192), &[], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_ERANGE
