@@ -1,8 +1,0 @@
-refactor(ramshared): linearize pci_remove teardown and guard checks
-
-- Refactored `ramshared_pci_remove` to incorporate `unlikely()` guard clauses for `pdev` and `rs_dev`.
-- Updated teardown sequence to match exact reverse order of `ramshared_pci_probe`, including explicitly unsetting `pci_set_drvdata` before disk cleanup and `mutex_destroy(&rs_dev->lock)` at the end.
-- Replaced nested queue bounds check in `ramshared_pci_probe` with a linear `clamp_t` call.
-- Flattened the 32-bit DMA fallback condition in `ramshared_pci_probe` for linear error handling.
-
-Rollback trigger: Kernel panic during device teardown or rmmod.
