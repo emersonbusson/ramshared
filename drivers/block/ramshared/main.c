@@ -37,6 +37,13 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
 		 capacity_mb);
 
+	if (pci_resource_len(pdev, 0) > 0 &&
+	    ((u64)capacity_mb << 20) > pci_resource_len(pdev, 0)) {
+		dev_err(&pdev->dev, "capacity_mb (%lu MiB) exceeds physical PCIe BAR0 aperture (%llu bytes)\n",
+			capacity_mb, (unsigned long long)pci_resource_len(pdev, 0));
+		return -EINVAL;
+	}
+
 	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
 		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
 			capacity_mb);
