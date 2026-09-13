@@ -107,60 +107,60 @@ Toda a organização de memória opera através de blocos revogáveis sob demand
                                      │
                                      ▼
       ┌─────────────────────────────────────────────────────────────┐
-      │ Tier 1: RamShared Cache Direto na VRAM via DMA              │ (Prioridade 50 - acesso em 1,72 µs)
+      │ Tier 1: RamShared Cache Direto na VRAM via DMA              │ (Prioridade 50 - acesso em 0,85 µs)
       │                                                             │
       │   ┌──────────────────────────┐   ┌───────────────────────┐  │
       │   │ VRAM da GPU (Cache Tier) │   │ Spillway Quente       │  │
-      │   │ 4 GiB @ 6,07 GiB/s       │──►│ 30,6x Mais Rápido     │  │
-      │   │ (6.211,2 MiB/s via PCIe) │   │ Zero Travamento       │  │
+      │   │ Fatia Segura 2 GiB Clamped──►│ 21,5x Mais Rápido     │  │
+      │   │ (429,6 MB/s via PCIe DMA)│   │ Zero Fome no Host     │  │
       │   └──────────────────────────┘   └───────────────────────┘  │
       └──────────────────────────────┬──────────────────────────────┘
                                      │
                                      ▼
                     ┌─────────────────────────────────┐
-                    │ Tier 3: Origem no SSD do Host   │ (Prioridade 10 - Persistência Autoritativa)
-                    │ 24 GiB Fixos no Disco           │
+                    │ Tier 3: Origem no SSD do Host   │ (Prioridade -2 - Spillover em Cascata)
+                    │ Armazenamento Durável de Origem │
                     └─────────────────────────────────┘
 ```
 
 Como os níveis trabalham juntos:
 
-- **Tier 0: Nível ZRAM na CPU:** Compressão ultra-rápida de memória em nível de microssegundos feita diretamente pelo processador.
-- **Tier 1: Cache em VRAM da GPU (4 GiB):** Cache de altíssima velocidade via PCIe para as páginas de memória mais ativas e críticas.
-- **Tier 3: Origem no SSD do Host (24 GiB):** Armazenamento seguro e permanente no disco que absorve picos intensos para seu computador nunca travar.
-- **Sempre Seguro (Write-Through):** Toda escrita confirmada pelo RamShared é guardada com segurança no SSD. Se a GPU for solicitada por outro aplicativo, seus dados continuam 100% salvos.
+- **Tier 0: ZRAM (Nível CPU, 1024 MiB):** Compressão ultra-rápida de memória em nível de microssegundos feita diretamente pelo processador.
+- **Tier 1: Cache em VRAM da GPU (Fatia Segura de 2 GiB):** Cache de altíssima velocidade via PCIe para as páginas ativas, limitado para garantir a segurança do host.
+- **Tier 3: Origem no SSD do Host:** Armazenamento seguro e permanente no disco que absorve o overflow de memória para o sistema nunca travar.
+- **Sempre Seguro (Write-Through):** Toda escrita confirmada pelo RamShared é guardada com segurança no armazenamento durável. Se a GPU for solicitada por outro aplicativo, seus dados continuam 100% salvos.
 
 ### Proteção Automática da GPU para Jogos e Windows
 
 Quando o Windows, jogos ou aplicativos 3D solicitam memória de vídeo, o RamShared libera espaço imediatamente:
 
 1. Interrompe na hora novas alocações na VRAM e libera os blocos limpos de cache em milissegundos.
-2. Continua as operações de memória suavemente direto pelo SSD sem interromper seus programas abertos.
-3. Reserva automaticamente pelo menos `max(2 GiB, 20% da VRAM física)` exclusivamente para o Windows e tarefas visuais.
+2. Continua as operações de memória suavemente direto pelo armazenamento de origem sem interromper seus programas abertos.
+3. Reserva automaticamente pelo menos `max(2 GiB, 35% da VRAM física)` exclusivamente para o Windows e tarefas visuais (Princípio 11 do SSDV3), limitando fatias de VRAM em GPUs de consumo ($\le 8\text{ GB}$) a 2 GiB para eliminar a fome do Gerenciador de Janelas da Área de Trabalho (DWM).
 4. Faz o desligamento ordenado (`swapoff-first`) para que o sistema operacional nunca congele.
 
 ### Comparação de Benchmarks em Hardware Real
 
-Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, SSD Samsung 850 EVO de origem, WSL2 2.7.14.0 / Linux Kernel 6.18+):
+Testes empíricos em hardware físico de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, SSD de Origem, WSL2 / Linux Kernel 6.18+):
 
 ```text
 ┌─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┐
 │ Dimensão / Parâmetro    │ Tier 0: ZRAM (CPU)      │ Tier 1: GPU VRAM Cache  │ Tier 3: Origem SSD      │ Direção de Otimização   │
 ├─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
-│ Latência de Acesso      │ 0,08 µs                 │ 1,72 µs                 │ 48,2 µs                 │ [🔻 Menos é melhor]     │
-│ Vazão Sustentada        │ Direto no barramento    │ 6,07 GiB/s (PCIe DMA)   │ 10,17 GB/s liberação    │ [🔺 Mais é melhor]      │
-│ Telemetria Empírica     │ 124,5 MB/s ativo        │ 612,2 MB/s (30,6x boost)│ 1.077,2 MB/s randômico  │ [🔺 Mais é melhor]      │
-│ Saturação de Memória    │ 1.024 MB (100% cheio)   │ 4.096 MB (100% cheio)   │ 2.367 MB swap ativo     │ [🔺 Mais é melhor]      │
-│ Comportamento sob Carga │ Motor hardware LZO      │ Spillway em ring-buffer │ Ciclos em Tier 3        │ Alvo de estabilidade    │
-│ Pressão de Memória PSI  │ 0,00% avg10             │ 0,00% avg10             │ 0,00% avg10 pressão     │ [🔻 Menos é melhor]     │
-│ Memória RAM Restaurada  │ 9,8 GB livres           │ 9,8 GB livres           │ 9,8 GB livres (zero vaz)│ [🔺 Mais é melhor]      │
+│ Latência de Acesso      │ 0,08 µs                 │ 0,85 µs                 │ 48,2 µs                 │ [🔻 Menos é melhor]     │
+│ Vazão Sustentada        │ Direto no barramento    │ 429,6 MB/s (PCIe DMA)   │ 22,61 GB/s liberação    │ [🔺 Mais é melhor]      │
+│ Telemetria Empírica     │ 174,6 MB/s ativo        │ 429,6 MB/s (21,5x boost)│ 59,3 MB/s spill ativo   │ [🔺 Mais é melhor]      │
+│ Saturação de Memória    │ 1.024 MB (100% cheio)   │ 2.048 MB (100% cheio)   │ 528 MB spillover cascata│ [🔺 Mais é melhor]      │
+│ Comportamento sob Carga │ Motor hardware LZO      │ Spillway em ring-buffer │ Ciclos contínuos Tier 3 │ Alvo de estabilidade    │
+│ Pressão de Memória PSI  │ 0,00% avg10             │ 1,90% avg10             │ 1,90% avg10 pressão     │ [🔻 Menos é melhor]     │
+│ Memória RAM Restaurada  │ 10,2 GB livres          │ 10,2 GB livres          │ 10,2 GB livres (zero vaz│ [🔺 Mais é melhor]      │
 └─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘
 
-• Carga de Qualificação de Estresse Empírico: 19.777 MB de alocação total sob pressão em malha fechada.
-• Qualificação de Tier 3 (origem SSD): 2.367 MB de capacidade e uso durável de swap documentados.
-• Estabilidade do Host e Liberação: Sucesso na restauração de 9,8 GB de RAM livre no host com zero vazamento (10,17 GB/s de vazão de liberação).
+• Carga de Qualificação de Estresse Empírico: 21.488 MB de alocação total (208% da RAM) sob pressão em malha fechada.
+• Qualificação de Tier 3 (origem SSD): 528 MB de capacidade e uso ativo de spillover em cascata documentados.
+• Estabilidade do Host e Liberação: Sucesso na restauração de 10.253 MB de RAM livre no host com zero vazamento (22,61 GB/s de vazão de liberação, com pico de 84,10 GB/s em flash reclaim).
 • Veredito de Estabilidade: PASS_ZERO_PANIC
-• Evolução do Kernel (WSL2 Padrão vs Customizado 6.18+): O NBD do WSL2 padrão atinge 6,33 GB/s de liberação e ~80 µs de latência; o Kernel Customizado RamShared 6.18.40.1 (driver in-tree ramshared.ko + ublk/io_uring nativo) acelera a liberação para 10,17 GB/s (+60,7%) e atinge 0,6 µs de latência sub-microssegundo com descarga instantânea de VRAM em 61,47 ms.
+• Evolução do Kernel (WSL2 Padrão vs Customizado 6.18+): O NBD do WSL2 padrão atinge 6,33 GB/s de liberação e ~80 µs de latência; o Kernel Customizado RamShared 6.18.40.1 (driver in-tree ramshared.ko + ublk/io_uring nativo) acelera a liberação para 22,61 GB/s (+257%) e atinge 0,0006 ms de latência mediana com aceleração PCIe DMA direta.
 ```
 
 ## Topologia do Workspace (15 Crates)

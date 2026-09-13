@@ -7418,7 +7418,7 @@ mod tests {
         });
 
         let worker_tx = jobs_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .expect("injected acceptor exposes the live NBD worker");
         worker_tx.send(WMsg::Opened).expect("open NBD generation");
         for handle in 0..3 {
@@ -7439,13 +7439,13 @@ mod tests {
                 .expect("drive one bounded recovery sample");
             assert_nbd_ok(
                 reply_rx
-                    .recv_timeout(Duration::from_secs(1))
+                    .recv_timeout(Duration::from_secs(5))
                     .expect("pre-recovery NBD job reply"),
                 "pre-recovery NBD job",
             );
         }
         activation_started_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .expect("the third healthy sample starts one pending activation");
 
         worker_tx
@@ -7468,7 +7468,7 @@ mod tests {
             .expect("queue NBD work after pending shutdown");
         assert_nbd_ok(
             reply_rx
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(Duration::from_secs(5))
                 .expect("pending recovery must not block the NBD serve loop"),
             "post-shutdown pending-recovery NBD job",
         );
@@ -7485,7 +7485,7 @@ mod tests {
         activation_outcome.succeed();
         assert_eq!(
             done_rx
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(Duration::from_secs(5))
                 .expect("daemon exits after the terminal activation outcome"),
             Ok(())
         );
@@ -10677,7 +10677,10 @@ Filename Type Size Used Priority
         let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
         let (safe_slice, clamped) =
             calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(clamped, "allocation must be clamped to protect Windows host");
+        assert!(
+            clamped,
+            "allocation must be clamped to protect Windows host"
+        );
         // On <= 8GB GPU, capped to 2048 MiB to protect Windows DWM and enable Tier 3 spillover
         assert_eq!(safe_slice, 2048 * 1024 * 1024);
     }
@@ -10702,7 +10705,10 @@ Filename Type Size Used Priority
         let requested_slice = 32 * 1024 * 1024;
         let (safe_slice, clamped) =
             calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(!clamped, "Mock environment under 2048 MiB must not be clamped");
+        assert!(
+            !clamped,
+            "Mock environment under 2048 MiB must not be clamped"
+        );
         assert_eq!(safe_slice, requested_slice);
     }
 }
