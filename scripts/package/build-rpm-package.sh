@@ -58,6 +58,7 @@ mkdir -p %{buildroot}/usr/share/ramshared/scripts
 mkdir -p %{buildroot}/usr/lib/systemd/system
 mkdir -p %{buildroot}/lib/udev/rules.d
 mkdir -p %{buildroot}/etc/ramshared
+
 install -m 0644 ${ROOT}/packaging/systemd/ramshared-vram.service %{buildroot}/usr/lib/systemd/system/ramshared-vram.service
 
 install -m 0755 ${CLI_BIN} %{buildroot}/usr/bin/ramshared
