@@ -543,6 +543,58 @@ mod tests {
     }
 
     #[test]
+    fn test_package_invalid_service_identities_rejects() {
+        let mut candidate = manifest();
+        candidate.services.broker_name = "WrongBroker".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+
+        let mut candidate = manifest();
+        candidate.services.broker_account = "WrongAccount".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+
+        let mut candidate = manifest();
+        candidate.services.consumer_name = "WrongConsumer".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+
+        let mut candidate = manifest();
+        candidate.services.consumer_account = "WrongConsumerAccount".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_non_hex_commit_rejects() {
+        let mut candidate = manifest();
+        candidate.commit = "abcdef12345g".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_sha256_hash_length_or_chars_rejects() {
+        let mut candidate = manifest();
+        candidate.artifacts[0].sha256 = "A".repeat(63);
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+
+        let mut candidate = manifest();
+        candidate.artifacts[0].sha256 = "G".repeat(64);
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_artifact_relative_path_rejects() {
+        let mut candidate = manifest();
+        candidate.artifacts[0].relative_path = "../escaped_path".into();
+        let bytes = serde_json::to_vec(&candidate).unwrap();
+        assert!(parse_manifest(&bytes).is_err());
+    }
+
+    #[test]
     fn product_manifest_version_directory_and_artifact() {
         let m = manifest();
         assert_eq!(m.version_directory(), "1.2.3-abcdef123456");
