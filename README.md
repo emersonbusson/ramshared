@@ -2,91 +2,68 @@
 
 Language: [Portuguese (Brazil)](README.pt-BR.md)
 
-**RamShared turns your idle GPU memory (VRAM) into an ultra-fast RAM cache for Linux and WSL2.**
+**RamShared is a stable Linux and WSL2 memory-tiering project. It can use idle GPU memory as a revocable cache, with ZRAM and disk as the surrounding tiers.**
 
-When your computer runs low on RAM, standard operating systems freeze or become painfully slow because they swap memory to a slow disk. RamShared routes overflow memory directly into your GPU (NVIDIA, AMD, or Intel) over high-speed PCIe bus lines, keeping your system fast and responsive.
-
-Best of all: if you launch a game, 3D app, or AI workload (like PyTorch or Ollama), RamShared instantly yields the VRAM back to your graphics card in milliseconds without crashing your programs or losing data, because all writes are safely backed by disk.
+The project is intended for people who want to study or operate GPU-backed memory tiers on their own machines. It observes pressure, keeps a disk-backed origin, and is designed to give VRAM back when the GPU needs it. Hardware, drivers, and the active workload still determine the result, so run the readiness check before enabling anything.
 
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0"><img alt="Release v0.12.0" src="https://img.shields.io/badge/release-v0.12.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-46.9k%2B_%2F_14d-blue?style=flat-square&logo=git">
-  <img alt="Unique Cloners" src="https://img.shields.io/badge/unique_cloners-910%2B-blueviolet?style=flat-square">
-  <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
-  <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-production%20ready-2f855a?style=flat-square">
-  <img alt="Windows Driver" src="https://img.shields.io/badge/Windows%20driver-hardware%20qualified-2f855a?style=flat-square">
+  <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-stable-2f855a?style=flat-square">
 </p>
 
 ```bash
-# 1. Build release binaries (CLI + background service)
+# 1. Build the current checkout (CLI + background service)
 ./scripts/quickstart.sh
 
 # 2. Verify environment readiness and GPU topology
-ramshared check
+./target/release/ramshared check
 
 # 3. Launch the interactive real-time dashboard
-ramshared top
+./target/release/ramshared top
 ```
 
 ## Why RamShared?
 
 > **"Does every machine need a GPU? Why use GPU memory as RAM instead of standard ZRAM or SSD swap?"**
 
-- **Put Idle GPU Memory to Work:** In developer workstations, gaming PCs, and WSL2 setups, GPUs often sit idle with gigabytes of unused VRAM. RamShared turns that dormant hardware into a supercharged memory cache.
-- **Protect Your SSD from Wear:** Heavy swap thrashing constantly writes data to flash memory, shortening your SSD's lifespan (TBW). GPU VRAM has infinite write endurance and never degrades.
-- **Say Goodbye to WSL2 and Linux Freezes:** Standard WSL2 swap traverses four virtualization layers (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), causing notorious system lockups when memory fills up. RamShared bypasses this bottleneck by streaming memory pages directly across the PCIe bus.
-- **Save CPU Power vs ZRAM:** While compressed RAM (ZRAM) is fast, heavy compression burns valuable CPU cores. RamShared uses direct PCIe DMA transfers to move memory without loading your CPU during heavy compiles or multitasking.
-- **Games and AI Workloads Always Win:** VRAM is leased purely as a smart cache. The millisecond another app or game requests GPU memory, RamShared yields it instantly with zero data loss.
-- **100% Optional GPU:** Don't have a dedicated GPU? RamShared still works seamlessly, coordinating fast compressed RAM (ZRAM) and SSD storage with the same freeze-proof stability.
-- **Hardware Architecture & FAQ:** For technical deep-dives on multi-vendor GPU support (NVIDIA, AMD, Intel), random 4KB latency vs NVMe streaming, and flash wear endurance, see the [Frequently Asked Questions](docs/FAQ.md#why-use-gpu-memory-when-nvme-striped-arrays-reach-28-gbs-and-ddr5-reaches-70-gbs).
+- **Use idle VRAM deliberately:** GPU memory can be useful as a cache when a compatible GPU is idle. The amount available changes with games, desktops, and compute workloads.
+- **Keep a durable origin:** VRAM is not the system of record. The design keeps an authoritative backing store so a cache release can be handled safely.
+- **Work alongside ZRAM and disk:** A GPU tier is one option in a cascade, not a replacement for every form of swap or memory management.
+- **Stay in control:** Activation and teardown require an explicit operator command. The project does not silently enable memory pressure workloads.
+- **Read the limits first:** Consult the [FAQ](docs/FAQ.md) and the [reliability gap register](docs/reliability/GAP-REGISTER.md) before using the Windows driver or custom-kernel lab surfaces.
 
 ## Current Status
 
-Release: **v0.12.0 (Production Qualified Release & Multi-Tier Memory Cascade)**. Fully tested and verified under 100% memory saturation and heavy host workload pressure on physical hardware.
+Latest published release: **[v0.12.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0)**. This checkout builds **0.13.0**, the next stable maintenance version in development; it is not published yet.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
-| 4-Tier Memory Cascade | **100% Saturated Qualified** | Sustained 19,777 MB to 20,208 MB across RAM, ZRAM, GPU VRAM, and SSD swap over 40 continuous stress cycles with zero system stalls (`PASS_ZERO_PANIC`). |
-| Linux/WSL2 Stability | **Hardened & Tested · 1,065 tests passing** | Workload processes and storage ledgers are fully protected. Validated with 1,065 automated workspace tests (0 failures, 0 panics) and clean shutdown ordering. |
-| Host Memory Pressure | **Validated** | Sustained 99% host RAM load (17.2 GB allocated on a 20 GB machine) for 60 seconds with 100% data integrity (SHA-256 verified) and zero crashes. |
-| GPU VRAM Cache & SSD Safety | **Live Hardware Qualified** | Tested on physical hardware (NVIDIA RTX 2060 + Samsung SSD). High-speed PCIe cache hits, and 100% byte-exact disk recovery when GPU memory is freed. |
-| Safe GPU Reclaim | **Validated** | When external graphical or compute apps request memory, RamShared steps aside cleanly without leaving ghost processes. |
-| WSL2 Anti-Freeze Protection | **Hardened & Verified** | Eliminates desktop and terminal freezes during high memory load through orderly swap teardown (`swapoff-first`) and dynamic memory governing. |
-| Windows StorPort Driver | **Qualified Miniport Topology** | Native Windows virtual disk driver with isolated broker/consumer services, named-pipe communication, and hardware DMA streaming. |
-| Reliable Disk Origin | **100% Deterministic Capacity** | Uses fixed, authoritative disk backing so that memory is never lost even under sudden GPU disconnects. |
-| Upstream Linux ublk & In-Tree Driver | **LKML RFC v3 & Custom WSL2 6.18+** | Native kernel block driver (`ramshared.ko`) and zero-copy `ublk` (`io_uring`) qualified under Linux 6.18+ ([#41054](https://github.com/microsoft/WSL/issues/41054)). |
+| Linux and WSL2 userspace | **Stable and qualified** | The CLI, daemon, checks, and teardown paths are covered by CI. Enable them after `check` and the documented preflight complete. |
+| GPU cache | **Stable on qualified hardware** | CUDA and Vulkan backends exist, while usable capacity and behaviour still depend on the driver, GPU, display workload, and current host pressure. |
+| Disk origin and integrity | **Stable and tested** | The software has integrity and teardown checks; every deployment still needs its own before/after validation. |
+| Windows StorPort driver | **Not publicly distributable yet** | The driver remains a supervised lab surface until a production-trusted signing and qualification path is complete. |
+| Custom kernel and ublk transport | **Deferred** | These are development and lab surfaces, not the default day-one WSL2 transport. |
 
 
-The status above reflects verified physical hardware qualification. For full benchmark traces, test logs, and audit records, see [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and [`docs/reliability/`](docs/reliability/).
+Historical measurements are retained in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Entries without a public evidence envelope are historical records, not current release baselines. Open limits and qualification work are tracked in [`docs/reliability/`](docs/reliability/).
 
-## Safe Operation & Quick Start Guidance
+### v0.12 qualification snapshot
+
+The published v0.12 qualification reached **19,777 MB** across Tier 0 (ZRAM), Tier 1 (GPU VRAM cache), and Tier 3 (SSD origin), with a `PASS_ZERO_PANIC` verdict on the qualified hardware. This records the release evidence; it is not a throughput or capacity promise for a different machine.
+
+## Run it safely
 <a id="safe-operation"></a><a id="quick-start"></a>
 
 RamShared is designed with strict safety defaults. It will never make unmonitored changes in the background without your explicit command.
 
-To install and verify your setup in under a minute, run:
-
-```bash
-# 1. Build release binaries (CLI + background service)
-./scripts/quickstart.sh
-
-# 2. Verify environment readiness and GPU topology
-ramshared check
-
-# 3. Launch the interactive real-time dashboard
-ramshared top
-```
-
-To start or stop memory offloading, the service requires explicit operator authorization (`sudo ramshared up` / `sudo ramshared down`).
-
-The default deployment profile establishes 4 GiB of logical capacity with a 1 GiB dynamic physical cache cap. You can customize capacity from 1 to 24 GiB on demand without preallocating that amount of physical VRAM.
+Build once with the commands above, then use `./target/release/ramshared check`. Do not activate a tier when the check reports a blocker. Starting and stopping memory offload always requires an explicit operator command (`sudo ./target/release/ramshared up` / `sudo ./target/release/ramshared down`).
 
 ### Architecture Note: Dynamic Allocation Only
 
-All memory tiering operates via on-demand, revocable chunks backed by the authoritative SSD origin. Legacy fixed preallocation has been removed to ensure zero GPU starvation for display and gaming workloads.
+Memory tiering uses on-demand, revocable chunks backed by a durable origin. It reduces the chance of competing with display or compute workloads, but cannot guarantee spare VRAM on every GPU or driver.
 
 ## Memory Cascade
 
@@ -132,29 +109,11 @@ When Windows, games, or 3D rendering workloads request GPU memory, RamShared ste
 3. Automatically reserves at least `max(1.5 GiB, 20% of physical VRAM)` exclusively for Windows and display tasks (SSDV3 Principle 11), ensuring Desktop Window Manager (DWM) stability while granting a full 4 GiB slice on 6GB+ GPUs.
 4. Performs a graceful `swapoff-first` teardown so the operating system never freezes.
 
-### Multi-Tier Hardware Benchmark Comparison
+### Evidence, without marketing shortcuts
 
-Empirical benchmarks on physical host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x16, Backing SSD Origin, WSL2 / Linux Kernel 6.18+):
+Performance depends on the GPU, driver, desktop workload, disk path, and memory pressure of the machine being tested. A number from one RTX 2060 or one WSL2 host is not a promise for another computer.
 
-```text
-┌─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┬─────────────────────────┐
-│ Metric / Dimension      │ Tier 0: ZRAM (CPU Tier) │ Tier 1: GPU VRAM Cache  │ Tier 3: SSD Origin      │ Optimization Direction  │
-├─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
-│ Access Latency          │ 0.08 µs                 │ 0.85 µs                 │ 48.2 µs                 │ [🔻 Lower is better]    │
-│ Sustained Throughput    │ Direct CPU bus          │ 311.6 MB/s (PCIe DMA)   │ 21.66 GB/s reclaim      │ [🔺 Higher is better]   │
-│ Empirical Telemetry     │ 140.7 MB/s active       │ 311.6 MB/s (15.6x boost)│ 16.8 MB/s active spill  │ [🔺 Higher is better]   │
-│ Memory Saturation       │ 1,024 MB (100% full)    │ 4,096 MB (1,969 MB act.)│ Durable backing store   │ [🔺 Higher is better]   │
-│ Active Stress Behavior  │ LZO hardware engine     │ Ring-buffered spillway  │ Sustained Tier 3 cycles │ Stability target        │
-│ PSI Memory Pressure     │ 0.00% avg10             │ 0.00% avg10 (7.0 peak)  │ 0.00% avg10 full press  │ [🔻 Lower is better]    │
-│ Restored Host RAM       │ 10.2 GB free            │ 10.2 GB free            │ 10.2 GB free (zero leak)│ [🔺 Higher is better]   │
-└─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┴─────────────────────────┘
-
-• Empirical Stress Qualification Workload: 20,208 MB total allocation (171% of RAM) under closed-loop pressure with 4 GiB VRAM active.
-• Tier 3 (SSD origin) Qualification: 4 GiB durable partition capacity and spillover telemetry documented.
-• Host Stability & Reclaim Status: Successfully restored 10,217 MB free host RAM with zero leak (21.66 GB/s reclaim throughput, peaking at 84.10 GB/s flash reclaim).
-• Stability Verdict: PASS_ZERO_PANIC
-• Kernel Evolution (Stock WSL2 vs Custom 6.18+): Stock WSL2 NBD yields 6.33 GB/s reclaim and ~80 µs latency; RamShared Custom Kernel 6.18.40.1 (in-tree ramshared.ko + native ublk/io_uring) accelerates reclaim to 21.66 GB/s (+242%) and achieves 0.0006 ms median allocation latency with direct PCIe DMA acceleration.
-```
+The project keeps historical benchmark records for audit. Only a result with a current public evidence envelope may be used as a release baseline or a regression claim. See [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) for the measurement context and [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) for the remaining qualification boundaries.
 
 ## Workspace Topology (15 Crates)
 
@@ -233,14 +192,6 @@ For driver distribution and WHQL attestation details, refer to [`docs/packaging/
 Empirical performance measurements and latency distributions are recorded under public evidence envelopes in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and registered in [`validation.md`](validation.md).
 
 For raw sample bundles, hardware execution traces, latency histograms, and exact reproduction steps for EVD-0037 and EVD-0038, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
-
-## Community Traction & Ecosystem
-
-RamShared is deployed, evaluated, and benchmarked across global Linux, WSL2, and hardware engineering communities:
-
-- **High Adoption:** Over 46,900 Git clones across 910+ unique engineering systems in a 14-day window.
-- **Active Community Discovery:** Consistent inbound discovery from technical communities on Reddit (`r/linux`, `r/hardware`), kernel developer networks, and search indexes.
-- **Kernel Architecture Auditing:** Substantial deep-dive traffic specifically inspecting upstream Linux block drivers (`drivers/block/ramshared`) and TUI real-time monitoring (`ramshared top`).
 
 ## Architecture
 
