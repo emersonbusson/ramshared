@@ -143,8 +143,9 @@ pub fn validate_threshold(val: u64, min: u64, max: u64) -> Result<(), PriorityEr
 
 /// Evaluates priority sorting and tier matching using linear guard checks.
 pub fn evaluate_tier_priority(tier: Tier, priorities: &TierPriorities, allowed: Option<Tier>) -> Result<i32, PriorityError> {
-    if let Some(req_tier) = allowed && tier != req_tier {
-        return Err(PriorityError::TierMismatch(tier));
+    match allowed {
+        Some(req_tier) if tier != req_tier => return Err(PriorityError::TierMismatch(tier)),
+        _ => {}
     }
 
     match tier {
