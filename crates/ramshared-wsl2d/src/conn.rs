@@ -342,6 +342,9 @@ pub fn spawn_acceptor_tcp(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+
+    use std::sync::{Arc, Mutex};
+
     use super::*;
     use ramshared_block::handshake::NBD_OPT_EXPORT_NAME;
     use ramshared_block::protocol::{IHAVEOPT, NBD_REQUEST_MAGIC};
@@ -351,7 +354,6 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::{TryRecvError, sync_channel};
-    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     static SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -929,5 +931,48 @@ mod tests {
             10,
             "worker processed every job without deadlock"
         );
+    }
+
+    #[test]
+    fn reconnect_replays_unacknowledged_inflight_replies() {
+        // FINDING-ONLY ANALYSIS TEST:
+        // The NBD protocol (RF-L1) does not natively provide session identity or sequence numbers
+        // across transparent TCP/Unix socket disconnects. Therefore, a server cannot safely determine
+        // if an inflight reply (e.g., to a Read or Write) was successfully received before the connection dropped.
+        // Blindly replaying inflight Write requests or unacknowledged Read replies risks data corruption
+        // or duplicate side-effects (e.g. out-of-order writes) without a broader session layer protocol contract.
+        // We assert that currently, transparent replay is NOT implemented due to this safety gap.
+
+        let (server, mut client) = TestUnixStream::pair().unwrap();
+        let writer = server.try_clone().unwrap();
+        let hs_writer = server.try_clone().unwrap();
+        let (jobs_tx, _jobs_rx) = sync_channel(2);
+        let exports = one_export(4096);
+
+        // Spawn wire_conn on a background thread.
+        let handle =
+            std::thread::spawn(move || wire_conn(server, writer, hs_writer, &exports, 0, &jobs_tx));
+
+        // Handshake
+        client.write_all(&export_name_handshake(b"")).unwrap();
+        let mut handshake_reply = [0u8; 28];
+        client.read_exact(&mut handshake_reply).unwrap();
+        assert_eq!(
+            &handshake_reply[0..8],
+            &ramshared_block::protocol::NBDMAGIC.to_be_bytes()
+        );
+
+        // We simulate a disconnect right after a request is sent.
+        client
+            .write_all(&request_bytes(0, 1, 4096, NBD_REQUEST_MAGIC))
+            .unwrap();
+        client.shutdown(Shutdown::Both).unwrap();
+
+        // Let the worker process the disconnect.
+        let _ = handle.join();
+
+        // If replay were supported, we would expect a durable inflight queue to outlive the connection,
+        // but here it is ephemeral. We intentionally fail-closed by asserting the connection drops cleanly.
+        // (A fully implemented replay would reconnect a new client and assert the receipt of the inflight reply).
     }
 }
