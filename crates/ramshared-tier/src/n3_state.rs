@@ -2244,7 +2244,7 @@ mod additional_tests {
             .map(|i| {
                 let id_bytes = [b'e', i as u8];
                 ObservationEvent::new(
-                    EventId::new(&id_bytes).unwrap(),
+                    EventId::new(id_bytes).unwrap_or_else(|_| panic!("failed to create event_id")),
                     ObservationEventKind::Healthy,
                 )
             })
