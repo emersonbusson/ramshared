@@ -10,7 +10,7 @@ use std::net::{TcpListener, TcpStream};
 
 use ramshared_agent::local::{LocalMsg, LocalReply, read_json_line, write_json_line};
 use ramshared_broker::model::TransportKind;
-use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg, VersionHeader};
 
 fn usage() -> &'static str {
     "ramshared-host-agent --broker HOST:PORT [--listen HOST:PORT] [--tenant NAME]"
@@ -55,7 +55,7 @@ fn connect_broker(
     write_msg(
         &mut writer,
         &Msg::Register {
-            proto: PROTO_VERSION,
+            header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
             tenant: tenant.into(),
             transport: TransportKind::DccAgent,
         },

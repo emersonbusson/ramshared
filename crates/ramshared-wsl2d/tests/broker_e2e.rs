@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::model::TransportKind;
-use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg, VersionHeader};
 use ramshared_broker::slices::SliceMap;
 use ramshared_wsl2d::DemoteReason;
 use ramshared_wsl2d::WMsg;
@@ -95,7 +95,7 @@ fn register(s: &mut TcpStream, name: &str) {
     write_msg(
         s,
         &Msg::Register {
-            proto: PROTO_VERSION,
+            header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
             tenant: name.into(),
             transport: TransportKind::NbdTcp,
         },

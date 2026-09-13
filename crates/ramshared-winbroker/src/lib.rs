@@ -1,6 +1,6 @@
 use ramshared_broker::lease::{LeaseBook, LeaseDecision, LeaseDeny, LogicalLease};
 use ramshared_broker::model::TransportKind;
-use ramshared_broker::protocol::{Msg, PROTO_VERSION};
+use ramshared_broker::protocol::{Msg, PROTO_VERSION, VersionHeader};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -210,11 +210,7 @@ impl BrokerSessionCore {
     }
 
     fn on_unregistered_msg(&mut self, session_id: usize, message: Msg) -> Vec<BrokerEffect> {
-        let Msg::Register {
-            proto,
-            tenant,
-            transport,
-        } = message
+        let Msg::Register { header: VersionHeader { proto, .. }, tenant, transport } = message
         else {
             return vec![
                 BrokerEffect::Reply(Msg::Error {
@@ -305,11 +301,11 @@ mod tests {
     use super::BrokerConfigV1;
     use super::{BrokerEffect, BrokerSessionCore, MAX_CONFIG_BYTES};
     use ramshared_broker::model::TransportKind;
-    use ramshared_broker::protocol::{Msg, PROTO_VERSION};
+    use ramshared_broker::protocol::{Msg, PROTO_VERSION, VersionHeader};
 
     fn register(tenant: &str) -> Msg {
         Msg::Register {
-            proto: PROTO_VERSION,
+            header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
             tenant: tenant.into(),
             transport: TransportKind::WinDrive,
         }
