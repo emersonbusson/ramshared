@@ -2169,15 +2169,7 @@ mod additional_tests {
 
     #[test]
     fn test_host_observation_validate() -> Result<(), FailureReason> {
-        let valid_obs = HostObservation::host(
-            1,
-            4096,
-            0,
-            4096,
-            100,
-            10,
-            EventId::new(b"evt-1")?,
-        );
+        let valid_obs = HostObservation::host(1, 4096, 0, 4096, 100, 10, EventId::new(b"evt-1")?);
 
         // Happy path
         assert_eq!(valid_obs.validate(100), Ok(()));
@@ -2192,31 +2184,49 @@ mod additional_tests {
         // Zero epoch
         let mut zero_epoch = valid_obs.clone();
         zero_epoch.host_epoch = 0;
-        assert_eq!(zero_epoch.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            zero_epoch.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         // Empty adapter ID
         let mut empty_adapter = valid_obs.clone();
         empty_adapter.adapter_id = OpaqueId(Vec::new());
-        assert_eq!(empty_adapter.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            empty_adapter.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         // Empty event ID
         let mut empty_event = valid_obs.clone();
         empty_event.event_id = OpaqueId(Vec::new());
-        assert_eq!(empty_event.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            empty_event.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         // Non-host authority
         let mut guest_auth = valid_obs.clone();
         guest_auth.authority = Authority::Guest;
-        assert_eq!(guest_auth.validate(100), Err(FailureReason::HostAuthorityRequired));
+        assert_eq!(
+            guest_auth.validate(100),
+            Err(FailureReason::HostAuthorityRequired)
+        );
 
         // Invalid max_age (0 or > MAX_OBSERVATION_AGE)
         let mut zero_max_age = valid_obs.clone();
         zero_max_age.max_age = 0;
-        assert_eq!(zero_max_age.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            zero_max_age.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         let mut excess_max_age = valid_obs.clone();
         excess_max_age.max_age = MAX_OBSERVATION_AGE + 1;
-        assert_eq!(excess_max_age.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            excess_max_age.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         // Clock errors
         assert_eq!(
@@ -2239,40 +2249,61 @@ mod additional_tests {
                 )
             })
             .collect();
-        assert_eq!(too_many_events.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            too_many_events.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         let mut unknown_event_kind = valid_obs.clone();
         unknown_event_kind.events = vec![ObservationEvent::new(
             EventId::new(b"evt-unk")?,
             ObservationEventKind::Unknown,
         )];
-        assert_eq!(unknown_event_kind.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            unknown_event_kind.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         let mut empty_event_id_event = valid_obs.clone();
         empty_event_id_event.events = vec![ObservationEvent::new(
             OpaqueId(Vec::new()),
             ObservationEventKind::Healthy,
         )];
-        assert_eq!(empty_event_id_event.validate(100), Err(FailureReason::MalformedRecord));
+        assert_eq!(
+            empty_event_id_event.validate(100),
+            Err(FailureReason::MalformedRecord)
+        );
 
         // Budget counters validation
         let mut unaligned_budget = valid_obs.clone();
         unaligned_budget.budget_bytes = 100;
-        assert_eq!(unaligned_budget.validate(100), Err(FailureReason::ImpossibleBudget));
+        assert_eq!(
+            unaligned_budget.validate(100),
+            Err(FailureReason::ImpossibleBudget)
+        );
 
         let mut excess_budget = valid_obs.clone();
         excess_budget.budget_bytes = MAX_CAPACITY_BYTES + CAPACITY_ALIGNMENT_BYTES;
-        assert_eq!(excess_budget.validate(100), Err(FailureReason::ImpossibleBudget));
+        assert_eq!(
+            excess_budget.validate(100),
+            Err(FailureReason::ImpossibleBudget)
+        );
 
         let mut resident_over_budget = valid_obs.clone();
         resident_over_budget.resident_bytes = 8192;
         resident_over_budget.budget_bytes = 4096;
-        assert_eq!(resident_over_budget.validate(100), Err(FailureReason::ImpossibleBudget));
+        assert_eq!(
+            resident_over_budget.validate(100),
+            Err(FailureReason::ImpossibleBudget)
+        );
 
         let mut available_over_budget = valid_obs.clone();
         available_over_budget.available_bytes = 8192;
         available_over_budget.budget_bytes = 4096;
-        assert_eq!(available_over_budget.validate(100), Err(FailureReason::ImpossibleBudget));
+        assert_eq!(
+            available_over_budget.validate(100),
+            Err(FailureReason::ImpossibleBudget)
+        );
 
         Ok(())
     }
