@@ -4,7 +4,7 @@ Implemented protocol handshake negotiation logic (`negotiate_protocol`) inside `
 ## Commits
 | Commit | What was done | Why it was done | Details |
 | :--- | :--- | :--- | :--- |
-| 61991fc216afd7f7d3220b46f98ab35c2a06ce51 | test(winsvc): unit tests for protocol handshake sequence | Adds tests for protocol version negotiation | <details><summary>Details</summary>Files: `crates/ramshared-winsvc/src/proto.rs`<br>Validation: `cargo test -p ramshared-winsvc`<br>Risk/rollback: Low</details> |
+| 7eff661d1afb4a2e4069927fd8b61c42f0fb3426 | test(winsvc): unit tests for protocol handshake sequence | Adds tests for protocol version negotiation | <details><summary>Details</summary>Files: `crates/ramshared-winsvc/src/proto.rs`<br>Validation: `cargo test -p ramshared-winsvc`<br>Risk/rollback: Low</details> |
 
 ## Issue
 test-winsvc

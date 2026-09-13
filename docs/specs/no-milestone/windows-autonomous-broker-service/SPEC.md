@@ -761,4 +761,4 @@ The VM and physical commands are environment-bound gates, not substitutes for th
   and `IMPL.md` match the evidence without promoting production signing.
 - [x] `./scripts/docs-check.sh` and `git diff --check` pass.
 
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/proto.rs --min 80 --report-json tmp/windows-protocol-handshake-sequence-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/proto.rs --min 80

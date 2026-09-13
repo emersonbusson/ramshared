@@ -580,9 +580,7 @@
         "--files",
         "crates/ramshared-winsvc/src/proto.rs",
         "--min",
-        "80",
-        "--report-json",
-        "tmp/windows-protocol-handshake-sequence-cov.json"
+        "80"
       ],
       "packages": [
         "ramshared-winsvc"
