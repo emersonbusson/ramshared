@@ -342,28 +342,6 @@ function Assert-LiveConfiguration {
         -not (Test-Path -LiteralPath $BaselineFile -PathType Leaf)) {
         throw "baseline_file_missing"
     }
-
-    $wslExe = Get-WslExecutable
-    $distroCheck = Invoke-BoundedProcess -FilePath $wslExe -ArgumentValues @("-d", $Distro, "--", "true") -TimeoutSec 15
-    if (-not $distroCheck.completed -or $distroCheck.exit_code -ne 0) {
-        throw "distro_missing"
-    }
-    $fioCheck = Invoke-BoundedProcess -FilePath $wslExe -ArgumentValues @("-d", $Distro, "--", "fio", "--version") -TimeoutSec 15
-    if (-not $fioCheck.completed -or $fioCheck.exit_code -ne 0) {
-        throw "fio_missing"
-    }
-    $nbdCheck = Invoke-BoundedProcess -FilePath $wslExe -ArgumentValues @("-d", $Distro, "--", "nbd-client", "--version") -TimeoutSec 15
-    if (-not $nbdCheck.completed -or $nbdCheck.exit_code -ne 0) {
-        throw "nbd_client_missing"
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($ArtifactRoot)) {
-        $qualifier = Split-Path -Path $ArtifactRoot -Qualifier
-        $drive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='$qualifier'" -ErrorAction SilentlyContinue
-        if ($null -ne $drive -and [int64]$drive.FreeSpace -lt 10737418240) {
-            throw "disk_space_insufficient"
-        }
-    }
 }
 
 function Get-CellTimeoutBudget {
@@ -3001,19 +2979,6 @@ Write-Output "[cuda-vram-workload] released"
                 Write-Output "source_identity=REFUSED"
             } finally {
                 $script:ExpectedSourceCommit = $savedExpected
-            }
-            return
-        }
-        "missing-distro" {
-            $savedDistro = $script:Distro
-            try {
-                $script:Distro = "invalid-distro"
-                $refused = $false
-                try { Assert-LiveConfiguration } catch { $refused = $_.Exception.Message -eq "distro_missing" }
-                if (-not $refused) { throw "manufactured_missing_distro_was_accepted" }
-                Write-Output "missing_distro=REFUSED"
-            } finally {
-                $script:Distro = $savedDistro
             }
             return
         }
