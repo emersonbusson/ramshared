@@ -55,6 +55,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw "readiness_host_provider_failure: Script must be run as Administrator."
+}
+
+if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
+    throw "readiness_host_provider_failure: Hyper-V PowerShell module is not installed or available."
+}
+
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
 function Normalize-Win11LabReadyThumbprint {

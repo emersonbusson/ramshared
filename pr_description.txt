@@ -1,0 +1,11 @@
+## Summary
+Adds early guard clauses in Wait-Win11LabReady.ps1 to validate Administrator privileges and the availability of the Hyper-V PowerShell module, ensuring fail-fast on script initialization according to infrastructure hardening principles.
+
+## Commits
+* feat(windows): add admin and hyper-v module guard clauses to Wait-Win11LabReady.ps1
+
+## Validation
+Validated statically via `git diff`. The script will now abort immediately if either prerequisites are missing.
+
+## Rollback trigger
+Rollback trigger: issues with administrator elevation checks or Hyper-V module discovery preventing script startup.
