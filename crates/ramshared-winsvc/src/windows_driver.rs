@@ -438,8 +438,7 @@ impl WindowsDriverLink {
         }
         self.pending = true;
         let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
-        let wr =
-            unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
+        let wr = unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
         if wr == WAIT_TIMEOUT {
             self.cancel_and_drain(&ov);
             return Err(IoctlError::Timeout);
