@@ -1943,14 +1943,13 @@ impl AppArgs {
             .map(|a| (a.ip().to_string(), a.port()));
         let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
 
-        let slice_bytes = if slices > 0 {
+        let slice_bytes = if slices == 0 {
+            0
+        } else {
             slice_mb
                 .checked_mul(1024 * 1024)
                 .ok_or("--slice-mb: MiB value overflow")?
-        } else {
-            0
         };
-
         Ok(Self {
             size,
             origin,
