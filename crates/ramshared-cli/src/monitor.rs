@@ -106,8 +106,6 @@ fn parse_path(value: Option<&String>) -> Result<PathBuf, ()> {
 pub enum MonitorError {
     Io(String),
     Json(String),
-    #[allow(dead_code)]
-    Terminal(String),
 }
 
 impl fmt::Display for MonitorError {
@@ -115,7 +113,6 @@ impl fmt::Display for MonitorError {
         match self {
             Self::Io(message) => write!(formatter, "monitor I/O: {message}"),
             Self::Json(message) => write!(formatter, "monitor JSON: {message}"),
-            Self::Terminal(message) => write!(formatter, "monitor terminal: {message}"),
         }
     }
 }
@@ -2207,10 +2204,6 @@ mod tests {
         assert_eq!(
             format!("{}", MonitorError::Json("x".into())),
             "monitor JSON: x"
-        );
-        assert_eq!(
-            format!("{}", MonitorError::Terminal("x".into())),
-            "monitor terminal: x"
         );
         let sample = observation(false, false);
         assert_eq!(sample.bool_value("missing"), None);
