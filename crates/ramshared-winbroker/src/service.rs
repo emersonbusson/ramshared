@@ -325,7 +325,7 @@ fn serve_session(
             {
                 continue;
             }
-            Err(error) if matches!(error.raw_os_error(), Some(109) | Some(233)) => break,
+            Err(error) if matches!(error.raw_os_error(), Some(109) | Some(232) | Some(233)) => break,
             Err(error) => return Err(error),
         };
         frame.extend_from_slice(&chunk[..read]);
