@@ -370,7 +370,6 @@ fn observe_bound_device(
         };
         Ok(BoundDeviceIdentity {
             kind: expected_kind,
-            path: path.clone(),
             dev_t: format!("{major}:{index}"),
             sysfs_path: format!(
                 "/sys/devices/virtual/block/{}",
@@ -378,6 +377,7 @@ fn observe_bound_device(
             ),
             sysfs_dev_t: format!("{major}:{index}"),
             kernel_owner_instance_id: owner,
+            path,
         })
     }
     #[cfg(not(test))]
