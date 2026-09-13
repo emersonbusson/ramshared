@@ -1,0 +1,32 @@
+## Resumo
+
+Hardened the Arch Linux PKGBUILD script for RamShared by validating checksums, ensuring stripped binaries, handling cd failures correctly, and defining backup files properly.
+
+## Commits
+
+| Commit | What was done | Why it was done | Details |
+|---|---|---|---|
+| `efa5788` | Hardened PKGBUILD with strict bash rules, hash check, and strip flags | To prevent silent regressions, source directory mismatches, and package bloating | <details><summary>details</summary>**Files:** `packaging/arch/PKGBUILD`<br>**Validation:** Ran shellcheck with zero errors, checked sha256 sums.<br>**Risk/rollback:** Errors during makepkg process or silent overwrite of config files</details> |
+
+## Issue
+
+Closes #
+
+## Responsavel/Owner
+
+@jules
+
+## Labels
+
+type:chore
+area:packaging
+
+## Validacao
+
+- [x] Gates de build/test do escopo tocado
+- [ ] `./scripts/docs-check.sh` (se tocou docs/specs ou gerou PRD/SPEC/IMPL)
+- [ ] SSDV3: SPEC/IMPL atualizados e citados (ou N/A — mudança não estrutural / só scripts)
+
+## Rollback trigger
+
+Any issue with makepkg or user install errors caused by missing source dir or hash validation failures.
