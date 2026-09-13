@@ -11,7 +11,7 @@
 #include <linux/uaccess.h>
 #include "ramshared.h"
 
-int ramshared_ioctl(struct block_device *bdev, fmode_t mode,
+int ramshared_ioctl(struct block_device *bdev, ramshared_blk_mode_t mode,
 		    unsigned int cmd, unsigned long arg)
 {
 	struct ramshared_device *rs_dev;
