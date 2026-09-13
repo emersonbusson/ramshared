@@ -979,8 +979,30 @@ mod tests {
             parse_product_friendly_name("RAMSHARE VRAMDISK").unwrap(),
             ("RAMSHARE".into(), "VRAMDISK".into())
         );
+        assert_eq!(
+            parse_product_friendly_name("ramshare vramdisk scsi disk device").unwrap(),
+            ("RAMSHARE".into(), "VRAMDISK".into())
+        );
+        assert_eq!(
+            parse_product_friendly_name("  RAMSHARE   VRAMDISK \t SCSI  Disk  Device \n").unwrap(),
+            ("RAMSHARE".into(), "VRAMDISK".into())
+        );
         assert!(parse_product_friendly_name("RAMSHARE OTHER SCSI Disk Device").is_err());
         assert!(parse_product_friendly_name("RAMSHARE VRAMDISK USB Device").is_err());
+        assert!(parse_product_friendly_name("").is_err());
+        assert!(parse_product_friendly_name("   \t\n").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK SCSI").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK SCSI Disk").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK SCSI Disk Device Extra").is_err());
+        assert!(parse_product_friendly_name("OTHER VRAMDISK").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE OTHER").is_err());
+        assert!(parse_product_friendly_name("VRAMDISK RAMSHARE").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK USB Disk Device").is_err());
+        assert_eq!(
+            parse_product_friendly_name("INVALID").unwrap_err(),
+            "unexpected product friendly name"
+        );
     }
 
     #[test]
