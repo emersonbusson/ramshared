@@ -1087,7 +1087,10 @@ mod tests {
 
     #[test]
     fn test_validate_absolute_config_path_valid_absolute() {
-        assert!(validate_absolute_config_path(Path::new(r"C:\ProgramData\RamShared\winsvc.toml")).is_ok());
+        assert!(
+            validate_absolute_config_path(Path::new(r"C:\ProgramData\RamShared\winsvc.toml"))
+                .is_ok()
+        );
         assert!(validate_absolute_config_path(Path::new(r"\\?\C:\winsvc.toml")).is_ok());
     }
 
