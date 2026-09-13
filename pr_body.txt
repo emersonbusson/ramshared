@@ -1,0 +1,23 @@
+## Summary
+Implemented protocol handshake negotiation logic (`negotiate_protocol`) inside `crates/ramshared-winsvc/src/proto.rs` and added tests to cover version negotiation, incompatible version rejection, and timeout on incomplete handshake scenarios. This addresses the lack of test coverage for the protocol handshake sequence. Also added coverage map mapping in `docs/governance/rust-slice-coverage.json` for `crates/ramshared-winsvc/src/proto.rs` to fix `changed-rust-file-unmapped` error.
+
+## Commits
+| Commit | What was done | Why it was done | Details |
+| :--- | :--- | :--- | :--- |
+| 190e3c27cb4c62c7af9c775f15e062bb4bca7ee4 | test(winsvc): unit tests for protocol handshake sequence | Adds tests for protocol version negotiation | <details><summary>Details</summary>Files: `crates/ramshared-winsvc/src/proto.rs`<br>Validation: `cargo test -p ramshared-winsvc`<br>Risk/rollback: Low</details> |
+
+## Issue
+test-winsvc
+
+## Responsavel/Owner
+TestCov100/2026-09-06/test-winsvc/007
+
+## Labels
+type:test
+area:winsvc
+
+## Validacao/Validation
+cargo test -p ramshared-winsvc
+
+## Rollback trigger
+test failure

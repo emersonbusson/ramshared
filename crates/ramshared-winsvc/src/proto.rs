@@ -220,7 +220,8 @@ mod tests {
         }
 
         let mut stream = BlockingStream;
-        let err = negotiate_protocol(&mut stream, std::time::Duration::from_millis(10)).unwrap_err();
+        let err =
+            negotiate_protocol(&mut stream, std::time::Duration::from_millis(10)).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
     }
 
