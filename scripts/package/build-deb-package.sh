@@ -122,16 +122,18 @@ printf " Absorbs memory pressure spikes and prevents desktop/WSL2 swap freezes.\
 
 # Generate DEBIAN/postinst (post-installation script)
 cat << 'POSTINST_EOF' > "$STAGE_DIR/DEBIAN/postinst"
-#!/bin/sh
-set -e
+#!/bin/bash
+set -euo pipefail
 
-if [ "$1" = "configure" ]; then
-  if command -v udevadm >/dev/null 2>&1; then
-    udevadm control --reload-rules || true
-    udevadm trigger --subsystem-match=drm || true
-  fi
-  if command -v systemctl >/dev/null 2>&1; then
-    systemctl daemon-reload || true
+if [ "${1:-}" = "configure" ]; then
+  if [ -d /run/systemd/system ]; then
+    if command -v udevadm >/dev/null 2>&1; then
+      udevadm control --reload-rules >/dev/null 2>&1 || true
+      udevadm trigger --subsystem-match=drm >/dev/null 2>&1 || true
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
   fi
   echo "RamShared installed successfully. Udev auto-activation enabled."
   echo "Run 'sudo ramshared check' to test machine readiness."
