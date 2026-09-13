@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.12.0] (2026-09-12)
+
+### Features
+
+* **vram:** 4 GiB active VRAM tiering, dynamic host safety clamping, and display desktop stutter prevention ([54b12af](https://github.com/emersonbusson/ramshared/commit/54b12af))
+* **telemetry:** granular hardware cycle latencies, p99 tail jitter, and comparison benchmarks ([026249c](https://github.com/emersonbusson/ramshared/commit/026249c))
+* **core:** consolidate multi-tier resilience, GPU isolation, and verified audit ([ab9e70c](https://github.com/emersonbusson/ramshared/commit/ab9e70c))
+* **kernel:** Linux 6.18 LTS driver upstreaming architecture and in-tree C block driver specification
+* **cuda:** CUDA-Rust native allocation error recovery with automatic failover to host RAM
+
+### Reliability & Benchmarks
+
+* **qualification:** 171% memory saturation stress qualification across RAM, ZRAM, 4 GiB VRAM, and SSD swap with zero system stalls (`PASS_ZERO_PANIC`)
+* **governance:** full documentation humanization, public hygiene sanitization, and release automation sync
+
 ## [0.11.0] (2026-09-11)
 
 ### Features

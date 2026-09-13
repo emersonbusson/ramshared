@@ -14,7 +14,7 @@ E o melhor: se você abrir um jogo, aplicativo 3D ou modelo de IA (como PyTorch 
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Versão v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0"><img alt="Versão v0.12.0" src="https://img.shields.io/badge/release-v0.12.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-46.9k%2B_%2F_14d-blue?style=flat-square&logo=git">
   <img alt="Clonadores Únicos" src="https://img.shields.io/badge/clonadores_únicos-910%2B-blueviolet?style=flat-square">
@@ -48,7 +48,7 @@ ramshared top
 
 ## Status atual
 
-Versão: **v0.11.0 (Release de Produção Qualificado e Cascata de Memória Multi-Tier)**. Totalmente testada e verificada sob 100% de saturação de memória e alta pressão de trabalho em hardware real sob WSL2.
+Versão: **v0.12.0 (Release de Produção Qualificado e Cascata de Memória Multi-Tier)**. Totalmente testada e verificada sob 100% de saturação de memória e alta pressão de trabalho em hardware real sob WSL2.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
@@ -211,7 +211,7 @@ segurança, modelos de serviços systemd, documentação e assinaturas criptogr�
 Caches de compilação, credenciais e artefatos de ambientes transitórios são estritamente excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-As versões oficiais para Linux (incluindo v0.11.0 e marcos anteriores) e
+As versões oficiais para Linux (incluindo v0.12.0 e marcos anteriores) e
 seus checksums criptográficos são qualificados pelo fluxo automatizado de promoção de releases.
 
 ## Arquitetura do Driver Windows StorPort

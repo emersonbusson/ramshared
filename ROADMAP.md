@@ -1,6 +1,6 @@
 # Roadmap
 
-Current release posture: **v0.10.0 Qualified Production Release**. Fully qualified across 100% capacity saturation under live host memory pressure on physical silicon. The multi-tier memory cascade (ZRAM ➔ GPU VRAM ➔ SSD Origin ➔ WSL2 disk fallback) operates with zero panics, zero data loss, and sub-millisecond page-fault latency.
+Current release posture: **v0.12.0 Qualified Production Release**. Fully qualified across 100% capacity saturation under live host memory pressure on physical hardware. The multi-tier memory cascade (ZRAM ➔ GPU VRAM ➔ SSD Origin ➔ WSL2 disk fallback) operates with zero panics, zero data loss, and sub-millisecond page-fault latency.
 
 Evidence lives in [validation.md](validation.md) and feature IMPL files.
 
@@ -52,12 +52,11 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and isol
 
 ---
 
-## Next (v0.11.0)
+## Next (v0.13.0)
 
 | Priority | Milestone Target | Focus |
 | :--- | :--- | :--- |
 | Upstream Linux & WSL2 | LKML driver review & WSL merge (#41054) | Direct `ublk`/`io_uring` zero-copy default transport |
-| Automated Distribution | Systemd packaging & pre-built binary releases | Automated deb/rpm release bundles via CI |
 | Multi-vendor Acceleration | Vulkan Memory Allocator (VMA) multi-vendor tier | AMD Radeon & Intel Arc hardware qualification |
 
 ---
