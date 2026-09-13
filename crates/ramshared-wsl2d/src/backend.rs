@@ -173,6 +173,7 @@ mod tests {
             },
             &[],
             &mut view,
+            None,
         );
         let errno = u32::from_be_bytes([out.reply[4], out.reply[5], out.reply[6], out.reply[7]]);
         assert_ne!(

@@ -145,6 +145,7 @@ mod tests {
             },
             &payload,
             &mut be,
+            None,
         );
         assert_eq!(errno(&w), 0, "WRITE must succeed");
 
@@ -158,6 +159,7 @@ mod tests {
             },
             &[],
             &mut be,
+            None,
         );
         assert_eq!(r.read_data, payload, "READ must return written bytes");
     }
@@ -175,6 +177,7 @@ mod tests {
             },
             &[],
             &mut be,
+            None,
         );
         assert_ne!(errno(&r), 0, "OOB must fail before/with backend");
         assert!(r.read_data.is_empty());

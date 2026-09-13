@@ -2985,6 +2985,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let mut shutdown_requested = false;
     let mut live = LiveCount::new();
     let mut consecutive_io_errors = 0u32;
+    let mut rate_limiter = ramshared_block::request::TokenBucket::new(1000, 100.0);
     const MAX_CONSECUTIVE_IO_ERRORS: u32 = 3;
     let mut last_gpu_heartbeat = Instant::now();
     const GPU_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
@@ -3132,7 +3133,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             if let Some(job) = job {
                 let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
                 let t0 = std::time::Instant::now();
-                let out = serve(&job.req, &job.payload, &mut backend);
+                let out = serve(&job.req, &job.payload, &mut backend, Some(&mut rate_limiter));
                 let lat_us = starter.elapsed_us(t0);
                 let _ = job.reply.send(Reply {
                     reply: out.reply,
@@ -4424,6 +4425,7 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
     };
     let mut demoted = false;
     let mut consecutive_io_errors: u32 = 0;
+    let mut rate_limiter = ramshared_block::request::TokenBucket::new(1000, 100.0);
     const MAX_CONSECUTIVE_IO_ERRORS: u32 = 3;
     let mut last_heartbeat = std::time::Instant::now();
     eprintln!("[ramsharedd] serving (single worker; multi-slice broker)");
@@ -4476,7 +4478,7 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
             let t0 = std::time::Instant::now();
             let out = {
                 let mut view = SliceView::new(&mut backend, base, len);
-                serve(&job.req, &job.payload, &mut view)
+                serve(&job.req, &job.payload, &mut view, Some(&mut rate_limiter))
             };
             let lat_us = t0.elapsed().as_micros() as u64;
 
