@@ -446,6 +446,42 @@ tenant = "windrive-host"
     }
 
     #[test]
+    fn effective_reserve_bytes_comprehensive_scenarios() {
+        let mut c = WinDriveConfig::from_toml(GOOD).unwrap();
+
+        // 1. Config reserve dominance: reserve_bytes > floor (512 MiB) and > 10% VRAM
+        c.reserve_bytes = 2 * 1024 * 1024 * 1024; // 2 GiB
+        let total_vram = 10 * 1024 * 1024 * 1024; // 10 GiB, 10% = 1 GiB
+        assert_eq!(c.effective_reserve_bytes(total_vram), 2 * 1024 * 1024 * 1024);
+
+        // 2. Policy floor dominance: reserve_bytes = 0, VRAM 10% < 512 MiB
+        c.reserve_bytes = 0;
+        let small_vram = 2 * 1024 * 1024 * 1024; // 2 GiB, 10% = 204.8 MiB
+        assert_eq!(c.effective_reserve_bytes(small_vram), RESERVE_FLOOR_BYTES);
+
+        // 3. 10% VRAM dominance: reserve_bytes = floor, VRAM 10% > 512 MiB
+        c.reserve_bytes = RESERVE_FLOOR_BYTES;
+        let large_vram: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB, 10% = 1.6 GiB
+        let expected_tenth = large_vram.div_ceil(10);
+        assert_eq!(c.effective_reserve_bytes(large_vram), expected_tenth);
+
+        // 4. Ceil rounding for VRAM not divisible by 10
+        c.reserve_bytes = 0;
+        assert_eq!(c.effective_reserve_bytes(11), RESERVE_FLOOR_BYTES); // 11 div_ceil 10 is 2, floor wins
+        c.reserve_bytes = 0;
+        let unaligned_vram: u64 = 10 * 1024 * 1024 * 1024 + 7; // 10% ceil is 1073741825
+        assert_eq!(c.effective_reserve_bytes(unaligned_vram), unaligned_vram.div_ceil(10));
+
+        // 5. Zero VRAM
+        c.reserve_bytes = 100;
+        assert_eq!(c.effective_reserve_bytes(0), RESERVE_FLOOR_BYTES);
+
+        // 6. Max u64 VRAM
+        c.reserve_bytes = 0;
+        assert_eq!(c.effective_reserve_bytes(u64::MAX), u64::MAX.div_ceil(10));
+    }
+
+    #[test]
     fn example_config_parses() {
         let example = include_str!("../winsvc.example.toml");
         let c = WinDriveConfig::from_toml(example).unwrap();
