@@ -182,8 +182,6 @@ pub fn serve_with_rate_limit<B: BlockBackend + ?Sized>(
     backend: &mut B,
     rate_limit: Option<&mut TokenBucket>,
 ) -> ServeOutcome {
-
-
     #[allow(clippy::collapsible_if)]
     if let Some(bucket) = rate_limit {
         if !bucket.check_and_consume(1) {
@@ -274,6 +272,25 @@ mod tests {
         assert!(!bucket.check_and_consume(1));
         sleep(Duration::from_millis(150));
         assert!(bucket.check_and_consume(1));
+    }
+
+    #[test]
+    fn test_serve_with_rate_limit_allows_under_limit() {
+        let mut b = MemBackend { data: vec![0u8; 4096], bs: 4096 };
+        let mut bucket = TokenBucket::new(1, 10.0);
+        let r = serve_with_rate_limit(&req(Command::Read, 0, 4096), &[], &mut b, Some(&mut bucket));
+        assert_eq!(u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]), NBD_OK);
+        assert!(!r.disconnect);
+    }
+
+    #[test]
+    fn test_serve_with_rate_limit_disconnects_over_limit() {
+        let mut b = MemBackend { data: vec![0u8; 4096], bs: 4096 };
+        let mut bucket = TokenBucket::new(0, 10.0); // Empty bucket
+        let r = serve_with_rate_limit(&req(Command::Read, 0, 4096), &[], &mut b, Some(&mut bucket));
+        assert_eq!(u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]), NBD_ESHUTDOWN);
+        assert!(r.read_data.is_empty());
+        assert!(r.disconnect);
     }
 
     struct MemBackend {
