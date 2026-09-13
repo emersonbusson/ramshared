@@ -134,6 +134,7 @@ pub struct StressReport {
 
 pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     let mut opts = StressOptions::default();
+    let mut target_explicit = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -152,6 +153,7 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                     .ok_or_else(|| "--target requires a value (1-99)".to_string())?
                     .parse()
                     .map_err(|_| "invalid --target value")?;
+                target_explicit = true;
             }
             "--step" => {
                 i += 1;
@@ -191,8 +193,18 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
             "--cascade" => {
                 opts.cascade = true;
                 opts.battery = true;
+                if !target_explicit {
+                    opts.target_pct = 100;
+                }
                 if opts.tier3_target_pct.is_none() {
-                    opts.tier3_target_pct = Some(30);
+                    opts.tier3_target_pct = Some(15);
+                }
+                opts.max_psi_full = opts.max_psi_full.max(50.0);
+                if opts.step_pct == 1 {
+                    opts.step_pct = 5;
+                }
+                if opts.interval_ms == 1500 {
+                    opts.interval_ms = 500;
                 }
             }
             "--tier3-target-pct" => {
@@ -205,6 +217,16 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                 opts.tier3_target_pct = Some(val.clamp(1, 99));
                 opts.cascade = true;
                 opts.battery = true;
+                if !target_explicit {
+                    opts.target_pct = 100;
+                }
+                opts.max_psi_full = opts.max_psi_full.max(50.0);
+                if opts.step_pct == 1 {
+                    opts.step_pct = 5;
+                }
+                if opts.interval_ms == 1500 {
+                    opts.interval_ms = 500;
+                }
             }
             "--max-psi-full" => {
                 i += 1;
@@ -651,25 +673,27 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         append_telemetry_log(&opts.telemetry_log, &reading);
 
         let sysctl_min_free_mb = read_sysctl_min_free_mb();
-        let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
         let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
         const SWAP_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(150);
         const MAX_SWAP_DRAIN_IDLE_CYCLES: usize = 80; // 80 * 150ms = 12.0s of zero swap growth before declaring limit
 
         // Under WSL2, Hyper-V synthetic devices (hv_balloon, vmicvmswitch) and host-guest
-        // heartbeat require at least 600 MB headroom to avoid VM unresponsiveness and teardown.
-        let multi_tier_floor = if is_wsl2() {
-            opts.min_ram_mb.max(600).max(dynamic_kernel_floor)
+        // heartbeat require at least 600 MB of total physical memory headroom.
+        // In Linux, /proc/meminfo MemAvailable ALREADY discounts sysctl_min_free_mb (reserved pages).
+        // Therefore: physical_headroom = MemAvailable + sysctl_min_free_mb.
+        // We calibrate hard_floor against MemAvailable such that:
+        //   hard_floor + sysctl_min_free_mb >= target_physical_floor (600 MB on WSL2).
+        let target_physical_floor = if is_wsl2() {
+            opts.min_ram_mb.max(600)
         } else {
             const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
-            opts.min_ram_mb.max(BARE_METAL_MULTI_TIER_FLOOR_MB).max(dynamic_kernel_floor)
+            opts.min_ram_mb.max(BARE_METAL_MULTI_TIER_FLOOR_MB)
         };
 
-        let hard_floor = if is_multi_tier {
-            multi_tier_floor
-        } else {
-            opts.min_ram_mb.max(dynamic_kernel_floor)
-        };
+        let min_usable_avail = if is_multi_tier { 100 } else { 200 };
+        let hard_floor = target_physical_floor
+            .saturating_sub(sysctl_min_free_mb)
+            .max(min_usable_avail);
 
         let mut avail_mb = avail_mb;
         let mut last_swap_val = tot_swap;
@@ -838,6 +862,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 one_pct_mb.min(avail_mb.saturating_sub(hard_floor + 50)).min(128)
             } else if avail_mb > hard_floor + 20 {
                 32
+            } else if avail_mb > hard_floor {
+                16
             } else {
                 0
             }
@@ -846,7 +872,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         };
 
         if safe_alloc_mb == 0 {
-            if is_multi_tier && avail_mb > hard_floor && psi_full < opts.max_psi_full {
+            if is_multi_tier && !floor_breached && psi_full < opts.max_psi_full {
                 safe_alloc_mb = 16;
             } else {
                 break;
@@ -1588,10 +1614,13 @@ mod tests {
     fn wsl2_hard_floor_enforces_safety_ceiling() {
         if is_wsl2() {
             let sysctl_min = read_sysctl_min_free_mb();
-            let dynamic_floor = sysctl_min.saturating_add(128).max(512);
             let opts = StressOptions::default();
-            let multi_tier_floor = opts.min_ram_mb.max(600).max(dynamic_floor);
-            assert!(multi_tier_floor >= 600, "WSL2 floor must never be lower than 600 MB");
+            let target_physical_floor = opts.min_ram_mb.max(600);
+            let hard_floor = target_physical_floor.saturating_sub(sysctl_min).max(100);
+            assert!(
+                hard_floor + sysctl_min >= 600,
+                "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 600 MB"
+            );
         }
     }
 }
