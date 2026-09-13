@@ -1950,6 +1950,7 @@ impl AppArgs {
                 .checked_mul(1024 * 1024)
                 .ok_or("--slice-mb: MiB value overflow")?
         };
+
         Ok(Self {
             size,
             origin,
