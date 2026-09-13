@@ -43,15 +43,14 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -ERANGE;
 	}
 
-	if (queue_depth < 16 || queue_depth > 1024) {
+	if (queue_depth < 16 || queue_depth > 1024)
 		dev_warn(&pdev->dev,
 			 "clamping queue_depth (%u) to bounds [16, 1024]\n",
 			 queue_depth);
-		if (queue_depth < 16)
-			queue_depth = 16;
-		else
-			queue_depth = 1024;
-	}
+	if (queue_depth < 16)
+		queue_depth = 16;
+	if (queue_depth > 1024)
+		queue_depth = 1024;
 
 	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
 	if (!rs_dev)
@@ -79,10 +78,10 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (ret) {
 		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
 		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (ret) {
-			dev_err(&pdev->dev, "no usable DMA configuration\n");
-			goto err_clear_master;
-		}
+	}
+	if (ret) {
+		dev_err(&pdev->dev, "no usable DMA configuration\n");
+		goto err_clear_master;
 	}
 
 	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
@@ -103,10 +102,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = device_add_disk(&pdev->dev, rs_dev->disk, ramshared_attr_groups);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
-		put_disk(rs_dev->disk);
-		rs_dev->disk = NULL;
-		blk_mq_free_tag_set(&rs_dev->tag_set);
-		goto err_dma_cleanup;
+		goto err_queue_cleanup;
 	}
 
 	pci_set_drvdata(pdev, rs_dev);
@@ -114,6 +110,10 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		 rs_dev->disk->disk_name);
 	return 0;
 
+err_queue_cleanup:
+	put_disk(rs_dev->disk);
+	rs_dev->disk = NULL;
+	blk_mq_free_tag_set(&rs_dev->tag_set);
 err_dma_cleanup:
 	ramshared_dma_cleanup(rs_dev);
 err_release_regions:
