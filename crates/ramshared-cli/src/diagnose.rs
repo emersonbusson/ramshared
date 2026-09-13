@@ -59,7 +59,9 @@ impl std::fmt::Display for DiagnoseError {
             Self::Io(err, path) => write!(f, "read {}: {err}", path.display()),
             Self::MissingProcfs => write!(f, "procfs is missing or inaccessible"),
             Self::ParseJson(msg) => write!(f, "{msg}"),
-            Self::PermissionDenied(path) => write!(f, "permission denied to read {}", path.display()),
+            Self::PermissionDenied(path) => {
+                write!(f, "permission denied to read {}", path.display())
+            }
             Self::Timeout(msg) => write!(f, "timeout: {msg}"),
         }
     }
@@ -70,10 +72,10 @@ impl DiagnoseError {
         match self {
             Self::InvalidArgs(_) => 22, // EINVAL
             Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
-            Self::MissingProcfs => 2,   // ENOENT
-            Self::ParseJson(_) => 22, // EINVAL for malformed json
+            Self::MissingProcfs => 2,        // ENOENT
+            Self::ParseJson(_) => 22,        // EINVAL for malformed json
             Self::PermissionDenied(_) => 13, // EACCES
-            Self::Timeout(_) => 110,  // ETIMEDOUT
+            Self::Timeout(_) => 110,         // ETIMEDOUT
         }
     }
 }
@@ -524,7 +526,8 @@ mod tests {
 
     #[test]
     fn run_refuses_permission_denied() {
-        let temp_dir = std::env::temp_dir().join(format!("ramshared_test_perm_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("ramshared_test_perm_{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let path = temp_dir.join("events.jsonl");
         std::fs::write(&path, "").unwrap();
@@ -533,10 +536,7 @@ mod tests {
         perms.set_mode(0o000);
         std::fs::set_permissions(&path, perms).unwrap();
 
-        let args = vec![
-            "--events".to_string(),
-            path.to_string_lossy().into_owned(),
-        ];
+        let args = vec!["--events".to_string(), path.to_string_lossy().into_owned()];
 
         let err = run(&args).unwrap_err();
 
