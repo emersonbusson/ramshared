@@ -1,0 +1,94 @@
+1. **RULES**:
+   - ORTHOGONAL SCOPE: Only modify `scripts/windows/Wait-Win11LabReady.ps1`. No other files.
+   - PHYSICAL BOUNDS & SAFETY: Validate max 300s limit and inputs against safety boundaries.
+   - TYPED ERROR HANDLING: Do not introduce any new unwrap() or expect() equivalents. Uses typed exceptions.
+   - REPRODUCIBLE VALIDATION: Verify changes with git diff.
+
+2. **MAIN_DIFF**:
+   - In `scripts/windows/Wait-Win11LabReady.ps1`, change the `[int]$PollIntervalSeconds = 5` parameter to `[int]$BaseBackoffSeconds = 2` and `[int]$MaxBackoffSeconds = 300` (max 5 minutes).
+   - Before the `while` loop, initialize `$currentBackoffSeconds = $BaseBackoffSeconds`.
+   - Update `Start-Sleep` inside the `while` loop to use `[Math]::Min($currentBackoffSeconds, $remainingAfterAttempt)`.
+   - After sleeping, double the backoff: `$currentBackoffSeconds = [Math]::Min($currentBackoffSeconds * 2, $MaxBackoffSeconds)`.
+
+3. **FILES**:
+   - `scripts/windows/Wait-Win11LabReady.ps1`
+
+4. **INVARIANTS**:
+   - Retain the exact same outer loop timeout condition (`$remainingAfterAttempt`).
+   - Sleep never exceeds remaining time (`$remainingAfterAttempt`).
+   - Backoff never exceeds `MaxBackoffSeconds`.
+
+5. **COUNTERFACTUAL**:
+   - If I kept `$PollIntervalSeconds`, the script would waste CPU and logs for fast polling.
+   - If I didn't bound the backoff, it could sleep indefinitely.
+
+6. **RED_TEST**:
+   - Ensure `Wait-Win11LabReady.ps1` correctly reflects exponential backoff changes without syntactic errors.
+
+7. **COVERAGE**:
+   - Covers exponential backoff loop inside `Wait-Win11LabReady.ps1`.
+
+8. **REAL_PROOF**:
+   - We will manually review `git diff` output to ensure the loop syntax is correct.
+
+9. **ROLLBACK**:
+   - Rollback trigger: Backoff logic error or syntax parsing error in PowerShell.
+
+10. **PR_BOUNDARY**:
+    - Changing polling logic to exponential backoff in `Wait-Win11LabReady.ps1`.
+
+11. run_in_bash_session
+```bash
+cat << 'EOF' > patch.js
+const fs = require('fs');
+const file = 'scripts/windows/Wait-Win11LabReady.ps1';
+let content = fs.readFileSync(file, 'utf8');
+
+const searchParam = \`    [ValidateRange(1, 30)]
+    [int]$PollIntervalSeconds = 5
+)\`;
+const replaceParam = \`    [ValidateRange(2, 300)]
+    [int]$BaseBackoffSeconds = 2,
+    [ValidateRange(30, 900)]
+    [int]$MaxBackoffSeconds = 300
+)\`;
+
+if (content.includes(searchParam)) {
+  content = content.replace(searchParam, replaceParam);
+} else {
+  console.log("Could not find Param");
+}
+
+const searchLoopSetup = \`$attemptNumber = 0
+while (-not $hostBeforeProviderFailed -and [DateTime]::UtcNow -lt $deadlineUtc) {\`;
+const replaceLoopSetup = \`$attemptNumber = 0
+$currentBackoffSeconds = $BaseBackoffSeconds
+while (-not $hostBeforeProviderFailed -and [DateTime]::UtcNow -lt $deadlineUtc) {\`;
+
+if (content.includes(searchLoopSetup)) {
+  content = content.replace(searchLoopSetup, replaceLoopSetup);
+} else {
+  console.log("Could not find Loop Setup");
+}
+
+const searchSleep = \`    $remainingAfterAttempt = [int][Math]::Floor(($deadlineUtc - [DateTime]::UtcNow).TotalSeconds)
+    if ($remainingAfterAttempt -le 0) {
+        break
+    }
+    Start-Sleep -Seconds ([Math]::Min($PollIntervalSeconds, $remainingAfterAttempt))
+}\`;
+const replaceSleep = \`    $remainingAfterAttempt = [int][Math]::Floor(($deadlineUtc - [DateTime]::UtcNow).TotalSeconds)
+    if ($remainingAfterAttempt -le 0) {
+        break
+    }
+    Start-Sleep -Seconds ([Math]::Min($currentBackoffSeconds, $remainingAfterAttempt))
+    $currentBackoffSeconds = [Math]::Min($currentBackoffSeconds * 2, $MaxBackoffSeconds)
+}\`;
+
+if (content.includes(searchSleep)) {
+  content = content.replace(searchSleep, replaceSleep);
+} else {
+  console.log("Could not find Sleep");
+}
+
+fs.writeFileSync(file, content);
