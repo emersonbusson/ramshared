@@ -118,7 +118,7 @@ $required = @(
     "raw_measurement_status",
     "pair_decision",
     "windows_script_sha256",
-    "cuda_pair_hold_too_short",
+    "cuda_pair_hold_out_of_bounds",
     "Get-CellTimeoutBudget",
     "Get-PairTimeoutBudget",
     "Get-StrictCellTimeoutBudget",

@@ -1,3 +1,0 @@
-1. RULES
-   - ORTHOGONAL SCOPE: Modify strictly scripts/windows/Invoke-NbdBenchmarkMatrix.ps1 and its tests.
-   - PHYSICAL BOUNDS & SAFETY: Clamp benchmark thread count to `[Environment]::ProcessorCount`. Ensure max timeout bounds on `CudaMaxHoldSec` properly (validate bounds). `CudaMaxHoldSec` actually has `[ValidateRange(360, 7920)]`, which seems correct as bounds. What about worker_threads? The specification states: "Clamp benchmark thread count to [Environment]::ProcessorCount and enforce min/max timeout bounds." Let's check max timeout bounds. What are the bounds on min/max timeout?
