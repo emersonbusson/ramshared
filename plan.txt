@@ -1,0 +1,36 @@
+1. RULES
+   - ORTHOGONAL SCOPE: Modify strictly scripts/package/build-deb-package.sh.
+   - PHYSICAL BOUNDS & SAFETY: Add fail-fast prerequisite checks for dpkg-deb and fakeroot. Validate version string explicitly.
+   - TYPED ERROR HANDLING: Add fail-fast guards with explicit error messages and exits.
+   - REPRODUCIBLE VALIDATION: Test script execution.
+
+2. MAIN_DIFF
+   - Add prerequisite checks for dpkg-deb, fakeroot, and VERSION right after variable assignments.
+   - Use `fakeroot dpkg-deb` to build the archive.
+
+3. FILES
+   - scripts/package/build-deb-package.sh
+
+4. INVARIANTS
+   - The script must error out if required tools (dpkg-deb, fakeroot) are missing.
+   - The final dpkg-deb command must be wrapped with fakeroot to ensure correct permissions inside the .deb package.
+
+5. COUNTERFACTUAL
+   - Without fakeroot, files inside the package might end up with the builder's UID/GID instead of root, leading to incorrect permissions upon installation.
+   - Without prerequisite checks, the script might fail late and leave incomplete build artifacts.
+
+6. RED_TEST
+   - Running the script in an environment without dpkg-deb or fakeroot should immediately fail and exit before any build artifacts are created or binaries are checked.
+
+7. COVERAGE
+   - Added guard clauses cover the environment dependencies for Debian package building.
+
+8. REAL_PROOF
+   - bash -n scripts/package/build-deb-package.sh (syntax check)
+   - Running the script confirms fakeroot and dpkg-deb are checked and used properly.
+
+9. ROLLBACK
+   - Rollback trigger: The package fails to build or installs with incorrect ownership.
+
+10. PR_BOUNDARY
+    - Only Debian packaging script is touched.

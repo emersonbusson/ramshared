@@ -1,0 +1,20 @@
+## Resumo
+
+Added fail-fast guard clauses and input validation for Debian package building in `scripts/package/build-deb-package.sh` to comply with architectural bounds and safety.
+
+## Commits
+
+- Add guard clauses and prerequisite checks in debian package builder
+- Enforce fail-fast checks for dpkg-deb and fakeroot existence
+- Validate version string is not empty before evaluation
+- Apply fakeroot isolation constraint to dpkg-deb archive build
+
+## Validacao
+
+- Passed bash -n syntax checks for `build-deb-package.sh`
+- Tested script execution explicitly invoking with an empty string, gracefully failing and preventing corruption as expected.
+- Verified missing fakeroot/dpkg-deb environments will error out safely before doing any work.
+
+## Rollback trigger
+
+Rollback if package building pipeline is blocked due to unresolvable prerequisites or missing binaries on expected build nodes.
