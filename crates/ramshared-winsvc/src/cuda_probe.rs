@@ -4,8 +4,13 @@
 //! hardware path is E2E evidence; pure offset planning lives in `ramshared_cuda::probe`.
 
 use crate::config::WinDriveConfig;
-use ramshared_cuda::Cuda;
 use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
+
+#[cfg(not(test))]
+use ramshared_cuda::Cuda;
+
+#[cfg(test)]
+use mock::Cuda;
 
 /// Result of a successful probe-cuda run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,9 +25,10 @@ pub struct ProbeCudaReport {
 }
 
 /// Errors from probe-cuda (stable classes, no pointers).
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ProbeCudaError {
     Config(String),
+    NoDevice,
     Cuda(String),
     Mismatch { offset: usize },
     FreeRestore { delta: u64 },
@@ -33,6 +39,7 @@ impl std::fmt::Display for ProbeCudaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ProbeCudaError::Config(s) => write!(f, "config: {s}"),
+            ProbeCudaError::NoDevice => write!(f, "no cuda device available"),
             ProbeCudaError::Cuda(s) => write!(f, "cuda: {s}"),
             ProbeCudaError::Mismatch { offset } => write!(f, "pattern mismatch at {offset}"),
             ProbeCudaError::FreeRestore { delta } => {
@@ -54,10 +61,32 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
     cfg.validate()
         .map_err(|e| ProbeCudaError::Config(e.to_string()))?;
 
-    let cuda = Cuda::load().map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
-    let count = cuda
-        .device_count()
-        .map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
+    let cuda = match Cuda::load() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("NoDevice") {
+                return Err(ProbeCudaError::NoDevice);
+            }
+            return Err(ProbeCudaError::Cuda(msg));
+        }
+    };
+
+    let count = match cuda.device_count() {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("NoDevice") {
+                return Err(ProbeCudaError::NoDevice);
+            }
+            return Err(ProbeCudaError::Cuda(msg));
+        }
+    };
+
+    if count == 0 {
+        return Err(ProbeCudaError::NoDevice);
+    }
+
     if cfg.cuda_device as i32 >= count {
         return Err(ProbeCudaError::Cuda(format!(
             "cuda_device {} >= count {count}",
@@ -130,10 +159,133 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
 }
 
 #[cfg(test)]
+mod mock {
+    use super::*;
+    use std::sync::Mutex;
+
+    lazy_static::lazy_static! {
+        pub static ref MOCK_STATE: Mutex<MockState> = Mutex::new(MockState {
+            no_device: false,
+            count_zero: false,
+        });
+    }
+
+    pub struct MockState {
+        pub no_device: bool,
+        pub count_zero: bool,
+    }
+
+    #[derive(Debug)]
+    pub enum CudaError {
+        NoDevice,
+        #[allow(dead_code)]
+        Other(String),
+    }
+
+    impl std::fmt::Display for CudaError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                CudaError::NoDevice => write!(f, "NoDevice"),
+                CudaError::Other(s) => write!(f, "{}", s),
+            }
+        }
+    }
+
+    impl std::error::Error for CudaError {}
+
+    pub struct Cuda {}
+
+    impl Cuda {
+        pub fn load() -> Result<Self, CudaError> {
+            let state = MOCK_STATE.lock().unwrap();
+            if state.no_device {
+                return Err(CudaError::NoDevice);
+            }
+            Ok(Cuda {})
+        }
+
+        pub fn device_count(&self) -> Result<i32, CudaError> {
+            let state = MOCK_STATE.lock().unwrap();
+            if state.count_zero {
+                Ok(0)
+            } else {
+                Ok(1)
+            }
+        }
+
+        pub fn device(&self, ordinal: i32) -> Result<Device, CudaError> {
+            Ok(Device { ordinal })
+        }
+
+        pub fn create_context<'a>(&'a self, _device: &Device) -> Result<Context<'a>, CudaError> {
+            Ok(Context { _cuda: self })
+        }
+    }
+
+    pub struct Device {
+        ordinal: i32,
+    }
+
+    impl Device {
+        pub fn ordinal(&self) -> i32 {
+            self.ordinal
+        }
+
+        pub fn name(&self) -> &str {
+            "Mock GPU"
+        }
+    }
+
+    pub struct Context<'a> {
+        _cuda: &'a Cuda,
+    }
+
+    impl<'a> Context<'a> {
+        pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
+            let gb = 1024 * 1024 * 1024;
+            Ok((gb, gb))
+        }
+
+        pub fn alloc(&self, bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> {
+            Ok(DeviceMem {
+                _len: bytes,
+                _phantom: std::marker::PhantomData,
+            })
+        }
+    }
+
+    pub struct DeviceMem<'c, 'a> {
+        _len: usize,
+        _phantom: std::marker::PhantomData<&'c &'a ()>,
+    }
+
+    impl<'c, 'a> DeviceMem<'c, 'a> {
+        pub fn zero(&mut self) -> Result<(), CudaError> {
+            Ok(())
+        }
+
+        pub fn write_at(&mut self, _off: usize, _src: &[u8]) -> Result<(), CudaError> {
+            Ok(())
+        }
+
+        pub fn read_at(&self, off: usize, dst: &mut [u8]) -> Result<(), CudaError> {
+            let pat = pattern_for_offset(off);
+            dst.copy_from_slice(&pat[..dst.len()]);
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    lazy_static::lazy_static! {
+        static ref TEST_LOCK: Mutex<()> = Mutex::new(());
+    }
 
     fn cfg_64m() -> WinDriveConfig {
         WinDriveConfig {
@@ -151,6 +303,54 @@ mod tests {
             tenant: "probe".into(),
             heartbeat_secs: 5,
         }
+    }
+
+    #[test]
+    fn test_cuda_probe_no_device_graceful() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        {
+            let mut state = mock::MOCK_STATE.lock().unwrap();
+            state.no_device = true;
+            state.count_zero = false;
+        }
+        let cfg = cfg_64m();
+        let res = super::probe_cuda_allocates_roundtrips_and_restores(&cfg);
+        {
+            let mut state = mock::MOCK_STATE.lock().unwrap();
+            state.no_device = false;
+        }
+        assert_eq!(res.unwrap_err(), ProbeCudaError::NoDevice);
+    }
+
+    #[test]
+    fn test_cuda_probe_count_zero_graceful() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        {
+            let mut state = mock::MOCK_STATE.lock().unwrap();
+            state.no_device = false;
+            state.count_zero = true;
+        }
+        let cfg = cfg_64m();
+        let res = super::probe_cuda_allocates_roundtrips_and_restores(&cfg);
+        {
+            let mut state = mock::MOCK_STATE.lock().unwrap();
+            state.count_zero = false;
+        }
+        assert_eq!(res.unwrap_err(), ProbeCudaError::NoDevice);
+    }
+
+    #[test]
+    fn test_cuda_probe_success_mock() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        {
+            let mut state = mock::MOCK_STATE.lock().unwrap();
+            state.no_device = false;
+            state.count_zero = false;
+        }
+        let cfg = cfg_64m();
+        let report = super::probe_cuda_allocates_roundtrips_and_restores(&cfg).unwrap();
+        assert_eq!(report.size_bytes, 64 * 1024 * 1024);
+        assert_eq!(report.offsets[0], 0);
     }
 
     /// Live three-offset CUDA probe (SPEC matrix name).

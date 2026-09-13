@@ -1043,6 +1043,7 @@ name = "ramshared-winsvc"
 version = "0.12.0"
 dependencies = [
  "base64",
+ "lazy_static",
  "ramshared-block",
  "ramshared-broker",
  "ramshared-cuda",
