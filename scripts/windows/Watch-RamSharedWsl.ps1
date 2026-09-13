@@ -783,6 +783,7 @@ function Invoke-GuardianWatch {
     $runDirectory = Join-Path $ArtifactRoot ("ramshared-guardian-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
     New-Item -ItemType Directory -Path $runDirectory | Out-Null
     $eventPath = Join-Path $runDirectory "guardian-events.jsonl"
+    if ($null -eq (Get-Process -Name "wsl" -ErrorAction SilentlyContinue)) { throw "guardian_watch_failed: wsl_process_not_found" }
     $telemetryPath = Join-Path $ArtifactRoot "windows-telemetry.jsonl"
     Write-GuardianEvent -Path $eventPath -Event "guardian_started" -Data @{ heartbeat = $HeartbeatPath; stale_after_seconds = $StaleAfterSec }
     while ($true) {
