@@ -1,0 +1,20 @@
+# RamShared Configuration
+# Multi-tier memory tiering and GPU VRAM configuration
+
+[daemon]
+# Allocation mode: auto (detects VRAM and applies safe slice), fixed, or dynamic
+mode = "auto"
+
+# Reserve floor for Windows/Desktop display manager stability (MiB)
+# Preserves at least 1536 MiB or 20% of total VRAM (SSDV3 Principle 11)
+host_reserve_floor_mb = 1536
+
+# Maximum VRAM allocation cap (MiB)
+max_vram_mb = 4096
+
+[tiering]
+# Tier 0 (CPU ZRAM compression) capacity (MiB)
+zram_mb = 1024
+
+# Tier 3 (SSD origin store) fallback partition / backing device
+tier3_enabled = true

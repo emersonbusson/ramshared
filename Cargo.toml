@@ -23,6 +23,8 @@ version = "0.11.0"
 edition = "2024"
 rust-version = "1.98.0"
 license = "MIT"
+authors = ["Emerson Busson <https://github.com/emersonbusson>"]
+homepage = "https://github.com/emersonbusson/ramshared"
 repository = "https://github.com/emersonbusson/ramshared"
 # Internal workspace crates are never published to crates.io. Marking them
 # private prevents accidental publication and keeps path dependencies out of

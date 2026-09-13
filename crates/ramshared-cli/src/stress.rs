@@ -644,8 +644,12 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let sysctl_min_free_mb = read_sysctl_min_free_mb();
         let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
         let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
+        const MULTI_TIER_HARD_FLOOR_MB: u64 = 200;
+        const SWAP_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(150);
+        const MAX_SWAP_DRAIN_IDLE_CYCLES: usize = 80; // 80 * 150ms = 12.0s of zero swap growth before declaring limit
+
         let hard_floor = if is_multi_tier {
-            200
+            MULTI_TIER_HARD_FLOOR_MB
         } else {
             opts.min_ram_mb.max(dynamic_kernel_floor)
         };
@@ -653,13 +657,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let mut avail_mb = avail_mb;
         let mut last_swap_val = tot_swap;
         let mut idle_cycles = 0;
-        let max_idle_cycles = 40; // 40 * 150ms = 6.0s of zero swap growth before declaring limit
+        let max_idle_cycles = MAX_SWAP_DRAIN_IDLE_CYCLES;
 
         while avail_mb <= hard_floor && is_multi_tier {
             if term_signal.load(Ordering::Relaxed) {
                 break;
             }
-            thread::sleep(Duration::from_millis(150));
+            thread::sleep(SWAP_DRAIN_POLL_INTERVAL);
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
             let (cur_swap, _, _, _) = read_swap_tiers();

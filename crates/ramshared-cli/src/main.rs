@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2024-2026 Emerson Busson. All rights reserved.
+// Author: Emerson Busson (https://github.com/emersonbusson | https://www.linkedin.com/in/emersonbusson)
 //! ramshared CLI — preflight (check/doctor) and cascade orchestration (up/down).
 //! No `unsafe`: the CUDA probe uses the audited `ramshared-cuda` crate (Day-0).
 #![forbid(unsafe_code)]
@@ -531,7 +534,11 @@ fn run_from_args<R: CliActionRunner>(
 ) -> ExitCode {
     match parse_cli_command(args) {
         Ok(CliCommand::Version) => {
-            let _ = writeln!(stdout, "ramshared {}", env!("CARGO_PKG_VERSION"));
+            let _ = writeln!(
+                stdout,
+                "ramshared {} (Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)",
+                env!("CARGO_PKG_VERSION")
+            );
             ExitCode::SUCCESS
         }
         Ok(CliCommand::Run { args }) => actions.run_workload(&args, stdout, stderr),
@@ -1762,7 +1769,10 @@ mod tests {
         assert!(actions.calls.is_empty());
         assert_eq!(
             String::from_utf8(stdout).expect("version output is UTF-8"),
-            format!("ramshared {}\n", env!("CARGO_PKG_VERSION"))
+            format!(
+                "ramshared {} (Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)\n",
+                env!("CARGO_PKG_VERSION")
+            )
         );
         assert!(stderr.is_empty());
     }

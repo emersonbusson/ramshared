@@ -78,7 +78,8 @@ One primary path. No shim, dual-path, dual-reader/writer, or dead code unless SP
 7. **Host safety** — never run unsupervised swap/ublk pressure on live WSL2; prefer QEMU/isolated VM, or use the approved shared-host watchdog harness when explicitly authorized.  
 8. **English** structural docs and code comments.  
 9. **Cover + live E2E close Step 3** — `IMPL.md` / index `DONE` is not proof.  
-10. **Platform-native gates** — Linux LKM ≠ Windows WDK ≠ pure userspace cascade; pick the row in Cover vs E2E.
+10. **Platform-native gates** — Linux LKM ≠ Windows WDK ≠ pure userspace cascade; pick the row in Cover vs E2E.  
+11. **Shared hardware & tiering coexistence** — in multi-tier or cross-OS environments (WSL2/Hyper-V, WDDM/DXG, CXL, NUMA), hardware is shared with the host OS. Higher accelerator tiers (VRAM, CXL) are strictly opportunistic: they must **never** compromise host display or system stability. Specs touching shared hardware must define a mathematical host safety cushion, non-blocking DMA with bounded latency, and cooperative spillover into fallback tiers (SSD).
 
 ---
 
@@ -217,6 +218,9 @@ Fill items that apply; mark **N/A** with one-word reason when surface absent.
 - [ ] Lifetime: get/put map/unmap balanced; remove reverse of probe  
 - [ ] Hot-unplug / device-gone: stable errno, not UAF  
 - [ ] Host safety: no unsupervised live WSL2 pressure; Windows/shared pressure only via the approved watchdog harness or lab VM when required  
+- [ ] Shared-hardware cushion: mathematical host reserve floor enforced; no greedy static allocation of shared VRAM/RAM  
+- [ ] Bounded DMA / foreign driver calls: watchdog/timeout ensures no thread hangs indefinitely in foreign driver ioctls  
+- [ ] Cooperative cascade spillover: lower tiers (e.g. SSD swap) verified to receive traffic when accelerator tier saturates or degrades  
 - [ ] Replayable ops: idempotent (#17)  
 
 #### Files to CREATE / MODIFY / DELETE
@@ -298,6 +302,7 @@ Layer-specific (delete N/A rows in the written SPEC):
 - Evidence = “check exists” only  
 - Wrong platform gate (e.g. cascade-only commands on Windows-only SPEC, or checkpatch as primary for WDK)  
 - Paths/process from another product/repo  
+- Shared hardware: greedy static reservation on shared memory without host floor, or unbounded synchronous DMA waits that can hang kernel reclaim  
 
 ### Output
 
@@ -307,7 +312,7 @@ Layer-specific (delete N/A rows in the written SPEC):
 
 Write `AUDIT-2.5.md` (or reviews path). On **`no-go`**: fix `SPEC.md` **same turn**; optional H1 changelog. Never `SPECvN.md`.
 
-**Hard no-go:** missing Kahneman on critical · Day-0 violation · incomplete test matrix · privilege/uAPI/driver boundary without refusal+legitimate when applicable · foreign process/API shapes · platform gate mismatch.
+**Hard no-go:** missing Kahneman on critical · Day-0 violation · incomplete test matrix · privilege/uAPI/driver boundary without refusal+legitimate when applicable · foreign process/API shapes · platform gate mismatch · greedy static overcommit on shared host memory without floor calculation · unbounded synchronous foreign driver waits.
 
 ### `AUDIT-2.5.md` skeleton
 
