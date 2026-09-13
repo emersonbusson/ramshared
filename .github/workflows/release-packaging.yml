@@ -37,10 +37,10 @@ jobs:
         run: cargo build --release --locked
 
       - name: Build Debian/Ubuntu Package (.deb)
-        run: ./scripts/package/build-deb-package.sh "${{ github.ref_name || inputs.version }}"
+        run: ./scripts/package/build-deb-package.sh "${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.11.0' }}"
 
       - name: Build Fedora/RHEL Package (.rpm)
-        run: ./scripts/package/build-rpm-package.sh "${{ github.ref_name || inputs.version }}"
+        run: ./scripts/package/build-rpm-package.sh "${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.11.0' }}"
 
       - name: Package Arch Linux AUR Tarball
         run: |
@@ -64,8 +64,9 @@ jobs:
           path: artifacts/packages/
 
       - name: Attach Assets to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          find artifacts/packages -maxdepth 1 -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" -o -name "SHA256SUMS.txt" \) -exec gh release upload "${{ github.ref_name }}" {} + --clobber || true
+          TARGET_TAG="${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.11.0' }}"
+          find artifacts/packages -maxdepth 1 -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" -o -name "SHA256SUMS.txt" \) -exec gh release upload "$TARGET_TAG" {} + --clobber || true

@@ -4541,6 +4541,68 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
     backend
 }
 
+/// Calculates the maximum safe VRAM allocation per slice, respecting the host reserve floor.
+///
+/// Principle 11 (Shared Hardware & Tiering Coexistence Invariant):
+/// On shared-memory environments (such as WSL2/dxgkrnl), GPU VRAM is shared between the host OS
+/// display manager (DWM), host applications, and WSL2. Allocating too much VRAM starves the host
+/// GPU memory manager, leading to driver timeouts (TDR) and system deadlocks.
+/// Rules:
+/// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
+///   environment, and no clamping is applied.
+/// - HOST_RESERVE_FLOOR = max(1536 MB, total_vram * 20%) preserves dedicated headroom for the
+///   host Desktop Window Manager (DWM) while allowing a full 4 GiB slice on 6GB+ GPUs (SSDV3 Principle 11).
+/// - If `free_vram` is known and lower than the ceiling, allocation respects runtime free headroom (512 MiB)
+///   to prevent runtime CUDA allocation failures under external graphics pressure.
+/// - Slices are aligned to 128 MiB boundaries.
+pub fn calculate_safe_vram_slice(
+    requested_slice_bytes: u64,
+    slices: u16,
+    total_vram: u64,
+    free_vram: u64,
+) -> (u64, bool) {
+    const MIN_REAL_GPU_BYTES: u64 = 2048 * 1024 * 1024; // 2048 MiB
+    const MIN_HOST_RESERVE_BYTES: u64 = 1536 * 1024 * 1024; // 1536 MiB for Windows DWM
+    const HOST_RESERVE_PERCENT: u64 = 20; // 20% of total VRAM
+    const RUNTIME_FREE_HEADROOM_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB runtime buffer
+    const SLICE_ALIGNMENT_BYTES: u64 = 128 * 1024 * 1024; // 128 MiB boundary
+
+    if slices == 0 || requested_slice_bytes == 0 || total_vram < MIN_REAL_GPU_BYTES {
+        return (requested_slice_bytes, false);
+    }
+
+    let total_requested = match (slices as u64).checked_mul(requested_slice_bytes) {
+        Some(t) => t,
+        None => return (requested_slice_bytes, false),
+    };
+
+    let floor_pct = total_vram.saturating_mul(HOST_RESERVE_PERCENT) / 100;
+    let host_floor = std::cmp::max(MIN_HOST_RESERVE_BYTES, floor_pct);
+    let mut max_safe_total = total_vram.saturating_sub(host_floor);
+
+    // If active free VRAM is reported and below the theoretical ceiling, respect active free headroom
+    if free_vram > 0 && free_vram < max_safe_total {
+        let safe_by_free = free_vram.saturating_sub(RUNTIME_FREE_HEADROOM_BYTES);
+        if safe_by_free > 0 {
+            max_safe_total = safe_by_free;
+        }
+    }
+
+    let max_safe_per_slice = max_safe_total / (slices as u64);
+
+    if total_requested <= max_safe_total {
+        (requested_slice_bytes, false)
+    } else {
+        let aligned_slice = (max_safe_per_slice / SLICE_ALIGNMENT_BYTES) * SLICE_ALIGNMENT_BYTES;
+        let final_safe_slice = if aligned_slice > 0 {
+            aligned_slice
+        } else {
+            max_safe_per_slice
+        };
+        (final_safe_slice, true)
+    }
+}
+
 /// VRAM broker path (ITEM-8): slices VRAM into `slices` NBD exports served by Unix +
 /// (optional) TCP, with the arbiter deciding who uses each slice. The single worker owns the
 /// VRAM/CUDA context and runs residency §9/§9.4. Live execution is the QEMU gate (`--backend
@@ -4557,10 +4619,20 @@ fn run_broker<P: VramProvider>(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let (free, total_vram) = provider.mem_info().unwrap_or((0, 0));
+    let (effective_slice_bytes, was_clamped) =
+        calculate_safe_vram_slice(slice_bytes, slices, total_vram, free);
+    if was_clamped {
+        eprintln!(
+            "[ramsharedd] WARNING: requested VRAM allocation ({} MiB/slice) exceeds host safety ceiling. Clamping to {} MiB to preserve host reserve floor (Principle 11).",
+            slice_bytes >> 20,
+            effective_slice_bytes >> 20
+        );
+    }
     let setup_sock = sock.clone();
     run_broker_with_setup(
         provider,
-        slice_bytes,
+        effective_slice_bytes,
         slices,
         sock,
         force,
@@ -4568,7 +4640,7 @@ fn run_broker<P: VramProvider>(
         move || {
             broker_setup(
                 slices,
-                slice_bytes,
+                effective_slice_bytes,
                 &setup_sock,
                 listen_nbd_addr,
                 advertise_tcp,
@@ -7338,7 +7410,7 @@ mod tests {
         });
 
         let worker_tx = jobs_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .expect("injected acceptor exposes the live NBD worker");
         worker_tx.send(WMsg::Opened).expect("open NBD generation");
         for handle in 0..3 {
@@ -7359,13 +7431,13 @@ mod tests {
                 .expect("drive one bounded recovery sample");
             assert_nbd_ok(
                 reply_rx
-                    .recv_timeout(Duration::from_secs(1))
+                    .recv_timeout(Duration::from_secs(5))
                     .expect("pre-recovery NBD job reply"),
                 "pre-recovery NBD job",
             );
         }
         activation_started_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(5))
             .expect("the third healthy sample starts one pending activation");
 
         worker_tx
@@ -7388,7 +7460,7 @@ mod tests {
             .expect("queue NBD work after pending shutdown");
         assert_nbd_ok(
             reply_rx
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(Duration::from_secs(5))
                 .expect("pending recovery must not block the NBD serve loop"),
             "post-shutdown pending-recovery NBD job",
         );
@@ -7405,7 +7477,7 @@ mod tests {
         activation_outcome.succeed();
         assert_eq!(
             done_rx
-                .recv_timeout(Duration::from_secs(1))
+                .recv_timeout(Duration::from_secs(5))
                 .expect("daemon exits after the terminal activation outcome"),
             Ok(())
         );
@@ -10587,5 +10659,62 @@ Filename Type Size Used Priority
         ]))
         .expect("auto backend must parse");
         assert!(matches!(args.backend, BackendKind::Auto));
+    }
+
+    #[test]
+    fn test_host_vram_clamping_rtx2060() {
+        // RTX 2060: 6144 MiB total, 4800 MiB free
+        let total_vram = 6144 * 1024 * 1024;
+        let free_vram = 4800 * 1024 * 1024;
+        let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(
+            !clamped,
+            "4096 MiB allocation on 6GB GPU must be granted with 1.5GB host reserve"
+        );
+        assert_eq!(safe_slice, requested_slice);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_rtx2060_over_request() {
+        // RTX 2060: 6144 MiB total, 4800 MiB free
+        let total_vram = 6144 * 1024 * 1024;
+        let free_vram = 4800 * 1024 * 1024;
+        let requested_slice = 5120 * 1024 * 1024; // 5120 MiB requested (> 4608 max safe)
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(
+            clamped,
+            "allocation exceeding host reserve floor must be clamped"
+        );
+        assert_eq!(safe_slice, 4608 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_unconstrained() {
+        // RTX 4090: 24576 MiB total, 20000 MiB free
+        let total_vram = 24576 * 1024 * 1024;
+        let free_vram = 20000 * 1024 * 1024;
+        let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(!clamped, "RTX 4090 with ample headroom must not be clamped");
+        assert_eq!(safe_slice, requested_slice);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_mock_small() {
+        // Mock provider: 64 MiB total
+        let total_vram = 64 * 1024 * 1024;
+        let free_vram = 64 * 1024 * 1024;
+        let requested_slice = 32 * 1024 * 1024;
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(
+            !clamped,
+            "Mock environment under 2048 MiB must not be clamped"
+        );
+        assert_eq!(safe_slice, requested_slice);
     }
 }

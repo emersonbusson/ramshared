@@ -9,6 +9,12 @@ publish.workspace = true
 
 [dependencies]
 ramshared-vram = { path = "../ramshared-vram" }
+cuda-core = { version = "0.3.1", optional = true }
+cuda-async = { version = "0.3.1", optional = true }
+
+[features]
+default = []
+cuda-rust = ["dep:cuda-core", "dep:cuda-async"]
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61.2"

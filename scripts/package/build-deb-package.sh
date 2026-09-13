@@ -65,6 +65,9 @@ fi
 if [[ -f "$ROOT/scripts/safety/cascade.conf.example" ]]; then
   install -m 0644 "$ROOT/scripts/safety/cascade.conf.example" "$STAGE_DIR/etc/ramshared/cascade.conf.example"
 fi
+if [[ -f "$ROOT/packaging/etc/ramshared/config.toml" ]]; then
+  install -m 0644 "$ROOT/packaging/etc/ramshared/config.toml" "$STAGE_DIR/etc/ramshared/config.toml"
+fi
 
 # Install systemd service and slice units
 for unit in ramshared-cascade.service ramshared-cascade-health.service \

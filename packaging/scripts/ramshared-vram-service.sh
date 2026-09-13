@@ -54,15 +54,23 @@ detect_vram_capacity() {
 
     if [[ "$total_mib" =~ ^[0-9]+$ ]] && [[ "$total_mib" -gt 0 ]]; then
         local reserve_mib=$(( total_mib * 20 / 100 ))
-        if [[ $reserve_mib -lt 2048 ]]; then
-            reserve_mib=2048
+        if [[ $reserve_mib -lt 1536 ]]; then
+            reserve_mib=1536
         fi
         local target_mib=$(( total_mib - reserve_mib ))
-        if [[ $target_mib -gt $free_mib ]]; then
-            target_mib=$(( free_mib - 512 ))
+        if [[ $target_mib -gt 4096 ]]; then
+            target_mib=4096
+        fi
+        # If active free VRAM is reported and below target, preserve 512 MiB free buffer
+        if [[ "$free_mib" =~ ^[0-9]+$ ]] && [[ $free_mib -gt 0 && $free_mib -lt $target_mib ]]; then
+            local safe_free=$(( free_mib - 512 ))
+            if [[ $safe_free -gt 0 ]]; then
+                target_mib=$safe_free
+            fi
         fi
         if [[ $target_mib -lt 512 ]]; then
-            target_mib=512
+            echo 0
+            return 0
         fi
         echo "$target_mib"
     else

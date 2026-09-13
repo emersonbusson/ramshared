@@ -349,6 +349,34 @@
         "registry_state": null
       },
       "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cuda/Cargo.toml",
+          "crates/ramshared-cuda/src/lib.rs",
+          "crates/ramshared-vram/src/lib.rs"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/cuda-rust-native-tiering/IMPL.md",
+        "prd": "docs/specs/no-milestone/cuda-rust-native-tiering/PRD.md",
+        "spec": "docs/specs/no-milestone/cuda-rust-native-tiering/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "cuda-rust-native-tiering"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
         "implementation_paths": [],
         "test_paths": []
       },
@@ -703,6 +731,32 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "release-promotion-publication"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-wsl2d/src/main.rs"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/vram-host-safety-and-dynamic-tiering/PRD.md",
+        "spec": "docs/specs/no-milestone/vram-host-safety-and-dynamic-tiering/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "vram-host-safety-and-dynamic-tiering"
     },
     {
       "claim_reconciliation": {

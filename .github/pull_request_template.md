@@ -11,8 +11,12 @@ Sync rule: rules changing in governance must change in >=2 places in the same co
 <!--
 Clear, human-readable summary explaining WHAT and WHY directly.
 When touching performance, memory, or stress benchmarks, include a self-contained compact hardware comparison table
-(Previous vs Current with physical hardware delta, directions [🔺/🔻], and tier tree ├─ Tier 1/2/3).
-Tier 3 (Host SSD) qualification metrics are mandatory for performance PRs (CI blocks merge if omitted).
+directly reflecting the 4 evaluation categories from the stress test JSON:
+  1. Workload & Capacity (Requested RAM, Total Swap, Tier 1 ZRAM, Tier 2 VRAM, Tier 3 SSD)
+  2. Speed & Transfer Latency (ZRAM speed, VRAM DMA speed, Speedup factor, Latencies, Reclaim throughput)
+  3. Pressure & Stalls (PSI memory index, PSI stall time %, Major faults)
+  4. Integrity & Stability (Bit-exact integrity %, Restored RAM, OOM kills, PASS_ZERO_PANIC)
+Tier 3 (Host SSD) qualification metrics and PASS_ZERO_PANIC are mandatory for performance PRs (CI blocks merge if omitted).
 Prohibited: internal methodology buzzwords or external links to raw JSON files.
 -->
 

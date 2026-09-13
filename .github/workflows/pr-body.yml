@@ -147,12 +147,20 @@ jobs:
               if (!/PASS_ZERO_PANIC/i.test(body)) {
                 core.setFailed('Hardware table missing mandatory stability verdict: PASS_ZERO_PANIC.');
               }
+              const hasFourCategories =
+                /1\.\s*Workload\s*&\s*Capacity/i.test(body) &&
+                /2\.\s*Speed\s*&\s*Transfer\s*Latency/i.test(body) &&
+                /3\.\s*Pressure\s*&\s*Stalls/i.test(body) &&
+                /4\.\s*Integrity\s*&\s*Stability/i.test(body);
+              if (!hasFourCategories) {
+                core.setFailed('Hardware table must contain all 4 evaluation categories from benchmark JSON (1. Workload & Capacity, 2. Speed & Transfer Latency, 3. Pressure & Stalls, 4. Integrity & Stability).');
+              }
               if (body.includes('🔴 ALARM') && !/\[alarm-waiver-justified:[^\]]+\]/i.test(body)) {
                 core.setFailed('Hardware table contains 🔴 ALARM regressions. Fix root-cause per docs/reliability/HARDWARE-METRICS-TRIAGE.md or add [alarm-waiver-justified: <reason>].');
               }
             }
 
-            // Verify complete commit list in PR description
+            // Verify complete commit list and required 4-column structure in PR description
             const prNumber = context.payload.pull_request?.number;
             if (prNumber) {
               try {
@@ -164,6 +172,13 @@ jobs:
                 });
                 const commitsSectionMatch = body.match(/##\s+Commits[\s\S]*?(?=##\s+|$)/i);
                 const commitsSection = commitsSectionMatch ? commitsSectionMatch[0] : '';
+
+                // Validate 4-column table structure per PR template (.github/pull_request_template.md)
+                const hasFourColumns = /\|\s*Commit\s*\|[^|\r\n]+\|[^|\r\n]+\|[^|\r\n]+\|/i.test(commitsSection);
+                if (!hasFourColumns) {
+                  core.setFailed('PR description ## Commits section must contain a 4-column markdown table: | Commit | What was done | Why it was done | Details | (per .github/pull_request_template.md).');
+                }
+
                 const missingCommits = [];
                 for (const c of commits) {
                   const shortSha = c.sha.slice(0, 7).toLowerCase();
@@ -175,6 +190,11 @@ jobs:
                   core.setFailed(`PR description ## Commits table is missing branch commits: ${missingCommits.join(', ')}. All ${commits.length} commits must be listed.`);
                 } else {
                   core.info(`All ${commits.length} branch commits verified in PR ## Commits table.`);
+                }
+
+                // Validate details tag in commits section
+                if (!/<details>[\s\S]*?<\/details>/i.test(commitsSection)) {
+                  core.setFailed('PR description ## Commits table must contain a details block per row in the Details column with Files, Validation, and Risk/rollback.');
                 }
               } catch (commitErr) {
                 core.warning(`Unable to fetch branch commits via API: ${commitErr.message}`);
