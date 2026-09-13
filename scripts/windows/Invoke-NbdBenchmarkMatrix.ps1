@@ -335,8 +335,8 @@ function Assert-LiveConfiguration {
     }
     $maximumPairOuterTimeoutSec = Get-PairTimeoutBudget -TierMiB 4096
     $minimumCudaHoldSec = $maximumPairOuterTimeoutSec.cuda_hold_min_sec
-    if ($CudaMaxHoldSec -lt $minimumCudaHoldSec) {
-        throw "cuda_pair_hold_too_short required_sec=$minimumCudaHoldSec configured_sec=$CudaMaxHoldSec"
+    if ($CudaMaxHoldSec -lt $minimumCudaHoldSec -or $CudaMaxHoldSec -gt 7920) {
+        throw "cuda_pair_hold_out_of_bounds min_sec=$minimumCudaHoldSec max_sec=7920 configured_sec=$CudaMaxHoldSec"
     }
     if (-not [string]::IsNullOrWhiteSpace($BaselineFile) -and
         -not (Test-Path -LiteralPath $BaselineFile -PathType Leaf)) {
@@ -463,7 +463,7 @@ function New-Plan {
                     pattern = "shake256-v1"
                     measurement = "allocation_to_hold_ms"
                     allocation_chunk_bytes = 67108864
-                    worker_threads = 1
+                    worker_threads = [Environment]::ProcessorCount
                     workload = "anonymous_memory_sequential_write"
                     allocated_mib = $tier + 2560
                     memory_high_mib = 1200
@@ -2495,8 +2495,8 @@ function Invoke-CellPair {
             return $pairResults
         }
         if ($first.condition -eq "bounded") {
-            if ($CudaMaxHoldSec -lt [int]$pairContext.timeout_budget.cuda_hold_min_sec) {
-                throw "cuda_pair_hold_too_short required_sec=$($pairContext.timeout_budget.cuda_hold_min_sec) configured_sec=$CudaMaxHoldSec"
+            if ($CudaMaxHoldSec -lt [int]$pairContext.timeout_budget.cuda_hold_min_sec -or $CudaMaxHoldSec -gt 7920) {
+                throw "cuda_pair_hold_out_of_bounds min_sec=$([int]$pairContext.timeout_budget.cuda_hold_min_sec) max_sec=7920 configured_sec=$CudaMaxHoldSec"
             }
             $pairCudaHoldSec = [int]$pairContext.timeout_budget.cuda_hold_min_sec
             $cuda = Start-CudaWorkload -PairDir $pairDir -CudaHoldSec $pairCudaHoldSec
@@ -2991,8 +2991,12 @@ Write-Output "[cuda-vram-workload] released"
                 $script:ExpectedSourceCommit = ("a" * 40)
                 $script:NvidiaSmiPath = "nvidia-smi.exe"
                 $refused = $false
-                try { Assert-LiveConfiguration } catch { $refused = $_.Exception.Message -like "cuda_pair_hold_too_short*" }
+                try { Assert-LiveConfiguration } catch { $refused = $_.Exception.Message -like "cuda_pair_hold_out_of_bounds*" }
                 if (-not $refused) { throw "manufactured_cuda_deadline_was_accepted" }
+                $script:CudaMaxHoldSec = 8000
+                $refused = $false
+                try { Assert-LiveConfiguration } catch { $refused = $_.Exception.Message -like "cuda_pair_hold_out_of_bounds*" }
+                if (-not $refused) { throw "manufactured_cuda_deadline_max_was_accepted" }
                 Write-Output "cuda_deadline=REFUSED"
             } finally {
                 $script:CudaMaxHoldSec = $savedHold
@@ -3218,8 +3222,8 @@ Write-Output "[cuda-vram-workload] released"
             New-Item -ItemType Directory -Path $temp | Out-Null
             $savedBaseline = $script:BaselineFile
             try {
-                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
-                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount }
+                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount }
                 $sourceCommit = ("a" * 40) -join ""
                 $manifestSha256 = ("b" * 64) -join ""
                 $scriptHash = ("c" * 64) -join ""
@@ -3260,7 +3264,7 @@ Write-Output "[cuda-vram-workload] released"
                             "--expected-manifest-sha256", $manifestSha256, "--pair-id", "1024-idle", "--runs", "3", "--sample-timeout-sec", "240"
                         )
                         script_sha256 = [pscustomobject]$scriptHashes
-                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount }
                     }
                     if ($Mode -eq "nbd") {
                         $record["nbd"] = [pscustomobject]@{
@@ -3652,7 +3656,7 @@ Write-Output "[cuda-vram-workload] released"
                             sink_type = "directory"; sink_identity_sha256 = ("d" * 64) -join ""
                         }
                         workload = [pscustomobject]@{
-                            pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = 1; allocated_mib = 3584
+                            pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount; allocated_mib = 3584
                         }
                     }
                     if ($Mode -eq "nbd") {

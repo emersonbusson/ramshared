@@ -1,0 +1,43 @@
+1. RULES
+   - ORTHOGONAL SCOPE: Modify strictly scripts/windows/Invoke-NbdBenchmarkMatrix.ps1 and its tests.
+   - PHYSICAL BOUNDS & SAFETY: Clamp benchmark thread count to `[Environment]::ProcessorCount`. Ensure max timeout bounds on `CudaMaxHoldSec` properly (validate bounds 360 to 7920).
+   - TYPED ERROR HANDLING: Zero unwrap() or expect() panics in production paths. Return precise domain errors.
+   - REPRODUCIBLE VALIDATION: Run bash validation scripts or PowerShell syntax checks to verify correctness before opening the PR.
+
+2. MAIN_DIFF
+   - In `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1`:
+     - Change `worker_threads = 1` to `worker_threads = [Environment]::ProcessorCount`.
+     - In `Assert-LiveConfiguration` and `Invoke-CellPair`, change the `cuda_pair_hold_too_short` check to include max bounds `7920` and throw `cuda_pair_hold_out_of_bounds`.
+     - Update `cuda-deadline` test in `Invoke-ManufacturedSelfTest` to expect the new error message and test max bounds `8000`.
+
+3. FILES
+   - scripts/windows/Invoke-NbdBenchmarkMatrix.ps1
+
+4. INVARIANTS
+   - `worker_threads` is tied to logical processor count.
+   - `CudaMaxHoldSec` respects timeout bounds.
+
+5. COUNTERFACTUAL
+   - Without these checks, thread count could remain clamped at 1, unoptimized for hardware. Cuda timeout bounds could exceed 7920 internally.
+
+6. RED_TEST
+   - PSScriptAnalyzer or bash validations. Testing `pwsh` loading script.
+
+7. COVERAGE
+   - Handled via `Invoke-ManufacturedSelfTest` inside the script, updated to match new conditions.
+
+8. REAL_PROOF
+   - Validating script structure via git diff.
+
+9. ROLLBACK
+   - Rollback trigger: Benchmark threads fail to allocate or exceed memory, or timeout boundary checks regress.
+
+10. PR_BOUNDARY
+   - Strictly `jules/inbox`.
+
+11. replace_with_git_merge_diff
+    - Path: `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1`
+    - Apply the diffs to clamp threads and enforce `cuda_pair_hold_out_of_bounds`.
+
+12. run_in_bash_session
+    - Run `git diff` to verify the changes were applied correctly.
