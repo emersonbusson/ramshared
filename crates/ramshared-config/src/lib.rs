@@ -307,4 +307,46 @@ mod tests {
             assert!(matches!(err, ConfigError::OutOfRange(_)));
         }
     }
+
+    #[test]
+    fn parses_syntax_error_captures_line_col() {
+        let err = Config::parse("[broker]\nlisten = '127.0.0.1:7777'\ninvalid = = syntax")
+            .expect_err("expected syntax error");
+        assert!(matches!(
+            err,
+            ConfigError::Parse {
+                line: Some(3),
+                column: Some(11),
+                ref key_path,
+                ..
+            } if key_path.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parses_type_mismatch_in_agent_captures_key_path_and_location() {
+        let err = Config::parse("[agent]\nwatchdog_secs = 'not_a_number'")
+            .expect_err("expected parse error");
+        assert!(matches!(
+            err,
+            ConfigError::Parse {
+                line: Some(2),
+                column: Some(17),
+                ref key_path,
+                ..
+            } if key_path == "agent.watchdog_secs"
+        ));
+    }
+
+    #[test]
+    fn parses_partial_agent_config_and_applies_defaults() {
+        let cfg = Config::parse("[agent]\ntenant = 'my-tenant'").expect("parse partial config");
+        assert_eq!(cfg.agent.tenant, "my-tenant");
+        assert_eq!(cfg.agent.broker, "127.0.0.1:7777");
+        assert_eq!(cfg.agent.watchdog_secs, 90);
+        assert_eq!(cfg.broker.listen, "127.0.0.1:7777");
+        assert_eq!(cfg.broker.slices, 1);
+        assert_eq!(cfg.broker.slice_mib, 256);
+        assert_eq!(cfg.broker.backend, "cuda");
+    }
 }
