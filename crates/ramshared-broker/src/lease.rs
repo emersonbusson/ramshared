@@ -13,6 +13,8 @@ pub struct LogicalLease {
     pub id: u32,
     pub holder: TenantId,
     pub bytes: u64,
+    #[serde(skip)]
+    pub expires_at: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +52,8 @@ pub struct LeaseBook {
     next_id: u32,
     pending: Option<PendingLease>,
     active: Option<LogicalLease>,
+    lease_duration: Option<std::time::Duration>,
+    grace_period: Option<std::time::Duration>,
 }
 
 impl LeaseBook {
@@ -59,7 +63,15 @@ impl LeaseBook {
             next_id: 1,
             pending: None,
             active: None,
+            lease_duration: None,
+            grace_period: None,
         }
+    }
+
+    pub fn with_expiry(mut self, duration: std::time::Duration, grace: std::time::Duration) -> Self {
+        self.lease_duration = Some(duration);
+        self.grace_period = Some(grace);
+        self
     }
 
     #[cfg(test)]
@@ -69,6 +81,8 @@ impl LeaseBook {
             next_id,
             pending: None,
             active: None,
+            lease_duration: None,
+            grace_period: None,
         }
     }
 
@@ -103,6 +117,10 @@ impl LeaseBook {
     }
 
     pub fn grant_pending(&mut self, granted_bytes: u64) -> Result<LogicalLease, LeaseDeny> {
+        self.grant_pending_at(granted_bytes, std::time::Instant::now())
+    }
+
+    pub fn grant_pending_at(&mut self, granted_bytes: u64, now: std::time::Instant) -> Result<LogicalLease, LeaseDeny> {
         let pending = self.pending.as_ref().ok_or(LeaseDeny::WrongLease)?;
         if granted_bytes < pending.requested_bytes || granted_bytes > self.capacity_bytes {
             return Err(LeaseDeny::InsufficientGrant);
@@ -115,11 +133,42 @@ impl LeaseBook {
             id: self.next_id,
             holder: pending.holder,
             bytes: granted_bytes,
+            expires_at: self.lease_duration.map(|d| now + d),
         };
         self.next_id = following_id;
         self.pending = None;
         self.active = Some(lease.clone());
         Ok(lease)
+    }
+
+    pub fn renew(&mut self, holder: TenantId, lease: u32, now: std::time::Instant) -> Result<bool, LeaseDeny> {
+        let Some(active) = self.active.as_mut() else {
+            return Ok(false);
+        };
+        if active.holder != holder {
+            return Err(LeaseDeny::WrongHolder);
+        }
+        if active.id != lease {
+            return Err(LeaseDeny::WrongLease);
+        }
+        if let Some(d) = self.lease_duration {
+            active.expires_at = Some(now + d);
+        }
+        Ok(true)
+    }
+
+    pub fn check_expiry(&mut self, now: std::time::Instant) -> Option<LogicalLease> {
+        let expired = {
+            let active = self.active.as_ref()?;
+            let expires_at = active.expires_at?;
+            let hard_expiry = expires_at + self.grace_period.unwrap_or(std::time::Duration::ZERO);
+            now >= hard_expiry
+        };
+        if expired {
+            self.active.take()
+        } else {
+            None
+        }
     }
 
     pub fn cancel_pending(&mut self, holder: TenantId) -> bool {
@@ -238,6 +287,50 @@ mod tests {
         assert!(book.disconnect(8).is_none());
         assert_eq!(book.active(), Some(&lease));
         assert_eq!(book.disconnect(7).released, Some(lease));
+    }
+
+    #[test]
+    fn expiry_with_grace_period() {
+        let mut book = LeaseBook::new(1024).with_expiry(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(5),
+        );
+        let _ = book.begin_request(7, 512);
+        let now = std::time::Instant::now();
+        let lease = book.grant_pending_at(512, now).unwrap();
+
+        // Not expired yet
+        assert!(book.check_expiry(now).is_none());
+        assert!(book.check_expiry(now + std::time::Duration::from_secs(14)).is_none());
+
+        // Expired! (10s duration + 5s grace = 15s)
+        let expired = book.check_expiry(now + std::time::Duration::from_secs(15));
+        assert!(expired.is_some());
+        assert_eq!(expired.unwrap().id, lease.id);
+
+        // Active lease should be gone
+        assert!(book.active().is_none());
+    }
+
+    #[test]
+    fn renewal_resets_expiry() {
+        let mut book = LeaseBook::new(1024).with_expiry(
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(5),
+        );
+        let _ = book.begin_request(7, 512);
+        let now = std::time::Instant::now();
+        let lease = book.grant_pending_at(512, now).unwrap();
+
+        // Renew at 9s
+        let renew_time = now + std::time::Duration::from_secs(9);
+        assert_eq!(book.renew(7, lease.id, renew_time), Ok(true));
+
+        // Should not expire at 15s anymore (since it was renewed at 9s)
+        assert!(book.check_expiry(now + std::time::Duration::from_secs(15)).is_none());
+
+        // Will expire at 9s + 10s + 5s = 24s
+        assert!(book.check_expiry(now + std::time::Duration::from_secs(24)).is_some());
     }
 
     #[test]
