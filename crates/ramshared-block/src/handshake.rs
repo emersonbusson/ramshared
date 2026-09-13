@@ -27,9 +27,11 @@ const MAX_OPT_LEN: usize = 4096; // NBD options are small; anti-allocation limit
 pub enum HandshakeError {
     Io(io::Error),
     Aborted,
+    Disconnected,
     IncompatibleVersion,
     UnsupportedFeature,
     InvalidFormat,
+    Timeout,
 }
 
 impl From<io::Error> for HandshakeError {
@@ -45,7 +47,9 @@ impl fmt::Display for HandshakeError {
             HandshakeError::Aborted => f.write_str("client aborted the handshake (NBD_OPT_ABORT)"),
             HandshakeError::IncompatibleVersion => f.write_str("incompatible protocol version"),
             HandshakeError::UnsupportedFeature => f.write_str("unsupported negotiation feature"),
+            HandshakeError::Disconnected => f.write_str("client disconnected cleanly"),
             HandshakeError::InvalidFormat => f.write_str("invalid protocol format"),
+            HandshakeError::Timeout => f.write_str("handshake timed out"),
         }
     }
 }
@@ -65,12 +69,6 @@ fn read_u32<R: Read>(r: &mut R) -> io::Result<u32> {
     r.read_exact(&mut b)?;
     Ok(u32::from_be_bytes(b))
 }
-fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    r.read_exact(&mut b)?;
-    Ok(u64::from_be_bytes(b))
-}
-
 fn write_opt_reply<W: Write>(w: &mut W, opt: u32, rep: u32, data: &[u8]) -> io::Result<()> {
     w.write_all(&NBD_REP_MAGIC.to_be_bytes())?;
     w.write_all(&opt.to_be_bytes())?;
@@ -127,17 +125,38 @@ pub fn server_handshake<R: Read, W: Write>(
     exports: &[Export],
     tx_flags: u16,
 ) -> Result<usize, HandshakeError> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+
     // Greeting: NBDMAGIC + IHAVEOPT + handshake flags.
     w.write_all(&NBDMAGIC.to_be_bytes())?;
     w.write_all(&IHAVEOPT.to_be_bytes())?;
     w.write_all(&(NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES).to_be_bytes())?;
     w.flush()?;
 
-    let client_flags = read_u32(r)?;
+    let mut b4 = [0u8; 4];
+    match r.read_exact(&mut b4[0..1]) {
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(HandshakeError::Disconnected),
+        Err(e) => return Err(HandshakeError::Io(e)),
+    }
+    r.read_exact(&mut b4[1..4])?;
+    let client_flags = u32::from_be_bytes(b4);
     let no_zeroes = client_flags & NBD_FLAG_C_NO_ZEROES != 0;
 
     loop {
-        let opt_magic = read_u64(r)?;
+        if start.elapsed() > timeout {
+            return Err(HandshakeError::Timeout);
+        }
+
+        let mut b8 = [0u8; 8];
+        match r.read_exact(&mut b8[0..1]) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Err(HandshakeError::Disconnected),
+            Err(e) => return Err(HandshakeError::Io(e)),
+        }
+        r.read_exact(&mut b8[1..8])?;
+        let opt_magic = u64::from_be_bytes(b8);
         if opt_magic != IHAVEOPT {
             return Err(HandshakeError::IncompatibleVersion);
         }
@@ -409,5 +428,46 @@ mod tests {
         let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
+    }
+
+    struct SlowReader {
+        data: std::io::Cursor<Vec<u8>>,
+        sleep_done: bool,
+    }
+    impl std::io::Read for SlowReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.sleep_done {
+                std::thread::sleep(std::time::Duration::from_secs(6));
+                self.sleep_done = true;
+            }
+            self.data.read(buf)
+        }
+    }
+
+    #[test]
+    fn handshake_timeout_enforced() {
+        let data = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &go_data(b""));
+        let mut r = SlowReader { data, sleep_done: false };
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::Timeout)));
+    }
+
+    #[test]
+    fn disconnect_during_handshake_graceful() {
+        let mut r = std::io::Cursor::new(Vec::new());
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::Disconnected)));
+    }
+
+    #[test]
+    fn disconnect_after_flags_graceful() {
+        let mut v = Vec::new();
+        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        let mut r = std::io::Cursor::new(v);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::Disconnected)));
     }
 }
