@@ -36,6 +36,18 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
    qualify them. Historical evidence is labeled observed or unqualified when
    custody, owner, timestamps, source revision, or retention facts are absent.
 
+## Broker-Daemon IPC Threats (Unix Sockets & Named Pipes)
+
+The broker-daemon communication channel is a high-value target because it bridges user-space coordination with privileged hardware enforcement.
+
+| Threat | Channel | Required control | Honest residual risk |
+| --- | --- | --- | --- |
+| **Message Replay** | Unix Sockets, Named Pipes | Nonces, strictly monotonic sequence numbers, or timestamped signatures on state-mutating requests | High-frequency replay might exhaust broker queue limits before detection. |
+| **Spoofed Client Injection** | Named Pipes (Windows), Unix Sockets (Linux) | Strict ACLs (Windows `LocalSystem`/`Administrators` only, Linux `root:root` 0600), `SO_PEERCRED` validation, mutual authentication | A compromised administrator account already owns the machine. |
+| **Malformed Payload DoS** | Unix Sockets, Named Pipes | Strict bounds-checked parsing (no `unwrap()`), maximum message size limits, timeout on partial reads | Extremely fast well-formed but semantically complex messages might still induce high CPU usage. |
+| **Downgrade Attack** | Protocol handshake | Minimum protocol version enforcement, fail-closed on unknown opcodes | A legitimate but old client is permanently locked out without upgrade. |
+| **File Descriptor / Handle Exhaustion** | Unix Sockets, Named Pipes | Connection limits per peer, overall broker connection ceiling, eager reaping of idle sessions | The broker may briefly refuse legitimate new daemons during a storm. |
+
 ## Threats and controls
 
 | Threat | Boundary crossed | Required control | Honest residual risk |
