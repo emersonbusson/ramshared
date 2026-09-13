@@ -684,4 +684,164 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         let c = WinDriveConfig::from_toml(GOOD).unwrap();
         assert_eq!(c.evidence_path(), c.evidence_path.as_path());
     }
+
+    fn valid_config() -> WinDriveConfig {
+        WinDriveConfig {
+            size_bytes: MIN_SIZE_BYTES,
+            block_size: 4096,
+            cuda_device: 0,
+            reserve_bytes: RESERVE_FLOOR_BYTES,
+            queue_depth: 4,
+            max_io_bytes: 1048576,
+            evidence_path: PathBuf::from(r"C:\ProgramData\RamShared\evidence"),
+            volume_letter: 'D',
+            volume_mount_path: None,
+            broker_pipe: BrokerPipeV1::NamedPipeV1,
+            broker_ready_timeout_secs: 30,
+            tenant: "windrive-host".into(),
+            heartbeat_secs: 5,
+        }
+    }
+
+    #[test]
+    fn validate_valid_config_succeeds() {
+        let c = valid_config();
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_block_size_512_succeeds() {
+        let mut c = valid_config();
+        c.block_size = 512;
+        c.max_io_bytes = 512 * 1024;
+        assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_size_bytes_below_min_fails() {
+        let mut c = valid_config();
+        c.size_bytes = MIN_SIZE_BYTES - c.block_size as u64;
+        let e = c.validate().unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_queue_depth_zero_and_exceeds_max_fails() {
+        let mut c = valid_config();
+        c.queue_depth = 0;
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "queue_depth",
+                ..
+            }
+        ));
+
+        c.queue_depth = 512;
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "queue_depth",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_max_io_bytes_exceeds_cap_fails() {
+        let mut c = valid_config();
+        c.max_io_bytes = MAX_IO_BYTES_CAP + c.block_size;
+        let e = c.validate().unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "max_io_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_volume_letter_cases() {
+        let mut c = valid_config();
+        c.volume_letter = 'd';
+        assert!(c.validate().is_ok());
+
+        c.volume_letter = 'z';
+        assert!(c.validate().is_ok());
+
+        c.volume_letter = 'C';
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "volume_letter",
+                ..
+            }
+        ));
+
+        c.volume_letter = '[';
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "volume_letter",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_volume_mount_path_invariants() {
+        let mut c = valid_config();
+        c.volume_mount_path = Some(PathBuf::from(r"C:\ProgramData\RamShared\mounts\..\secret"));
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "volume_mount_path",
+                ..
+            }
+        ));
+
+        c.volume_mount_path = Some(PathBuf::from(r"C:\ProgramData\RamShared\mounts\lun;1"));
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "volume_mount_path",
+                ..
+            }
+        ));
+
+        c.volume_mount_path = Some(PathBuf::from(r"C:\ProgramData\RamShared\mounts\"));
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "volume_mount_path",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_broker_ready_timeout_secs_boundaries() {
+        let mut c = valid_config();
+        c.broker_ready_timeout_secs = 0;
+        assert!(matches!(
+            c.validate().unwrap_err(),
+            ConfigError::Invalid {
+                field: "broker_ready_timeout_secs",
+                ..
+            }
+        ));
+
+        c.broker_ready_timeout_secs = 1;
+        assert!(c.validate().is_ok());
+
+        c.broker_ready_timeout_secs = 30;
+        assert!(c.validate().is_ok());
+    }
 }
