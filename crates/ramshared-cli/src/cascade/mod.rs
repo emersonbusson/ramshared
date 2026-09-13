@@ -1108,9 +1108,7 @@ fn supervisor_identity_is_valid(identity: Option<&serde_json::Value>) -> bool {
     true
 }
 
-fn parse_and_validate_action_results<'a>(
-    results: &'a [serde_json::Value],
-) -> Option<Vec<&'a str>> {
+fn parse_and_validate_action_results<'a>(results: &'a [serde_json::Value]) -> Option<Vec<&'a str>> {
     if results.len() > 7 {
         return None;
     }
