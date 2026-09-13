@@ -6,6 +6,7 @@
 //! absorbs cold overflows.
 
 use core::fmt;
+use crate::cascade::Tier;
 
 /// Priority of the zram tier (HOT, compressed RAM). Higher = used first by kernel.
 pub const ZRAM_PRIO: i32 = 200;
@@ -109,6 +110,7 @@ pub fn validate_purge_age(
 pub enum PriorityError {
     InvalidWeight(i32),
     ThresholdOutOfRange { val: u64, min: u64, max: u64 },
+    TierMismatch(Tier),
 }
 
 impl fmt::Display for PriorityError {
@@ -118,6 +120,7 @@ impl fmt::Display for PriorityError {
             Self::ThresholdOutOfRange { val, min, max } => {
                 write!(f, "threshold {val} out of range ({min}..={max})")
             }
+            Self::TierMismatch(t) => write!(f, "tier constraint unmet: {:?}", t),
         }
     }
 }
@@ -136,6 +139,19 @@ pub fn validate_threshold(val: u64, min: u64, max: u64) -> Result<(), PriorityEr
         return Err(PriorityError::ThresholdOutOfRange { val, min, max });
     }
     Ok(())
+}
+
+/// Evaluates priority sorting and tier matching using linear guard checks.
+pub fn evaluate_tier_priority(tier: Tier, priorities: &TierPriorities, allowed: Option<Tier>) -> Result<i32, PriorityError> {
+    if let Some(req_tier) = allowed && tier != req_tier {
+        return Err(PriorityError::TierMismatch(tier));
+    }
+
+    match tier {
+        Tier::Zram => Ok(priorities.zram),
+        Tier::Vram => Ok(priorities.vram),
+        Tier::Vhdx => Ok(priorities.vhdx),
+    }
 }
 
 #[cfg(test)]
@@ -236,5 +252,18 @@ mod tests {
             validate_purge_age(201, 200),
             Err(PurgeAgeError::AgeExceedsUptime)
         );
+    }
+
+    #[test]
+    fn evaluate_tier_priority_returns_correct_value() {
+        let p = TierPriorities::default();
+        assert_eq!(evaluate_tier_priority(Tier::Vram, &p, None), Ok(VRAM_PRIO));
+        assert_eq!(evaluate_tier_priority(Tier::Zram, &p, None), Ok(ZRAM_PRIO));
+    }
+
+    #[test]
+    fn evaluate_tier_priority_enforces_guard_clause() {
+        let p = TierPriorities::default();
+        assert_eq!(evaluate_tier_priority(Tier::Vram, &p, Some(Tier::Zram)), Err(PriorityError::TierMismatch(Tier::Vram)));
     }
 }
