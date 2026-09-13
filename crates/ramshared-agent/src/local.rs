@@ -9,6 +9,30 @@ use std::io::{BufRead, Write};
 
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 
+/// Checkpoint state for the local agent.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AgentState {
+    pub config_revision: u64,
+    pub last_known_lease: Option<u32>,
+}
+
+impl AgentState {
+    /// Loads the agent state from the given path.
+    pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
+        let file = std::fs::File::open(path)?;
+        serde_json::from_reader(file).map_err(std::io::Error::other)
+    }
+
+    /// Saves the agent state to the given path atomically using a temporary file.
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let temp = path.with_extension("tmp");
+        let file = std::fs::File::create(&temp)?;
+        serde_json::to_writer(file, self).map_err(std::io::Error::other)?;
+        // Atomic rename
+        std::fs::rename(temp, path)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LocalMsg {
@@ -77,6 +101,26 @@ mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
     use std::io::Cursor;
+
+
+    #[test]
+    fn agent_state_load_save() {
+        let dir = std::env::temp_dir().join(format!("agent_state_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create_dir_all");
+        let path = dir.join("state.json");
+
+        let state = AgentState {
+            config_revision: 42,
+            last_known_lease: Some(123),
+        };
+
+        state.save(&path).expect("save");
+        let loaded = AgentState::load(&path).expect("load");
+
+        assert_eq!(loaded, state);
+
+        std::fs::remove_dir_all(&dir).expect("remove_dir_all");
+    }
 
     #[test]
     fn local_protocol_roundtrip() {
