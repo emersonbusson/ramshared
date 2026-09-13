@@ -529,16 +529,27 @@ mod tests {
     fn test_evidence_serialization_roundtrip_matches_original_struct() {
         let mut row = RuntimeEvidence::base("run-roundtrip", "Leased");
         row.counters = IoCounters {
-            reads: 1, writes: 2, flushes: 3, bytes_read: 4, bytes_written: 5, errors: 6, outstanding: 7,
+            reads: 1,
+            writes: 2,
+            flushes: 3,
+            bytes_read: 4,
+            bytes_written: 5,
+            errors: 6,
+            outstanding: 7,
         };
         row.latency = Some(LatencySummary {
-            p50_us: 10, p95_us: 20, p99_us: 30, max_us: 40, samples: 50,
+            p50_us: 10,
+            p95_us: 20,
+            p99_us: 30,
+            max_us: 40,
+            samples: 50,
         });
         row.error_class = Some("TestClass".to_string());
         row.error_code = Some("TEST_ERR".to_string());
 
         let json = serde_json::to_string(&row).expect("serialize should succeed");
-        let parsed: RuntimeEvidence = serde_json::from_str(&json).expect("deserialize should succeed");
+        let parsed: RuntimeEvidence =
+            serde_json::from_str(&json).expect("deserialize should succeed");
 
         assert_eq!(row, parsed);
     }
