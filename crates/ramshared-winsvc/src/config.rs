@@ -268,7 +268,7 @@ tenant = "windrive-host"
 "#;
 
     #[test]
-    fn parse_product_config() {
+    fn test_config_valid_toml_parses_successfully() {
         let c = WinDriveConfig::from_toml(GOOD).unwrap();
         assert_eq!(c.size_bytes, 512 * 1024 * 1024);
         assert_eq!(c.block_size, 4096);
