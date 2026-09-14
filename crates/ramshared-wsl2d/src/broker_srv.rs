@@ -1129,6 +1129,10 @@ mod tests {
 
     /// Like `core`, but with configurable `recon_streak` (tests the actual production hysteresis).
     fn core_streak(k: u16, recon_streak: u32) -> BrokerCore {
+        core_with_lease_ttl(k, recon_streak, Duration::from_secs(30))
+    }
+
+    fn core_with_lease_ttl(k: u16, recon_streak: u32, lease_ttl: Duration) -> BrokerCore {
         let cfg = ArbiterConfig {
             streak: 1, // move already on the 1st tick above delta (tests)
             ..ArbiterConfig::default()
@@ -1146,6 +1150,7 @@ mod tests {
                 vram: Arc::new(VramGauge::default()),
                 tol_frac: 0.10,
                 recon_streak,
+                lease_ttl,
             },
         )
     }
@@ -1605,6 +1610,34 @@ mod tests {
             .count()
     }
 
+    fn register_at(c: &mut BrokerCore, sid: usize, name: &str, now: Instant) {
+        c.handle(
+            CoreEvent::Msg(
+                sid,
+                Msg::Register {
+                    proto: PROTO_VERSION,
+                    tenant: name.into(),
+                    transport: TransportKind::DccAgent,
+                },
+            ),
+            now,
+        );
+    }
+
+    fn heartbeat_at(c: &mut BrokerCore, sid: usize, now: Instant) {
+        c.handle(
+            CoreEvent::Msg(
+                sid,
+                Msg::Psi {
+                    sample: PsiSample::default(),
+                    swaps: vec![],
+                    mem: None,
+                },
+            ),
+            now,
+        );
+    }
+
     #[test]
     fn lease_granted_from_free_slices() {
         let mut c = core(2);
@@ -1659,6 +1692,56 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(n_leased(&c), 0); // devolvida ao tier de swap
+    }
+
+    #[test]
+    fn disconnect_holds_active_lease_until_deadline() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut c = core_with_lease_ttl(1, 1, ttl);
+        register_at(&mut c, 10, "holder", started);
+        heartbeat_at(&mut c, 10, started);
+        c.handle(
+            CoreEvent::Msg(10, Msg::LeaseRequest { bytes: SLICE }),
+            started,
+        );
+        c.handle(CoreEvent::Tick, started);
+        assert_eq!(n_leased(&c), 1);
+
+        c.handle(
+            CoreEvent::Disconnected(10),
+            started + Duration::from_secs(1),
+        );
+        assert_eq!(n_leased(&c), 1, "disconnect must not reclaim immediately");
+
+        c.handle(CoreEvent::Tick, started + Duration::from_secs(2));
+        assert_eq!(n_leased(&c), 1, "pre-deadline tick retains the lease");
+        c.handle(CoreEvent::Tick, started + ttl);
+        assert_eq!(n_leased(&c), 0, "deadline tick returns the lease slices");
+    }
+
+    #[test]
+    fn holder_heartbeat_renews_active_lease() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut c = core_with_lease_ttl(1, 1, ttl);
+        register_at(&mut c, 10, "holder", started);
+        heartbeat_at(&mut c, 10, started);
+        c.handle(
+            CoreEvent::Msg(10, Msg::LeaseRequest { bytes: SLICE }),
+            started,
+        );
+        c.handle(CoreEvent::Tick, started);
+        assert_eq!(n_leased(&c), 1);
+
+        heartbeat_at(&mut c, 10, started + Duration::from_secs(2));
+        c.handle(CoreEvent::Tick, started + ttl);
+        assert_eq!(n_leased(&c), 1, "holder heartbeat extends the deadline");
+        c.handle(
+            CoreEvent::Tick,
+            started + Duration::from_secs(5),
+        );
+        assert_eq!(n_leased(&c), 0, "renewed deadline eventually expires");
     }
 
     #[test]

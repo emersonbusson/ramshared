@@ -162,6 +162,8 @@ impl LeaseBook {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use std::time::{Duration, Instant};
+
     use super::{LeaseBook, LeaseDecision, LeaseDeny};
 
     #[test]
@@ -246,5 +248,69 @@ mod tests {
         let _ = book.begin_request(7, 512);
         assert_eq!(book.grant_pending(512), Err(LeaseDeny::LeaseIdExhausted));
         assert!(book.pending().is_some());
+    }
+
+    #[test]
+    fn active_lease_renews_only_for_holder() {
+        let mut book = LeaseBook::new(1024);
+        let started = Instant::now();
+        let ttl = Duration::from_secs(10);
+        let _ = book.begin_request(7, 512);
+        let lease = book.grant_pending(512, started, ttl).unwrap();
+
+        assert!(!book.renew_active(8, started + Duration::from_secs(5), ttl));
+        assert!(book.renew_active(7, started + Duration::from_secs(5), ttl));
+        assert_eq!(book.expire(started + ttl), None);
+        assert_eq!(
+            book.expire(started + Duration::from_secs(15)),
+            Some(lease)
+        );
+    }
+
+    #[test]
+    fn active_lease_expires_at_its_monotonic_deadline() {
+        let mut book = LeaseBook::new(1024);
+        let started = Instant::now();
+        let ttl = Duration::from_secs(10);
+        let _ = book.begin_request(7, 512);
+        let lease = book.grant_pending(512, started, ttl).unwrap();
+
+        assert_eq!(
+            book.expire(started + Duration::from_secs(9)),
+            None,
+            "a lease must remain active before its deadline"
+        );
+        assert_eq!(book.expire(started + ttl), Some(lease));
+        assert_eq!(book.expire(started + Duration::from_secs(20)), None);
+    }
+
+    #[test]
+    fn disconnect_cancels_pending_but_retains_active_lease() {
+        let mut book = LeaseBook::new(1024);
+        let _ = book.begin_request(7, 512);
+        assert!(book.disconnect(7).cancelled_pending);
+
+        let started = Instant::now();
+        let _ = book.begin_request(7, 512);
+        let lease = book
+            .grant_pending(512, started, Duration::from_secs(10))
+            .unwrap();
+        let disconnected = book.disconnect(7);
+
+        assert_eq!(disconnected.retained_active, Some(lease.clone()));
+        assert_eq!(book.active(), Some(&lease));
+    }
+
+    #[test]
+    fn zero_ttl_refuses_before_activating_pending_lease() {
+        let mut book = LeaseBook::new(1024);
+        let _ = book.begin_request(7, 512);
+
+        assert_eq!(
+            book.grant_pending(512, Instant::now(), Duration::ZERO),
+            Err(LeaseDeny::InvalidTtl)
+        );
+        assert!(book.pending().is_some());
+        assert!(book.active().is_none());
     }
 }
