@@ -620,7 +620,10 @@ mod tests {
     #[test]
     fn validate_lower_tier_capacity_success() {
         let vram = GIB;
-        let required = minimum_lower_tier_bytes(vram).unwrap();
+        let required = match minimum_lower_tier_bytes(vram) {
+            Ok(value) => value,
+            Err(error) => panic!("valid one GiB capacity requirement: {error:?}"),
+        };
 
         // Exact required capacity
         let sample_exact = CapacitySample::Observed {
@@ -708,7 +711,10 @@ mod tests {
     #[test]
     fn validate_lower_tier_capacity_alignment_and_shortfall_errors() {
         let vram = GIB;
-        let required = minimum_lower_tier_bytes(vram).unwrap();
+        let required = match minimum_lower_tier_bytes(vram) {
+            Ok(value) => value,
+            Err(error) => panic!("valid one GiB capacity requirement: {error:?}"),
+        };
 
         // Alignment bytes == 0
         let zero_alignment = CapacitySample::Observed {
