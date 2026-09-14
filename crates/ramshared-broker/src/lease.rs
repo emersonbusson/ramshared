@@ -4,6 +4,10 @@ use std::time::{Duration, Instant};
 
 use crate::model::TenantId;
 
+/// Default lifetime for an active logical lease when a broker shell does not
+/// expose a deployment-specific policy surface.
+pub const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(30);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingLease {
     pub holder: TenantId,
