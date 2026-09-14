@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.2](https://github.com/emersonbusson/ramshared/compare/v0.13.1...v0.13.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* **release:** keep embedded version in sync ([8a12991](https://github.com/emersonbusson/ramshared/commit/8a12991ab1aa5e30fd2fec42fbafbcebd4596227))
+* **release:** keep embedded version in sync ([86f444f](https://github.com/emersonbusson/ramshared/commit/86f444f4ba5c27058193aae4afffb868a192a734))
+
 ## [0.13.1](https://github.com/emersonbusson/ramshared/compare/v0.13.0...v0.13.1) (2026-09-14)
 
 
