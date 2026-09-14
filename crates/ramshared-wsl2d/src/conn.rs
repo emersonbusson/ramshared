@@ -132,7 +132,7 @@ pub fn spawn_writer<S: Write + Send + 'static>(
                         eprintln!("[ramsharedd] conn: write failed after retries: {}", e);
                         break;
                     }
-                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                    if e.kind() != std::io::ErrorKind::WouldBlock && e.kind() != std::io::ErrorKind::BrokenPipe {
                         eprintln!("[ramsharedd] conn: fatal write error: {}", e);
                         break;
                     }
@@ -388,6 +388,7 @@ mod tests {
             if let WriterFailure::WriteAt(expected) = self.failure
                 && write_index == expected
             {
+                self.failure = WriterFailure::Never;
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "test write failure",
@@ -409,6 +410,7 @@ mod tests {
         fn flush(&mut self) -> io::Result<()> {
             self.state.flushes.fetch_add(1, Ordering::SeqCst);
             if matches!(self.failure, WriterFailure::Flush) {
+                self.failure = WriterFailure::Never;
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "test flush failure",
@@ -630,6 +632,31 @@ mod tests {
         assert_eq!(*disconnect_state.bytes.lock().unwrap(), disconnect_expected);
         assert_eq!(disconnect_state.flushes.load(Ordering::SeqCst), 1);
 
+        let write_error_fatal_state = Arc::new(WriterState::default());
+        let (write_error_fatal_tx, write_error_fatal_rx) = channel();
+        struct FatalWriter {
+            _state: Arc<WriterState>,
+        }
+        impl Write for FatalWriter {
+            fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "fatal error"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let write_error_fatal_writer = spawn_writer(
+            FatalWriter { _state: Arc::clone(&write_error_fatal_state) },
+            write_error_fatal_rx,
+        );
+        write_error_fatal_tx.send(reply(0x88, &[0x99], false)).unwrap();
+        drop(write_error_fatal_tx);
+        join_with_deadline(write_error_fatal_writer);
+        assert_eq!(
+            *write_error_fatal_state.bytes.lock().unwrap(),
+            Vec::<u8>::new()
+        );
+
         let write_error_state = Arc::new(WriterState::default());
         let (write_error_tx, write_error_rx) = channel();
         let write_error_writer = spawn_writer(
@@ -641,9 +668,15 @@ mod tests {
         join_with_deadline(write_error_writer);
         assert_eq!(
             *write_error_state.bytes.lock().unwrap(),
-            vec![0x88; SIMPLE_REPLY_LEN]
+            {
+                let mut expected = vec![0x88; SIMPLE_REPLY_LEN];
+                expected.extend_from_slice(&[0x99]);
+                let mut full = vec![0x88; SIMPLE_REPLY_LEN];
+                full.extend_from_slice(&expected);
+                full
+            }
         );
-        assert_eq!(write_error_state.flushes.load(Ordering::SeqCst), 0);
+        assert_eq!(write_error_state.flushes.load(Ordering::SeqCst), 1);
 
         let flush_error_state = Arc::new(WriterState::default());
         let (flush_error_tx, flush_error_rx) = channel();
@@ -656,9 +689,14 @@ mod tests {
         join_with_deadline(flush_error_writer);
         assert_eq!(
             *flush_error_state.bytes.lock().unwrap(),
-            vec![0xaa; SIMPLE_REPLY_LEN]
+            {
+                let expected = vec![0xaa; SIMPLE_REPLY_LEN];
+                let mut full = expected.clone();
+                full.extend_from_slice(&expected);
+                full
+            }
         );
-        assert_eq!(flush_error_state.flushes.load(Ordering::SeqCst), 1);
+        assert_eq!(flush_error_state.flushes.load(Ordering::SeqCst), 2);
     }
 
     #[test]
