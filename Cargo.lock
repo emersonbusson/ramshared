@@ -1043,6 +1043,7 @@ name = "ramshared-winsvc"
 version = "0.13.4" # x-release-please-version
 dependencies = [
  "base64",
+ "lazy_static",
  "ramshared-block",
  "ramshared-broker",
  "ramshared-cuda",
