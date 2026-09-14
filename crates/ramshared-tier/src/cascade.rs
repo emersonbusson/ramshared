@@ -192,6 +192,9 @@ mod tests {
     fn migration_speed_within_bandwidth_limit_is_ok() {
         assert_eq!(validate_migration_speed(GIB, 2 * GIB), Ok(()));
         assert_eq!(validate_migration_speed(GIB, GIB), Ok(()));
+        assert_eq!(validate_migration_speed(0, 0), Ok(()));
+        assert_eq!(validate_migration_speed(0, GIB), Ok(()));
+        assert_eq!(validate_migration_speed(u64::MAX, u64::MAX), Ok(()));
     }
 
     #[test]
@@ -200,6 +203,29 @@ mod tests {
             validate_migration_speed(2 * GIB, GIB),
             Err(MigrationError::ExceedsBusBandwidth)
         );
+        assert_eq!(
+            validate_migration_speed(GIB + 1, GIB),
+            Err(MigrationError::ExceedsBusBandwidth)
+        );
+        assert_eq!(
+            validate_migration_speed(GIB, 0),
+            Err(MigrationError::ExceedsBusBandwidth)
+        );
+        assert_eq!(
+            validate_migration_speed(u64::MAX, u64::MAX - 1),
+            Err(MigrationError::ExceedsBusBandwidth)
+        );
+    }
+
+    #[test]
+    fn migration_error_display_and_error_trait() {
+        let err = MigrationError::ExceedsBusBandwidth;
+        assert_eq!(
+            err.to_string(),
+            "requested tier migration speed exceeds the physical bus bandwidth limit"
+        );
+        let std_err: &dyn std::error::Error = &err;
+        assert!(std_err.source().is_none());
     }
 
     #[test]
