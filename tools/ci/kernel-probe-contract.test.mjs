@@ -24,6 +24,10 @@ test('PCI probe rejects a capacity that cannot be backed by BAR0', () => {
   )
   assert.match(
     dma,
+    /rs_dev->capacity_bytes\s*>\s*SIZE_MAX[\s\S]*?return\s+-EOVERFLOW;/,
+  )
+  assert.match(
+    dma,
     /rs_dev->dma\.size\s*=\s*\(size_t\)rs_dev->capacity_bytes;/,
   )
 })
