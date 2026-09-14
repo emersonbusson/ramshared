@@ -7,6 +7,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
 VERSION_CLEAN="${VERSION#v}"
+
+# Prerequisite checks
+if ! command -v dpkg-deb >/dev/null 2>&1; then
+  echo "ERROR: dpkg-deb is required to build Debian packages." >&2
+  exit 1
+fi
+
+if ! command -v fakeroot >/dev/null 2>&1; then
+  echo "ERROR: fakeroot is required to build Debian packages with proper ownership." >&2
+  exit 1
+fi
+
+if [[ -z "$VERSION" ]]; then
+  echo "ERROR: Version argument cannot be empty." >&2
+  exit 1
+fi
+
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
 ARCH="amd64"
 
@@ -170,7 +187,7 @@ chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
-dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
+fakeroot dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
 
 # Compute SHA-256
