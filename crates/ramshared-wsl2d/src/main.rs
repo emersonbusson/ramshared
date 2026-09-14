@@ -2043,156 +2043,106 @@ fn select_daemon_action(args: AppArgs) -> Result<DaemonAction, Box<dyn std::erro
 }
 
 struct ProductionDaemonRunner;
-
-impl DaemonActionRunner for ProductionDaemonRunner {
-    fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>> {
-        match action {
-            DaemonAction::Broker(args) => {
-                let AppArgs {
-                    force,
-                    backend,
-                    slices,
-                    slice_bytes,
-                    sock,
-                    listen_nbd_addr,
-                    arbiter_addr,
-                    advertise_tcp,
-                    telemetry_jsonl,
-                    ..
-                } = args;
-                let arbiter_addr = arbiter_addr
-                    .ok_or("--slices requires --arbiter-listen IP:PORT (broker control point)")?;
-                match backend {
-                    BackendKind::Vram => {
-                        let maybe_run = match Cuda::load() {
-                            Ok(cuda) => match cuda.device(0) {
-                                Ok(dev) => {
-                                    eprintln!("[ramsharedd] GPU: {}", dev.name());
-                                    match cuda.create_context(&dev) {
-                                        Ok(ctx) => run_broker(
-                                            ctx,
-                                            slice_bytes,
-                                            slices,
-                                            sock.clone(),
-                                            force,
-                                            listen_nbd_addr,
-                                            advertise_tcp.clone(),
-                                            arbiter_addr,
-                                            telemetry_jsonl.clone(),
-                                        ),
-                                        Err(e) => Err(e.into()),
-                                    }
-                                }
-                                Err(e) => Err(e.into()),
-                            },
-                            Err(e) => Err(e.into()),
-                        };
-                        match maybe_run {
-                            Ok(()) => Ok(()),
-                            Err(e) => {
-                                eprintln!(
-                                    "[ramsharedd] GPU initialization failed ({e}); falling back natively to RAM backend to keep swap alive"
-                                );
-                                run_broker_ram(
+impl ProductionDaemonRunner {
+    fn execute_broker(&mut self, args: AppArgs) -> Result<(), Box<dyn std::error::Error>> {
+        let AppArgs {
+            force,
+            backend,
+            slices,
+            slice_bytes,
+            sock,
+            listen_nbd_addr,
+            arbiter_addr,
+            advertise_tcp,
+            telemetry_jsonl,
+            ..
+        } = args;
+        let arbiter_addr = arbiter_addr
+            .ok_or("--slices requires --arbiter-listen IP:PORT (broker control point)")?;
+        match backend {
+            BackendKind::Vram => {
+                let maybe_run = match Cuda::load() {
+                    Ok(cuda) => match cuda.device(0) {
+                        Ok(dev) => {
+                            eprintln!("[ramsharedd] GPU: {}", dev.name());
+                            match cuda.create_context(&dev) {
+                                Ok(ctx) => run_broker(
+                                    ctx,
                                     slice_bytes,
                                     slices,
-                                    sock,
+                                    sock.clone(),
+                                    force,
                                     listen_nbd_addr,
-                                    advertise_tcp,
+                                    advertise_tcp.clone(),
                                     arbiter_addr,
-                                    telemetry_jsonl,
-                                )
+                                    telemetry_jsonl.clone(),
+                                ),
+                                Err(e) => Err(e.into()),
                             }
                         }
+                        Err(e) => Err(e.into()),
+                    },
+                    Err(e) => Err(e.into()),
+                };
+                match maybe_run {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        eprintln!(
+                            "[ramsharedd] GPU initialization failed ({e}); falling back natively to RAM backend to keep swap alive"
+                        );
+                        run_broker_ram(
+                            slice_bytes,
+                            slices,
+                            sock,
+                            listen_nbd_addr,
+                            advertise_tcp,
+                            arbiter_addr,
+                            telemetry_jsonl,
+                        )
                     }
-                    BackendKind::Auto => {
-                        let cuda_run = match Cuda::load() {
-                            Ok(cuda) => match cuda.device(0) {
-                                Ok(dev) => {
-                                    eprintln!(
-                                        "[ramsharedd] GPU (CUDA auto-detected): {}",
-                                        dev.name()
-                                    );
-                                    match cuda.create_context(&dev) {
-                                        Ok(ctx) => Some(run_broker(
-                                            ctx,
-                                            slice_bytes,
-                                            slices,
-                                            sock.clone(),
-                                            force,
-                                            listen_nbd_addr,
-                                            advertise_tcp.clone(),
-                                            arbiter_addr,
-                                            telemetry_jsonl.clone(),
-                                        )),
-                                        Err(e) => {
-                                            eprintln!(
-                                                "[ramsharedd] CUDA context creation failed: {e}"
-                                            );
-                                            None
-                                        }
-                                    }
-                                }
+                }
+            }
+            BackendKind::Auto => {
+                let cuda_run = match Cuda::load() {
+                    Ok(cuda) => match cuda.device(0) {
+                        Ok(dev) => {
+                            eprintln!(
+                                "[ramsharedd] GPU (CUDA auto-detected): {}",
+                                dev.name()
+                            );
+                            match cuda.create_context(&dev) {
+                                Ok(ctx) => Some(run_broker(
+                                    ctx,
+                                    slice_bytes,
+                                    slices,
+                                    sock.clone(),
+                                    force,
+                                    listen_nbd_addr,
+                                    advertise_tcp.clone(),
+                                    arbiter_addr,
+                                    telemetry_jsonl.clone(),
+                                )),
                                 Err(e) => {
-                                    eprintln!("[ramsharedd] CUDA device(0) failed: {e}");
+                                    eprintln!(
+                                        "[ramsharedd] CUDA context creation failed: {e}"
+                                    );
                                     None
                                 }
-                            },
-                            Err(_) => None,
-                        };
-                        if let Some(res) = cuda_run {
-                            match res {
-                                Ok(()) => Ok(()),
-                                Err(err) => {
-                                    eprintln!(
-                                        "[ramsharedd] GPU broker failed ({err}); falling back natively to RAM backend"
-                                    );
-                                    run_broker_ram(
-                                        slice_bytes,
-                                        slices,
-                                        sock,
-                                        listen_nbd_addr,
-                                        advertise_tcp,
-                                        arbiter_addr,
-                                        telemetry_jsonl,
-                                    )
-                                }
                             }
-                        } else if let Ok(provider) = VulkanProvider::open(0) {
+                        }
+                        Err(e) => {
+                            eprintln!("[ramsharedd] CUDA device(0) failed: {e}");
+                            None
+                        }
+                    },
+                    Err(_) => None,
+                };
+                if let Some(res) = cuda_run {
+                    match res {
+                        Ok(()) => Ok(()),
+                        Err(err) => {
                             eprintln!(
-                                "[ramsharedd] GPU (Vulkan auto-detected): {}",
-                                provider.device_name()
-                            );
-                            match run_broker(
-                                provider,
-                                slice_bytes,
-                                slices,
-                                sock.clone(),
-                                force,
-                                listen_nbd_addr,
-                                advertise_tcp.clone(),
-                                arbiter_addr,
-                                telemetry_jsonl.clone(),
-                            ) {
-                                Ok(()) => Ok(()),
-                                Err(err) => {
-                                    eprintln!(
-                                        "[ramsharedd] Vulkan broker failed ({err}); falling back natively to RAM backend"
-                                    );
-                                    run_broker_ram(
-                                        slice_bytes,
-                                        slices,
-                                        sock,
-                                        listen_nbd_addr,
-                                        advertise_tcp,
-                                        arbiter_addr,
-                                        telemetry_jsonl,
-                                    )
-                                }
-                            }
-                        } else {
-                            eprintln!(
-                                "[ramsharedd] No GPU available; auto-selecting RAM backend to keep swap alive"
+                                "[ramsharedd] GPU broker failed ({err}); falling back natively to RAM backend"
                             );
                             run_broker_ram(
                                 slice_bytes,
@@ -2205,22 +2155,43 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                             )
                         }
                     }
-                    BackendKind::Vulkan => {
-                        let provider = VulkanProvider::open(0)?;
-                        eprintln!("[ramsharedd] GPU (Vulkan): {}", provider.device_name());
-                        run_broker(
-                            provider,
-                            slice_bytes,
-                            slices,
-                            sock,
-                            force,
-                            listen_nbd_addr,
-                            advertise_tcp,
-                            arbiter_addr,
-                            telemetry_jsonl,
-                        )
+                } else if let Ok(provider) = VulkanProvider::open(0) {
+                    eprintln!(
+                        "[ramsharedd] GPU (Vulkan auto-detected): {}",
+                        provider.device_name()
+                    );
+                    match run_broker(
+                        provider,
+                        slice_bytes,
+                        slices,
+                        sock.clone(),
+                        force,
+                        listen_nbd_addr,
+                        advertise_tcp.clone(),
+                        arbiter_addr,
+                        telemetry_jsonl.clone(),
+                    ) {
+                        Ok(()) => Ok(()),
+                        Err(err) => {
+                            eprintln!(
+                                "[ramsharedd] Vulkan broker failed ({err}); falling back natively to RAM backend"
+                            );
+                            run_broker_ram(
+                                slice_bytes,
+                                slices,
+                                sock,
+                                listen_nbd_addr,
+                                advertise_tcp,
+                                arbiter_addr,
+                                telemetry_jsonl,
+                            )
+                        }
                     }
-                    BackendKind::Ram => run_broker_ram(
+                } else {
+                    eprintln!(
+                        "[ramsharedd] No GPU available; auto-selecting RAM backend to keep swap alive"
+                    );
+                    run_broker_ram(
                         slice_bytes,
                         slices,
                         sock,
@@ -2228,42 +2199,155 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                         advertise_tcp,
                         arbiter_addr,
                         telemetry_jsonl,
-                    ),
+                    )
                 }
             }
-            DaemonAction::Nbd(args) => {
-                let AppArgs {
-                    backend,
-                    size,
-                    origin,
+            BackendKind::Vulkan => {
+                let provider = VulkanProvider::open(0)?;
+                eprintln!("[ramsharedd] GPU (Vulkan): {}", provider.device_name());
+                run_broker(
+                    provider,
+                    slice_bytes,
+                    slices,
                     sock,
                     force,
-                    nbd_dev,
-                    ..
-                } = args;
-                let validated_origin = match origin {
-                    Some(path) => {
-                        let (origin, partuuid) = open_validated_origin(&path, size)?;
+                    listen_nbd_addr,
+                    advertise_tcp,
+                    arbiter_addr,
+                    telemetry_jsonl,
+                )
+            }
+            BackendKind::Ram => run_broker_ram(
+                slice_bytes,
+                slices,
+                sock,
+                listen_nbd_addr,
+                advertise_tcp,
+                arbiter_addr,
+                telemetry_jsonl,
+            ),
+        }
+    }
+
+    fn execute_nbd(&mut self, args: AppArgs) -> Result<(), Box<dyn std::error::Error>> {
+        let AppArgs {
+            backend,
+            size,
+            origin,
+            sock,
+            force,
+            nbd_dev,
+            ..
+        } = args;
+        let validated_origin = match origin {
+            Some(path) => {
+                let (origin, partuuid) = open_validated_origin(&path, size)?;
+                eprintln!(
+                    "[ramsharedd] mode=origin-cache logical={} MiB partuuid={partuuid}",
+                    size >> 20
+                );
+                Some(origin)
+            }
+            None => None,
+        };
+        if validated_origin.is_some() {
+            if matches!(backend, BackendKind::Ram) {
+                return Err(
+                    "--backend ram has no single NBD path; use --slices (broker) or ublk"
+                        .into(),
+                );
+            }
+            eprintln!(
+                "[ramsharedd] GPU cache worker is isolated and not enabled; \
+                 serving the authoritative origin with cache=UNAVAILABLE"
+            );
+            return run_nbd(
+                UnavailableVramProvider,
+                validated_origin,
+                size,
+                sock,
+                force,
+                nbd_dev,
+                false,
+            );
+        }
+        match backend {
+            BackendKind::Vram | BackendKind::Auto => {
+                let cuda = match Cuda::load() {
+                    Ok(cuda) => cuda,
+                    Err(error) if validated_origin.is_some() => {
                         eprintln!(
-                            "[ramsharedd] mode=origin-cache logical={} MiB partuuid={partuuid}",
-                            size >> 20
+                            "[ramsharedd] GPU cache unavailable: {error}; serving origin"
                         );
-                        Some(origin)
+                        return run_nbd(
+                            UnavailableVramProvider,
+                            validated_origin,
+                            size,
+                            sock,
+                            force,
+                            nbd_dev,
+                            false,
+                        );
                     }
-                    None => None,
+                    Err(error) => return Err(error.into()),
                 };
-                if validated_origin.is_some() {
-                    if matches!(backend, BackendKind::Ram) {
-                        return Err(
-                            "--backend ram has no single NBD path; use --slices (broker) or ublk"
-                                .into(),
+                let dev = match cuda.device(0) {
+                    Ok(device) => device,
+                    Err(error) if validated_origin.is_some() => {
+                        eprintln!(
+                            "[ramsharedd] GPU cache unavailable: {error}; serving origin"
+                        );
+                        return run_nbd(
+                            UnavailableVramProvider,
+                            validated_origin,
+                            size,
+                            sock,
+                            force,
+                            nbd_dev,
+                            false,
                         );
                     }
+                    Err(error) => return Err(error.into()),
+                };
+                eprintln!("[ramsharedd] GPU: {}", dev.name());
+                let provider = match cuda.create_context(&dev) {
+                    Ok(provider) => provider,
+                    Err(error) if validated_origin.is_some() => {
+                        eprintln!(
+                            "[ramsharedd] GPU cache unavailable: {error}; serving origin"
+                        );
+                        return run_nbd(
+                            UnavailableVramProvider,
+                            validated_origin,
+                            size,
+                            sock,
+                            force,
+                            nbd_dev,
+                            false,
+                        );
+                    }
+                    Err(error) => return Err(error.into()),
+                };
+                run_nbd(provider, validated_origin, size, sock, force, nbd_dev, true)
+            }
+            BackendKind::Vulkan => match VulkanProvider::open(0) {
+                Ok(provider) => {
+                    eprintln!("[ramsharedd] GPU (Vulkan): {}", provider.device_name());
+                    run_nbd(
+                        provider,
+                        validated_origin,
+                        size,
+                        sock,
+                        force,
+                        nbd_dev,
+                        false,
+                    )
+                }
+                Err(error) if validated_origin.is_some() => {
                     eprintln!(
-                        "[ramsharedd] GPU cache worker is isolated and not enabled; \
-                         serving the authoritative origin with cache=UNAVAILABLE"
+                        "[ramsharedd] GPU cache unavailable: {error}; serving origin"
                     );
-                    return run_nbd(
+                    run_nbd(
                         UnavailableVramProvider,
                         validated_origin,
                         size,
@@ -2271,108 +2355,32 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                         force,
                         nbd_dev,
                         false,
-                    );
+                    )
                 }
-                match backend {
-                    BackendKind::Vram | BackendKind::Auto => {
-                        let cuda = match Cuda::load() {
-                            Ok(cuda) => cuda,
-                            Err(error) if validated_origin.is_some() => {
-                                eprintln!(
-                                    "[ramsharedd] GPU cache unavailable: {error}; serving origin"
-                                );
-                                return run_nbd(
-                                    UnavailableVramProvider,
-                                    validated_origin,
-                                    size,
-                                    sock,
-                                    force,
-                                    nbd_dev,
-                                    false,
-                                );
-                            }
-                            Err(error) => return Err(error.into()),
-                        };
-                        let dev = match cuda.device(0) {
-                            Ok(device) => device,
-                            Err(error) if validated_origin.is_some() => {
-                                eprintln!(
-                                    "[ramsharedd] GPU cache unavailable: {error}; serving origin"
-                                );
-                                return run_nbd(
-                                    UnavailableVramProvider,
-                                    validated_origin,
-                                    size,
-                                    sock,
-                                    force,
-                                    nbd_dev,
-                                    false,
-                                );
-                            }
-                            Err(error) => return Err(error.into()),
-                        };
-                        eprintln!("[ramsharedd] GPU: {}", dev.name());
-                        let provider = match cuda.create_context(&dev) {
-                            Ok(provider) => provider,
-                            Err(error) if validated_origin.is_some() => {
-                                eprintln!(
-                                    "[ramsharedd] GPU cache unavailable: {error}; serving origin"
-                                );
-                                return run_nbd(
-                                    UnavailableVramProvider,
-                                    validated_origin,
-                                    size,
-                                    sock,
-                                    force,
-                                    nbd_dev,
-                                    false,
-                                );
-                            }
-                            Err(error) => return Err(error.into()),
-                        };
-                        run_nbd(provider, validated_origin, size, sock, force, nbd_dev, true)
-                    }
-                    BackendKind::Vulkan => match VulkanProvider::open(0) {
-                        Ok(provider) => {
-                            eprintln!("[ramsharedd] GPU (Vulkan): {}", provider.device_name());
-                            run_nbd(
-                                provider,
-                                validated_origin,
-                                size,
-                                sock,
-                                force,
-                                nbd_dev,
-                                false,
-                            )
-                        }
-                        Err(error) if validated_origin.is_some() => {
-                            eprintln!(
-                                "[ramsharedd] GPU cache unavailable: {error}; serving origin"
-                            );
-                            run_nbd(
-                                UnavailableVramProvider,
-                                validated_origin,
-                                size,
-                                sock,
-                                force,
-                                nbd_dev,
-                                false,
-                            )
-                        }
-                        Err(error) => Err(error.into()),
-                    },
-                    BackendKind::Ram => Err(
-                        "--backend ram has no single NBD path; use --slices (broker) or ublk"
-                            .into(),
-                    ),
-                }
-            }
-            DaemonAction::Ublk(args) => {
-                run_ublk(args.size, args.force, args.queue_depth, args.backend)
-            }
+                Err(error) => Err(error.into()),
+            },
+            BackendKind::Ram => Err(
+                "--backend ram has no single NBD path; use --slices (broker) or ublk"
+                    .into(),
+            ),
+        }
+    }
+
+    fn execute_ublk(&mut self, args: AppArgs) -> Result<(), Box<dyn std::error::Error>> {
+        run_ublk(args.size, args.force, args.queue_depth, args.backend)
+    }
+}
+
+impl DaemonActionRunner for ProductionDaemonRunner {
+    fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>> {
+        match action {
+            DaemonAction::Broker(args) => self.execute_broker(args),
+            DaemonAction::Nbd(args) => self.execute_nbd(args),
+            DaemonAction::Ublk(args) => self.execute_ublk(args),
         }
     }
 }
+
 
 /// Minimal WDDM-budget view used by the NBD policy. The daemon core needs only
 /// a fresh budget/current-usage sample; `/dev/dxg` stays in the production
