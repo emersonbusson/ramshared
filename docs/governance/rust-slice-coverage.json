@@ -572,6 +572,28 @@
       "min": 80
     },
     {
+      "id": "windows-protocol-handshake-sequence",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-winsvc",
+        "--files",
+        "crates/ramshared-winsvc/src/proto.rs",
+        "--min",
+        "80"
+      ],
+      "packages": [
+        "ramshared-winsvc"
+      ],
+      "files": [
+        "crates/ramshared-winsvc/src/proto.rs"
+      ],
+      "min": 80
+    },
+    {
       "id": "windows-autonomous-structural-rust",
       "kind": "rust-structural-contract",
       "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",

@@ -760,3 +760,5 @@ The VM and physical commands are environment-bound gates, not substitutes for th
 - [ ] README, ADRs, degradation matrix, runbook, gap register, `validation.md`,
   and `IMPL.md` match the evidence without promoting production signing.
 - [x] `./scripts/docs-check.sh` and `git diff --check` pass.
+
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/proto.rs --min 80
