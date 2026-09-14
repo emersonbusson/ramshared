@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use ramshared_agent::watchdog::{Watchdog, WatchdogError};
 use ramshared_agent::{psi, swap};
 use ramshared_broker::model::{SliceId, TransportKind};
-use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, TenantMem, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, VersionHeader, TenantMem, read_msg, write_msg, VersionHeader};
 
 /// Transmission rate of `Psi` (low-rate control-plane, ~1 msg/s).
 const PSI_PERIOD: Duration = Duration::from_secs(1);
@@ -325,7 +325,7 @@ fn session(
     write_msg(
         &mut w,
         &Msg::Register {
-            proto: PROTO_VERSION,
+            header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
             tenant: cfg.tenant.clone(),
             transport: cfg.transport,
         },
@@ -588,7 +588,7 @@ mod tests {
         assert!(matches!(
             read_msg(reader).expect("registration must decode"),
             Some(Msg::Register {
-                proto: PROTO_VERSION,
+                header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
                 tenant,
                 transport: TransportKind::NbdTcp,
             }) if tenant == "test-tenant"

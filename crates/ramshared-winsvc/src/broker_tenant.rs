@@ -6,7 +6,7 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use ramshared_broker::model::{PsiSample, TransportKind};
-use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg, VersionHeader};
 
 /// Lease state held by this process after a successful grant.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,7 +107,7 @@ impl BrokerTenant {
         stream: &mut S,
     ) -> Result<u32, BrokerTenantError> {
         let msg = Msg::Register {
-            proto: PROTO_VERSION,
+            header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
             tenant: self.tenant.clone(),
             transport: TransportKind::WinDrive,
         };
@@ -259,7 +259,7 @@ mod tests {
     use std::io::Cursor;
     use std::time::Duration;
 
-    use ramshared_broker::protocol::{Msg, write_msg};
+    use ramshared_broker::protocol::{Msg, write_msg, VersionHeader};
 
     fn with_reply(
         request: Msg,

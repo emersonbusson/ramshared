@@ -24,7 +24,7 @@ use ramshared_broker::arbiter::{Action, Arbiter, ArbiterConfig, TenantView};
 use ramshared_broker::lease::{LeaseBook, LeaseDecision, LeaseDeny};
 use ramshared_broker::model::{PsiSample, Slice, SliceId, SliceState, TenantId, TransportKind};
 use ramshared_broker::protocol::{
-    Msg, NbdEndpoint, PROTO_VERSION, SliceIo, SwapEntry, TenantMem, TenantStatus, read_msg,
+    Msg, NbdEndpoint, PROTO_VERSION, SliceIo, SwapEntry, TenantMem, TenantStatus, VersionHeader, read_msg,
     write_msg,
 };
 use ramshared_broker::slices::SliceMap;
@@ -228,11 +228,7 @@ impl BrokerCore {
 
     fn on_msg(&mut self, sid: usize, msg: Msg, out: &mut Vec<Outbound>) {
         match msg {
-            Msg::Register {
-                proto,
-                tenant,
-                transport,
-            } => self.on_register(sid, proto, tenant, transport, out),
+            Msg::Register { header: VersionHeader { proto, .. }, tenant, transport } => self.on_register(sid, proto, tenant, transport, out),
             Msg::Psi { sample, swaps, mem } => self.on_psi(sid, sample, swaps, mem, out),
             Msg::SwapOnDone { slice, ok, detail } => {
                 if ok {
@@ -342,7 +338,7 @@ impl BrokerCore {
         out.push(Outbound::Log(format!(
             "[ramsharedd] tenant registrado name={name} id={id} transport={transport:?}"
         )));
-        out.push(Outbound::ToSession(sid, Msg::Registered { tenant_id: id }));
+        out.push(Outbound::ToSession(sid, Msg::Registered { tenant_id: id, features: vec![] }));
     }
 
     fn on_psi(
@@ -1155,7 +1151,7 @@ mod tests {
             CoreEvent::Msg(
                 sid,
                 Msg::Register {
-                    proto: PROTO_VERSION,
+                    header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
                     tenant: name.into(),
                     transport: TransportKind::NbdUnix,
                 },
@@ -1186,7 +1182,7 @@ mod tests {
     fn register_assigns_stable_id_and_acks_psi() {
         let mut c = core(2);
         let o = reg(&mut c, 10, "wsl2");
-        assert!(o.contains(&Outbound::ToSession(10, Msg::Registered { tenant_id: 1 })));
+        assert!(o.contains(&Outbound::ToSession(10, Msg::Registered { tenant_id: 1, features: vec![] })));
         let o = psi(&mut c, 10, 0.0);
         assert!(o.contains(&Outbound::ToSession(10, Msg::Ack)));
     }
@@ -1209,7 +1205,7 @@ mod tests {
             CoreEvent::Msg(
                 10,
                 Msg::Register {
-                    proto: 999,
+                    header: VersionHeader { proto: 999, features: vec![] },
                     tenant: "x".into(),
                     transport: TransportKind::NbdUnix,
                 },
@@ -1777,7 +1773,7 @@ mod tests {
             CoreEvent::Msg(
                 sid,
                 Msg::Register {
-                    proto: PROTO_VERSION,
+                    header: VersionHeader { proto: PROTO_VERSION, features: vec![] },
                     tenant: name.into(),
                     transport,
                 },
