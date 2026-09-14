@@ -15,7 +15,6 @@ const RUST_VERSION = '1.98.0'
 const RUST_COMMIT_RE = /^[0-9a-f]{40}$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
 const DRIVER_SIGNING = new Set(['test-signed', 'unknown', 'untrusted', 'production-trusted'])
-const TARGET_TAG = 'v0.9.0-beta.1'
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -185,7 +184,7 @@ function validatePublicAssets(manifest, root, errors) {
     'ramshared-sbom.cdx.json',
     'release-manifest.json',
   ]
-  if (tag !== TARGET_TAG || !sameStrings(manifest?.public_assets, expected)) add(errors, 'release-public-assets-invalid')
+  if (!TAG_RE.test(tag) || !sameStrings(manifest?.public_assets, expected)) add(errors, 'release-public-assets-invalid')
   const checksum = manifest?.detached_checksum
   if (!isObject(checksum) || checksum.archive !== manifest?.linux_bundle?.path || checksum.algorithm !== 'sha256' ||
       checksum.path !== `${manifest?.linux_bundle?.path}.sha256`) {
