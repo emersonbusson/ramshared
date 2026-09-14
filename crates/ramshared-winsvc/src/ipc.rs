@@ -491,4 +491,60 @@ mod tests {
         let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
         assert_eq!(err, IpcDeserializeError::IncompleteMessage);
     }
+
+    #[test]
+    fn ipc_header_payload_exactly_max() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.extend_from_slice(&MAX_PAYLOAD_LEN.to_le_bytes());
+
+        let read_header = IpcMessageHeader::read_from(&buffer[..]).unwrap();
+        assert_eq!(read_header.magic, IPC_MAGIC);
+        assert_eq!(read_header.version, IPC_VERSION_1);
+        assert_eq!(read_header.payload_len, MAX_PAYLOAD_LEN);
+    }
+
+    #[test]
+    fn ipc_header_payload_zero_length() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.extend_from_slice(&0u32.to_le_bytes());
+
+        let read_header = IpcMessageHeader::read_from(&buffer[..]).unwrap();
+        assert_eq!(read_header.magic, IPC_MAGIC);
+        assert_eq!(read_header.version, IPC_VERSION_1);
+        assert_eq!(read_header.payload_len, 0);
+    }
+
+    #[test]
+    fn ipc_header_payload_max_plus_one() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.extend_from_slice(&(MAX_PAYLOAD_LEN + 1).to_le_bytes());
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(
+            err,
+            IpcDeserializeError::PayloadTooLarge(MAX_PAYLOAD_LEN + 1)
+        );
+    }
+
+    #[test]
+    fn ipc_header_payload_with_null_bytes() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        // Length is 4 bytes
+        buffer.extend_from_slice(&4u32.to_le_bytes());
+        // Embedded null bytes representing the payload in the stream
+        buffer.extend_from_slice(&[0, 0, 0, 0]);
+
+        let read_header = IpcMessageHeader::read_from(&buffer[..]).unwrap();
+        assert_eq!(read_header.magic, IPC_MAGIC);
+        assert_eq!(read_header.version, IPC_VERSION_1);
+        assert_eq!(read_header.payload_len, 4);
+    }
 }
