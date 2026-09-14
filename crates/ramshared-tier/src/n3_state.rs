@@ -769,22 +769,22 @@ impl PreflightModel {
 
     /// Emits an advisory demotion intent without creating a lease.
     pub fn request_demotion(&mut self) -> PreflightDecision {
-        if self.state == PreflightState::Constrained {
-            self.state = PreflightState::DemotionRequested;
+        if self.state != PreflightState::Constrained {
             return PreflightDecision {
                 state: self.state,
-                action: PreflightAction::DemotionRequested,
+                action: PreflightAction::Unavailable(FailureReason::StateTransition(
+                    StateTransitionError::IllegalPreflight {
+                        expected: Some(PreflightState::Constrained),
+                        actual: self.state,
+                    },
+                )),
                 retry_allowed: true,
             };
         }
+        self.state = PreflightState::DemotionRequested;
         PreflightDecision {
             state: self.state,
-            action: PreflightAction::Unavailable(FailureReason::StateTransition(
-                StateTransitionError::IllegalPreflight {
-                    expected: Some(PreflightState::Constrained),
-                    actual: self.state,
-                },
-            )),
+            action: PreflightAction::DemotionRequested,
             retry_allowed: true,
         }
     }
@@ -1940,6 +1940,19 @@ mod tests {
                 StateTransitionError::IllegalPreflight {
                     expected: Some(PreflightState::Constrained),
                     actual: model.state
+                }
+            ))
+        );
+
+        // Explicitly set state to other non-constrained values
+        model.state = PreflightState::Observing;
+        let decision2 = model.request_demotion();
+        assert_eq!(
+            decision2.action,
+            PreflightAction::Unavailable(FailureReason::StateTransition(
+                StateTransitionError::IllegalPreflight {
+                    expected: Some(PreflightState::Constrained),
+                    actual: PreflightState::Observing
                 }
             ))
         );
