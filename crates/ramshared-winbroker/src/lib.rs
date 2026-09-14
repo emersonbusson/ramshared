@@ -316,6 +316,13 @@ mod tests {
     }
 
     #[test]
+    fn disconnect_graceful_pipe_error_no_data() {
+        use super::WinBrokerError;
+        let e = std::io::Error::from_raw_os_error(232);
+        assert!(matches!(WinBrokerError::from(e), WinBrokerError::NoData));
+    }
+
+    #[test]
     fn winbrokererror_mapping() {
         use super::WinBrokerError;
         use std::io;
