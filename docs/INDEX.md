@@ -25,6 +25,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED | — |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD | — |
+| [`kernel-pci-bar-capacity-contract`](specs/no-milestone/kernel-pci-bar-capacity-contract/) | Exact PCI BAR capacity contract for the RamShared block driver | — | — | UNQUALIFIED | — |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD | — |
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD | — |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker | — | — | UNQUALIFIED | — |
