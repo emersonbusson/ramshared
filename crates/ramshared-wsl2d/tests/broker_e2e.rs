@@ -112,7 +112,10 @@ fn register_with_transport(s: &mut TcpStream, name: &str, transport: TransportKi
     .unwrap();
 }
 
-fn request_status(s: &mut TcpStream, r: &mut BufReader<TcpStream>) -> Vec<ramshared_broker::model::Slice> {
+fn request_status(
+    s: &mut TcpStream,
+    r: &mut BufReader<TcpStream>,
+) -> Vec<ramshared_broker::model::Slice> {
     write_msg(s, &Msg::Status).unwrap();
     match read_until(r, |message| matches!(message, Msg::StatusReply { .. })) {
         Some(Msg::StatusReply { slices, .. }) => slices,
@@ -184,19 +187,28 @@ fn e2e_disconnected_lease_expires_without_reuse_before_deadline() {
     let (mut holder, mut holder_reader) = connect(h.addr);
     register_with_transport(&mut holder, "holder", TransportKind::DccAgent);
     assert!(matches!(
-        read_until(&mut holder_reader, |message| matches!(message, Msg::Registered { .. })),
+        read_until(&mut holder_reader, |message| matches!(
+            message,
+            Msg::Registered { .. }
+        )),
         Some(Msg::Registered { .. })
     ));
     write_msg(&mut holder, &Msg::LeaseRequest { bytes: SLICE }).unwrap();
     assert!(matches!(
-        read_until(&mut holder_reader, |message| matches!(message, Msg::LeaseGranted { .. })),
+        read_until(&mut holder_reader, |message| matches!(
+            message,
+            Msg::LeaseGranted { .. }
+        )),
         Some(Msg::LeaseGranted { .. })
     ));
 
     let (mut observer, mut observer_reader) = connect(h.addr);
     register_with_transport(&mut observer, "observer", TransportKind::DccAgent);
     assert!(matches!(
-        read_until(&mut observer_reader, |message| matches!(message, Msg::Registered { .. })),
+        read_until(&mut observer_reader, |message| matches!(
+            message,
+            Msg::Registered { .. }
+        )),
         Some(Msg::Registered { .. })
     ));
     drop(holder_reader);
@@ -204,11 +216,17 @@ fn e2e_disconnected_lease_expires_without_reuse_before_deadline() {
 
     std::thread::sleep(Duration::from_millis(100));
     let before = request_status(&mut observer, &mut observer_reader);
-    assert!(matches!(before[0].state, ramshared_broker::model::SliceState::Leased));
+    assert!(matches!(
+        before[0].state,
+        ramshared_broker::model::SliceState::Leased
+    ));
 
     std::thread::sleep(Duration::from_millis(500));
     let after = request_status(&mut observer, &mut observer_reader);
-    assert!(matches!(after[0].state, ramshared_broker::model::SliceState::Free));
+    assert!(matches!(
+        after[0].state,
+        ramshared_broker::model::SliceState::Free
+    ));
 }
 
 #[test]

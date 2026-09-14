@@ -43,7 +43,7 @@ use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::autotier::{
     AutotierConfig, BudgetInput, RecoveryTracker, backend_release_allowed, commit_allowed,
 };
-use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
+use ramshared_wsl2d::broker_srv::{BrokerConfig, DEFAULT_LEASE_TTL, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::{spawn_activate_swap, spawn_swapoff};
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
@@ -4111,6 +4111,7 @@ fn build_broker_config_with_tick(
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
         tick,
+        lease_ttl: DEFAULT_LEASE_TTL,
         slice_io,
         vram,
         tol_frac: RECON_TOL_FRAC,
