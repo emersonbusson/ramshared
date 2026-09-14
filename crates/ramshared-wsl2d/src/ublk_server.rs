@@ -75,30 +75,37 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
     buf: &mut [u8],
 ) -> i32 {
     let len = req.len as usize;
+
+    // Buffer non-nullness / empty guard
+    if buf.is_empty() && req.len > 0 {
+        return EINVAL;
+    }
+
     if len > buf.len() {
         return EINVAL; // request larger than the available buffer
     }
 
     let bs = backend.block_size() as u64;
-    if bs > 0 && (!req.offset.is_multiple_of(bs) || !(req.len as u64).is_multiple_of(bs)) {
+    if bs > 0 && !req.offset.is_multiple_of(bs) {
+        return EINVAL;
+    }
+    if bs > 0 && !(req.len as u64).is_multiple_of(bs) {
         return EINVAL;
     }
 
     // Physical bounds guard
-    if req
-        .offset
-        .checked_add(req.len as u64)
-        .is_none_or(|end| end > backend.size_bytes())
-    {
+    let end = match req.offset.checked_add(req.len as u64) {
+        Some(val) => val,
+        None => return ERANGE,
+    };
+    if end > backend.size_bytes() {
         return ERANGE;
     }
 
     // Command guard
-    if !matches!(
-        req.cmd,
-        Command::Read | Command::Write | Command::Flush | Command::Trim
-    ) {
-        return EINVAL;
+    match req.cmd {
+        Command::Read | Command::Write | Command::Flush | Command::Trim => {}
+        _ => return EINVAL,
     }
 
     if req.cmd == Command::Trim {
@@ -940,6 +947,20 @@ mod join_tests {
         };
         assert_eq!(residency.demote_count(), 3);
         residency.join().expect("residency success");
+    }
+
+    #[test]
+    fn serve_request_refuses_null_buffer() {
+        let mut backend = RamBackend::new(4096);
+        let mut buffer: [u8; 0] = [];
+        let request = Request {
+            flags: 0,
+            cmd: Command::Read,
+            handle: 1,
+            offset: 0,
+            len: 4096,
+        };
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
     }
 
     #[test]
