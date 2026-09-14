@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_serialization_v1() {
+    fn test_ipc_header_serialization_v1() {
         let header = IpcMessageHeader::new(IPC_VERSION_1, 42);
         let mut buffer = Vec::new();
         header.write_to(&mut buffer).unwrap();
@@ -419,7 +419,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_serialization_v2() {
+    fn test_ipc_header_serialization_v2() {
         let mut header = IpcMessageHeader::new(IPC_VERSION_2, 42);
         header.flags = 0xDEADBEEF;
         let mut buffer = Vec::new();
@@ -434,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_backward_compatibility() {
+    fn test_ipc_header_backward_compatibility() {
         // V1 payload
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_invalid_magic() {
+    fn test_ipc_header_invalid_magic() {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&0xBADBADu32.to_le_bytes());
         buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
@@ -460,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_unsupported_version() {
+    fn test_ipc_header_unsupported_version() {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
         buffer.extend_from_slice(&999u32.to_le_bytes());
@@ -471,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_payload_too_large() {
+    fn test_ipc_header_payload_too_large() {
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
         buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
@@ -485,10 +485,122 @@ mod tests {
     }
 
     #[test]
-    fn ipc_header_incomplete_message() {
+    fn test_ipc_header_incomplete_message() {
         let buffer = IPC_MAGIC.to_le_bytes(); // Only magic, missing version and len
 
         let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
         assert_eq!(err, IpcDeserializeError::IncompleteMessage);
+    }
+
+    #[test]
+    fn test_ipc_header_disconnect() {
+        let buffer: [u8; 0] = [];
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::Disconnect);
+    }
+
+    #[test]
+    fn test_ipc_header_io_error_first_byte() {
+        struct FailingReader;
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "permission denied",
+                ))
+            }
+        }
+        let err = IpcMessageHeader::read_from(FailingReader).unwrap_err();
+        assert_eq!(
+            err,
+            IpcDeserializeError::Io(std::io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    #[test]
+    fn test_ipc_header_incomplete_magic() {
+        let buffer = [0x52u8, 0x41u8]; // "RA", missing "MS"
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::IncompleteMessage);
+    }
+
+    #[test]
+    fn test_ipc_header_incomplete_version() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.push(1); // 1 byte of version, missing 3
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::IncompleteMessage);
+    }
+
+    #[test]
+    fn test_ipc_header_incomplete_len() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_1.to_le_bytes());
+        buffer.push(42); // 1 byte of len, missing 3
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::IncompleteMessage);
+    }
+
+    #[test]
+    fn test_ipc_header_incomplete_flags() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_2.to_le_bytes());
+        buffer.extend_from_slice(&42u32.to_le_bytes());
+        buffer.push(0xFF); // 1 byte of flags, missing 3
+
+        let err = IpcMessageHeader::read_from(&buffer[..]).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::IncompleteMessage);
+    }
+
+    #[test]
+    fn test_ipc_payload_round_trip() {
+        let header = IpcMessageHeader::new(IPC_VERSION_2, 5);
+        let payload = b"hello";
+
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(payload);
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+
+        assert_eq!(read_header.magic, header.magic);
+        assert_eq!(read_header.payload_len, 5);
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_eq!(&read_payload[..], payload);
+    }
+
+    #[test]
+    fn test_ipc_payload_truncated() {
+        let header = IpcMessageHeader::new(IPC_VERSION_1, 100);
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(b"too short");
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        let err = std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn test_ipc_payload_malformed() {
+        let header = IpcMessageHeader::new(IPC_VERSION_1, 5);
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(b"bad\0\0");
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_ne!(&read_payload[..], b"good\0");
     }
 }
