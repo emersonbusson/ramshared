@@ -401,6 +401,9 @@ impl WindowsDriverLink {
 
     /// One pending COMMIT_AND_FETCH only (DT-4). Timeout uses CancelIoEx + GetOverlappedResult.
     pub fn commit_and_fetch(&mut self, timeout: Duration) -> Result<(), IoctlError> {
+        if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
+            return Err(IoctlError::Invalid("invalid driver handle".into()));
+        }
         if self.pending {
             return Err(IoctlError::Invalid("commit already pending".into()));
         }
@@ -423,35 +426,34 @@ impl WindowsDriverLink {
                 &mut ov,
             )
         };
-        if ok == FALSE {
-            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-            if err != ERROR_IO_PENDING {
-                return Err(IoctlError::Ioctl(format!("COMMIT win32={err}")));
-            }
-            self.pending = true;
-            let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
-            let wr =
-                unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
-            if wr == WAIT_TIMEOUT {
-                self.cancel_and_drain(&ov);
-                return Err(IoctlError::Timeout);
-            }
-            if wr != WAIT_OBJECT_0 {
-                self.cancel_and_drain(&ov);
-                return Err(IoctlError::Ioctl(format!("WaitForSingleObject={wr}")));
-            }
-            let mut xfer = 0u32;
-            let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
-            self.pending = false;
-            if gor == FALSE {
-                return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
-            }
-            Ok(())
-        } else {
+        if ok != FALSE {
             // Completed inline.
             self.pending = false;
-            Ok(())
+            return Ok(());
         }
+
+        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        if err != ERROR_IO_PENDING {
+            return Err(IoctlError::Ioctl(format!("COMMIT win32={err}")));
+        }
+        self.pending = true;
+        let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        let wr = unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
+        if wr == WAIT_TIMEOUT {
+            self.cancel_and_drain(&ov);
+            return Err(IoctlError::Timeout);
+        }
+        if wr != WAIT_OBJECT_0 {
+            self.cancel_and_drain(&ov);
+            return Err(IoctlError::Ioctl(format!("WaitForSingleObject={wr}")));
+        }
+        let mut xfer = 0u32;
+        let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
+        self.pending = false;
+        if gor == FALSE {
+            return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
+        }
+        Ok(())
     }
 
     pub fn cancel_fetch(&mut self) -> Result<(), IoctlError> {
@@ -479,6 +481,15 @@ impl WindowsDriverLink {
         input: Option<&[u8]>,
         _output: Option<&mut [u8]>,
     ) -> Result<(), IoctlError> {
+        if self.handle.is_null() || self.handle == INVALID_HANDLE_VALUE {
+            return Err(IoctlError::Invalid("invalid driver handle".into()));
+        }
+        if let Some(b) = input {
+            if (b.as_ptr() as usize) % 4096 != 0 {
+                return Err(IoctlError::Invalid("unaligned IOCTL buffer".into()));
+            }
+        }
+
         unsafe {
             let _ = ResetEvent(self.event);
         }
@@ -560,4 +571,57 @@ fn struct_bytes<T>(v: &T) -> Vec<u8> {
         ptr::copy_nonoverlapping((v as *const T) as *const u8, out.as_mut_ptr(), n);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_handle_commit_and_fetch() {
+        let mut link = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        let err = link.commit_and_fetch(Duration::from_secs(1)).unwrap_err();
+        match err {
+            IoctlError::Invalid(msg) => assert_eq!(msg, "invalid driver handle"),
+            _ => panic!("Expected IoctlError::Invalid"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_handle_ioctl_sync() {
+        let mut link = WindowsDriverLink {
+            handle: INVALID_HANDLE_VALUE,
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        let err = link.ioctl_sync(0, None, None).unwrap_err();
+        match err {
+            IoctlError::Invalid(msg) => assert_eq!(msg, "invalid driver handle"),
+            _ => panic!("Expected IoctlError::Invalid"),
+        }
+    }
+
+    #[test]
+    fn test_unaligned_ioctl_buffer() {
+        let mut link = WindowsDriverLink {
+            handle: 1 as HANDLE, // valid enough handle for this test, since it hits guard clause first
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        // Create an unaligned buffer (size 4096, force a misaligned slice)
+        let buf = vec![0u8; 4096 + 1];
+        let ptr = buf.as_ptr() as usize;
+        let offset = if ptr % 4096 == 0 { 1 } else { 0 };
+        let slice = &buf[offset..offset + 1]; // Definitely not page aligned
+
+        let err = link.ioctl_sync(0, Some(slice), None).unwrap_err();
+        match err {
+            IoctlError::Invalid(msg) => assert_eq!(msg, "unaligned IOCTL buffer"),
+            _ => panic!("Expected IoctlError::Invalid"),
+        }
+    }
 }
