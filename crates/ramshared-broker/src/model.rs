@@ -72,32 +72,27 @@ impl Slice {
             }
         }
 
-        let mut min_offset = u64::MAX;
-        let mut max_end = 0;
-        let mut total_len = 0;
-        for i in 0..slices.len() {
-            let a = &slices[i];
-            min_offset = std::cmp::min(min_offset, a.offset);
-            max_end = std::cmp::max(max_end, a.offset + a.len);
-            total_len += a.len;
-
-            for b in slices.iter().skip(i + 1) {
-                let a_end = a.offset + a.len;
-                let b_end = b.offset + b.len;
-                if std::cmp::max(a.offset, b.offset) < std::cmp::min(a_end, b_end) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "Slices overlap",
-                    ));
-                }
-            }
+        if slices.is_empty() {
+            return Ok(());
         }
 
-        if !slices.is_empty() && max_end.saturating_sub(min_offset) != total_len {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Slices are not contiguous",
-            ));
+        let mut sorted: Vec<&Slice> = slices.iter().collect();
+        sorted.sort_unstable_by_key(|slice| slice.offset);
+
+        for pair in sorted.windows(2) {
+            let previous_end = pair[0].offset + pair[0].len;
+            if previous_end > pair[1].offset {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Slices overlap",
+                ));
+            }
+            if previous_end != pair[1].offset {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Slices are not contiguous",
+                ));
+            }
         }
 
         Ok(())
@@ -291,6 +286,19 @@ mod tests {
             },
         ];
         assert!(Slice::validate_layout(&ok_slices, max_cap).is_ok());
+        assert!(Slice::validate_layout(&[], max_cap).is_ok());
+
+        let unsorted_ok_slices = [
+            Slice {
+                id: 1,
+                offset: 4096,
+                len: 4096,
+                tenant: None,
+                state: SliceState::Free,
+            },
+            base_slice.clone(),
+        ];
+        assert!(Slice::validate_layout(&unsorted_ok_slices, max_cap).is_ok());
 
         let mut zero_len = ok_slices.clone();
         zero_len[0].len = 0;
