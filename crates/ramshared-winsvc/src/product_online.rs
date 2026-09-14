@@ -1254,7 +1254,6 @@ struct HostGates {
     volume_device_path: Option<String>,
     raw_disk: bool,
     /// Validated at construction (letter/serial/size shape); kept for diagnostics.
-    #[allow(dead_code)]
     target: TeardownTarget,
     target_serial: String,
     target_size: u64,

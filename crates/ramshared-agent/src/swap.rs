@@ -56,22 +56,26 @@ pub fn validate_swap_resize(
 /// Assembles `nbd-client` argv to attach `export` to `dev` (DT-14: `-timeout 30`, no
 /// `-persist`). Unix uses `-unix <path>`; TCP uses positional `<host> <port>`.
 pub fn nbd_args(endpoint: &NbdEndpoint, export: &str, dev: &str) -> Vec<String> {
-    let mut a: Vec<String> = vec!["-N".into(), export.into()];
     match endpoint {
-        NbdEndpoint::Unix { path } => {
-            a.push("-unix".into());
-            a.push(path.clone());
-            a.push(dev.into());
-        }
-        NbdEndpoint::Tcp { host, port } => {
-            a.push(host.clone());
-            a.push(port.to_string());
-            a.push(dev.into());
-        }
+        NbdEndpoint::Unix { path } => vec![
+            "-N".into(),
+            export.into(),
+            "-unix".into(),
+            path.clone(),
+            dev.into(),
+            "-timeout".into(),
+            "30".into(),
+        ],
+        NbdEndpoint::Tcp { host, port } => vec![
+            "-N".into(),
+            export.into(),
+            host.clone(),
+            port.to_string(),
+            dev.into(),
+            "-timeout".into(),
+            "30".into(),
+        ],
     }
-    a.push("-timeout".into());
-    a.push("30".into());
-    a
 }
 
 /// Assembles `swapon` argv (DT-7: only emits `-p <prio>` when priority is defined).
