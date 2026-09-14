@@ -31,6 +31,7 @@ const RELEASE_ENVIRONMENT = 'protected-release'
 const RELEASE_SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
 const RELEASE_PROMOTION_POLICY = 'docs/governance/release-promotion.json'
 const RELEASE_TARGET_TAG = 'v0.9.0-beta.1'
+const RELEASE_PRODUCER_TARGET_TAG = 'derived-from-conventional-commits'
 const RELEASE_INTEGRITY_ARTIFACT_RETENTION_DAYS = 14
 const LOCAL_REUSABLE_AGGREGATE_KIND = 'local-reusable-needs-v1'
 const RUST_SLICE_COVERAGE_MAP = 'docs/governance/rust-slice-coverage.json'
@@ -217,9 +218,9 @@ function validateReleaseProducerPolicy(gate, policy, errors) {
     if (required) errors.push(finding(gate.id, 'release-producer-policy-missing'))
     return
   }
-  if (!isObject(producer) || producer.target_tag !== RELEASE_TARGET_TAG ||
+  if (!isObject(producer) || producer.target_tag !== RELEASE_PRODUCER_TARGET_TAG ||
       producer.credential !== 'github-app-required' || producer.release_config !== 'release-please-config.json' ||
-      producer.draft !== true || producer.prerelease !== true || producer.force_tag_creation !== true ||
+      producer.draft !== false || producer.prerelease !== false || producer.force_tag_creation !== true ||
       producer.skip_github_release !== false || Object.hasOwn(producer, 'release_as') ||
       Object.hasOwn(producer, 'baseline_version') || Object.hasOwn(producer, 'last_release_sha')) {
     errors.push(finding(gate.id, 'release-producer-policy-invalid'))
@@ -1002,7 +1003,8 @@ export function releaseProducerManifestMatchesPublishedTarget(manifest, policy) 
   if (!isObject(manifest) || !isObject(policy) || Object.keys(manifest).length !== 1) return false
   const version = manifest['.']
   return typeof version === 'string' && typeof policy.target_tag === 'string' &&
-    version === policy.target_tag.slice(1)
+    policy.target_tag === RELEASE_PRODUCER_TARGET_TAG &&
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
 }
 
 function releaseProducerHeaderHasRequiredSections(header) {
@@ -1022,16 +1024,14 @@ function releaseProducerWorkflowFindings(gate, text, block, root) {
       !joined.includes('test -n "$RELEASE_APP_ID"') || !joined.includes('test -n "$RELEASE_APP_PRIVATE_KEY"') ||
       appTokenStart === -1 || appTokenUse === -1 || /\bif:\s*/.test(joined.slice(appTokenStart, appTokenUse)) ||
       !joined.includes('token: ${{ steps.release-app-token.outputs.token }}') ||
-      !joined.includes('git ls-remote --refs') || !joined.includes('refs/tags/$RELEASE_TARGET_TAG') ||
-      !joined.includes("if: ${{ steps.target.outputs.run == 'true' }}") ||
       /RELEASE_PLEASE_TOKEN|GITHUB_TOKEN|\bPAT\b|\|\|/.test(joined)) {
     observed.push('release-producer-credential-invalid')
   }
   try {
     const config = JSON.parse(readFileSync(path.join(root, policy.release_config), 'utf8'))
     const manifest = JSON.parse(readFileSync(path.join(root, '.release-please-manifest.json'), 'utf8'))
-    if (config['release-type'] !== 'simple' || config.versioning !== 'prerelease' ||
-        config['prerelease-type'] !== 'beta' || config.prerelease !== true || config.draft !== true ||
+    if (config['release-type'] !== 'simple' || Object.hasOwn(config, 'versioning') ||
+        Object.hasOwn(config, 'prerelease-type') || Object.hasOwn(config, 'prerelease') || config.draft !== false ||
         config['force-tag-creation'] !== true || config['skip-github-release'] !== false ||
         Object.hasOwn(config, 'last-release-sha') || Object.hasOwn(config, 'release-as') ||
         !releaseProducerHeaderHasRequiredSections(config['pull-request-header']) ||
