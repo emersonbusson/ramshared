@@ -148,6 +148,13 @@ mod windows_svc {
             // SCM default without service dispatcher running returns 1
             assert_eq!(code, 1);
         }
+
+        #[test]
+        fn test_run_checked_disallows_unapproved_program() {
+            let res = run_checked("cmd.exe", &["/c", "echo", "test"]);
+            assert!(res.is_err());
+            assert!(res.unwrap_err().to_string().contains("not permitted"));
+        }
     }
 
     fn service_main(_args: Vec<OsString>) {
@@ -633,7 +640,12 @@ mod windows_svc {
         Ok(())
     }
 
+    const ALLOWED_PROGRAMS: &[&str] = &["sc.exe"];
+
     fn run_checked(program: &str, args: &[&str]) -> Result<(), Box<dyn std::error::Error>> {
+        if !ALLOWED_PROGRAMS.contains(&program) {
+            return Err(format!("program '{program}' is not permitted for execution").into());
+        }
         let output = std::process::Command::new(program).args(args).output()?;
         if !output.status.success() {
             return Err(format!(
