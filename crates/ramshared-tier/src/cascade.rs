@@ -203,6 +203,37 @@ mod tests {
     }
 
     #[test]
+    fn migration_speed_edge_cases() {
+        // Zero requested speed is always valid
+        assert_eq!(validate_migration_speed(0, 0), Ok(()));
+        assert_eq!(validate_migration_speed(0, GIB), Ok(()));
+
+        // Off-by-one boundary conditions
+        assert_eq!(validate_migration_speed(GIB, GIB), Ok(()));
+        assert_eq!(
+            validate_migration_speed(GIB + 1, GIB),
+            Err(MigrationError::ExceedsBusBandwidth)
+        );
+
+        // Maximum integer bounds
+        assert_eq!(validate_migration_speed(u64::MAX, u64::MAX), Ok(()));
+        assert_eq!(
+            validate_migration_speed(u64::MAX, u64::MAX - 1),
+            Err(MigrationError::ExceedsBusBandwidth)
+        );
+    }
+
+    #[test]
+    fn migration_error_display_and_trait() {
+        let err = MigrationError::ExceedsBusBandwidth;
+        assert_eq!(
+            err.to_string(),
+            "requested tier migration speed exceeds the physical bus bandwidth limit"
+        );
+        let _err_trait: &dyn std::error::Error = &err;
+    }
+
+    #[test]
     fn tier_resize_within_physical_limits_is_ok() {
         assert_eq!(validate_tier_resize(Tier::Zram, 0, GIB, GIB), Ok(()));
         assert_eq!(validate_tier_resize(Tier::Vram, GIB, GIB, GIB), Ok(()));
