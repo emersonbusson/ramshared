@@ -1086,21 +1086,39 @@ mod tests {
     }
 
     #[test]
-    fn relative_config_is_rejected() {
-        let e = validate_absolute_config_path(Path::new("winsvc.toml")).unwrap_err();
-        assert!(matches!(
-            e,
-            ConfigError::Invalid {
-                field: "config",
-                ..
-            }
-        ));
+    fn test_validate_absolute_config_path_valid_absolute() {
+        assert!(
+            validate_absolute_config_path(Path::new(r"C:\ProgramData\RamShared\winsvc.toml"))
+                .is_ok()
+        );
+        assert!(validate_absolute_config_path(Path::new(r"\\?\C:\winsvc.toml")).is_ok());
     }
 
     #[test]
-    fn reparse_config_is_rejected() {
-        let e = validate_absolute_config_path(Path::new("")).unwrap_err();
-        assert!(matches!(e, ConfigError::Invalid { .. }));
+    fn test_validate_absolute_config_path_empty() {
+        let err = validate_absolute_config_path(Path::new("")).unwrap_err();
+        match err {
+            ConfigError::Invalid { field, detail } => {
+                assert_eq!(field, "config");
+                assert_eq!(detail, "empty path");
+            }
+            _ => panic!("expected ConfigError::Invalid for empty path"),
+        }
+    }
+
+    #[test]
+    fn test_validate_absolute_config_path_relative() {
+        let relative_paths = ["winsvc.toml", "./winsvc.toml", "config/winsvc.toml"];
+        for rel in &relative_paths {
+            let err = validate_absolute_config_path(Path::new(rel)).unwrap_err();
+            match err {
+                ConfigError::Invalid { field, detail } => {
+                    assert_eq!(field, "config");
+                    assert_eq!(detail, "relative config path rejected");
+                }
+                _ => panic!("expected ConfigError::Invalid for relative path {}", rel),
+            }
+        }
     }
 
     #[test]

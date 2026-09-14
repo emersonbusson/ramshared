@@ -503,4 +503,54 @@ mod tests {
         let current_health: Option<bool> = None;
         assert_ne!(current_health, Some(true));
     }
+    #[test]
+    fn test_evidence_record_creation_base_returns_default_values() {
+        let row = RuntimeEvidence::base("run-creation", "Startup");
+        assert_eq!(row.run_id, "run-creation");
+        assert_eq!(row.phase, "Startup");
+        assert_eq!(row.schema, EVIDENCE_SCHEMA);
+        assert_eq!(row.backend, "cuda");
+        assert!(row.event_id.starts_with("evt-"));
+        assert!(row.ts_utc_ms > 0);
+        assert_eq!(row.pid, std::process::id());
+        assert_eq!(row.mode, "storage-only");
+    }
+
+    #[test]
+    fn test_evidence_timestamp_formatting_utc_ms_returns_valid_timestamp() {
+        let ts1 = utc_ms();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        let ts2 = utc_ms();
+        assert!(ts2 >= ts1);
+        assert!(ts1 > 0);
+    }
+
+    #[test]
+    fn test_evidence_serialization_roundtrip_matches_original_struct() {
+        let mut row = RuntimeEvidence::base("run-roundtrip", "Leased");
+        row.counters = IoCounters {
+            reads: 1,
+            writes: 2,
+            flushes: 3,
+            bytes_read: 4,
+            bytes_written: 5,
+            errors: 6,
+            outstanding: 7,
+        };
+        row.latency = Some(LatencySummary {
+            p50_us: 10,
+            p95_us: 20,
+            p99_us: 30,
+            max_us: 40,
+            samples: 50,
+        });
+        row.error_class = Some("TestClass".to_string());
+        row.error_code = Some("TEST_ERR".to_string());
+
+        let json = serde_json::to_string(&row).expect("serialize should succeed");
+        let parsed: RuntimeEvidence =
+            serde_json::from_str(&json).expect("deserialize should succeed");
+
+        assert_eq!(row, parsed);
+    }
 }
