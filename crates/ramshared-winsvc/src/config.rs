@@ -684,4 +684,82 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         let c = WinDriveConfig::from_toml(GOOD).unwrap();
         assert_eq!(c.evidence_path(), c.evidence_path.as_path());
     }
+
+    #[test]
+    fn test_from_toml_lowercase_volume_letter_accepted() {
+        let text = GOOD.replace(r#"volume_letter = "D""#, r#"volume_letter = "d""#);
+        let c = WinDriveConfig::from_toml(&text).unwrap();
+        assert_eq!(c.volume_letter, 'd');
+    }
+
+    #[test]
+    fn test_from_toml_block_size_512_accepted() {
+        let text = GOOD.replace("block_size = 4096", "block_size = 512");
+        let c = WinDriveConfig::from_toml(&text).unwrap();
+        assert_eq!(c.block_size, 512);
+    }
+
+    #[test]
+    fn test_from_toml_missing_win_drive_section_fails() {
+        let bad = r#"
+[other_drive]
+size_bytes = 536870912
+"#;
+        let e = WinDriveConfig::from_toml(bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn test_from_toml_ready_timeout_boundary_validation() {
+        let bad_zero = GOOD.replace("broker_ready_timeout_secs = 30", "broker_ready_timeout_secs = 0");
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad_zero),
+            Err(ConfigError::Invalid { field: "broker_ready_timeout_secs", .. })
+        ));
+
+        let good_one = GOOD.replace("broker_ready_timeout_secs = 30", "broker_ready_timeout_secs = 1");
+        let c = WinDriveConfig::from_toml(&good_one).unwrap();
+        assert_eq!(c.broker_ready_timeout_secs, 1);
+    }
+
+    #[test]
+    fn test_from_toml_queue_depth_exceeds_max_fails() {
+        let bad = GOOD.replace("queue_depth = 4", "queue_depth = 512");
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Invalid { field: "queue_depth", .. })
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_max_io_exceeds_cap_fails() {
+        let bad = GOOD.replace("max_io_bytes = 1048576", "max_io_bytes = 1052672");
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Invalid { field: "max_io_bytes", .. })
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_invalid_mount_paths() {
+        let text_exact_prefix = GOOD.replace(
+            r#"volume_letter = "D""#,
+            r#"volume_letter = "D"
+volume_mount_path = "C:\\ProgramData\\RamShared\\mounts\\""#,
+        );
+        assert!(matches!(
+            WinDriveConfig::from_toml(&text_exact_prefix),
+            Err(ConfigError::Invalid { field: "volume_mount_path", .. })
+        ));
+
+        let text_dotdot = GOOD.replace(
+            r#"volume_letter = "D""#,
+            r#"volume_letter = "D"
+volume_mount_path = "C:\\ProgramData\\RamShared\\mounts\\..\\secret""#,
+        );
+        assert!(matches!(
+            WinDriveConfig::from_toml(&text_dotdot),
+            Err(ConfigError::Invalid { field: "volume_mount_path", .. })
+        ));
+    }
 }
