@@ -507,6 +507,32 @@ tenant = "windrive-host"
     }
 
     #[test]
+    fn from_reader_empty_buffer_fails() {
+        let e = WinDriveConfig::from_reader(b"").unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn from_reader_invalid_toml_syntax_fails() {
+        let bad = b"[win_drive\ninvalid_toml";
+        let e = WinDriveConfig::from_reader(bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn from_reader_invalid_config_invariants_fails() {
+        let bad = GOOD.replace("block_size = 4096", "block_size = 1234");
+        let e = WinDriveConfig::from_reader(bad.as_bytes()).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "block_size",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn reject_bad_block_size() {
         let bad = GOOD.replace("block_size = 4096", "block_size = 1024");
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
