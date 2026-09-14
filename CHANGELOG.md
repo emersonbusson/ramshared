@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.4](https://github.com/emersonbusson/ramshared/compare/v0.13.3...v0.13.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **release:** narrow lockfile version updates ([def6a73](https://github.com/emersonbusson/ramshared/commit/def6a73c3eb81bf38fb5a372ae4b04112b38db7a))
+* **release:** narrow lockfile version updates ([ded4cde](https://github.com/emersonbusson/ramshared/commit/ded4cde8496ba5e7f755dac512df52e443bcfa6a))
+* **release:** update lockfile with published versions ([e024233](https://github.com/emersonbusson/ramshared/commit/e024233a17ce6c03314ba62c69dc669bc2e7f160))
+* **release:** update lockfile with published versions ([de70535](https://github.com/emersonbusson/ramshared/commit/de705354eb38bdc3436ce1e8524fbefef55fee60))
+
 ## [0.13.3](https://github.com/emersonbusson/ramshared/compare/v0.13.2...v0.13.3) (2026-09-14)
 
 
