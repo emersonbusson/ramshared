@@ -3,6 +3,55 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// Trait representing a mockable interface for reading host system information.
+pub trait SysInfo {
+    fn available_memory_bytes(&self) -> Result<u64, String>;
+    fn available_disk_space_bytes(&self) -> Result<u64, String>;
+    fn cpu_load_percentage(&self) -> Result<u8, String>;
+}
+
+/// Validates that available memory meets the required minimum threshold.
+pub fn memory_threshold_guard<S: SysInfo>(sys: &S, min_required_bytes: u64) -> Result<(), String> {
+    let avail = sys.available_memory_bytes()?;
+    if avail < min_required_bytes {
+        return Err(format!(
+            "insufficient memory: {} bytes available, {} required",
+            avail, min_required_bytes
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that available disk space meets the required minimum threshold.
+pub fn disk_space_guard<S: SysInfo>(sys: &S, min_required_bytes: u64) -> Result<(), String> {
+    let avail = sys.available_disk_space_bytes()?;
+    if avail < min_required_bytes {
+        return Err(format!(
+            "insufficient disk space: {} bytes available, {} required",
+            avail, min_required_bytes
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that CPU load does not exceed the maximum allowed percentage.
+pub fn cpu_load_guard<S: SysInfo>(sys: &S, max_allowed_percent: u8) -> Result<(), String> {
+    if max_allowed_percent > 100 {
+        return Err("max_allowed_percent cannot exceed 100".to_string());
+    }
+    let load = sys.cpu_load_percentage()?;
+    if load > 100 {
+        return Err("system reported cpu load > 100".to_string());
+    }
+    if load > max_allowed_percent {
+        return Err(format!(
+            "cpu load too high: {}%, max allowed {}%",
+            load, max_allowed_percent
+        ));
+    }
+    Ok(())
+}
+
 /// Combine configured and currently active pagefiles.
 ///
 /// Both observations are mandatory. Paths are deduplicated case-insensitively
@@ -109,6 +158,36 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    struct MockSysInfo {
+        mem: Result<u64, String>,
+        disk: Result<u64, String>,
+        cpu: Result<u8, String>,
+    }
+
+    impl MockSysInfo {
+        fn new(
+            mem: Result<u64, String>,
+            disk: Result<u64, String>,
+            cpu: Result<u8, String>,
+        ) -> Self {
+            Self { mem, disk, cpu }
+        }
+    }
+
+    impl SysInfo for MockSysInfo {
+        fn available_memory_bytes(&self) -> Result<u64, String> {
+            self.mem.clone()
+        }
+
+        fn available_disk_space_bytes(&self) -> Result<u64, String> {
+            self.disk.clone()
+        }
+
+        fn cpu_load_percentage(&self) -> Result<u8, String> {
+            self.cpu.clone()
+        }
+    }
+
     #[test]
     fn pagefile_sources_are_unioned() {
         let rows = merge_pagefile_sources(
@@ -207,5 +286,100 @@ mod tests {
         let mut slow = pass;
         slow.teardown_ms = Some(30_001);
         assert!(!slow.is_pass(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn test_host_safety_memory_guard_pass() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(1000), Ok(50));
+        assert!(memory_threshold_guard(&sys, 500).is_ok());
+        assert!(memory_threshold_guard(&sys, 1000).is_ok()); // boundary
+    }
+
+    #[test]
+    fn test_host_safety_memory_guard_fail_insufficient() {
+        let sys = MockSysInfo::new(Ok(499), Ok(1000), Ok(50));
+        let err = memory_threshold_guard(&sys, 500).unwrap_err();
+        assert_eq!(
+            err,
+            "insufficient memory: 499 bytes available, 500 required"
+        );
+    }
+
+    #[test]
+    fn test_host_safety_memory_guard_fail_sys_error() {
+        let sys = MockSysInfo::new(Err("WMI timeout".to_string()), Ok(1000), Ok(50));
+        let err = memory_threshold_guard(&sys, 500).unwrap_err();
+        assert_eq!(err, "WMI timeout");
+    }
+
+    #[test]
+    fn test_host_safety_disk_guard_pass() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(2000), Ok(50));
+        assert!(disk_space_guard(&sys, 1000).is_ok());
+        assert!(disk_space_guard(&sys, 2000).is_ok()); // boundary
+    }
+
+    #[test]
+    fn test_host_safety_disk_guard_fail_insufficient() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(999), Ok(50));
+        let err = disk_space_guard(&sys, 1000).unwrap_err();
+        assert_eq!(
+            err,
+            "insufficient disk space: 999 bytes available, 1000 required"
+        );
+    }
+
+    #[test]
+    fn test_host_safety_disk_guard_fail_sys_error() {
+        let sys = MockSysInfo::new(Ok(1000), Err("permission denied".to_string()), Ok(50));
+        let err = disk_space_guard(&sys, 1000).unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    #[test]
+    fn test_host_safety_cpu_guard_pass() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(1000), Ok(80));
+        assert!(cpu_load_guard(&sys, 90).is_ok());
+        assert!(cpu_load_guard(&sys, 80).is_ok()); // boundary
+    }
+
+    #[test]
+    fn test_host_safety_cpu_guard_fail_too_high() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(1000), Ok(95));
+        let err = cpu_load_guard(&sys, 90).unwrap_err();
+        assert_eq!(err, "cpu load too high: 95%, max allowed 90%");
+    }
+
+    #[test]
+    fn test_host_safety_cpu_guard_fail_sys_error() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(1000), Err("missing deps".to_string()));
+        let err = cpu_load_guard(&sys, 90).unwrap_err();
+        assert_eq!(err, "missing deps");
+    }
+
+    #[test]
+    fn test_host_safety_cpu_guard_invalid_max() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(1000), Ok(50));
+        let err = cpu_load_guard(&sys, 101).unwrap_err();
+        assert_eq!(err, "max_allowed_percent cannot exceed 100");
+    }
+
+    #[test]
+    fn test_host_safety_cpu_guard_invalid_sys_load() {
+        let sys = MockSysInfo::new(Ok(1000), Ok(1000), Ok(105));
+        let err = cpu_load_guard(&sys, 90).unwrap_err();
+        assert_eq!(err, "system reported cpu load > 100");
+    }
+
+    #[test]
+    fn test_host_safety_memory_guard_zero_required() {
+        let sys = MockSysInfo::new(Ok(0), Ok(0), Ok(0));
+        assert!(memory_threshold_guard(&sys, 0).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_disk_guard_zero_required() {
+        let sys = MockSysInfo::new(Ok(0), Ok(0), Ok(0));
+        assert!(disk_space_guard(&sys, 0).is_ok());
     }
 }
