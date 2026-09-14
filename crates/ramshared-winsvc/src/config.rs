@@ -682,6 +682,25 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
     #[test]
     fn evidence_path_accessor() {
         let c = WinDriveConfig::from_toml(GOOD).unwrap();
+        assert_eq!(c.evidence_path(), Path::new(r"C:\ProgramData\RamShared\evidence"));
         assert_eq!(c.evidence_path(), c.evidence_path.as_path());
+
+        let unc_toml = GOOD.replace(
+            r#"evidence_path = "C:\\ProgramData\\RamShared\\evidence""#,
+            r#"evidence_path = "\\\\server\\share\\evidence""#,
+        );
+        let c_unc = WinDriveConfig::from_toml(&unc_toml).unwrap();
+        assert_eq!(c_unc.evidence_path(), Path::new(r"\\server\share\evidence"));
+
+        let ext_toml = GOOD.replace(
+            r#"evidence_path = "C:\\ProgramData\\RamShared\\evidence""#,
+            r#"evidence_path = "\\\\?\\C:\\ProgramData\\RamShared\\evidence""#,
+        );
+        let c_ext = WinDriveConfig::from_toml(&ext_toml).unwrap();
+        assert_eq!(c_ext.evidence_path(), Path::new(r"\\?\C:\ProgramData\RamShared\evidence"));
+
+        let mut custom = c.clone();
+        custom.evidence_path = PathBuf::from(r"D:\CustomEvidenceDir\log.jsonl");
+        assert_eq!(custom.evidence_path(), Path::new(r"D:\CustomEvidenceDir\log.jsonl"));
     }
 }
