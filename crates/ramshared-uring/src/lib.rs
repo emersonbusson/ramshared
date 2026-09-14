@@ -541,13 +541,14 @@ impl UblkServer {
         let cancel_entry = opcode::AsyncCancel::new(target_user_data)
             .build()
             .user_data(cancel_user_data);
+        let cancel_entry128: squeue::Entry128 = cancel_entry.into();
 
         let mut sq = self.ring.submission();
         if sq.is_full() {
             return Err(io::Error::from_raw_os_error(libc::EBUSY));
         }
         unsafe {
-            let _ = sq.push(&cancel_entry.into());
+            let _ = sq.push(&cancel_entry128);
         }
         drop(sq);
         self.ring.submit()?;
@@ -939,6 +940,49 @@ mod tests {
             .push(0, 2, 0, 0)
             .expect_err("expected ring full error");
         assert_eq!(err.raw_os_error(), Some(libc::EBUSY));
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove fixture");
+    }
+    #[test]
+    fn test_io_uring_cancel_socket_peer_disconnect() {
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-socket-disconnect", page);
+        let fd = file.as_raw_fd();
+
+        let mut server = UblkServer::new(fd, 2, page).expect("server fixture");
+
+        // Simulate a pending read/write socket operation
+        let ts_long = types::Timespec::new().sec(10).nsec(0);
+        let entry = opcode::Timeout::new(&ts_long as *const _)
+            .build()
+            .user_data(44);
+        let timeout_entry: squeue::Entry128 = entry.into();
+
+        // SAFETY: The timespec lives in the same frame, we wait before drop.
+        unsafe {
+            server
+                .ring
+                .submission()
+                .push(&timeout_entry)
+                .expect("push pending operation");
+        }
+
+        // Simulating Peer Disconnect by Canceling the request
+        server.cancel_request(44, 45).expect("push cancel on peer disconnect");
+
+        // Wait for both the cancellation and the cancelled timeout
+        server.ring.submit_and_wait(2).expect("submit cancel");
+        let mut results = server.drain();
+        results.sort_by_key(|c| c.tag);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].tag, 44);
+        assert_eq!(results[0].result, -libc::ECANCELED);
+
+        assert_eq!(results[1].tag, 45);
+        assert!(results[1].result == 0 || results[1].result == -libc::EALREADY);
 
         drop(server);
         drop(file);
