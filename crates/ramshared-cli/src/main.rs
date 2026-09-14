@@ -1883,6 +1883,10 @@ mod tests {
     #[test]
     fn public_control_commands_parse_exactly() {
         assert_eq!(
+            parse_cli_command(&cli_args(&["migrate-cascade", "--from-legacy"])).unwrap(),
+            CliCommand::MigrateLegacyCascade
+        );
+        assert_eq!(
             parse_cli_command(&cli_args(&[
                 "run",
                 "--class",
