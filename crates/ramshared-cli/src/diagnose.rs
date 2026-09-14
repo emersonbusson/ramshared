@@ -46,7 +46,9 @@ struct Event {
 pub enum DiagnoseError {
     InvalidArgs(String),
     Io(std::io::Error, std::path::PathBuf),
+    MissingProcfs,
     ParseJson(String),
+    PermissionDenied(std::path::PathBuf),
     Timeout(String),
 }
 
@@ -55,7 +57,11 @@ impl std::fmt::Display for DiagnoseError {
         match self {
             Self::InvalidArgs(msg) => write!(f, "{msg}"),
             Self::Io(err, path) => write!(f, "read {}: {err}", path.display()),
+            Self::MissingProcfs => write!(f, "procfs is missing or inaccessible"),
             Self::ParseJson(msg) => write!(f, "{msg}"),
+            Self::PermissionDenied(path) => {
+                write!(f, "permission denied to read {}", path.display())
+            }
             Self::Timeout(msg) => write!(f, "timeout: {msg}"),
         }
     }
@@ -66,8 +72,10 @@ impl DiagnoseError {
         match self {
             Self::InvalidArgs(_) => 22, // EINVAL
             Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
-            Self::ParseJson(_) => 22, // EINVAL for malformed json
-            Self::Timeout(_) => 110,  // ETIMEDOUT
+            Self::MissingProcfs => 2,        // ENOENT
+            Self::ParseJson(_) => 22,        // EINVAL for malformed json
+            Self::PermissionDenied(_) => 13, // EACCES
+            Self::Timeout(_) => 110,         // ETIMEDOUT
         }
     }
 }
@@ -103,7 +111,25 @@ pub fn run_probe_with_timeout<T: Send + 'static, F: FnOnce() -> T + Send + 'stat
 
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let (path, json) = parse_args(args)?;
-    let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
+
+    if !std::path::Path::new("/proc").exists() {
+        return Err(DiagnoseError::MissingProcfs);
+    }
+
+    if let Err(e) = fs::metadata(&path) {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            return Err(DiagnoseError::PermissionDenied(path));
+        }
+        return Err(DiagnoseError::Io(e, path));
+    }
+
+    let text = fs::read_to_string(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            DiagnoseError::PermissionDenied(path.clone())
+        } else {
+            DiagnoseError::Io(e, path.clone())
+        }
+    })?;
     let diagnosis = run_probe_with_timeout(
         "diagnose_jsonl",
         std::time::Duration::from_secs(5),
@@ -484,5 +510,48 @@ mod tests {
         let json_str = render_json(&d);
         assert!(json_str.contains("S3"));
         print_text(&d);
+    }
+
+    #[test]
+    fn run_refuses_missing_procfs() {
+        let old_cwd = std::env::current_dir().unwrap();
+        let temp_dir = std::env::temp_dir().join(format!("ramshared_test_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Ensure compile passes; cannot reliably remove /proc in a simple test without unshare
+        std::env::set_current_dir(old_cwd).unwrap();
+        std::fs::remove_dir_all(&temp_dir).unwrap_or(());
+    }
+
+    #[test]
+    fn run_refuses_permission_denied() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("ramshared_test_perm_{}", std::process::id()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let path = temp_dir.join("events.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        let args = vec!["--events".to_string(), path.to_string_lossy().into_owned()];
+
+        let err = run(&args).unwrap_err();
+
+        // Clean up before assertion just in case it panics
+        let mut reset_perms = std::fs::metadata(&path).unwrap().permissions();
+        reset_perms.set_mode(0o600);
+        std::fs::set_permissions(&path, reset_perms).unwrap_or(());
+        std::fs::remove_dir_all(&temp_dir).unwrap_or(());
+
+        if let DiagnoseError::PermissionDenied(err_path) = err {
+            assert_eq!(err_path, path);
+        } else if let DiagnoseError::MissingProcfs = err {
+            // Some weird environment where /proc doesn't exist
+        } else {
+            panic!("Expected PermissionDenied or MissingProcfs, got: {:?}", err);
+        }
     }
 }
