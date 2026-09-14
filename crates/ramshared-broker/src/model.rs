@@ -21,6 +21,20 @@ pub enum SliceState {
     Leased,
 }
 
+impl SliceState {
+    /// Validates allowed state machine transitions (PRD §7 / ITEM-4).
+    pub fn valid_transition(&self, next: SliceState) -> bool {
+        matches!(
+            (self, next),
+            (SliceState::Free, SliceState::Active)
+                | (SliceState::Free, SliceState::Leased)
+                | (SliceState::Active, SliceState::Draining)
+                | (SliceState::Draining, SliceState::Free)
+                | (SliceState::Leased, SliceState::Free)
+        )
+    }
+}
+
 /// A slice of VRAM exported as an NBD device. Disjoint offsets on the same `DeviceMem`.
 ///
 /// Derived `PartialEq`/`Eq`: `protocol::Msg` (which derives `PartialEq` for roundtrip tests)
@@ -134,6 +148,26 @@ pub struct Lease {
     pub bytes: u64,
     pub slices: Vec<SliceId>,
     pub revocable: bool,
+}
+
+impl Lease {
+    /// Validates physical hardware limits, bounds, and slice counts (PRD §7).
+    pub fn validate_bounds(&self, slice_size: u64, max_capacity: u64) -> Result<(), std::io::Error> {
+        if self.bytes > max_capacity {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Lease exceeds physical VRAM capacity",
+            ));
+        }
+        let expected_slices = self.bytes.div_ceil(slice_size);
+        if self.slices.len() as u64 != expected_slices {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Lease slice count does not match bytes/slice_size",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -342,5 +376,56 @@ mod tests {
         };
         assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
         assert_eq!(e.to_string(), "Slices are not contiguous");
+    }
+
+    #[test]
+    fn slice_state_transitions() {
+        assert!(SliceState::Free.valid_transition(SliceState::Active));
+        assert!(SliceState::Free.valid_transition(SliceState::Leased));
+        assert!(SliceState::Active.valid_transition(SliceState::Draining));
+        assert!(SliceState::Draining.valid_transition(SliceState::Free));
+        assert!(SliceState::Leased.valid_transition(SliceState::Free));
+
+        assert!(!SliceState::Active.valid_transition(SliceState::Free));
+        assert!(!SliceState::Free.valid_transition(SliceState::Draining));
+        assert!(!SliceState::Draining.valid_transition(SliceState::Active));
+        assert!(!SliceState::Leased.valid_transition(SliceState::Active));
+    }
+
+    #[test]
+    fn lease_bounds_validation() {
+        let max_capacity = 1024 * 1024 * 1024; // 1 GB
+        let slice_size = 4096;
+
+        let ok_lease = Lease {
+            id: 1,
+            holder: 1,
+            bytes: 8192,
+            slices: vec![1, 2],
+            revocable: false,
+        };
+        assert!(ok_lease.validate_bounds(slice_size, max_capacity).is_ok());
+
+        let out_of_bounds = Lease {
+            id: 2,
+            holder: 1,
+            bytes: max_capacity + 4096,
+            slices: vec![1],
+            revocable: false,
+        };
+        let res = out_of_bounds.validate_bounds(slice_size, max_capacity);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "Lease exceeds physical VRAM capacity");
+
+        let bad_slice_count = Lease {
+            id: 3,
+            holder: 1,
+            bytes: 8192,
+            slices: vec![1], // Missing one slice
+            revocable: false,
+        };
+        let res = bad_slice_count.validate_bounds(slice_size, max_capacity);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().to_string(), "Lease slice count does not match bytes/slice_size");
     }
 }
