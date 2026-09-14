@@ -3,8 +3,85 @@
 
 use crate::protocol::{Command, NBD_CMD_FLAG_FUA, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
 
+use std::time::Instant;
+
+/// Token bucket algorithm for rate limiting.
+#[derive(Debug, Clone)]
+pub struct TokenBucket {
+    pub capacity: u32,
+    pub refill_rate: f64,
+    pub tokens: f64,
+    pub last_refill: Instant,
+}
+
+impl TokenBucket {
+    pub fn new(capacity: u32, refill_rate: f64) -> Self {
+        Self {
+            capacity,
+            refill_rate,
+            tokens: capacity as f64,
+            last_refill: Instant::now(),
+        }
+    }
+
+    pub fn check_and_consume(&mut self, tokens: u32) -> bool {
+        self.refill();
+        if self.tokens >= tokens as f64 {
+            self.tokens -= tokens as f64;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn refill(&mut self) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.last_refill).as_secs_f64();
+        self.tokens += elapsed * self.refill_rate;
+        if self.tokens > self.capacity as f64 {
+            self.tokens = self.capacity as f64;
+        }
+        self.last_refill = now;
+    }
+}
+
+pub struct RateLimitedBackend<B: BlockBackend> {
+    pub inner: B,
+    pub bucket: TokenBucket,
+}
+
+impl<B: BlockBackend> BlockBackend for RateLimitedBackend<B> {
+    fn size_bytes(&self) -> u64 {
+        self.inner.size_bytes()
+    }
+    fn block_size(&self) -> u32 {
+        self.inner.block_size()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner.is_read_only()
+    }
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+        self.inner.read_at(off, buf)
+    }
+    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
+        self.inner.write_at(off, data)
+    }
+    fn write_at_with_options(
+        &mut self,
+        off: u64,
+        data: &[u8],
+        options: WriteOptions,
+    ) -> Result<(), IoError> {
+        self.inner.write_at_with_options(off, data, options)
+    }
+    fn flush(&mut self) -> Result<(), IoError> {
+        self.inner.flush()
+    }
+}
+
+
 // errno in simple reply (re-exported from protocol for backward compatibility).
-pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK};
+pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_ESHUTDOWN, NBD_OK};
 
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
@@ -99,6 +176,26 @@ fn validate_command_flags(req: &Request) -> Result<WriteOptions, u32> {
 
 /// Dispatches an already parsed request. `payload` is the WRITE data (empty for
 /// others). Does no socket I/O — only logic (testable without root).
+pub fn serve_with_rate_limit<B: BlockBackend + ?Sized>(
+    req: &Request,
+    payload: &[u8],
+    backend: &mut B,
+    rate_limit: Option<&mut TokenBucket>,
+) -> ServeOutcome {
+    #[allow(clippy::collapsible_if)]
+    if let Some(bucket) = rate_limit {
+        if !bucket.check_and_consume(1) {
+            return ServeOutcome {
+                reply: encode_simple_reply(NBD_ESHUTDOWN, req.handle),
+                read_data: Vec::new(),
+                disconnect: true,
+            };
+        }
+    }
+
+    serve(req, payload, backend)
+}
+
 pub fn serve<B: BlockBackend + ?Sized>(
     req: &Request,
     payload: &[u8],
@@ -161,9 +258,40 @@ pub fn serve<B: BlockBackend + ?Sized>(
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    #[test]
+    fn test_token_bucket() {
+        let mut bucket = TokenBucket::new(10, 10.0);
+        assert!(bucket.check_and_consume(10));
+        assert!(!bucket.check_and_consume(1));
+        sleep(Duration::from_millis(150));
+        assert!(bucket.check_and_consume(1));
+    }
+
+    #[test]
+    fn test_serve_with_rate_limit_allows_under_limit() {
+        let mut b = MemBackend { data: vec![0u8; 4096], bs: 4096 };
+        let mut bucket = TokenBucket::new(1, 10.0);
+        let r = serve_with_rate_limit(&req(Command::Read, 0, 4096), &[], &mut b, Some(&mut bucket));
+        assert_eq!(u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]), NBD_OK);
+        assert!(!r.disconnect);
+    }
+
+    #[test]
+    fn test_serve_with_rate_limit_disconnects_over_limit() {
+        let mut b = MemBackend { data: vec![0u8; 4096], bs: 4096 };
+        let mut bucket = TokenBucket::new(0, 10.0); // Empty bucket
+        let r = serve_with_rate_limit(&req(Command::Read, 0, 4096), &[], &mut b, Some(&mut bucket));
+        assert_eq!(u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]), NBD_ESHUTDOWN);
+        assert!(r.read_data.is_empty());
+        assert!(r.disconnect);
+    }
 
     struct MemBackend {
         data: Vec<u8>,
