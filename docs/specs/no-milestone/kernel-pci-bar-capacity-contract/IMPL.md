@@ -43,4 +43,4 @@ or any target drill observes `capacity_bytes != dma.size`.
 | RF | ITEM | Commit |
 | --- | --- | --- |
 | RF-1..4 | ITEM-1 | `00abd559`, `83a6b505` |
-| RF-1..4 | ITEM-2..4 | Pending commit |
+| RF-1..4 | ITEM-2..4 | `7eb5bb2f` |
