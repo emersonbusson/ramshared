@@ -1024,6 +1024,8 @@ function releaseProducerWorkflowFindings(gate, text, block, root) {
       !joined.includes('test -n "$RELEASE_APP_ID"') || !joined.includes('test -n "$RELEASE_APP_PRIVATE_KEY"') ||
       appTokenStart === -1 || appTokenUse === -1 || /\bif:\s*/.test(joined.slice(appTokenStart, appTokenUse)) ||
       !joined.includes('token: ${{ steps.release-app-token.outputs.token }}') ||
+      !joined.includes('node tools/ci/prepare-release-config.mjs') ||
+      !joined.includes('config-file: .release-please-runtime-config.json') ||
       /RELEASE_PLEASE_TOKEN|GITHUB_TOKEN|\bPAT\b|\|\|/.test(joined)) {
     observed.push('release-producer-credential-invalid')
   }
