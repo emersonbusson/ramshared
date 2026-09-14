@@ -1,6 +1,6 @@
 # RamShared System Specifications Index
 
-This catalog organizes all 38 system architecture and design specifications in RamShared. Each specification follows the **SSDV3** methodology (PRD ➔ SPEC ➔ IMPL ➔ Validation) and defines formal contracts, operational invariants, and testable gates.
+This catalog organizes all 43 system architecture and design specifications in RamShared. Each specification follows the **SSDV3** methodology (PRD ➔ SPEC ➔ IMPL ➔ Validation) and defines formal contracts, operational invariants, and testable gates.
 
 ---
 
@@ -20,7 +20,9 @@ These specifications govern the active runtime architecture of RamShared across 
 | [`custom-kernel-ublk-product-transport`](no-milestone/custom-kernel-ublk-product-transport/) | Linux `ublk` userspace block device driver implementation and performance tuning. |
 | [`external-gpu-workload-wddm-pressure`](no-milestone/external-gpu-workload-wddm-pressure/) | Dynamic WDDM GPU headroom monitoring and automatic 3D graphics reservation. |
 | [`vram-reclaim-pressure-matrix`](no-milestone/vram-reclaim-pressure-matrix/) | Host memory pressure hysteresis, proactive chunk eviction, and demotion state machine. |
+| [`vram-host-safety-and-dynamic-tiering`](no-milestone/vram-host-safety-and-dynamic-tiering/) | Host-aware VRAM safety ceiling and non-blocking spillover policy. |
 | [`broker-telemetry-reconciliation`](no-milestone/broker-telemetry-reconciliation/) | IPC broker synchronization, lease state machine, and IPC integrity verification. |
+| [`wsl2-vmbus-resilience`](no-milestone/wsl2-vmbus-resilience/) | VMBus memory headroom and anti-starvation policy for WSL2. |
 | [`benchmark-evidence-integrity`](no-milestone/benchmark-evidence-integrity/) | Deterministic benchmark execution, SHA-256 evidence hashing, and metric qualification. |
 | [`campaign-evidence-lifecycle`](no-milestone/campaign-evidence-lifecycle/) | Retention policy and gating rules for empirical validation records. |
 | [`documentation-governance-integrity`](no-milestone/documentation-governance-integrity/) | Automated documentation lifecycle, freshness tracking, and link integrity verification. |
@@ -42,11 +44,15 @@ Specifications in this track explore low-level driver development, kernel upstre
 | [`windows-swap-driver`](no-milestone/windows-swap-driver/) | Native Windows virtual disk pagefile backing and crash-dump safety verification. |
 | [`windows-task-manager-disk-counters`](no-milestone/windows-task-manager-disk-counters/) | Windows storage class driver compatibility and Task Manager I/O counter precision. |
 | [`kernel-native-language`](no-milestone/kernel-native-language/) | Rust for Linux kernel module implementations for block devices. |
+| [`kernel-pci-bar-capacity-contract`](no-milestone/kernel-pci-bar-capacity-contract/) | Exact PCI BAR capacity validation for the RamShared block driver. |
+| [`cuda-rust-native-tiering`](no-milestone/cuda-rust-native-tiering/) | Native CUDA-Rust acceleration and in-GPU page compression research. |
 | [`wsl2-custom-kernel-p1`](no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 Linux kernel builds with `CONFIG_BLK_DEV_UBLK` and `io_uring` support. |
+| [`wsl2-kernel-vmbus-headroom`](no-milestone/wsl2-kernel-vmbus-headroom/) | Kernel-level VMBus headroom and Hyper-V balloon protection. |
 | [`wsl2-upstream-native-contribution`](no-milestone/wsl2-upstream-native-contribution/) | Preparation and qualification for Linux upstream kernel submission. |
 | [`mainline-vram-tiering`](no-milestone/mainline-vram-tiering/) | Mainline Linux memory management (MM) subsystem integration and tiered tiering hooks. |
 | [`wsl2-native-vram-autotier`](no-milestone/wsl2-native-vram-autotier/) | Autonomous physical memory migration between system DDR and GPU VRAM. |
 | [`memory-broker`](no-milestone/memory-broker/) | Cross-process physical memory leasing and arbitration engine. |
+| [`broker-lease-lifecycle`](no-milestone/broker-lease-lifecycle/) | Renewable, time-bounded broker lease ownership and recovery. |
 
 ---
 

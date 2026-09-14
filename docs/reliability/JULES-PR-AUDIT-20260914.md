@@ -16,10 +16,10 @@ behaviour.
 
 | Disposition | Count | Meaning |
 | --- | ---: | --- |
-| Consolidated | 40 | Reimplemented or retained on the current branch with focused validation. |
+| Consolidated | 42 | Reimplemented or retained on the current branch with focused validation. |
 | Already merged | 1 | Present on `main` before this consolidation. |
 | Superseded | 5 | The current source already contains the necessary hardening; duplicating an old patch would add no behaviour. |
-| Successor required | 36 | The problem can be worth solving, but the submitted patch is not a safe implementation of it on the current architecture. |
+| Successor required | 34 | The problem can be worth solving, but the submitted patch is not a safe implementation of it on the current architecture. |
 | Rejected | 51 | Incorrect, redundant, unconnected to production behaviour, or unsuitable for public history. |
 | **Total** | **133** | Complete cohort. |
 
@@ -35,6 +35,7 @@ behaviour.
 | #1850 | `d5770984` | Validate broker slice layouts in sorted order instead of pairwise scanning. |
 | #1752 | `8b6f9bb8` | Treat Windows `ERROR_NO_DATA` as an orderly named-pipe disconnect. |
 | #1734, #1742 | `00abd559`, `83a6b505`, `7eb5bb2f` | Replace the narrow source fragments with an SSDV3-reviewed PCI BAR/capacity contract: early refusal, defence in depth at the map boundary, checked `size_t` conversion, and preserved PCI enable errno. The target-kernel/device gate remains partial. |
+| #1753, #1804 | `139fc363`, `bd665627`, `9e039749`, `5a40bed9` | Replace immediate disconnect reuse and unwired expiry helpers with a shared, renewable monotonic lease lifecycle across WSL and Windows broker shells. Pure, core, loopback, and Windows cross-target checks pass; isolated agent lifecycle drills remain partial. |
 
 ### Already merged
 
@@ -60,6 +61,7 @@ increase the consolidation count.
 | Source PRs | Current evidence | Disposition |
 | --- | --- | --- |
 | #1734, #1742 | `docs/specs/no-milestone/kernel-pci-bar-capacity-contract/` and `7eb5bb2f` establish an exact mapping invariant and preserve PCI errors without the original patch's unchecked shape. | Consolidated locally; target-tree and device evidence remain **PARTIAL**, not a finished hardware claim. |
+| #1753, #1804 | `docs/specs/no-milestone/broker-lease-lifecycle/` plus `139fc363`, `bd665627`, `9e039749`, and `5a40bed9` establish holder-only heartbeat renewal, monotonic expiry, tick-owned reclamation, and bounded Windows named-pipe scheduling. | Consolidated locally; isolated broker/agent lifecycle evidence remains **PARTIAL**, not a host or device claim. |
 
 #### Successor required — protocol, lifecycle, and allocator proposals
 
@@ -69,7 +71,6 @@ increase the consolidation count.
 | #1748 | Treats `BrokenPipe` as retryable although the peer is disconnected. | A lifecycle SPEC with a terminal disconnect state and bounded retry only for transient errors. |
 | #1750 | Rejects adapters using arbitrary fields rather than a capability contract. | A versioned capability model with real adapter fixtures. |
 | #1751 | Adds an arbitrary 4 GiB dispatcher limit without production wiring. | An allocation-policy SPEC with telemetry and all callers wired. |
-| #1753 | Reclaims disconnected tenant slices without defining ownership/freeze semantics. | A broker lifecycle/lease SPEC with race and recovery tests. |
 | #1755 | Starts timeout accounting after a blocking read, so it cannot bound that read. | A cancellable I/O design with a test that proves the deadline. |
 | #1757 | Adds a hardware-facing representation without a production path or device proof. | A device-format SPEC, target build, and hardware compatibility matrix. |
 | #1758 | Replaces state with timestamps but does not connect it to production or a clock policy. | A wired expiry model with deterministic time tests. |
@@ -81,7 +82,6 @@ increase the consolidation count.
 | #1776 | Has the same production-mock substitution problem as #1772. | An isolated fixture architecture and target-hardware validation. |
 | #1801 | Adds an incompatible 16-byte prefix to the NBD wire format. | A versioned NBD protocol design with interoperable clients. |
 | #1803 | Implements a token bucket that no serving path actually uses. | Back-pressure wired into the real serving loop with measurable limits. |
-| #1804 | Defines lease expiry helpers that no worker/tick path invokes. | A single lease owner, clock semantics, and reclamation tests. |
 | #1805 | Adds arbitrary starvation policy that conflicts with the existing never-zero contract. | A measured fairness policy and compatibility decision. |
 | #1806 | Broadly rewrites protocol schema and accepts unknown data fail-open. | A schema migration that fails closed and exercises all consumers. |
 | #1811 | Adds explanatory fields with no authoritative producer. | A defined producer, schema ownership, and output fixtures. |
@@ -140,6 +140,13 @@ Completed local checks while consolidating:
 - `node --test --test-reporter=dot tools/ci/check-ci-contract.test.mjs`
 - `bash -n scripts/package/build-deb-package.sh`
 - `git diff --check`
+
+The broker-lease successor additionally passed its RED→GREEN unit, pure-core,
+and loopback tests plus the 80% Rust slice coverage gate: `lease.rs` 97.9%
+(237/242), `winbroker/lib.rs` 92.4% (376/407), and `broker_srv.rs` 87.8%
+(1357/1546). The Windows broker also passed its
+`x86_64-pc-windows-gnu` cross-target compilation. Isolated broker/agent
+lifecycle drills remain environment-bound.
 
 The kernel PCI BAR successor also has a local RED→GREEN source-contract test:
 `node --test tools/ci/kernel-probe-contract.test.mjs` failed as intended before

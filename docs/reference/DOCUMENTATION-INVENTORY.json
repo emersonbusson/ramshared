@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 294,
-    "classified": 291,
+    "total": 298,
+    "classified": 295,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -1397,6 +1397,54 @@
     },
     {
       "path": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-lease-lifecycle/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-lease-lifecycle/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-lease-lifecycle/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-lease-lifecycle/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {
