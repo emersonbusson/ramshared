@@ -934,9 +934,10 @@ dependencies = [
  "proc-macro2",
 ]
 
+# x-release-please-start-version
 [[package]]
 name = "ramshared-agent"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -945,14 +946,14 @@ dependencies = [
 
 [[package]]
 name = "ramshared-block"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "ramshared-vram",
 ]
 
 [[package]]
 name = "ramshared-broker"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -960,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cli"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "libc",
  "ramshared-cuda",
@@ -973,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-config"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -982,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cuda"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "cuda-async",
  "cuda-core",
@@ -992,22 +993,22 @@ dependencies = [
 
 [[package]]
 name = "ramshared-dxg"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ramshared-integrity"
-version = "0.13.1"
+version = "0.13.2"
 
 [[package]]
 name = "ramshared-tier"
-version = "0.13.1"
+version = "0.13.2"
 
 [[package]]
 name = "ramshared-uring"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "io-uring",
  "libc",
@@ -1015,11 +1016,11 @@ dependencies = [
 
 [[package]]
 name = "ramshared-vram"
-version = "0.13.1"
+version = "0.13.2"
 
 [[package]]
 name = "ramshared-vulkan"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "ash",
  "ramshared-vram",
@@ -1027,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winbroker"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -1040,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winsvc"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "base64",
  "ramshared-block",
@@ -1058,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-wsl2d"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "ramshared-block",
  "ramshared-broker",
@@ -1075,6 +1076,7 @@ dependencies = [
  "sha2",
 ]
 
+# x-release-please-end
 [[package]]
 name = "ratatui"
 version = "0.30.2"
