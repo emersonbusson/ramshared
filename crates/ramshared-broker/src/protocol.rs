@@ -180,7 +180,35 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
         return Ok(None); // clean EOF
     }
     let had_newline = buf.last() == Some(&b'\n');
-    if !had_newline && buf.len() > MAX_LINE_BYTES {
+    if !had_newline {
+        if buf.len() > MAX_LINE_BYTES {
+            // Discard the remainder of the oversized line to resynchronize the parser on the next message
+            // without unbounded allocations to prevent memory exhaustion (DoS).
+            loop {
+                let available = match r.fill_buf() {
+                    Ok([]) => break,
+                    Ok(b) => b,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                };
+
+                if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+                    r.consume(pos + 1);
+                    break;
+                } else {
+                    let len = available.len();
+                    r.consume(len);
+                }
+            }
+            return Err(ProtocolError::PayloadTooLarge);
+        } else {
+            // Line was truncated before hitting a newline and before hitting MAX_LINE_BYTES.
+            return Err(ProtocolError::ConnectionClosed(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "truncated message",
+            )));
+        }
+    } else if buf.len() > MAX_LINE_BYTES {
         return Err(ProtocolError::PayloadTooLarge);
     }
     let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
@@ -439,11 +467,13 @@ mod tests {
 
     #[test]
     fn oversize_line_is_err() {
-        // Line > MAX_LINE_BYTES without '\n' within the cap → Err (does not try to parse giant).
+        // Line > MAX_LINE_BYTES without '\n' within the cap → Err PayloadTooLarge, but we discard the rest
         let mut data = vec![b'x'; MAX_LINE_BYTES + 100];
         data.push(b'\n');
+        data.extend_from_slice(b"{\"type\":\"status\"}\n");
         let mut cur = Cursor::new(data);
-        assert!(read_msg(&mut cur).is_err());
+        assert!(matches!(read_msg(&mut cur), Err(ProtocolError::PayloadTooLarge)));
+        assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Status);
     }
 
     #[test]
@@ -452,8 +482,17 @@ mod tests {
         // It must be rejected, because it exceeds MAX_LINE_BYTES.
         let mut data = vec![b'x'; MAX_LINE_BYTES + 1];
         data[MAX_LINE_BYTES] = b'\n';
+        data.extend_from_slice(b"{\"type\":\"status\"}\n");
         let mut cur = Cursor::new(data);
-        assert!(read_msg(&mut cur).is_err());
+        assert!(matches!(read_msg(&mut cur), Err(ProtocolError::PayloadTooLarge)));
+        assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Status);
+    }
+
+    #[test]
+    fn truncated_message_is_err() {
+        let data = b"{\"type\":\"status\"".to_vec();
+        let mut cur = Cursor::new(data);
+        assert!(matches!(read_msg(&mut cur), Err(ProtocolError::ConnectionClosed(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof));
     }
 
     #[test]
