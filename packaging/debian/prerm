@@ -6,13 +6,22 @@ set -euo pipefail
 
 if [ "${1:-}" = "remove" ]; then
     if command -v swapoff >/dev/null 2>&1; then
-        # Find active swaps and filter for ublkb or ramshared devices
-        while read -r swap_dev _rest; do
-            if [[ "$swap_dev" == /dev/ublkb* ]] || [[ "$swap_dev" == /dev/ramshared* ]]; then
-                echo "Deactivating ramshared swap device: $swap_dev"
-                swapoff "$swap_dev" || true
-            fi
-        done < <(grep -v "^Filename" /proc/swaps || true)
+        if [ -f /proc/swaps ]; then
+            TMP_SWAPS=$(mktemp)
+            trap 'rm -f "$TMP_SWAPS"' EXIT
+            grep -v "^Filename" /proc/swaps > "$TMP_SWAPS" || true
+
+            # Find active swaps and filter for ublkb or ramshared devices
+            while read -r swap_dev _rest; do
+                if [[ "$swap_dev" == /dev/ublkb* ]] || [[ "$swap_dev" == /dev/ramshared* ]]; then
+                    echo "Deactivating ramshared swap device: $swap_dev"
+                    swapoff "$swap_dev" || true
+                fi
+            done < "$TMP_SWAPS"
+
+            rm -f "$TMP_SWAPS"
+            trap - EXIT
+        fi
     fi
 
     if command -v systemctl >/dev/null 2>&1; then
