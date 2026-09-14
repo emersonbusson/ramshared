@@ -48,6 +48,7 @@ struct Config {
     nbd_base: String,
     transport: TransportKind,
     watchdog: Duration,
+    watchdog_threshold: u32,
     status_only: bool,
 }
 
@@ -94,7 +95,7 @@ enum ExecResult {
 fn usage() -> String {
     "Usage:\n  \
      ramshared-agent --broker HOST:PORT --tenant NAME [--swap-prio P] \
-     [--nbd-base /dev/nbd] [--transport tcp|unix] [--watchdog-secs 90]\n  \
+     [--nbd-base /dev/nbd] [--transport tcp|unix] [--watchdog-secs 90] [--watchdog-threshold 1]\n  \
      ramshared-agent --broker HOST:PORT --status"
         .to_string()
 }
@@ -115,6 +116,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     let mut nbd_base = "/dev/nbd".to_string();
     let mut transport = TransportKind::NbdTcp;
     let mut watchdog = Duration::from_secs(90);
+    let mut watchdog_threshold = 1;
     let mut status_only = false;
 
     let mut it = args.iter();
@@ -149,6 +151,10 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
                     .map_err(|_| format!("--watchdog-secs is invalid: {v}"))?;
                 watchdog = Duration::from_secs(s);
             }
+            "--watchdog-threshold" => {
+                let v = take("--watchdog-threshold")?;
+                watchdog_threshold = v.parse().map_err(|_| format!("--watchdog-threshold is invalid: {v}"))?;
+            }
             "--status" => status_only = true,
             "-h" | "--help" => return Ok(ParsedArgs::Help),
             other => return Err(format!("unknown argument: {other}\n{}", usage())),
@@ -162,6 +168,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         nbd_base,
         transport,
         watchdog,
+        watchdog_threshold,
         status_only,
     }))
 }
@@ -332,7 +339,7 @@ fn session(
     )?;
 
     let mut active: HashMap<SliceId, String> = HashMap::new();
-    let mut wd = Watchdog::new_clamped(cfg.watchdog, Instant::now());
+    let mut wd = Watchdog::new_clamped(cfg.watchdog, Instant::now(), cfg.watchdog_threshold);
     let mut next_psi = Instant::now();
     let mut session_err: Option<Box<dyn std::error::Error>> = None;
 
@@ -580,6 +587,7 @@ mod tests {
             nbd_base: "/dev/ramshared-test-nbd".to_string(),
             transport: TransportKind::NbdTcp,
             watchdog,
+            watchdog_threshold: 1,
             status_only: false,
         }
     }

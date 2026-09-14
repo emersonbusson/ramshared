@@ -40,10 +40,12 @@ impl std::error::Error for WatchdogError {}
 pub struct Watchdog {
     deadline: Duration,
     last: Instant,
+    failures: u32,
+    threshold: u32,
 }
 
 impl Watchdog {
-    pub fn new(deadline: Duration, now: Instant) -> Result<Self, WatchdogError> {
+    pub fn new(deadline: Duration, now: Instant, threshold: u32) -> Result<Self, WatchdogError> {
         if deadline <= Duration::from_millis(10) {
             return Err(WatchdogError::TooShort);
         }
@@ -53,15 +55,19 @@ impl Watchdog {
         Ok(Self {
             deadline,
             last: now,
+            failures: 0,
+            threshold,
         })
     }
 
     /// Creates a watchdog with transparent fallback clamp (resilient constructor).
-    pub fn new_clamped(deadline: Duration, now: Instant) -> Self {
+    pub fn new_clamped(deadline: Duration, now: Instant, threshold: u32) -> Self {
         let clamped = deadline.clamp(Duration::from_millis(10), Duration::from_secs(86400));
         Self {
             deadline: clamped,
             last: now,
+            failures: 0,
+            threshold,
         }
     }
 
@@ -69,19 +75,28 @@ impl Watchdog {
     pub fn touch(&mut self, now: Instant) {
         if now >= self.last {
             self.last = now;
+            self.failures = 0;
         }
     }
 
     /// `true` if `deadline` has passed since the last signal.
-    pub fn expired(&self, now: Instant) -> bool {
+    pub fn expired(&mut self, now: Instant) -> bool {
         if now < self.last {
             return false;
         }
-        now.saturating_duration_since(self.last) >= self.deadline
+        if now.saturating_duration_since(self.last) >= self.deadline {
+            let passed_intervals = now.saturating_duration_since(self.last).as_millis() / self.deadline.as_millis();
+            self.failures = self.failures.saturating_add(passed_intervals as u32);
+            self.last += Duration::from_millis((passed_intervals * self.deadline.as_millis()) as u64);
+            if self.failures >= self.threshold {
+                return true;
+            }
+        }
+        self.failures >= self.threshold
     }
 
     /// Checks if `deadline` has passed since the last signal.
-    pub fn check(&self, now: Instant) -> Result<(), WatchdogError> {
+    pub fn check(&mut self, now: Instant) -> Result<(), WatchdogError> {
         if self.expired(now) {
             Err(WatchdogError::HeartbeatTimeout(self.deadline))
         } else {
@@ -99,24 +114,24 @@ mod tests {
     fn new_rejects_extremes() {
         let t0 = Instant::now();
         assert_eq!(
-            Watchdog::new(Duration::from_millis(5), t0),
+            Watchdog::new(Duration::from_millis(5), t0, 1),
             Err(WatchdogError::TooShort)
         );
         assert_eq!(
-            Watchdog::new(Duration::from_millis(10), t0),
+            Watchdog::new(Duration::from_millis(10), t0, 1),
             Err(WatchdogError::TooShort)
         );
         assert_eq!(
-            Watchdog::new(Duration::from_secs(100_000), t0),
+            Watchdog::new(Duration::from_secs(100_000), t0, 1),
             Err(WatchdogError::TooLong)
         );
-        assert!(Watchdog::new(Duration::from_millis(20), t0).is_ok());
+        assert!(Watchdog::new(Duration::from_millis(20), t0, 1).is_ok());
     }
 
     #[test]
     fn does_not_expire_before_deadline() {
         let t0 = Instant::now();
-        let wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0, 1).expect("valid");
         assert!(!wd.expired(t0));
         assert!(!wd.expired(t0 + Duration::from_secs(89)));
         assert_eq!(wd.check(t0), Ok(()));
@@ -126,7 +141,7 @@ mod tests {
     #[test]
     fn expires_at_and_after_deadline() {
         let t0 = Instant::now();
-        let wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0, 1).expect("valid");
         assert!(wd.expired(t0 + Duration::from_secs(90)));
         assert!(wd.expired(t0 + Duration::from_secs(120)));
         assert_eq!(
@@ -138,7 +153,7 @@ mod tests {
     #[test]
     fn touch_resets_the_clock() {
         let t0 = Instant::now();
-        let mut wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0, 1).expect("valid");
         let t1 = t0 + Duration::from_secs(50);
         wd.touch(t1);
 
@@ -152,11 +167,53 @@ mod tests {
     #[test]
     fn time_drift_backwards_safe() {
         let t0 = Instant::now();
-        let mut wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0, 1).expect("valid");
         let t_past = t0.checked_sub(Duration::from_secs(10)).unwrap_or(t0);
 
         assert!(!wd.expired(t_past));
         wd.touch(t_past);
         assert_eq!(wd.last, t0);
+    }
+
+    #[test]
+    fn threshold_accumulates_failures() {
+        let t0 = Instant::now();
+        let mut wd = Watchdog::new(Duration::from_secs(10), t0, 3).expect("valid");
+
+        // Interval 1
+        assert!(!wd.expired(t0 + Duration::from_secs(10)));
+        // Interval 2
+        assert!(!wd.expired(t0 + Duration::from_secs(20)));
+        // Interval 3 -> Trigger!
+        assert!(wd.expired(t0 + Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn threshold_resets_on_touch() {
+        let t0 = Instant::now();
+        let mut wd = Watchdog::new(Duration::from_secs(10), t0, 3).expect("valid");
+
+        // Interval 1
+        assert!(!wd.expired(t0 + Duration::from_secs(10)));
+        // Touch halfway through interval 2
+        wd.touch(t0 + Duration::from_secs(15));
+
+        // Interval 1 from touch
+        assert!(!wd.expired(t0 + Duration::from_secs(25)));
+        // Interval 2 from touch
+        assert!(!wd.expired(t0 + Duration::from_secs(35)));
+        // Interval 3 from touch -> Trigger!
+        assert!(wd.expired(t0 + Duration::from_secs(45)));
+    }
+
+    #[test]
+    fn jump_multiple_intervals_adds_proportionally() {
+        let t0 = Instant::now();
+        let mut wd = Watchdog::new(Duration::from_secs(10), t0, 4).expect("valid");
+
+        // Jump 2.5 intervals -> Adds 2 failures
+        assert!(!wd.expired(t0 + Duration::from_secs(25)));
+        // Wait 2 more intervals -> Adds 2 failures -> Trigger!
+        assert!(wd.expired(t0 + Duration::from_secs(45)));
     }
 }
