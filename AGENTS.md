@@ -80,5 +80,5 @@ PR descriptions must follow `.github/pull_request_template.md` strictly: canonic
   workspace. Never reference or cross-contaminate with foreign repositories or
   private host environments.
 - **Reliability Gap Register & Release Parity**: Keep `docs/reliability/GAP-REGISTER.md`
-  semantically synchronized with active CI status and releases (`v0.12.0`). Phantom
+  semantically synchronized with active CI status and releases (`v0.13.4`). Phantom
   blockers (such as resolved Guard repairs) are strictly forbidden when CI gates pass.

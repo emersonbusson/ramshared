@@ -11,6 +11,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | Slug | Title | Milestone | Issues | Status | Qualified revision |
 | --- | --- | --- | --- | --- | --- |
 | [`benchmark-evidence-integrity`](specs/no-milestone/benchmark-evidence-integrity/) | Benchmark and validation evidence integrity | — | — | PARTIAL | — |
+| [`broker-lease-lifecycle`](specs/no-milestone/broker-lease-lifecycle/) | Renewable broker lease lifecycle | — | — | UNQUALIFIED | — |
 | [`broker-telemetry-reconciliation`](specs/no-milestone/broker-telemetry-reconciliation/) | Memory broker telemetry collection and reconciliation | — | — | UNQUALIFIED | — |
 | [`campaign-evidence-lifecycle`](specs/no-milestone/campaign-evidence-lifecycle/) | Campaign evidence lifecycle and custody | — | — | UNQUALIFIED | — |
 | [`cascade-desktop-app`](specs/no-milestone/cascade-desktop-app/) | Desktop control app for WSL2/Linux cascade (zenity + CLI) | — | — | UNQUALIFIED | — |
