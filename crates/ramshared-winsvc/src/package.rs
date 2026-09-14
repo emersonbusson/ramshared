@@ -408,6 +408,68 @@ mod tests {
     }
 
     #[test]
+    fn test_package_invalid_service_identities_rejects() {
+        let mut candidate = manifest();
+        candidate.services.broker_name = "WrongBroker".into();
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+
+        let mut candidate = manifest();
+        candidate.services.broker_account = "WrongAccount".into();
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+
+        let mut candidate = manifest();
+        candidate.services.consumer_name = "WrongConsumer".into();
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+
+        let mut candidate = manifest();
+        candidate.services.consumer_account = "WrongConsumerAccount".into();
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+    }
+
+    #[test]
+    fn test_package_non_hex_commit_rejects() {
+        let mut candidate = manifest();
+        candidate.commit = "abcdef123456789g".into(); // 'g' is non-hex
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_json_bytes_rejects() {
+        let invalid_json = b"{ invalid_json: ";
+        assert!(parse_manifest(invalid_json).is_err());
+    }
+
+    #[test]
+    fn test_package_max_manifest_bytes_boundary() {
+        assert!(parse_manifest(&vec![b' '; MAX_MANIFEST_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_artifact_path_rejects() {
+        let mut candidate = manifest();
+        candidate.artifacts[0].relative_path = "../escaped_path".into();
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_sha256_hash_format_rejects() {
+        // Wrong length (short)
+        let mut candidate = manifest();
+        candidate.artifacts[0].sha256 = "A".repeat(63);
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+
+        // Lowercase hex
+        let mut candidate = manifest();
+        candidate.artifacts[0].sha256 = "a".repeat(64);
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+
+        // Non-hex character
+        let mut candidate = manifest();
+        candidate.artifacts[0].sha256 = "Z".repeat(64);
+        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+    }
+
+    #[test]
     fn broker_capacity_must_equal_lun_size() {
         assert!(validate_cross_config(&broker_config(1, "t"), &fake_config(2, "t")).is_err());
     }
