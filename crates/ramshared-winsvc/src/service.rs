@@ -111,6 +111,31 @@ pub struct ServiceState {
     pub online: bool,
 }
 
+/// Strict internal lifecycle state transitions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ServiceStateMachine {
+    #[default]
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+}
+
+impl ServiceStateMachine {
+    pub fn transition(&mut self, next: ServiceStateMachine) -> Result<(), ProvisionError> {
+        match (*self, next) {
+            (ServiceStateMachine::Stopped, ServiceStateMachine::Starting)
+            | (ServiceStateMachine::Starting, ServiceStateMachine::Running)
+            | (ServiceStateMachine::Running, ServiceStateMachine::Stopping)
+            | (ServiceStateMachine::Stopping, ServiceStateMachine::Stopped) => {
+                *self = next;
+                Ok(())
+            }
+            _ => Err(ProvisionError::Config("invalid state transition".into())),
+        }
+    }
+}
+
 /// Result of a provision attempt.
 #[derive(Debug, PartialEq)]
 pub enum ProvisionError {
@@ -981,6 +1006,48 @@ mod tests {
         );
         assert!(parse_product_friendly_name("RAMSHARE OTHER SCSI Disk Device").is_err());
         assert!(parse_product_friendly_name("RAMSHARE VRAMDISK USB Device").is_err());
+    }
+
+    #[test]
+    fn test_service_state_machine_valid_transitions_ok() {
+        let mut sm = ServiceStateMachine::default();
+        assert_eq!(sm, ServiceStateMachine::Stopped);
+        sm.transition(ServiceStateMachine::Starting).unwrap();
+        assert_eq!(sm, ServiceStateMachine::Starting);
+        sm.transition(ServiceStateMachine::Running).unwrap();
+        assert_eq!(sm, ServiceStateMachine::Running);
+        sm.transition(ServiceStateMachine::Stopping).unwrap();
+        assert_eq!(sm, ServiceStateMachine::Stopping);
+        sm.transition(ServiceStateMachine::Stopped).unwrap();
+        assert_eq!(sm, ServiceStateMachine::Stopped);
+    }
+
+    #[test]
+    fn test_service_state_machine_invalid_transitions_err() {
+        let invalid_cases = [
+            (ServiceStateMachine::Stopped, ServiceStateMachine::Stopped),
+            (ServiceStateMachine::Stopped, ServiceStateMachine::Running),
+            (ServiceStateMachine::Stopped, ServiceStateMachine::Stopping),
+            (ServiceStateMachine::Starting, ServiceStateMachine::Stopped),
+            (ServiceStateMachine::Starting, ServiceStateMachine::Starting),
+            (ServiceStateMachine::Starting, ServiceStateMachine::Stopping),
+            (ServiceStateMachine::Running, ServiceStateMachine::Stopped),
+            (ServiceStateMachine::Running, ServiceStateMachine::Starting),
+            (ServiceStateMachine::Running, ServiceStateMachine::Running),
+            (ServiceStateMachine::Stopping, ServiceStateMachine::Starting),
+            (ServiceStateMachine::Stopping, ServiceStateMachine::Running),
+            (ServiceStateMachine::Stopping, ServiceStateMachine::Stopping),
+        ];
+
+        for (from, to) in invalid_cases {
+            let mut sm = from;
+            let result = sm.transition(to);
+            assert_eq!(
+                result.unwrap_err(),
+                ProvisionError::Config("invalid state transition".into())
+            );
+            assert_eq!(sm, from); // Unchanged.
+        }
     }
 
     #[test]
