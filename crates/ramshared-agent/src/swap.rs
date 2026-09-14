@@ -104,11 +104,55 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
     }
 }
 
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum PreflightError {
+    DeviceNotFound(String),
+    AlreadyActive(String),
+    PermissionDenied(String),
+    Other(String),
+}
+
+impl std::fmt::Display for PreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreflightError::DeviceNotFound(dev) => write!(f, "block device {} not found", dev),
+            PreflightError::AlreadyActive(dev) => write!(f, "block device {} is already active as swap", dev),
+            PreflightError::PermissionDenied(dev) => write!(f, "permission denied accessing block device {}", dev),
+            PreflightError::Other(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for PreflightError {}
+
+pub fn validate_swap_preflight(dev: &str) -> std::result::Result<(), PreflightError> {
+    use std::fs;
+    let path = std::path::Path::new(dev);
+
+    match fs::metadata(path) {
+        Ok(_) => {},
+        Err(e) => {
+            return match e.kind() {
+                std::io::ErrorKind::NotFound => Err(PreflightError::DeviceNotFound(dev.to_string())),
+                std::io::ErrorKind::PermissionDenied => Err(PreflightError::PermissionDenied(dev.to_string())),
+                _ => Err(PreflightError::Other(format!("failed to access {}: {}", dev, e))),
+            };
+        }
+    }
+
+    if fs::read_to_string("/proc/swaps").is_ok_and(|swaps| swaps.lines().skip(1).any(|line| line.starts_with(dev) && line.chars().nth(dev.len()).unwrap_or('x').is_whitespace())) {
+        return Err(PreflightError::AlreadyActive(dev.to_string()));
+    }
+    Ok(())
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum SwapError {
     DiskFull,
     PermissionDenied,
     InvalidSize,
+    Preflight(PreflightError),
     Other(String),
 }
 
@@ -133,6 +177,7 @@ impl std::fmt::Display for SwapError {
             SwapError::DiskFull => write!(f, "disk full (ENOSPC)"),
             SwapError::PermissionDenied => write!(f, "permission denied (EACCES)"),
             SwapError::InvalidSize => write!(f, "invalid size (ERANGE)"),
+            SwapError::Preflight(e) => write!(f, "pre-flight check failed: {}", e),
             SwapError::Other(e) => write!(f, "{}", e),
         }
     }
@@ -150,6 +195,8 @@ pub fn attach_swap_with<F>(
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
+    validate_swap_preflight(dev).map_err(SwapError::Preflight)?;
+
     run_cmd("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| {
         let msg = format!("nbd-client: {e}");
         SwapError::from_io_err(e, msg)
@@ -257,7 +304,7 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+        let res = attach_swap_with(&ep, "export", "/dev/null", None, |cmd, _| {
             if cmd == "nbd-client" {
                 Err(Error::other("mock error"))
             } else {
@@ -272,7 +319,7 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+        let res = attach_swap_with(&ep, "export", "/dev/null", None, |cmd, _| {
             if cmd == "mkswap" {
                 Err(Error::other("mock error"))
             } else {
@@ -287,7 +334,7 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+        let res = attach_swap_with(&ep, "export", "/dev/null", None, |cmd, _| {
             if cmd == "swapon" {
                 Err(Error::other("mock error"))
             } else {
@@ -302,7 +349,7 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |_, _| Ok(()));
+        let res = attach_swap_with(&ep, "export", "/dev/null", None, |_, _| Ok(()));
         assert_eq!(res, Ok(()));
     }
 
