@@ -6,6 +6,7 @@
 //! SPEC: docs/specs/no-milestone/memory-broker/SPEC.md (ITEM-9). Without `unsafe`.
 #![forbid(unsafe_code)]
 
+pub mod agent_cmd;
 pub mod explain;
 pub mod local;
 pub mod psi;
