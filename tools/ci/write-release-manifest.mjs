@@ -9,7 +9,7 @@ const SOURCE_SHA_RE = /^[0-9a-f]{40}$/
 const RUST_VERSION = '1.98.0'
 const RUST_COMMIT_RE = /^[0-9a-f]{40}$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
-const TARGET_TAG = 'v0.9.0-beta.1'
+const TAG_RE = /^v[0-9][0-9A-Za-z.+-]*$/
 
 function safeRelative(value) {
   return typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) &&
@@ -25,7 +25,7 @@ function isObject(value) {
 }
 
 function inputIsValid(input) {
-  return isObject(input) && input.tag === TARGET_TAG && SOURCE_SHA_RE.test(input.revision) &&
+  return isObject(input) && TAG_RE.test(input.tag) && SOURCE_SHA_RE.test(input.revision) &&
     input.clean_tree === true && input.rust_version === RUST_VERSION &&
     RUST_COMMIT_RE.test(input.rust_commit) &&
     safeRelative(input.bundle_path) && safeRelative(input.checksum_path) && safeRelative(input.sbom_path) &&

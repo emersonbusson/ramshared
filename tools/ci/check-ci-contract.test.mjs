@@ -957,34 +957,33 @@ test('release_producer_requires_github_app_token_without_fallback', () => {
   assert.match(workflow, /test -n "\$RELEASE_APP_PRIVATE_KEY"/)
   assert.match(workflow, /uses: actions\/create-github-app-token@[0-9a-f]{40}/)
   assert.match(workflow, /token: \$\{\{ steps\.release-app-token\.outputs\.token \}\}/)
-  assert.match(workflow, /git ls-remote --refs/)
-  assert.match(workflow, /refs\/tags\/\$RELEASE_TARGET_TAG/)
-  assert.match(workflow, /if: \$\{\{ steps\.target\.outputs\.run == 'true' \}\}/)
+  assert.doesNotMatch(workflow, /git ls-remote --refs/)
+  assert.doesNotMatch(workflow, /RELEASE_TARGET_TAG/)
   assert.doesNotMatch(workflow, /RELEASE_PLEASE_TOKEN|GITHUB_TOKEN|\bPAT\b|\|\|/)
   assert.equal(config.$schema, 'https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json')
   assert.equal(config['release-type'], 'simple')
-  assert.equal(config.versioning, 'prerelease')
-  assert.equal(config['prerelease-type'], 'beta')
-  assert.equal(config.prerelease, true)
-  assert.equal(config.draft, true)
+  assert.equal(Object.hasOwn(config, 'versioning'), false)
+  assert.equal(Object.hasOwn(config, 'prerelease-type'), false)
+  assert.equal(Object.hasOwn(config, 'prerelease'), false)
+  assert.equal(config.draft, false)
   assert.equal(config['force-tag-creation'], true)
   assert.equal(config['skip-github-release'], false)
   assert.equal(Object.hasOwn(config, 'release-as'), false)
   assert.equal(Object.hasOwn(config, 'last-release-sha'), false)
   assert.equal(releaseProducerManifestMatchesPublishedTarget(manifest, {
-    target_tag: 'v0.9.0-beta.1',
+    target_tag: 'derived-from-conventional-commits',
   }), true)
-  assert.match(config['pull-request-header'], /draft prerelease/i)
+  assert.match(config['pull-request-header'], /next stable/i)
 })
 
 test('release_producer_accepts_only_exact_released_manifest', () => {
   const policy = {
-    target_tag: 'v0.9.0-beta.1',
+    target_tag: 'derived-from-conventional-commits',
   }
 
-  assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': '0.9.0-beta.1' }, policy), true)
+  assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': '0.12.0' }, policy), true)
 
-  for (const version of ['0.8.0', '0.8.1', '0.9.0', '0.9.0-beta.2', '', null]) {
+  for (const version of ['0.9.0-beta.2', '', 'not-semver', null]) {
     assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': version }, policy), false)
   }
   assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': '0.8.0', other: '0.8.0' }, policy), false)
