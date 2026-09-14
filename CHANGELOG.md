@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.3](https://github.com/emersonbusson/ramshared/compare/v0.13.2...v0.13.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **release:** refresh workspace lock versions ([2cfc753](https://github.com/emersonbusson/ramshared/commit/2cfc75309a51e615abfa80f292f5cb5470621a1b))
+* **release:** refresh workspace lock versions ([5af33b7](https://github.com/emersonbusson/ramshared/commit/5af33b74bf7d0a7445ad1e6145b36518c5ddf5e8))
+
 ## [0.13.2](https://github.com/emersonbusson/ramshared/compare/v0.13.1...v0.13.2) (2026-09-14)
 
 
