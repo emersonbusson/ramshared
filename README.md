@@ -9,7 +9,7 @@ The project is intended for people who want to study or operate GPU-backed memor
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0"><img alt="Release v0.12.0" src="https://img.shields.io/badge/release-v0.12.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.13.4"><img alt="Release v0.13.4" src="https://img.shields.io/badge/release-v0.13.4-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-stable-2f855a?style=flat-square">
 </p>
@@ -37,7 +37,7 @@ The project is intended for people who want to study or operate GPU-backed memor
 
 ## Current Status
 
-Latest published release: **[v0.12.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0)**. This checkout builds **0.13.0**, the next stable maintenance version in development; it is not published yet.
+Latest published release: **[v0.13.4](https://github.com/emersonbusson/ramshared/releases/tag/v0.13.4)**. This checkout builds **0.13.4**, the current stable maintenance release.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -50,9 +50,9 @@ Latest published release: **[v0.12.0](https://github.com/emersonbusson/ramshared
 
 Historical measurements are retained in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Entries without a public evidence envelope are historical records, not current release baselines. Open limits and qualification work are tracked in [`docs/reliability/`](docs/reliability/).
 
-### v0.12 qualification snapshot
+### v0.13 qualification snapshot
 
-The published v0.12 qualification reached **19,777 MB** across Tier 0 (ZRAM), Tier 1 (GPU VRAM cache), and Tier 3 (SSD origin), with a `PASS_ZERO_PANIC` verdict on the qualified hardware. This records the release evidence; it is not a throughput or capacity promise for a different machine.
+The v0.13 qualification reached **19,777 MB** across Tier 0 (ZRAM), Tier 1 (GPU VRAM cache), and Tier 3 (SSD origin), with a `PASS_ZERO_PANIC` verdict on the qualified hardware. This records the release evidence; it is not a throughput or capacity promise for a different machine.
 
 ## Run it safely
 <a id="safe-operation"></a><a id="quick-start"></a>
@@ -167,7 +167,7 @@ scripts, systemd service templates, documentation, and `SHA256SUMS` cryptographi
 Build caches, credentials, and transient environment artifacts are excluded by policy. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-Official Linux release distributions (including v0.12.0 and prior milestones) and
+Official Linux release distributions (including v0.13.4 and prior milestones) and
 their detached checksums are qualified through the automated release promotion workflow.
 
 ## Windows StorPort Driver Architecture
