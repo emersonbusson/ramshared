@@ -290,6 +290,55 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_slices() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slices = 0;
+        let err = cfg.validate().expect_err("should reject zero slices");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.slices" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_slice_mib() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slice_mib = 0;
+        let err = cfg.validate().expect_err("should reject zero slice_mib");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.slice_mib" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_watchdog_secs() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.agent.watchdog_secs = 0;
+        let err = cfg.validate().expect_err("should reject zero watchdog_secs");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "agent.watchdog_secs" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn accepts_vulkan_backend() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.backend = "vulkan".into();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
     fn rejects_small_slice() {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.slice_mib = 15;
