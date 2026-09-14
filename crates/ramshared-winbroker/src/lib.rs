@@ -302,6 +302,8 @@ impl BrokerSessionCore {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use std::time::{Duration, Instant};
+
     use super::BrokerConfigV1;
     use super::{BrokerEffect, BrokerSessionCore, MAX_CONFIG_BYTES};
     use ramshared_broker::model::TransportKind;
@@ -465,15 +467,46 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_releases_server_state_and_audits_ambiguous() {
-        let mut core = BrokerSessionCore::new(1024, "winsvc", "01");
-        core.on_authenticated_msg(1, register("winsvc"));
-        core.on_authenticated_msg(1, Msg::LeaseRequest { bytes: 1024 });
+    fn disconnect_retains_server_lease_until_deadline() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut core = BrokerSessionCore::new_with_lease_ttl(1024, "winsvc", "01", ttl);
+        core.on_authenticated_msg_at(1, register("winsvc"), started);
+        core.on_authenticated_msg_at(1, Msg::LeaseRequest { bytes: 1024 }, started);
         let effects = core.on_disconnect(1);
-        assert!(effects.contains(&BrokerEffect::LeaseReleased(1)));
+        assert!(!effects.contains(&BrokerEffect::LeaseReleased(1)));
         assert!(effects.iter().any(
-            |e| matches!(e, BrokerEffect::Audit(s) if s == "lease_released_on_disconnect_ambiguous")
+            |e| matches!(e, BrokerEffect::Audit(s) if s == "lease_retained_until_expiry")
         ));
+        assert!(core.status().active_lease.is_some());
+        assert!(core.on_tick(started + Duration::from_secs(2)).is_empty());
+        assert!(core
+            .on_tick(started + ttl)
+            .contains(&BrokerEffect::LeaseReleased(1)));
+        assert!(core.status().active_lease.is_none());
+    }
+
+    #[test]
+    fn holder_heartbeat_renews_windows_lease_deadline() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut core = BrokerSessionCore::new_with_lease_ttl(1024, "winsvc", "01", ttl);
+        core.on_authenticated_msg_at(1, register("winsvc"), started);
+        core.on_authenticated_msg_at(1, Msg::LeaseRequest { bytes: 1024 }, started);
+        core.on_authenticated_msg_at(
+            1,
+            Msg::Psi {
+                sample: Default::default(),
+                swaps: Vec::new(),
+                mem: None,
+            },
+            started + Duration::from_secs(2),
+        );
+
+        assert!(core.on_tick(started + ttl).is_empty());
+        assert!(core
+            .on_tick(started + Duration::from_secs(5))
+            .contains(&BrokerEffect::LeaseReleased(1)));
     }
 
     #[test]
