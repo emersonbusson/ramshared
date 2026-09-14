@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.13.1](https://github.com/emersonbusson/ramshared/compare/v0.13.0...v0.13.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **ci:** attach generated package assets to releases ([c99c368](https://github.com/emersonbusson/ramshared/commit/c99c3681159a22603c1620ca840f3508349d5bb5))
+* **ci:** derive stable releases from conventional commits ([f42b84a](https://github.com/emersonbusson/ramshared/commit/f42b84a38f6f0765579b6c6b01383dabab5cce01))
+* **ci:** recover conventional stable release version ([b6b85e1](https://github.com/emersonbusson/ramshared/commit/b6b85e16fa2fa4903394b7a86da2ba79d6e0df8f))
+* **ci:** recover release version from workspace metadata ([0d5035b](https://github.com/emersonbusson/ramshared/commit/0d5035b431c04d548331cbde7959c0d3313e5695))
+* **ci:** use versioned release configuration ([e9fe5a9](https://github.com/emersonbusson/ramshared/commit/e9fe5a9ac17c28da7e9cab3caff92f810806d6c5))
+* **ci:** use versioned release configuration ([0702f6f](https://github.com/emersonbusson/ramshared/commit/0702f6fe29cd021e26c28001daf43d25d4ec5e87))
+
 ## [0.12.0] (2026-09-12)
 
 ### Features
