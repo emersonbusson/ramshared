@@ -171,7 +171,7 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
-        let Ok(idx) = server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags)
+        let Ok(idx) = server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags, None)
             .inspect_err(|e| {
                 eprintln!("[ramsharedd] conn: handshake failed: {e}");
                 let _ = jobs.send(WMsg::Closed);
@@ -454,6 +454,8 @@ mod tests {
 
     fn export_name_handshake(name: &[u8]) -> Vec<u8> {
         let mut wire = Vec::new();
+        wire.extend_from_slice(&1u64.to_be_bytes()); // ts
+        wire.extend_from_slice(&1u64.to_be_bytes()); // nonce
         wire.extend_from_slice(&(1u32 << 1).to_be_bytes()); // NBD_FLAG_C_NO_ZEROES
         wire.extend_from_slice(&IHAVEOPT.to_be_bytes());
         wire.extend_from_slice(&NBD_OPT_EXPORT_NAME.to_be_bytes());
