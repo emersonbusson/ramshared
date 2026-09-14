@@ -145,12 +145,37 @@ mod tests {
     #[test]
     fn validate_weight_rejects_negative() {
         assert_eq!(validate_weight(-1), Err(PriorityError::InvalidWeight(-1)));
+        assert_eq!(
+            validate_weight(i32::MIN),
+            Err(PriorityError::InvalidWeight(i32::MIN))
+        );
     }
 
     #[test]
     fn validate_weight_accepts_valid() {
         assert!(validate_weight(0).is_ok());
+        assert!(validate_weight(1).is_ok());
         assert!(validate_weight(100).is_ok());
+        assert!(validate_weight(i32::MAX).is_ok());
+    }
+
+    #[test]
+    fn priority_error_display_formatting() {
+        assert_eq!(
+            format!("{}", PriorityError::InvalidWeight(-10)),
+            "invalid weight: -10"
+        );
+        assert_eq!(
+            format!(
+                "{}",
+                PriorityError::ThresholdOutOfRange {
+                    val: 5,
+                    min: 10,
+                    max: 50
+                }
+            ),
+            "threshold 5 out of range (10..=50)"
+        );
     }
 
     #[test]
