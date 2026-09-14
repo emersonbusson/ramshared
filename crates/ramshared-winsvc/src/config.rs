@@ -371,6 +371,46 @@ tenant = "windrive-host"
     }
 
     #[test]
+    fn test_config_zero_capacity_rejects() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = 0");
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_config_size_negative_rejects() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = -1");
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn test_config_size_u64_max_rejects() {
+        let bad = GOOD.replace("size_bytes = 536870912", &format!("size_bytes = {}", u64::MAX));
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_config_non_utf8_rejects() {
+        let bad: &[u8] = &[0xff, 0xfe, 0xfd];
+        let e = WinDriveConfig::from_reader(bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
     fn reject_size_over_usize() {
         // On 64-bit hosts usize max is huge; force invalid by using unaligned + below floor path
         // via a direct validate of an oversized conceptual field when possible.
