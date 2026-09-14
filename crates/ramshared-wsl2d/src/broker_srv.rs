@@ -483,9 +483,12 @@ impl BrokerCore {
                 t.sid = None;
             }
             out.push(Outbound::Log(format!(
-                "[ramsharedd] tenant {id} desconectou; slices congeladas (DT-20)"
+                "[ramsharedd] tenant {id} desconectou; slices liberadas (DT-20)"
             )));
             // Lease holder/requester dropped → automatic release/cancel (DT-19).
+            // Chaos recovery: automatically reclaim all slices of the disconnected tenant.
+            self.slice_map.reclaim_disconnect(id);
+
             let disconnected = self.lease_book.disconnect(id);
             if let Some(lease) = disconnected.released {
                 self.release_slices(lease.id, out);
@@ -1382,15 +1385,15 @@ mod tests {
         psi(&mut c, 10, 0.0);
         c.handle(CoreEvent::Tick, Instant::now()); // s0 → a (Active)
         c.handle(CoreEvent::Disconnected(10), Instant::now());
-        // slice remains Active (frozen), owner absent
-        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Active);
-        // tick does not touch the absent one's slice (does not become Free nor reassigned)
+        // slice becomes Free (reclaimed)
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
         let o = c.handle(CoreEvent::Tick, Instant::now());
+        // Tick does a round-robin, since the tenant is disconnected, they shouldn't receive a SwapOn
         assert!(
             !o.iter()
-                .any(|x| matches!(x, Outbound::ToSession(_, Msg::SwapOn { .. })))
+                .any(|x| matches!(x, Outbound::ToSession(10, Msg::SwapOn { .. })))
         );
-        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Active);
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
     }
 
     #[test]
