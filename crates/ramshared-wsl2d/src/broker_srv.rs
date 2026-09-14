@@ -134,10 +134,6 @@ pub struct BrokerCore {
 const ZERO_RETRY_GRACE: u32 = 1;
 const ZERO_RETRY_ERROR: u32 = 5;
 
-/// A holder has fifteen default broker ticks to resume heartbeats before an
-/// orphaned lease returns its slices to the allocator.
-pub const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(30);
-
 /// Maps only an exact NBD block-device identity to its slice (DT-10/DT-21).
 fn dev_to_slice(dev: &str) -> Option<SliceId> {
     let dev = dev.trim();

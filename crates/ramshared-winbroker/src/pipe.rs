@@ -31,6 +31,8 @@ pub const STATUS_PIPE: &str = r"\\.\pipe\RamSharedBrokerStatus.v1";
 pub const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 pub const STATUS_BUFFER_BYTES: u32 = 4 * 1024;
 pub const MAX_PIPE_INSTANCES: u32 = 4;
+/// Bounds one overlapped pipe operation and drives the broker lifecycle tick.
+pub const PIPE_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub enum PipeAuthError {
@@ -474,7 +476,7 @@ fn overlapped_io(
             return Err(error);
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + PIPE_OPERATION_TIMEOUT;
     loop {
         match unsafe { WaitForSingleObject(event.0, 100) } {
             WAIT_OBJECT_0 => break,

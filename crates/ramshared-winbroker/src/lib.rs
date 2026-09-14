@@ -1,8 +1,11 @@
-use ramshared_broker::lease::{LeaseBook, LeaseDecision, LeaseDeny, LogicalLease};
+use ramshared_broker::lease::{
+    DEFAULT_LEASE_TTL, LeaseBook, LeaseDecision, LeaseDeny, LogicalLease,
+};
 use ramshared_broker::model::TransportKind;
 use ramshared_broker::protocol::{Msg, PROTO_VERSION};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 pub mod pipe;
@@ -141,6 +144,7 @@ pub struct BrokerSessionCore {
     broker_instance_id: String,
     live_session: Option<usize>,
     lease_book: LeaseBook,
+    lease_ttl: Duration,
 }
 
 impl BrokerSessionCore {
@@ -149,15 +153,42 @@ impl BrokerSessionCore {
         allowed_tenant: impl Into<String>,
         broker_instance_id: impl Into<String>,
     ) -> Self {
+        Self::new_with_lease_ttl(
+            capacity_bytes,
+            allowed_tenant,
+            broker_instance_id,
+            DEFAULT_LEASE_TTL,
+        )
+    }
+
+    /// Constructs a deterministic core for a broker shell or lifecycle test.
+    /// Production callers use [`Self::new`] and the shared default policy.
+    pub fn new_with_lease_ttl(
+        capacity_bytes: u64,
+        allowed_tenant: impl Into<String>,
+        broker_instance_id: impl Into<String>,
+        lease_ttl: Duration,
+    ) -> Self {
         Self {
             allowed_tenant: allowed_tenant.into(),
             broker_instance_id: broker_instance_id.into(),
             live_session: None,
             lease_book: LeaseBook::new(capacity_bytes),
+            lease_ttl,
         }
     }
 
     pub fn on_authenticated_msg(&mut self, session_id: usize, message: Msg) -> Vec<BrokerEffect> {
+        self.on_authenticated_msg_at(session_id, message, Instant::now())
+    }
+
+    /// Handles one authenticated frame using an injected monotonic time source.
+    pub fn on_authenticated_msg_at(
+        &mut self,
+        session_id: usize,
+        message: Msg,
+        now: Instant,
+    ) -> Vec<BrokerEffect> {
         if self.live_session != Some(session_id) {
             return self.on_unregistered_msg(session_id, message);
         }
@@ -167,7 +198,7 @@ impl BrokerSessionCore {
                     LeaseDecision::Pending(_) => {}
                     LeaseDecision::Denied(reason) => return vec![Self::denied(reason)],
                 }
-                let lease = match self.lease_book.grant_pending(bytes) {
+                let lease = match self.lease_book.grant_pending(bytes, now, self.lease_ttl) {
                     Ok(l) => l,
                     Err(reason) => return vec![Self::denied(reason)],
                 };
@@ -199,7 +230,10 @@ impl BrokerSessionCore {
             // WinDrive PSI is a liveness heartbeat only. It is deliberately
             // excluded from local arbitration, but it must keep the
             // authoritative lease session open.
-            Msg::Psi { .. } => Vec::new(),
+            Msg::Psi { .. } => {
+                self.lease_book.renew_active(1, now, self.lease_ttl);
+                Vec::new()
+            }
             _ => vec![
                 BrokerEffect::Reply(Msg::Error {
                     reason: "unexpected_message".into(),
@@ -269,11 +303,24 @@ impl BrokerSessionCore {
         self.live_session = None;
         let disconnected = self.lease_book.disconnect(1);
         let mut effects = vec![BrokerEffect::Audit("session_disconnected".into())];
-        if let Some(lease) = disconnected.released {
-            effects.push(BrokerEffect::Audit(
-                "lease_released_on_disconnect_ambiguous".into(),
-            ));
-            effects.push(BrokerEffect::LeaseReleased(lease.id));
+        if disconnected.retained_active.is_some() {
+            effects.push(BrokerEffect::Audit("lease_retained_until_expiry".into()));
+        }
+        effects
+    }
+
+    /// Expires an orphaned lease. The pipe loop owns when this is called; the
+    /// core stays deterministic and never creates a timer thread.
+    pub fn on_tick(&mut self, now: Instant) -> Vec<BrokerEffect> {
+        let Some(lease) = self.lease_book.expire(now) else {
+            return Vec::new();
+        };
+        let mut effects = vec![
+            BrokerEffect::Audit("lease_expired".into()),
+            BrokerEffect::LeaseReleased(lease.id),
+        ];
+        if self.live_session.is_some() {
+            effects.push(BrokerEffect::Close);
         }
         effects
     }
@@ -475,14 +522,17 @@ mod tests {
         core.on_authenticated_msg_at(1, Msg::LeaseRequest { bytes: 1024 }, started);
         let effects = core.on_disconnect(1);
         assert!(!effects.contains(&BrokerEffect::LeaseReleased(1)));
-        assert!(effects.iter().any(
-            |e| matches!(e, BrokerEffect::Audit(s) if s == "lease_retained_until_expiry")
-        ));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, BrokerEffect::Audit(s) if s == "lease_retained_until_expiry"))
+        );
         assert!(core.status().active_lease.is_some());
         assert!(core.on_tick(started + Duration::from_secs(2)).is_empty());
-        assert!(core
-            .on_tick(started + ttl)
-            .contains(&BrokerEffect::LeaseReleased(1)));
+        assert!(
+            core.on_tick(started + ttl)
+                .contains(&BrokerEffect::LeaseReleased(1))
+        );
         assert!(core.status().active_lease.is_none());
     }
 
@@ -504,9 +554,10 @@ mod tests {
         );
 
         assert!(core.on_tick(started + ttl).is_empty());
-        assert!(core
-            .on_tick(started + Duration::from_secs(5))
-            .contains(&BrokerEffect::LeaseReleased(1)));
+        assert!(
+            core.on_tick(started + Duration::from_secs(5))
+                .contains(&BrokerEffect::LeaseReleased(1))
+        );
     }
 
     #[test]

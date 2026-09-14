@@ -35,6 +35,7 @@ use ramshared_block::{
 #[cfg(test)]
 use ramshared_block::{GpuSample, WriteThroughCacheBackend};
 use ramshared_broker::arbiter::ArbiterConfig;
+use ramshared_broker::lease::DEFAULT_LEASE_TTL;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
 use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
@@ -43,7 +44,7 @@ use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::autotier::{
     AutotierConfig, BudgetInput, RecoveryTracker, backend_release_allowed, commit_allowed,
 };
-use ramshared_wsl2d::broker_srv::{BrokerConfig, DEFAULT_LEASE_TTL, EndpointCfg, spawn_broker};
+use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::{spawn_activate_swap, spawn_swapoff};
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,

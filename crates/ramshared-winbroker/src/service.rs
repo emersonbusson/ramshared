@@ -16,7 +16,7 @@ use windows_service::service_control_handler::{
     self, ServiceControlHandlerResult, ServiceStatusHandle,
 };
 
-use crate::pipe::{AuthenticatedPipe, PipeAuthError, PipeServer};
+use crate::pipe::{AuthenticatedPipe, PIPE_OPERATION_TIMEOUT, PipeAuthError, PipeServer};
 use crate::{
     BrokerConfigV1, BrokerEffect, BrokerSessionCore, BrokerStatusRequestV1, BrokerStatusV1,
 };
@@ -178,6 +178,24 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
     let status_thread = std::thread::spawn(move || serve_status(status_core, status_stop));
     let mut session_id = 1usize;
     while !stop.load(Ordering::Acquire) {
+        let expiry_effects = core
+            .lock()
+            .map_err(|_| io::Error::other("broker core mutex poisoned"))?
+            .on_tick(Instant::now());
+        for effect in expiry_effects {
+            match effect {
+                BrokerEffect::Audit(message) => {
+                    eprintln!("broker audit={message}");
+                    append_evidence(&evidence_path, &instance_id, &message, Some(session_id))?;
+                }
+                BrokerEffect::LeaseReleased(lease) => {
+                    eprintln!("broker lease_released={lease}");
+                }
+                BrokerEffect::Reply(_) | BrokerEffect::Close => {
+                    return Err(io::Error::other("unexpected detached broker effect"));
+                }
+            }
+        }
         let server =
             match PipeServer::bind_product(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT) {
                 Ok(server) => server,
@@ -192,31 +210,31 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
                 }
                 Err(error) => return Err(io::Error::other(format!("{error:?}"))),
             };
-        let pipe =
-            match server.accept_authenticated(&stop, Instant::now() + Duration::from_secs(10)) {
-                Ok(pipe) => pipe,
-                Err(PipeAuthError::Stopping) if stop.load(Ordering::Acquire) => break,
-                Err(PipeAuthError::Deadline) => continue,
-                Err(PipeAuthError::Refused) => {
-                    append_evidence(
-                        &evidence_path,
-                        &instance_id,
-                        "peer_sid_refused",
-                        Some(session_id),
-                    )?;
-                    continue;
-                }
-                Err(PipeAuthError::Io(error)) => {
-                    append_evidence(
-                        &evidence_path,
-                        &instance_id,
-                        &format!("peer_auth_io_error_{}", error.raw_os_error().unwrap_or(-1)),
-                        Some(session_id),
-                    )?;
-                    return Err(error);
-                }
-                Err(error) => return Err(io::Error::other(format!("{error:?}"))),
-            };
+        let pipe = match server.accept_authenticated(&stop, Instant::now() + PIPE_OPERATION_TIMEOUT)
+        {
+            Ok(pipe) => pipe,
+            Err(PipeAuthError::Stopping) if stop.load(Ordering::Acquire) => break,
+            Err(PipeAuthError::Deadline) => continue,
+            Err(PipeAuthError::Refused) => {
+                append_evidence(
+                    &evidence_path,
+                    &instance_id,
+                    "peer_sid_refused",
+                    Some(session_id),
+                )?;
+                continue;
+            }
+            Err(PipeAuthError::Io(error)) => {
+                append_evidence(
+                    &evidence_path,
+                    &instance_id,
+                    &format!("peer_auth_io_error_{}", error.raw_os_error().unwrap_or(-1)),
+                    Some(session_id),
+                )?;
+                return Err(error);
+            }
+            Err(error) => return Err(io::Error::other(format!("{error:?}"))),
+        };
         let mut first_frame = [0u8; 4096];
         let first_read = match pipe.read_first_authenticated_stoppable(&mut first_frame, &stop) {
             Ok(read) => read,
@@ -295,36 +313,25 @@ fn serve_session(
             let effects = core
                 .lock()
                 .map_err(|_| io::Error::other("broker core mutex poisoned"))?
-                .on_authenticated_msg(session_id, message);
-            let mut close = false;
-            for effect in effects {
-                match effect {
-                    BrokerEffect::Reply(reply) => write_message(pipe, &reply)?,
-                    BrokerEffect::Close => close = true,
-                    BrokerEffect::Audit(message) => {
-                        eprintln!("broker audit={message}");
-                        append_evidence(evidence_path, instance_id, &message, Some(session_id))?;
-                    }
-                    BrokerEffect::LeaseReleased(lease) => {
-                        eprintln!("broker lease_released={lease}")
-                    }
-                }
-            }
-            if close {
+                .on_authenticated_msg_at(session_id, message, Instant::now());
+            if deliver_session_effects(pipe, effects, evidence_path, instance_id, session_id)? {
                 return Ok(());
             }
         }
         let read = match pipe.read_frame_stoppable(&mut chunk, stop) {
             Ok(0) => break,
             Ok(read) => read,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
-                ) =>
-            {
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                let effects = core
+                    .lock()
+                    .map_err(|_| io::Error::other("broker core mutex poisoned"))?
+                    .on_tick(Instant::now());
+                if deliver_session_effects(pipe, effects, evidence_path, instance_id, session_id)? {
+                    return Ok(());
+                }
                 continue;
             }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) if matches!(error.raw_os_error(), Some(109) | Some(232) | Some(233)) => {
                 break;
             }
@@ -333,6 +340,28 @@ fn serve_session(
         frame.extend_from_slice(&chunk[..read]);
     }
     Ok(())
+}
+
+fn deliver_session_effects(
+    pipe: &AuthenticatedPipe,
+    effects: Vec<BrokerEffect>,
+    evidence_path: &std::path::Path,
+    instance_id: &str,
+    session_id: usize,
+) -> io::Result<bool> {
+    let mut close = false;
+    for effect in effects {
+        match effect {
+            BrokerEffect::Reply(reply) => write_message(pipe, &reply)?,
+            BrokerEffect::Close => close = true,
+            BrokerEffect::Audit(message) => {
+                eprintln!("broker audit={message}");
+                append_evidence(evidence_path, instance_id, &message, Some(session_id))?;
+            }
+            BrokerEffect::LeaseReleased(lease) => eprintln!("broker lease_released={lease}"),
+        }
+    }
+    Ok(close)
 }
 
 fn append_evidence(
