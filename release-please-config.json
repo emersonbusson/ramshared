@@ -29,7 +29,10 @@
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         "Cargo.toml",
-        "Cargo.lock"
+        {
+          "type": "generic",
+          "path": "Cargo.lock"
+        }
       ]
     }
   }
