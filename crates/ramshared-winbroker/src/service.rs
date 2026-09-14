@@ -178,9 +178,19 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
     let status_thread = std::thread::spawn(move || serve_status(status_core, status_stop));
     let mut session_id = 1usize;
     while !stop.load(Ordering::Acquire) {
-        let server =
+        let server = loop {
             match PipeServer::bind_product(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT) {
-                Ok(server) => server,
+                Ok(server) => break server,
+                Err(PipeAuthError::Io(error))
+                    if error.raw_os_error()
+                        == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) =>
+                {
+                    if stop.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
                 Err(PipeAuthError::Io(error)) => {
                     append_evidence(
                         &evidence_path,
@@ -191,7 +201,8 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
                     return Err(error);
                 }
                 Err(error) => return Err(io::Error::other(format!("{error:?}"))),
-            };
+            }
+        };
         let pipe =
             match server.accept_authenticated(&stop, Instant::now() + Duration::from_secs(10)) {
                 Ok(pipe) => pipe,
@@ -417,11 +428,22 @@ fn emit_event(transition: &str, instance_id: &str) {
 
 fn serve_status(core: Arc<Mutex<BrokerSessionCore>>, stop: Arc<AtomicBool>) -> io::Result<()> {
     while !stop.load(Ordering::Acquire) {
-        let server = match PipeServer::bind_status(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT)
-        {
-            Ok(server) => server,
-            Err(PipeAuthError::Io(error)) => return Err(error),
-            Err(error) => return Err(io::Error::other(format!("{error:?}"))),
+        let server = loop {
+            match PipeServer::bind_status(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT) {
+                Ok(server) => break server,
+                Err(PipeAuthError::Io(error))
+                    if error.raw_os_error()
+                        == Some(windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32) =>
+                {
+                    if stop.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                Err(PipeAuthError::Io(error)) => return Err(error),
+                Err(error) => return Err(io::Error::other(format!("{error:?}"))),
+            }
         };
         let pipe =
             match server.accept_authenticated(&stop, Instant::now() + Duration::from_secs(10)) {

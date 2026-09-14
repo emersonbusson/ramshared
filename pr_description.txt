@@ -1,0 +1,16 @@
+## Summary
+Implemented a retry loop in `run_console` and `serve_status` to handle `ERROR_PIPE_BUSY` (231) errors gracefully. The listener re-creation is now resilient to service restarts and chaos pressure by sleeping for 50ms and retrying when the pipe is temporarily busy.
+## Commits
+feat: add named pipe listener recovery retry bounds
+## Issue
+Named pipe listener recovery fails due to transient `ERROR_PIPE_BUSY`.
+## Responsavel/Owner
+Jules
+## Labels
+resilience, fix
+## Validation
+cargo check -p ramshared-winbroker --target x86_64-pc-windows-gnu
+cargo clippy -p ramshared-winbroker --lib -- -D warnings
+cargo test -p ramshared-winbroker
+## Rollback trigger
+Listener loops endlessly or crashes on normal disconnect.
