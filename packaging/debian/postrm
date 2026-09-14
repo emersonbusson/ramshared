@@ -1,0 +1,15 @@
+#!/bin/bash
+set -euo pipefail
+
+# Cleanup of transient runtime states and log files in postrm
+# Strict guard clauses and validation.
+
+if [ "${1:-}" = "purge" ]; then
+    # Purge /var/run/ramshared and transient runtime sockets cleanly
+    RAMSHARED_RUN_DIR="/var/run/ramshared"
+
+    if [ -d "$RAMSHARED_RUN_DIR" ]; then
+        echo "Removing transient runtime directory: $RAMSHARED_RUN_DIR"
+        rm -rf "$RAMSHARED_RUN_DIR"
+    fi
+fi
