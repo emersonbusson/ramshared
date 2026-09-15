@@ -510,7 +510,10 @@ function Invoke-GuardianInstallTransaction {
         $failure = $_
         $rollback = $Operations["rollback"]
         if ($null -eq $rollback) { throw "guardian install transaction has no rollback operation" }
-        try { & $rollback $transaction } catch { throw ("guardian install transaction failed at " + $transaction.phase + " and rollback was incomplete: " + $_.Exception.Message) }
+        try { & $rollback $transaction } catch {
+            $rollbackFailure = $_.Exception.Message
+            throw ("guardian install transaction failed at " + $transaction.phase + ": " + $failure.Exception.Message + "; rollback incomplete: " + $rollbackFailure)
+        }
         throw ("guardian install transaction failed at " + $transaction.phase + ": " + $failure.Exception.Message)
     }
 }
