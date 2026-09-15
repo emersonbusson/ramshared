@@ -5606,6 +5606,46 @@ mod tests {
     }
 
     #[test]
+    fn legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener() {
+        let digest = [0x5a; 32];
+        let legacy_executable = PathBuf::from("/usr/local/bin/ramsharedd");
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: legacy_executable.clone(),
+            canonical_executable: Some(legacy_executable.clone()),
+            executable_sha256: Some(digest),
+            arguments: vec![
+                "/usr/local/bin/ramsharedd".into(),
+                "--backend".into(),
+                "auto".into(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "4096".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ],
+            owns_legacy_listener: true,
+        };
+
+        assert!(legacy_regular_daemon_is_bound(
+            &observation,
+            &legacy_executable,
+            &digest,
+            4096,
+        ));
+        assert!(!legacy_regular_daemon_is_bound(
+            &LegacyDaemonObservation {
+                executable_sha256: Some([0xa5; 32]),
+                ..observation
+            },
+            &legacy_executable,
+            &digest,
+            4096,
+        ));
+    }
+
+    #[test]
     fn legacy_runtime_records_require_exact_legacy_values() {
         assert!(legacy_runtime_record_values_match(
             Some("527\n"),
