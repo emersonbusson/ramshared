@@ -2203,6 +2203,35 @@ Filename Type Size Used Priority
     }
 
     #[test]
+    fn guardian_health_accepts_a_windows_utf8_bom_and_rejects_malformed_json() {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-guardian-bom-state-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let safe = root.join("safe.json");
+        let health = root.join("health.json");
+
+        fs::write(
+            &health,
+            "\u{feff}{\"schema_version\":3,\"distro\":\"Ubuntu-24.04\",\"state\":\"HEALTHY\"}",
+        )
+        .unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::Healthy, None)
+        );
+
+        fs::write(&health, "\u{feff}not-json").unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::Blocked, Some("guardian_state_invalid".into()))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn stale_foreign_or_malformed_cache_or_supervisor_status_is_never_green() {
         let fresh_cache = serde_json::json!({
             "schema_version": 1,
