@@ -379,6 +379,12 @@ function Invoke-OriginManufacturedTests {
     $uninstallFailure = @{ manifest = $manifest; manifest_backup = "I:\RamShared\uninstall.manifest.json"; staging_vhdx = "I:\RamShared\uninstall.staging"; origin_staged = $true; manifest_removed = $true }
     $uninstallRollback = Get-OriginUninstallRollbackTargets -Transaction $uninstallFailure
     if (-not $uninstallRollback.restore_origin -or -not $uninstallRollback.restore_manifest) { throw "manufactured uninstall rollback did not preserve authority" }
+    $alreadyAttached = Get-OriginAttachmentDecision -GuestPartuuidPresent $true
+    $attachRequired = Get-OriginAttachmentDecision -GuestPartuuidPresent $false
+    if ($alreadyAttached.state -cne "ALREADY_ATTACHED" -or $alreadyAttached.host_mutation -or
+        $attachRequired.state -cne "ATTACH_REQUIRED" -or -not $attachRequired.host_mutation) {
+        throw "manufactured origin attachment decision was not idempotent and fail closed"
+    }
     Write-Output "PASS origin_plan_is_separate_fixed_and_identity_bound"
     Write-Output "PASS foreign_or_unproven_partuuid_is_rejected"
     Write-Output "PASS origin_install_failure_rolls_back_current_run_only"
@@ -387,6 +393,7 @@ function Invoke-OriginManufacturedTests {
     Write-Output "PASS canonical_vhdx_guid_and_partuuid_are_accepted"
     Write-Output "PASS malformed_or_foreign_origin_identity_is_refused"
     Write-Output "PASS origin_uninstall_failure_restores_vhdx_and_manifest_authority"
+    Write-Output "PASS origin_attach_decision_is_idempotent_and_fail_closed"
 }
 
 if ($Action -eq "plan" -or (-not $Run -and $Action -ne "status" -and $Action -ne "test")) { Write-OriginPlan; exit 0 }
