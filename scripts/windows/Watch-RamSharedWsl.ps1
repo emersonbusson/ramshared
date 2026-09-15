@@ -270,6 +270,16 @@ function Get-GuardianBootProbeSummary {
     }
 }
 
+function Get-GuardianBootProbeEventData {
+    param([AllowNull()][object]$Probe)
+    $summary = Get-GuardianBootProbeSummary -Probe $Probe
+    return @{
+        probe_completed = [bool]$summary.completed
+        probe_exit_code = $summary.exit_code
+        probe_reason = [string]$summary.reason
+    }
+}
+
 function Invoke-GuestProbe {
     $first = Invoke-BoundedProcess -FileName "wsl.exe" `
         -Arguments ((Get-GuardianWslCommandPrefix) + " /bin/true") -TimeoutSeconds $GuestCommandTimeoutSec
@@ -834,7 +844,7 @@ function Invoke-GuardianWatch {
                 Publish-GuardianState -State "SAFE_MODE" -Reason "host_safe_mode_gate_present" -BootId $publishedBootId
             } elseif ($null -eq $publishedBootId) {
                 Publish-GuardianState -State "BLOCKED" -Reason "boot_identity_unavailable" -BootId $null
-                Write-GuardianEvent -Path $eventPath -Event "guardian_boot_identity_unavailable" -Data @{ last_guest_boot_probe = $script:LastGuestBootProbe }
+                Write-GuardianEvent -Path $eventPath -Event "guardian_boot_identity_unavailable" -Data (Get-GuardianBootProbeEventData -Probe $script:LastGuestBootProbe)
             } else {
                 Publish-GuardianState -State "HEALTHY" -Reason "watching" -BootId $publishedBootId
             }
