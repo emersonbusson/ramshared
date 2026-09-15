@@ -46,6 +46,7 @@ $GuardianHealthPath = Join-Path $GuardianStateRoot ($Distro + ".health.json")
 $ResumeLeasePath = "/run/ramshared/host-resume-lease.json"
 $GuardianActionApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTION"
 $GuardianActivationApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTIVATION"
+$script:LastGuestBootProbe = $null
 
 function Resolve-GuardianTaskUserName {
     param([Parameter(Mandatory = $true)][string]$Sid)
@@ -255,6 +256,18 @@ function Get-GuardianWslCommandPrefix {
     # Distro is constrained by the top-level parameter validation.  Passing it
     # without quotes avoids preserving literal quotes through ProcessStartInfo.
     return ("-d " + $Distro + " -u root --")
+}
+
+function Get-GuardianBootProbeSummary {
+    param([AllowNull()][object]$Probe)
+    if ($null -eq $Probe) {
+        return [pscustomobject]@{ completed = $false; exit_code = $null; reason = "missing" }
+    }
+    return [pscustomobject]@{
+        completed = [bool]$Probe.completed
+        exit_code = if ($null -eq $Probe.exit_code) { $null } else { [int]$Probe.exit_code }
+        reason = [string]$Probe.reason
+    }
 }
 
 function Invoke-GuestProbe {
@@ -618,6 +631,7 @@ function Restore-SealedGuardianBackup {
 
 function Get-GuestBootId {
     $boot = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ((Get-GuardianWslCommandPrefix) + " cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
+    $script:LastGuestBootProbe = Get-GuardianBootProbeSummary -Probe $boot
     $candidate = if ($null -eq $boot.stdout) { $null } else { $boot.stdout.Trim().ToLowerInvariant() }
     if (-not $boot.completed -or $boot.exit_code -ne 0 -or -not (Test-CanonicalGuestBootId -BootId $candidate)) { return $null }
     return $candidate
@@ -820,6 +834,7 @@ function Invoke-GuardianWatch {
                 Publish-GuardianState -State "SAFE_MODE" -Reason "host_safe_mode_gate_present" -BootId $publishedBootId
             } elseif ($null -eq $publishedBootId) {
                 Publish-GuardianState -State "BLOCKED" -Reason "boot_identity_unavailable" -BootId $null
+                Write-GuardianEvent -Path $eventPath -Event "guardian_boot_identity_unavailable" -Data @{ last_guest_boot_probe = $script:LastGuestBootProbe }
             } else {
                 Publish-GuardianState -State "HEALTHY" -Reason "watching" -BootId $publishedBootId
             }
