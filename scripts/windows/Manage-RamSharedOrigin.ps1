@@ -10,7 +10,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet("plan", "install", "configure", "status", "uninstall", "test")]
+    [ValidateSet("plan", "install", "configure", "status", "uninstall", "attach", "test")]
     [string]$Action = "plan",
     [switch]$Run,
     [switch]$AttendedOriginApply,
@@ -203,6 +203,109 @@ function Test-OriginProofMatchesManifest {
         (Test-CanonicalOriginGuid -Value ([string]$Manifest.disk_guid)) -and
         $Proof.partuuid -ceq ([string]$Manifest.partuuid) -and
         $Proof.disk_guid -ceq ([string]$Manifest.disk_guid)
+}
+
+function Test-OriginAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-OriginBoundedProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [Parameter(Mandatory = $true)][string]$Arguments,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 30)][int]$TimeoutSeconds
+    )
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $FileName
+    $start.Arguments = $Arguments
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw "origin bounded process did not start" }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        $terminated = $false
+        if (-not $completed) {
+            try {
+                $process.Kill()
+                $terminated = $process.WaitForExit(5000)
+            } catch {
+                $terminated = $false
+            }
+        }
+        $streamsDrained = $false
+        try {
+            $streamsDrained = [Threading.Tasks.Task]::WaitAll(
+                [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), 5000)
+        } catch {
+            $streamsDrained = $false
+        }
+        return [ordered]@{
+            completed = [bool]($completed -and $streamsDrained)
+            exit_code = if ($completed -and $streamsDrained) { [int]$process.ExitCode } else { $null }
+            timed_out = [bool](-not $completed)
+            process_terminated = [bool]$terminated
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Invoke-OriginGuestPartUuidProbe {
+    param([Parameter(Mandatory = $true)][string]$PartUuid)
+    if (-not (Test-CanonicalOriginGuid -Value $PartUuid)) {
+        throw "origin guest PARTUUID probe received an invalid identity"
+    }
+    $arguments = "-d " + $Distro + " -u root -- test -b /dev/disk/by-partuuid/" + $PartUuid.ToLowerInvariant()
+    $probe = Invoke-OriginBoundedProcess -FileName "wsl.exe" -Arguments $arguments -TimeoutSeconds 5
+    if (-not $probe.completed) { throw "origin guest PARTUUID probe did not complete" }
+    if ($probe.exit_code -eq 0) { return $true }
+    if ($probe.exit_code -eq 1) { return $false }
+    throw "origin guest PARTUUID probe failed"
+}
+
+function Get-OriginAttachmentDecision {
+    param([Parameter(Mandatory = $true)][bool]$GuestPartuuidPresent)
+    if ($GuestPartuuidPresent) {
+        return [ordered]@{ state = "ALREADY_ATTACHED"; host_mutation = $false }
+    }
+    return [ordered]@{ state = "ATTACH_REQUIRED"; host_mutation = $true }
+}
+
+function Invoke-OriginAttachment {
+    param([Parameter(Mandatory = $true)][object]$Manifest)
+    if (-not (Test-OriginAdministrator)) { throw "origin attach requires an administrator token" }
+    $partUuid = ([string]$Manifest.partuuid).ToLowerInvariant()
+    $diskGuid = ([string]$Manifest.disk_guid).ToLowerInvariant()
+    $decision = Get-OriginAttachmentDecision -GuestPartuuidPresent (Invoke-OriginGuestPartUuidProbe -PartUuid $partUuid)
+    if ($decision.state -eq "ALREADY_ATTACHED") {
+        [ordered]@{ state = $decision.state; action = "attach"; partuuid = $partUuid; disk_guid = $diskGuid; host_mutation = $false } | ConvertTo-Json -Depth 4
+        return
+    }
+    if ($OriginVhdx -match '\s') { throw "origin attach requires a whitespace-free sealed VHDX path" }
+    $proof = Get-OriginVhdxOwnershipProof -VhdxPath $OriginVhdx
+    if (-not (Test-OriginProofMatchesManifest -Proof $proof -Manifest $Manifest)) {
+        throw "origin attach ownership proof does not match the sealed VHDX"
+    }
+    $mount = Invoke-OriginBoundedProcess -FileName "wsl.exe" `
+        -Arguments ("--mount --vhd " + $OriginVhdx + " --bare") -TimeoutSeconds 15
+    if (-not $mount.completed) { throw "origin attach did not complete within the bounded deadline" }
+    if ($mount.exit_code -ne 0) { throw "origin attach command failed" }
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        if (Invoke-OriginGuestPartUuidProbe -PartUuid $partUuid) {
+            [ordered]@{ state = "ATTACHED"; action = "attach"; partuuid = $partUuid; disk_guid = $diskGuid; host_mutation = $true } | ConvertTo-Json -Depth 4
+            return
+        }
+        if ($attempt -lt 5) { Start-Sleep -Seconds 1 }
+    }
+    throw "origin attach did not expose the sealed PARTUUID"
 }
 
 function New-OriginInstallTransaction {
@@ -450,6 +553,12 @@ switch ($Action) {
         if ($proof.partuuid -cne [string]$manifest.partuuid) { throw "PARTUUID ownership proof does not match the sealed origin VHDX" }
         if ($proof.disk_guid -cne [string]$manifest.disk_guid) { throw "disk GUID ownership proof does not match the sealed origin VHDX" }
         [ordered]@{ state = "VERIFIED"; action = $Action; partuuid = $proof.partuuid; disk_guid = $proof.disk_guid; host_mutation = $false } | ConvertTo-Json -Depth 4
+    }
+    "attach" {
+        if ($PartUuidWasSupplied) { throw "origin attach does not accept a caller PARTUUID" }
+        if ($LogicalCapacityWasSupplied -or $PhysicalCacheCapWasSupplied) { throw "origin attach does not accept caller capacity policy" }
+        $manifest = Read-SealedOriginManifest
+        Invoke-OriginAttachment -Manifest $manifest
     }
     "uninstall" {
         if ($PartUuidWasSupplied -or $LogicalCapacityWasSupplied -or $PhysicalCacheCapWasSupplied) { throw "origin uninstall does not accept caller identity or policy values" }
