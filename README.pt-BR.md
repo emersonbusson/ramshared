@@ -89,9 +89,10 @@ sudo ./target/release/ramshared migrate-cascade --from-legacy
 
 O comando não aceita substituição de dispositivo ou capacidade. Ele recusa a
 operação se não puder comprovar a origem selada, uma única topologia legada
-ZRAM → NBD elegível, o binário correspondente do daemon, margem de memória e
-um guardião do host saudável. Ele drena o swap antes de resetar, desconectar ou
-encerrar o daemon e então cria o binding normal de ciclo de vida selado. Uma
+ZRAM → NBD elegível, o binário correspondente do daemon (ou um daemon
+substituído, de root, ainda ligado ao listener NBD esperado), margem de memória
+e um guardião do host saudável. Ele drena o swap antes de resetar, desconectar
+ou encerrar o daemon e então cria o binding normal de ciclo de vida selado. Uma
 recusa mantém os dispositivos e as evidências existentes intactos.
 
 O perfil padrão define 4 GiB de capacidade lógica com um teto de cache físico de 1 GiB. Você pode ajustar a capacidade de 1 a 24 GiB sob demanda, sem precisar pré-alocar essa quantia na VRAM física.

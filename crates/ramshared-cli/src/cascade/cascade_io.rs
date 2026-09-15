@@ -2585,19 +2585,151 @@ fn execute_legacy_migration_transition<E: LegacyMigrationExecutor>(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum LegacyDaemonProof {
+    BinaryMatch,
+    ReplacedBinary { slice_mb: u64 },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyDaemonObservation {
+    uid: u32,
+    executable_link: PathBuf,
+    canonical_executable: Option<PathBuf>,
+    arguments: Vec<String>,
+    owns_legacy_listener: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct LegacyDaemonIdentity {
     pid: u32,
     instance_id: String,
     executable: PathBuf,
+    proof: LegacyDaemonProof,
 }
 
 fn legacy_daemon_identity_matches(
     expected: &LegacyDaemonIdentity,
     observed_instance_id: Option<&str>,
-    observed_executable: &Path,
+    observed: &LegacyDaemonObservation,
 ) -> bool {
     observed_instance_id == Some(expected.instance_id.as_str())
-        && observed_executable == expected.executable
+        && match expected.proof {
+            LegacyDaemonProof::BinaryMatch => {
+                observed.canonical_executable.as_deref() == Some(expected.executable.as_path())
+            }
+            LegacyDaemonProof::ReplacedBinary { slice_mb } => {
+                legacy_replaced_daemon_is_bound(observed, &expected.executable, slice_mb)
+            }
+        }
+}
+
+fn option_value_once<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
+    let mut found = None;
+    for pair in arguments.windows(2) {
+        if pair[0] == option && found.replace(pair[1].as_str()).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+fn deleted_executable_path(link: &Path) -> Option<PathBuf> {
+    link.to_str()?.strip_suffix(" (deleted)").map(PathBuf::from)
+}
+
+fn legacy_replaced_daemon_is_bound(
+    observation: &LegacyDaemonObservation,
+    expected_executable: &Path,
+    slice_mb: u64,
+) -> bool {
+    observation.uid == 0
+        && observation.owns_legacy_listener
+        && deleted_executable_path(&observation.executable_link).as_deref()
+            == Some(expected_executable)
+        && observation
+            .arguments
+            .first()
+            .is_some_and(|argv0| Path::new(argv0) == expected_executable)
+        && option_value_once(&observation.arguments, "--slices") == Some("1")
+        && option_value_once(&observation.arguments, "--slice-mb")
+            == Some(slice_mb.to_string().as_str())
+        && option_value_once(&observation.arguments, "--listen-nbd") == Some("127.0.0.1:10809")
+}
+
+fn process_socket_inodes(pid: u32) -> Result<std::collections::HashSet<String>, CascadeError> {
+    let entries = fs::read_dir(format!("/proc/{pid}/fd")).map_err(|error| {
+        CascadeError::Precondition(format!("read legacy daemon descriptors: {error}"))
+    })?;
+    let mut inodes = std::collections::HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CascadeError::Precondition(format!("read legacy daemon descriptor: {error}"))
+        })?;
+        let Ok(link) = fs::read_link(entry.path()) else {
+            continue;
+        };
+        let Some(link) = link.to_str() else {
+            continue;
+        };
+        if let Some(inode) = link
+            .strip_prefix("socket:[")
+            .and_then(|value| value.strip_suffix(']'))
+        {
+            inodes.insert(inode.to_string());
+        }
+    }
+    Ok(inodes)
+}
+
+fn legacy_listener_socket_inodes() -> Result<std::collections::HashSet<String>, CascadeError> {
+    let content = fs::read_to_string("/proc/net/tcp")
+        .map_err(|error| CascadeError::Io(format!("read TCP listener table: {error}")))?;
+    Ok(content
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            (fields.len() > 9 && fields[1] == "0100007F:2A39" && fields[3] == "0A")
+                .then(|| fields[9].to_string())
+        })
+        .collect())
+}
+
+fn process_owns_legacy_listener(pid: u32) -> Result<bool, CascadeError> {
+    let owned = process_socket_inodes(pid)?;
+    Ok(legacy_listener_socket_inodes()?
+        .iter()
+        .any(|inode| owned.contains(inode)))
+}
+
+fn read_legacy_daemon_observation(pid: u32) -> Result<LegacyDaemonObservation, CascadeError> {
+    let metadata = fs::metadata(format!("/proc/{pid}")).map_err(|error| {
+        CascadeError::Precondition(format!("stat legacy daemon process: {error}"))
+    })?;
+    let executable_link = fs::read_link(format!("/proc/{pid}/exe")).map_err(|error| {
+        CascadeError::Precondition(format!("read legacy daemon executable link: {error}"))
+    })?;
+    let arguments = fs::read(format!("/proc/{pid}/cmdline"))
+        .map_err(|error| {
+            CascadeError::Precondition(format!("read legacy daemon command: {error}"))
+        })?
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .map(|argument| {
+            std::str::from_utf8(argument)
+                .map(str::to_string)
+                .map_err(|_| {
+                    CascadeError::Precondition("legacy daemon command is not UTF-8".into())
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(LegacyDaemonObservation {
+        uid: metadata.uid(),
+        canonical_executable: fs::canonicalize(&executable_link).ok(),
+        executable_link,
+        arguments,
+        owns_legacy_listener: process_owns_legacy_listener(pid)?,
+    })
 }
 
 fn canonical_root_owned_daemon(path: &str) -> Result<PathBuf, CascadeError> {
@@ -2618,7 +2750,10 @@ fn canonical_root_owned_daemon(path: &str) -> Result<PathBuf, CascadeError> {
     Ok(canonical)
 }
 
-fn discover_legacy_daemon(expected_path: &str) -> Result<LegacyDaemonIdentity, CascadeError> {
+fn discover_legacy_daemon(
+    expected_path: &str,
+    expected_slice_mb: u64,
+) -> Result<LegacyDaemonIdentity, CascadeError> {
     let executable = canonical_root_owned_daemon(expected_path)?;
     let mut matches = Vec::new();
     let mut foreign_daemon_seen = false;
@@ -2639,16 +2774,24 @@ fn discover_legacy_daemon(expected_path: &str) -> Result<LegacyDaemonIdentity, C
         if comm.ok().as_deref().map(str::trim) != Some("ramsharedd") {
             continue;
         }
-        let observed_executable =
-            fs::canonicalize(format!("/proc/{pid}/exe")).map_err(|error| {
-                CascadeError::Precondition(format!(
-                    "cannot verify executable identity for a ramsharedd process: {error}"
-                ))
-            })?;
-        if observed_executable != executable {
+        let observation = read_legacy_daemon_observation(pid)?;
+        let proof = if fs::canonicalize(&observation.executable_link)
+            .ok()
+            .as_deref()
+            == Some(executable.as_path())
+        {
+            Some(LegacyDaemonProof::BinaryMatch)
+        } else if legacy_replaced_daemon_is_bound(&observation, &executable, expected_slice_mb) {
+            Some(LegacyDaemonProof::ReplacedBinary {
+                slice_mb: expected_slice_mb,
+            })
+        } else {
+            None
+        };
+        let Some(proof) = proof else {
             foreign_daemon_seen = true;
             continue;
-        }
+        };
         let instance_id = daemon_instance_id_from_pid(pid).ok_or_else(|| {
             CascadeError::Precondition("legacy daemon start identity is unavailable".into())
         })?;
@@ -2656,6 +2799,7 @@ fn discover_legacy_daemon(expected_path: &str) -> Result<LegacyDaemonIdentity, C
             pid,
             instance_id,
             executable: executable.clone(),
+            proof,
         });
     }
     if foreign_daemon_seen {
@@ -2675,14 +2819,11 @@ fn discover_legacy_daemon(expected_path: &str) -> Result<LegacyDaemonIdentity, C
 }
 
 fn revalidate_legacy_daemon(identity: &LegacyDaemonIdentity) -> Result<(), CascadeError> {
-    let observed_executable =
-        fs::canonicalize(format!("/proc/{}/exe", identity.pid)).map_err(|error| {
-            CascadeError::Precondition(format!("resolve legacy daemon process identity: {error}"))
-        })?;
+    let observed = read_legacy_daemon_observation(identity.pid)?;
     if legacy_daemon_identity_matches(
         identity,
         daemon_instance_id_from_pid(identity.pid).as_deref(),
-        &observed_executable,
+        &observed,
     ) {
         Ok(())
     } else {
@@ -2858,7 +2999,7 @@ pub fn migrate_legacy_cascade() -> Result<(), CascadeError> {
         ));
     }
     check_safety_net(args.vram_mb, args.force, &TierPriorities::default())?;
-    let daemon = discover_legacy_daemon(&args.daemon)?;
+    let daemon = discover_legacy_daemon(&args.daemon, args.vram_mb)?;
     let nbd = observe_bound_device(&legacy.nbd.canonical_path(), ManagedDeviceKind::Nbd)?;
     let zram = legacy
         .zram
@@ -5312,22 +5453,33 @@ mod tests {
             pid: 42,
             instance_id: "42-100".into(),
             executable: PathBuf::from("/opt/ramshared/bin/ramsharedd"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: PathBuf::from("/opt/ramshared/bin/ramsharedd"),
+            canonical_executable: Some(PathBuf::from("/opt/ramshared/bin/ramsharedd")),
+            arguments: Vec::new(),
+            owns_legacy_listener: false,
         };
 
         assert!(legacy_daemon_identity_matches(
             &identity,
             Some("42-100"),
-            Path::new("/opt/ramshared/bin/ramsharedd"),
+            &observation,
         ));
         assert!(!legacy_daemon_identity_matches(
             &identity,
             Some("42-101"),
-            Path::new("/opt/ramshared/bin/ramsharedd"),
+            &observation,
         ));
         assert!(!legacy_daemon_identity_matches(
             &identity,
             Some("42-100"),
-            Path::new("/opt/ramshared/bin/replaced"),
+            &LegacyDaemonObservation {
+                canonical_executable: Some(PathBuf::from("/opt/ramshared/bin/replaced")),
+                ..observation
+            },
         ));
     }
 
@@ -5342,6 +5494,7 @@ mod tests {
         let observation = LegacyDaemonObservation {
             uid: 0,
             executable_link: PathBuf::from("/usr/local/bin/ramsharedd (deleted)"),
+            canonical_executable: None,
             arguments: vec![
                 "/usr/local/bin/ramsharedd".into(),
                 "--slices".into(),
