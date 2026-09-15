@@ -1142,6 +1142,12 @@ switch ($Action) {
     "watch" { exit (Invoke-GuardianWatch) }
     "activate" { Activate-GuardianTask; Write-Output "guardian activated by explicit attended transaction: $TaskName" }
     "test" {
+        $bootProbeSummary = Get-GuardianBootProbeSummary -Probe ([ordered]@{ completed = $true; exit_code = 0; reason = "success"; stdout = "sensitive"; stderr = "sensitive" })
+        if (-not $bootProbeSummary.completed -or $bootProbeSummary.exit_code -ne 0 -or $bootProbeSummary.reason -cne "success" -or
+            $bootProbeSummary.PSObject.Properties.Name -contains "stdout" -or $bootProbeSummary.PSObject.Properties.Name -contains "stderr") {
+            throw "guardian boot probe summary did not remain sanitized"
+        }
+        Write-Output "PASS guardian_boot_probe_summary_is_sanitized"
         $guardianWslPrefix = Get-GuardianWslCommandPrefix
         if ($guardianWslPrefix -cne ("-d " + $Distro + " -u root --")) {
             throw "guardian WSL command prefix must preserve the validated distro name without quotes"
