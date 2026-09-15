@@ -1460,6 +1460,34 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "scripts/docs-check.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1",
+          "scripts/windows/Test-RamSharedOriginStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-origin-attachment-recovery/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-origin-attachment-recovery/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-origin-attachment-recovery/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-origin-attachment-recovery"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
           "scripts/safety/test-wsl-relay-health.sh",
           "scripts/safety/wsl-relay-health.sh"
         ],
