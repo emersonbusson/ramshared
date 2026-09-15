@@ -9,6 +9,7 @@
 | Critical | DT-5/DT-6 | A device can be retargeted or a PID reused between planning and effect. | Bind/revalidate device identity before each effect and signal only a revalidated pidfd. |
 | Critical | Atomicity frontier | A failed drain can leave a partial old topology; continuing into `up` could hide the failure. | Stop on first error, retain evidence, and call `up` only after legacy retirement is fully proven. |
 | High | DT-3 | Draining ZRAM can move compressed pages into RAM or the NBD fallback. | Require an available-memory budget before the first effect, retain the NBD until ZRAM absence is proven, then drain NBD. |
+| Critical | DT-10 | An earlier NBD client can leave a stale numeric owner PID, but a failed lookup can also hide an active or reused process. | Keep live-owner identity mandatory outside migration; admit an absent owner only after exact daemon/runtime admission and only when the positive sysfs PID has no `/proc` entry. Revalidate before every migration effect. |
 | High | DT-8 | A compatibility record could become a permanent second authority path. | Keep legacy identity in-memory only; success creates only the existing sealed binding. |
 | High | Validation | Source tests cannot prove WSL2 control-plane or host behavior. | Require BINARY_MATCH, the narrow replaced-binary listener proof, or the fixed legacy-path SHA-256 proof, plus the approved watchdog E2E; keep IMPL partial until evidence exists. |
 
