@@ -20,6 +20,7 @@ BOUND_LOWER_SINK_IDENTITY_SHA256=
 BOUND_LOWER_SINK_FS_BLOCK_BYTES=
 BOUND_LOWER_SINK_AVAILABLE_KIB=
 declare -A INSTALL_MANIFEST_HASHES=()
+declare -A LEGACY_AUXILIARY_UNIT_APPROVED_HASHES=()
 DESTINATION=
 STAGING=
 SELECTOR_STAGING=
@@ -28,6 +29,7 @@ ROLLBACK_UNIT_STAGING=
 LEGACY_BACKUP_ROOT=
 LEGACY_BACKUP=
 LEGACY_BACKUP_STAGING=
+LEGACY_AUXILIARY_BACKUP_SOURCE=
 ROLLBACK_SELECTOR_STAGING=
 PRIOR_SELECTOR_TARGET=
 PUBLISHED_DESTINATION=0
@@ -57,6 +59,9 @@ Usage:
     --lower-sink <safe-absolute-directory>
   install-cascade-boot.sh --approve-nbd-product-install <version> \\
     --approve-legacy-unit-replacement <sha256>
+  install-cascade-boot.sh --approve-nbd-product-install <version> \\
+    --lower-sink <safe-absolute-directory> \\
+    [--approve-legacy-auxiliary-unit-replacement <unit>:<sha256>]...
 
 The default is a read-only plan. Approval must name exactly the sealed release
 version in this bundle. An attended installation must bind one existing,
@@ -492,6 +497,51 @@ backup_legacy_unit_if_required() {
   # NBD_INSTALL_POST_WRITE_PHASE=legacy-unit-backed-up
 }
 
+verify_legacy_auxiliary_backup_or_refuse() {
+  local backup=$1 expected_hash=$2
+  [[ -f $backup && ! -L $backup ]] || refuse LEGACY_AUXILIARY_UNIT_BACKUP_CONFLICT
+  [[ $(stat -c '%u:%g:%a' -- "$backup" 2>/dev/null || true) == '0:0:444' ]] \
+    || refuse LEGACY_AUXILIARY_UNIT_BACKUP_CONFLICT
+  [[ $(sha256sum -- "$backup" | awk '{print $1}') == "${expected_hash,,}" ]] \
+    || refuse LEGACY_AUXILIARY_UNIT_BACKUP_HASH_MISMATCH
+}
+
+backup_legacy_auxiliary_unit_if_approved() {
+  local target=$1 name approved_hash observed_hash backup staging
+  name=$(basename -- "$target")
+  case $name in
+    ramshared-cascade-health.service|ramshared-workloads.slice) ;;
+    *) return 1 ;;
+  esac
+  [[ -n ${LEGACY_AUXILIARY_UNIT_APPROVED_HASHES[$name]+x} ]] || return 1
+  approved_hash=${LEGACY_AUXILIARY_UNIT_APPROVED_HASHES[$name]}
+  [[ -f $target && ! -L $target ]] || refuse AUXILIARY_UNIT_CONFLICT
+  [[ $(stat -c '%u:%g:%a' -- "$target" 2>/dev/null || true) == '0:0:644' ]] \
+    || refuse LEGACY_AUXILIARY_UNIT_METADATA_INVALID
+  observed_hash=$(sha256sum -- "$target" | awk '{print $1}')
+  [[ $observed_hash == "$approved_hash" ]] || refuse LEGACY_AUXILIARY_UNIT_HASH_MISMATCH
+
+  LEGACY_BACKUP_ROOT="$PRODUCT_ROOT/legacy-units"
+  backup="$LEGACY_BACKUP_ROOT/$name.$observed_hash.bak"
+  staging="$LEGACY_BACKUP_ROOT/.$name.$observed_hash.$$.staging"
+  prepare_legacy_backup_root_or_refuse
+  if [[ -e $backup || -L $backup ]]; then
+    verify_legacy_auxiliary_backup_or_refuse "$backup" "$approved_hash"
+    LEGACY_AUXILIARY_BACKUP_SOURCE=$backup
+    return 0
+  fi
+
+  path_exists_or_link "$staging" && refuse LEGACY_AUXILIARY_UNIT_BACKUP_CONFLICT
+  AUXILIARY_UNIT_STAGING_PATHS+=("$staging")
+  install -m 0444 "$target" "$staging"
+  chown root:root "$staging"
+  [[ $(sha256sum -- "$staging" | awk '{print $1}') == "$approved_hash" ]] \
+    || refuse LEGACY_AUXILIARY_UNIT_BACKUP_HASH_MISMATCH
+  mv -T "$staging" "$backup"
+  verify_legacy_auxiliary_backup_or_refuse "$backup" "$approved_hash"
+  LEGACY_AUXILIARY_BACKUP_SOURCE=$backup
+}
+
 path_exists_or_link() {
   [[ -e $1 || -L $1 ]]
 }
@@ -697,7 +747,12 @@ install_auxiliary_unit_if_absent() {
     if cmp -s "$expected" "$target"; then
       return 0
     fi
-    prior=$(prior_selected_auxiliary_unit "$target") || refuse AUXILIARY_UNIT_CONFLICT
+    if prior=$(prior_selected_auxiliary_unit "$target"); then
+      :
+    else
+      backup_legacy_auxiliary_unit_if_approved "$target" || refuse AUXILIARY_UNIT_CONFLICT
+      prior=$LEGACY_AUXILIARY_BACKUP_SOURCE
+    fi
     cmp -s "$prior" "$target" || refuse AUXILIARY_UNIT_CONFLICT
     staging="$target_dir/.${label}.${RELEASE_VERSION}.$$"
     backup="$target_dir/.${label}.${RELEASE_VERSION}.rollback.$$"
@@ -744,6 +799,18 @@ while (($# > 0)); do
     --approve-legacy-unit-replacement)
       (($# >= 2)) || refuse LEGACY_UNIT_APPROVAL_MISSING
       LEGACY_UNIT_APPROVED_HASH=$2
+      shift 2
+      ;;
+    --approve-legacy-auxiliary-unit-replacement)
+      (($# >= 2)) || refuse LEGACY_AUXILIARY_UNIT_APPROVAL_MISSING
+      if [[ $2 =~ ^(ramshared-cascade-health\.service|ramshared-workloads\.slice):([[:xdigit:]]{64})$ ]]; then
+        name=${BASH_REMATCH[1]}
+        [[ -z ${LEGACY_AUXILIARY_UNIT_APPROVED_HASHES[$name]+x} ]] \
+          || refuse LEGACY_AUXILIARY_UNIT_APPROVAL_DUPLICATE
+        LEGACY_AUXILIARY_UNIT_APPROVED_HASHES[$name]=${BASH_REMATCH[2],,}
+      else
+        refuse LEGACY_AUXILIARY_UNIT_APPROVAL_INVALID
+      fi
       shift 2
       ;;
     --enable)
