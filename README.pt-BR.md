@@ -77,6 +77,23 @@ ramshared top
 
 Transições de ativação exigem comando explícito do operador (`sudo ramshared up` / `sudo ramshared down`).
 
+### Transição única de uma cascata legada
+
+Se uma instalação anterior do RamShared ainda estiver em execução sem o binding
+de ciclo de vida atual, não desconecte manualmente os dispositivos de swap nem
+encerre o daemon. Use a transição assistida:
+
+```bash
+sudo ./target/release/ramshared migrate-cascade --from-legacy
+```
+
+O comando não aceita substituição de dispositivo ou capacidade. Ele recusa a
+operação se não puder comprovar a origem selada, uma única topologia legada
+ZRAM → NBD elegível, o binário correspondente do daemon, margem de memória e
+um guardião do host saudável. Ele drena o swap antes de resetar, desconectar ou
+encerrar o daemon e então cria o binding normal de ciclo de vida selado. Uma
+recusa mantém os dispositivos e as evidências existentes intactos.
+
 O perfil padrão define 4 GiB de capacidade lógica com um teto de cache físico de 1 GiB. Você pode ajustar a capacidade de 1 a 24 GiB sob demanda, sem precisar pré-alocar essa quantia na VRAM física.
 
 ### Nota de Arquitetura: Alocação Dinâmica Apenas
@@ -164,6 +181,7 @@ ramshared top
 - **Alocação dinâmica, sem desperdício:** O RamShared só aloca memória de vídeo sob demanda. Se jogos, navegadores ou aplicativos 3D precisarem de VRAM, o RamShared devolve o espaço na hora.
 - **Proteção do Gerenciador de Janelas (DWM):** Pelo menos 1,5 GB (ou 20% da VRAM) fica sempre reservado para a interface do Windows, garantindo que suas telas, janelas e cursor continuem perfeitamente fluidos.
 - **Segurança total de armazenamento:** As operações em disco vinculam-se estritamente ao identificador único do volume (UUID), nunca a letras voláteis de unidade.
+- **Transição legada assistida:** `migrate-cascade --from-legacy` é o único caminho suportado para sair de uma cascata anterior sem binding; não é recuperação automática.
 
 ## Integração de Sistema e Segurança
 

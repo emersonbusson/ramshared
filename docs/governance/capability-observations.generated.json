@@ -1114,6 +1114,35 @@
         "registry_state": null
       },
       "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-cascade-legacy-migration/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-cascade-legacy-migration/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-cascade-legacy-migration/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-cascade-legacy-migration"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
         "implementation_paths": [],
         "test_paths": []
       },

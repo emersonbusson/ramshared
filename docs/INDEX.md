@@ -40,6 +40,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`windows-swap-driver`](specs/no-milestone/windows-swap-driver/) | Swap-to-VRAM on Native Windows (StorPort virtual miniport) | P4 | — | UNQUALIFIED | — |
 | [`windows-task-manager-disk-counters`](specs/no-milestone/windows-task-manager-disk-counters/) | Windows virtual disk identity, counters, and performance matrix | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-boot`](specs/no-milestone/wsl2-cascade-boot/) | WSL2 cascade auto-start on boot with fail-closed anti-hang | — | — | UNQUALIFIED | — |
+| [`wsl2-cascade-legacy-migration`](specs/no-milestone/wsl2-cascade-legacy-migration/) | Attended migration from a legacy WSL2 cascade | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan detection and bound recovery | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-swap`](specs/no-milestone/wsl2-cascade-swap/) | Product Requirements Document — VRAM as a Cold Tier in WSL2 Swap Cascade (zram → VRAM → VHDX) | M01 | — | SPEC | — |
 | [`wsl2-control-plane-pressure-incident`](specs/no-milestone/wsl2-control-plane-pressure-incident/) | WSL2 control-plane pressure containment | — | — | UNQUALIFIED | — |

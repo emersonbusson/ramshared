@@ -206,6 +206,7 @@ enum CliCommand {
     Check { json: bool },
     Doctor { json: bool },
     Up { args: Vec<String> },
+    MigrateLegacyCascade,
     Down,
     Status { json: bool },
     Monitor { options: MonitorOptions },
@@ -298,6 +299,16 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "up" => Ok(CliCommand::Up {
             args: options.to_vec(),
         }),
+        "migrate-cascade" => {
+            if matches!(options, [option] if option == "--from-legacy") {
+                Ok(CliCommand::MigrateLegacyCascade)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "migrate-cascade",
+                    options: options.to_vec(),
+                })
+            }
+        }
         "down" => {
             if options.is_empty() {
                 Ok(CliCommand::Down)
@@ -335,6 +346,11 @@ trait CliActionRunner {
     fn check(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn doctor(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn up(&mut self, args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn migrate_legacy_cascade(
+        &mut self,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
     fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn monitor(
@@ -418,6 +434,14 @@ impl CliActionRunner for SystemCliActions {
 
     fn up(&mut self, args: &[String], _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
         to_exit(cascade::up_with_args(args), stderr)
+    }
+
+    fn migrate_legacy_cascade(
+        &mut self,
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(cascade::migrate_legacy_cascade(), stderr)
     }
 
     fn down(&mut self, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
@@ -548,6 +572,7 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Check { json }) => actions.check(json, stdout, stderr),
         Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
         Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
+        Ok(CliCommand::MigrateLegacyCascade) => actions.migrate_legacy_cascade(stdout, stderr),
         Ok(CliCommand::Down) => actions.down(stdout, stderr),
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
         Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
@@ -594,6 +619,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared migrate-cascade --from-legacy  # attended one-time sealed-origin handoff"
     );
     let _ = writeln!(
         stderr,
@@ -1606,6 +1635,15 @@ mod tests {
             self.result()
         }
 
+        fn migrate_legacy_cascade(
+            &mut self,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::MigrateLegacyCascade);
+            self.result()
+        }
+
         fn down(
             &mut self,
             _stdout: &mut dyn std::io::Write,
@@ -1735,6 +1773,8 @@ mod tests {
             cli_args(&["status", "--unsafe"]),
             cli_args(&["status", "--json", "--json"]),
             cli_args(&["down", "--force"]),
+            cli_args(&["migrate-cascade"]),
+            cli_args(&["migrate-cascade", "--from-legacy", "--force"]),
         ] {
             let mut actions = RecordingCliActions::default();
             let mut stdout = Vec::new();
@@ -1886,6 +1926,7 @@ mod tests {
             parse_cli_command(&cli_args(&["migrate-cascade", "--from-legacy"])).unwrap(),
             CliCommand::MigrateLegacyCascade
         );
+        assert!(parse_cli_command(&cli_args(&["migrate-cascade"])).is_err());
         assert_eq!(
             parse_cli_command(&cli_args(&[
                 "run",
@@ -2220,6 +2261,7 @@ CONFIG_BLK_DEV_NBD=m\n\
             &["doctor"][..],
             &["doctor", "--json"][..],
             &["up", "--vram", "1024"][..],
+            &["migrate-cascade", "--from-legacy"][..],
             &["down"][..],
             &["status"][..],
             &["status", "--json"][..],

@@ -474,6 +474,75 @@ fn plan_orphan_action(entries: &[SwapEntry], cascade_healthy: bool) -> OrphanPla
     OrphanPlan::DetectedUnboundZeroUsed
 }
 
+/// One attended transition plan from the pre-binding ZRAM → NBD topology.
+///
+/// It deliberately proves topology only. Runtime code must still bind the
+/// selected devices and daemon immediately before each effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyMigrationPlan {
+    nbd: SwapEntry,
+    zram: Option<SwapEntry>,
+}
+
+/// Build the only legacy topology the attended migration may retire.
+///
+/// Zero-used NBD is a necessary drain precondition, not ownership proof. The
+/// caller supplies explicit operator intent and the runtime daemon/device proof
+/// before this plan can cause any mutation.
+fn plan_legacy_migration(entries: &[SwapEntry]) -> Result<LegacyMigrationPlan, CascadeError> {
+    if entries
+        .iter()
+        .any(|entry| entry.is_ghost() && entry.is_managed_or_orphan_vram_tier())
+    {
+        return Err(CascadeError::Precondition(
+            "legacy migration refused: managed ghost swap is present".into(),
+        ));
+    }
+
+    let managed = entries
+        .iter()
+        .filter(|entry| !entry.is_ghost() && entry.is_managed_or_orphan_vram_tier())
+        .collect::<Vec<_>>();
+    let nbd = managed
+        .iter()
+        .filter(|entry| is_nbd_device_path(&entry.filename))
+        .copied()
+        .collect::<Vec<_>>();
+    let zram = managed
+        .iter()
+        .filter(|entry| is_zram_device_path(&entry.filename))
+        .copied()
+        .collect::<Vec<_>>();
+    let has_ublk = managed
+        .iter()
+        .any(|entry| is_ublk_device_path(&entry.filename));
+
+    if has_ublk || nbd.len() != 1 || zram.len() > 1 || managed.len() != nbd.len() + zram.len() {
+        return Err(CascadeError::Precondition(
+            "legacy migration requires exactly one NBD, at most one ZRAM, and no ublk".into(),
+        ));
+    }
+    let nbd = nbd[0];
+    if nbd.used_kb != 0 {
+        return Err(CascadeError::Precondition(format!(
+            "legacy migration requires a drained NBD before handoff; used_kb={}",
+            nbd.used_kb
+        )));
+    }
+    if let Some(zram) = zram.first()
+        && zram.priority <= nbd.priority
+    {
+        return Err(CascadeError::Precondition(
+            "legacy migration requires ZRAM priority above the NBD tier".into(),
+        ));
+    }
+
+    Ok(LegacyMigrationPlan {
+        nbd: nbd.clone(),
+        zram: zram.first().map(|entry| (*entry).clone()),
+    })
+}
+
 fn disk_swap_used_kib(entries: &[SwapEntry]) -> u64 {
     entries
         .iter()
@@ -1662,7 +1731,7 @@ fn print_tier(name: &str, t: &TierSample) {
 }
 
 mod cascade_io;
-pub use cascade_io::{down, up_with_args};
+pub use cascade_io::{down, migrate_legacy_cascade, up_with_args};
 
 #[cfg(test)]
 mod tests {
@@ -1813,6 +1882,40 @@ mod tests {
              /dev/sdc partition 8388608 0 -2\n",
         );
         assert_eq!(plan_orphan_action(&e, false), OrphanPlan::None);
+    }
+
+    #[test]
+    fn legacy_migration_plan_accepts_single_clean_nbd_and_zram() {
+        let entries = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sdb partition 4194304 0 -2\n\
+             /dev/zram0 partition 1048572 4140 100\n\
+             /dev/nbd0 partition 4194300 0 50\n",
+        );
+
+        let plan = plan_legacy_migration(&entries).expect("eligible legacy plan");
+
+        assert_eq!(plan.nbd.canonical_path(), "/dev/nbd0");
+        assert_eq!(plan.nbd.used_kb, 0);
+        assert_eq!(
+            plan.zram.as_ref().map(SwapEntry::canonical_path),
+            Some("/dev/zram0".into())
+        );
+    }
+
+    #[test]
+    fn legacy_migration_plan_refuses_ghost_dirty_duplicate_or_ublk() {
+        for fixture in [
+            "Filename Type Size Used Priority\n/dev/nbd0\\040(deleted) partition 1024 0 50\n",
+            "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 1 50\n",
+            "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 0 50\n/dev/nbd1 partition 1024 0 50\n",
+            "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 0 50\n/dev/ublkb0 partition 1024 0 40\n",
+        ] {
+            assert!(
+                plan_legacy_migration(&parse_proc_swaps(fixture)).is_err(),
+                "{fixture}"
+            );
+        }
     }
 
     #[test]
