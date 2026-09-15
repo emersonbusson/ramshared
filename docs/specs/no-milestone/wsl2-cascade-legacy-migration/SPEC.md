@@ -44,6 +44,7 @@
 | DT-7 | A failed stage does not attempt later stages, remove evidence, reformat a device, or invoke normal `up`. | Uncertain mutation is containment, not permission to continue. |
 | DT-8 | Once the new cascade is attached, its existing lifecycle binding is the only persistent authority. A repeat migration refuses because no eligible legacy constellation remains. | Satisfies Day-0: no permanent compatibility path. |
 | DT-9 | Non-managed disk swap rows are neither selected nor passed to a mutating command. | The host fallback is outside the migration authority. |
+| DT-10 | Normal lifecycle observation requires a live NBD kernel-owner start identity. The migration-only observer may represent that owner as absent only when sysfs reports a positive PID and `/proc/<pid>` is absent; it runs only after DT-4 daemon and runtime-record admission. Every migration revalidation repeats this observation, so PID reuse or an unidentifiable live owner refuses before the effect. | Earlier NBD clients can leave a stale kernel owner PID after their process exits. Treating any failed owner lookup as absent would authorize an uncertain live owner, while accepting this exact terminal state preserves a bounded handoff path. |
 
 ## Atomicity frontier and failure semantics
 
@@ -84,6 +85,7 @@ the new binding or claim a completed migration.
   `legacy_migration_rejects_replaced_daemon_identity`,
   `legacy_replaced_daemon_requires_bound_root_listener`,
   `legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener`,
+  `legacy_nbd_owner_policy_accepts_only_confirmed_absence`,
   `legacy_runtime_records_require_exact_legacy_values`.
 - Cover target: N/A — external-device orchestration; required hermetic executor
   tests plus watchdog E2E and daemon BINARY_MATCH or replaced-binary listener
@@ -141,6 +143,7 @@ the new binding or claim a completed migration.
 | Effect ordering | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_executor_preserves_swapoff_first_order` | hermetic executor | #9, #17 | E2E-gated |
 | First error | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_executor_stops_on_first_refusal` | hermetic executor | #15, #16 | E2E-gated |
 | Legacy daemon identity | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener` | hermetic | #13, #16 | E2E-gated |
+| Legacy NBD owner | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_nbd_owner_policy_accepts_only_confirmed_absence` | unit | #13, #16 | E2E-gated |
 | Attended migration | watchdog harness :: before/action/after | live E2E | #13, #16, #17 | required |
 
 ## Kahneman
