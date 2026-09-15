@@ -61,6 +61,22 @@ RamShared is designed with strict safety defaults. It will never make unmonitore
 
 Build once with the commands above, then use `./target/release/ramshared check`. Do not activate a tier when the check reports a blocker. Starting and stopping memory offload always requires an explicit operator command (`sudo ./target/release/ramshared up` / `sudo ./target/release/ramshared down`).
 
+### One-time legacy cascade handoff
+
+If an earlier RamShared installation is still running without the current
+lifecycle binding, do not manually detach its swap devices or kill its daemon.
+Use the attended handoff instead:
+
+```bash
+sudo ./target/release/ramshared migrate-cascade --from-legacy
+```
+
+The command accepts no device or capacity override. It refuses unless it can
+prove the sealed origin, one eligible legacy ZRAM → NBD topology, the matching
+daemon binary, memory headroom, and a healthy host guardian. It drains swap
+before reset, detach, or daemon termination, then creates the normal sealed
+lifecycle binding. A refusal leaves the existing devices and evidence intact.
+
 ### Architecture Note: Dynamic Allocation Only
 
 Memory tiering uses on-demand, revocable chunks backed by a durable origin. It reduces the chance of competing with display or compute workloads, but cannot guarantee spare VRAM on every GPU or driver.
@@ -146,6 +162,7 @@ ramshared top
 - **Dynamic memory allocation:** RamShared only claims GPU memory when needed by active swap traffic. If games, browsers, or AI apps request VRAM, RamShared yields it immediately.
 - **Desktop Window Manager protection:** At least 1.5 GB (or 20% of VRAM) is always preserved for Windows display rendering, ensuring your screen, mouse, and monitors never freeze.
 - **Strict storage safety:** Storage operations bind strictly to authoritative volume UUIDs, never ambiguous or transient drive letters.
+- **Attended legacy handoff:** `migrate-cascade --from-legacy` is the only supported path from an unbound earlier cascade; it is not automatic recovery.
 
 ## System Integration & Safety
 
