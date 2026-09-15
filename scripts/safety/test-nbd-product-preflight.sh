@@ -1721,6 +1721,30 @@ test_auxiliary_unit_conflict_refuses_and_rolls_back() {
   pass auxiliary_unit_conflict_refuses_and_rolls_back
 }
 
+test_owned_auxiliary_unit_from_prior_selector_is_upgraded() {
+  local root source prior target
+  root=$(new_rollback_installer_fixture owned-auxiliary-upgrade daemon-reloaded existing)
+  source="$root/opt/ramshared/releases/v1.2.3"
+  prior="$root/product/releases/v0.0.1"
+  target="$root/systemd/ramshared-workloads.slice"
+  chmod u+w "$prior"
+  mkdir -p "$prior/systemd"
+  printf '[Slice]\nDescription=prior sealed workload slice\n' >"$prior/systemd/ramshared-workloads.slice"
+  chmod 0444 "$prior/systemd/ramshared-workloads.slice"
+  install -m 0644 "$prior/systemd/ramshared-workloads.slice" "$target"
+  chmod 0555 "$prior"
+
+  run_rollback_installer "$root" no-injection
+  if ! assert_exit owned_auxiliary_unit_from_prior_selector_is_upgraded 0 ||
+    ! cmp -s "$source/systemd/ramshared-workloads.slice" "$target" ||
+    [[ $(readlink -- "$root/product/current") != releases/v1.2.3 ]] ||
+    [[ -n $(find "$root/systemd" -maxdepth 1 -name '.ramshared-workloads.*' -print -quit) ]]; then
+    fail 'owned_auxiliary_unit_from_prior_selector_is_upgraded did not replace only the prior sealed unit'
+    return
+  fi
+  pass owned_auxiliary_unit_from_prior_selector_is_upgraded
+}
+
 test_uninstaller_removes_auxiliary_units_without_stopping_workloads() {
   local uninstall="$REPO_ROOT/scripts/safety/uninstall-cascade-boot.sh"
   if ! grep -Fq 'ramshared-cascade-health.service' "$uninstall" ||
@@ -2205,6 +2229,7 @@ test_installer_active_enabled_or_unknown_units_refuse_without_writes
 test_installer_every_post_write_phase_rolls_back
 test_attended_derived_install_is_bound_and_sealed
 test_auxiliary_unit_conflict_refuses_and_rolls_back
+test_owned_auxiliary_unit_from_prior_selector_is_upgraded
 test_uninstaller_removes_auxiliary_units_without_stopping_workloads
 test_uninstaller_preserves_foreign_unit_definitions
 test_packaged_uninstaller_uses_sealed_binary_and_removes_units
