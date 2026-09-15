@@ -46,8 +46,21 @@ $GuardianHealthPath = Join-Path $GuardianStateRoot ($Distro + ".health.json")
 $ResumeLeasePath = "/run/ramshared/host-resume-lease.json"
 $GuardianActionApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTION"
 $GuardianActivationApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTIVATION"
-$TaskUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-if ([string]::IsNullOrWhiteSpace($TaskUserName)) { throw "guardian task account identity is missing" }
+
+function Resolve-GuardianTaskUserName {
+    param([Parameter(Mandatory = $true)][string]$Sid)
+    try {
+        $taskUserName = [System.Security.Principal.SecurityIdentifier]::new($Sid).Translate([System.Security.Principal.NTAccount]).Value
+    } catch {
+        throw ("guardian policy SID cannot resolve to a task account: " + $Sid)
+    }
+    if ([string]::IsNullOrWhiteSpace($taskUserName)) {
+        throw "guardian policy SID resolved to an empty task account"
+    }
+    return $taskUserName
+}
+
+$TaskUserName = Resolve-GuardianTaskUserName -Sid $UserSid
 
 function Test-AbsoluteWindowsPath {
     param([Parameter(Mandatory = $true)][string]$Path)
