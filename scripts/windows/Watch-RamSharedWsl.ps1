@@ -1163,6 +1163,12 @@ switch ($Action) {
             throw "guardian boot probe summary did not remain sanitized"
         }
         Write-Output "PASS guardian_boot_probe_summary_is_sanitized"
+        $bootProbeEventData = Get-GuardianBootProbeEventData -Probe $bootProbeSummary
+        if ($bootProbeEventData.probe_completed -ne $true -or $bootProbeEventData.probe_exit_code -ne 0 -or
+            $bootProbeEventData.probe_reason -cne "success" -or $bootProbeEventData.Keys.Count -ne 3) {
+            throw "guardian boot probe event payload was not flat and sanitized"
+        }
+        Write-Output "PASS guardian_boot_probe_event_payload_is_flat"
         $guardianWslPrefix = Get-GuardianWslCommandPrefix
         if ($guardianWslPrefix -cne ("-d " + $Distro + " -u root --")) {
             throw "guardian WSL command prefix must preserve the validated distro name without quotes"

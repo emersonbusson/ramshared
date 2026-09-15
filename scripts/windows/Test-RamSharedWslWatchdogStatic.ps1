@@ -36,6 +36,7 @@ foreach ($required in @(
     '.health.json',
     'Test-SealedGuardianIdentity',
     'Get-GuardianBootProbeSummary',
+    'Get-GuardianBootProbeEventData',
     'Restore-SealedGuardianBackup',
     'New-GuardianInstallTransaction',
     'Invoke-GuardianInstallTransaction',
@@ -163,6 +164,7 @@ foreach ($required in @(
     'PASS guardian_activation_is_explicit_and_staging_remains_disabled'
     'PASS guardian_wsl_arguments_are_scheduler_safe'
     'PASS guardian_boot_probe_summary_is_sanitized'
+    'PASS guardian_boot_probe_event_payload_is_flat'
 )) {
     if (-not ($manufactured -join "`n").Contains($required)) {
         throw "ramshared_wsl_guardian: manufactured output missing $required"
