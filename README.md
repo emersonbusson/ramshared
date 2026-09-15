@@ -73,7 +73,8 @@ sudo ./target/release/ramshared migrate-cascade --from-legacy
 
 The command accepts no device or capacity override. It refuses unless it can
 prove the sealed origin, one eligible legacy ZRAM → NBD topology, the matching
-daemon binary, memory headroom, and a healthy host guardian. It drains swap
+daemon binary (or a root-owned replaced daemon still bound to the expected NBD
+listener), memory headroom, and a healthy host guardian. It drains swap
 before reset, detach, or daemon termination, then creates the normal sealed
 lifecycle binding. A refusal leaves the existing devices and evidence intact.
 

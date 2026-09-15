@@ -4,7 +4,7 @@
 
 ## Status
 
-Implemented (source) · cover **85.4%** · E2E env-bound · BINARY_MATCH pending.
+Implemented (source) · cover **85.4%** · E2E env-bound · daemon proof pending.
 
 This document must remain partial until the required watchdog-supervised live
 path has a recorded legitimate result and refusal result. Source tests alone
@@ -24,18 +24,19 @@ do not close a privileged WSL2 cascade migration.
 
 - RED checkpoint: `62506cf8 test(cli): reproduce legacy cascade migration command`.
 - `cargo test -p ramshared-cli --bin ramshared -- --test-threads=1`:
-  **273 passed, 0 failed** (36.63 s).
+  **274 passed, 0 failed** (36.50 s).
 - `cargo clippy -p ramshared-cli --all-targets -- -D warnings`: exit 0.
 - `cargo fmt --all -- --check`: exit 0.
 - Slice cover: `crates/ramshared-cli/src/cascade/mod.rs` **85.4%**
   (1,724/2,018 lines), threshold 80%.
 - `./scripts/docs-check.sh`: exit 0.
-- BINARY_MATCH and live watchdog evidence: pending.
+- BINARY_MATCH or replaced-daemon listener proof and live watchdog evidence:
+  pending.
 
 ## Gaps
 
 - **Environment-bound:** supervised WSL2 migration campaign with active host
-  guardian authority, BINARY_MATCH, legitimate handoff, and refusal evidence.
+  guardian authority, daemon proof, legitimate handoff, and refusal evidence.
 
 ## Rollback trigger
 
