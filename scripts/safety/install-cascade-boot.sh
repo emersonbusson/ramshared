@@ -748,7 +748,10 @@ install_auxiliary_unit_if_absent() {
       return 0
     fi
     if prior=$(prior_selected_auxiliary_unit "$target"); then
-      :
+      if ! cmp -s "$prior" "$target"; then
+        backup_legacy_auxiliary_unit_if_approved "$target" || refuse AUXILIARY_UNIT_CONFLICT
+        prior=$LEGACY_AUXILIARY_BACKUP_SOURCE
+      fi
     else
       backup_legacy_auxiliary_unit_if_approved "$target" || refuse AUXILIARY_UNIT_CONFLICT
       prior=$LEGACY_AUXILIARY_BACKUP_SOURCE
