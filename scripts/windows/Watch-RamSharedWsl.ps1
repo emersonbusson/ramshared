@@ -251,11 +251,17 @@ function Get-HeartbeatState {
     return [ordered]@{ stale = ($age -ge $StaleAfterSec); age_seconds = $age }
 }
 
+function Get-GuardianWslCommandPrefix {
+    # Distro is constrained by the top-level parameter validation.  Passing it
+    # without quotes avoids preserving literal quotes through ProcessStartInfo.
+    return ("-d " + $Distro + " -u root --")
+}
+
 function Invoke-GuestProbe {
     $first = Invoke-BoundedProcess -FileName "wsl.exe" `
-        -Arguments ("-d `"$Distro`" -u root -- /bin/true") -TimeoutSeconds $GuestCommandTimeoutSec
+        -Arguments ((Get-GuardianWslCommandPrefix) + " /bin/true") -TimeoutSeconds $GuestCommandTimeoutSec
     $second = Invoke-BoundedProcess -FileName "wsl.exe" `
-        -Arguments ("-d `"$Distro`" -u root -- cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
+        -Arguments ((Get-GuardianWslCommandPrefix) + " cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
     $probes = @(
         [ordered]@{ name = "guest_process_probe"; result = $first },
         [ordered]@{ name = "guest_boot_identity_probe"; result = $second }
@@ -611,7 +617,7 @@ function Restore-SealedGuardianBackup {
 }
 
 function Get-GuestBootId {
-    $boot = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("-d `"$Distro`" -u root -- cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
+    $boot = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ((Get-GuardianWslCommandPrefix) + " cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
     $candidate = if ($null -eq $boot.stdout) { $null } else { $boot.stdout.Trim().ToLowerInvariant() }
     if (-not $boot.completed -or $boot.exit_code -ne 0 -or -not (Test-CanonicalGuestBootId -BootId $candidate)) { return $null }
     return $candidate
@@ -622,7 +628,7 @@ function Mirror-GuestSafeMode {
     $payload = [ordered]@{ schema_version = 1; incident_id = $IncidentId; distro = $Distro; boot_id = $BootId } | ConvertTo-Json -Compress
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
     $command = "install -d -m 0700 /var/lib/ramshared; printf '%s' '$encoded' | base64 -d > /var/lib/ramshared/.safe-mode.tmp; chmod 0600 /var/lib/ramshared/.safe-mode.tmp; mv /var/lib/ramshared/.safe-mode.tmp /var/lib/ramshared/safe-mode.json"
-    return Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("-d `"$Distro`" -u root -- sh -c `"$command`"") -TimeoutSeconds $GuestCommandTimeoutSec
+    return Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ((Get-GuardianWslCommandPrefix) + " sh -c `"$command`"") -TimeoutSeconds $GuestCommandTimeoutSec
 }
 
 function Invoke-TargetedTerminate {
@@ -630,7 +636,7 @@ function Invoke-TargetedTerminate {
     $terminationPath = Get-TerminationPath
     if (Test-Path -LiteralPath $terminationPath -PathType Leaf) { return [ordered]@{ started = $false; completed = $false; reason = "termination_already_recorded" } }
     Write-AtomicJson -Path $terminationPath -Value ([ordered]@{ incident_id = $IncidentId; distro = $Distro; prior_boot_id = $PriorBootId; started_utc = [DateTime]::UtcNow.ToString("o") })
-    $result = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("--terminate `"$Distro`"") -TimeoutSeconds $GuestCommandTimeoutSec
+    $result = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("--terminate " + $Distro) -TimeoutSeconds $GuestCommandTimeoutSec
     if (-not $result.completed) { return [ordered]@{ started = $true; completed = $false; reason = "terminate_timeout"; detail = $result } }
     return [ordered]@{ started = $true; completed = ($result.exit_code -eq 0); reason = $result.reason; detail = $result }
 }
