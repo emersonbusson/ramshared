@@ -1567,10 +1567,13 @@ EOF
 }
 
 run_rollback_installer() {
-  local root=$1 phase=$2 migration_hash=${3:-} source="$1/opt/ramshared/releases/v1.2.3"
+  local root=$1 phase=$2 migration_hash=${3:-} auxiliary_approval=${4:-} source="$1/opt/ramshared/releases/v1.2.3"
   local -a arguments=(--approve-nbd-product-install v1.2.3 --lower-sink "$root/sink")
   if [[ -n $migration_hash ]]; then
     arguments+=(--approve-legacy-unit-replacement "$migration_hash")
+  fi
+  if [[ -n $auxiliary_approval ]]; then
+    arguments+=(--approve-legacy-auxiliary-unit-replacement "$auxiliary_approval")
   fi
   set +e
   RUN_OUTPUT=$(env \
@@ -1777,6 +1780,70 @@ test_owned_auxiliary_unit_upgrade_restores_on_late_failure() {
     return
   fi
   pass owned_auxiliary_unit_upgrade_restores_on_late_failure
+}
+
+test_legacy_auxiliary_unit_migration_is_hash_bound() {
+  local root source target old_hash backup
+  root=$(new_rollback_installer_fixture legacy-auxiliary-migration daemon-reloaded existing)
+  source="$root/opt/ramshared/releases/v1.2.3"
+  sed \
+    -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$root/product|" \
+    -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
+    -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
+    -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
+    "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
+  chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
+  write_manifest "$source"
+  target="$root/systemd/ramshared-cascade-health.service"
+  printf '[Service]\nDescription=legacy health fixture\n' >"$target"
+  chmod 0644 "$target"
+  old_hash=$(sha256sum -- "$target" | awk '{print $1}')
+
+  run_rollback_installer "$root" no-injection '' "ramshared-cascade-health.service:${old_hash/a/b}"
+  if ! assert_exit legacy_auxiliary_unit_migration_is_hash_bound 1 ||
+    ! assert_contains legacy_auxiliary_unit_migration_is_hash_bound 'NBD_INSTALL_REASON=LEGACY_AUXILIARY_UNIT_HASH_MISMATCH' ||
+    [[ $(sha256sum -- "$target" | awk '{print $1}') != "$old_hash" ]] ||
+    [[ -e $root/product/releases/v1.2.3 ]]; then
+    fail 'legacy_auxiliary_unit_migration_is_hash_bound stale approval mutated the legacy unit'
+    return
+  fi
+
+  run_rollback_installer "$root" no-injection '' "ramshared-cascade-health.service:$old_hash"
+  backup="$root/product/legacy-units/ramshared-cascade-health.service.$old_hash.bak"
+  if ! assert_exit legacy_auxiliary_unit_migration_is_hash_bound 0 ||
+    ! cmp -s "$source/systemd/ramshared-cascade-health.service" "$target" ||
+    [[ $(readlink -- "$root/product/current") != releases/v1.2.3 ]] ||
+    [[ ! -f $backup || -L $backup ]] ||
+    [[ $(stat -c '%a' -- "$backup") != 444 ]] ||
+    [[ $(sha256sum -- "$backup" | awk '{print $1}') != "$old_hash" ]]; then
+    fail 'legacy_auxiliary_unit_migration_is_hash_bound did not create an exact immutable backup'
+    return
+  fi
+  pass legacy_auxiliary_unit_migration_is_hash_bound
+}
+
+test_legacy_auxiliary_unit_restores_after_late_failure() {
+  local root target old_hash backup reloads
+  root=$(new_rollback_installer_fixture legacy-auxiliary-rollback daemon-reloaded existing)
+  target="$root/systemd/ramshared-cascade-health.service"
+  printf '[Service]\nDescription=legacy health fixture\n' >"$target"
+  chmod 0644 "$target"
+  old_hash=$(sha256sum -- "$target" | awk '{print $1}')
+
+  run_rollback_installer "$root" daemon-reloaded '' "ramshared-cascade-health.service:$old_hash"
+  backup="$root/product/legacy-units/ramshared-cascade-health.service.$old_hash.bak"
+  reloads=$(grep -cx 'daemon-reload' "$root/state/systemctl.log" || true)
+  if ! assert_exit legacy_auxiliary_unit_restores_after_late_failure 1 ||
+    [[ $reloads != 2 ]] ||
+    [[ $(sha256sum -- "$target" | awk '{print $1}') != "$old_hash" ]] ||
+    [[ $(readlink -- "$root/product/current") != releases/v0.0.1 ]] ||
+    [[ -e $root/product/releases/v1.2.3 ]] ||
+    [[ ! -f $backup || -L $backup ]] ||
+    [[ $(sha256sum -- "$backup" | awk '{print $1}') != "$old_hash" ]]; then
+    fail 'legacy_auxiliary_unit_restores_after_late_failure did not preserve the approved prior definition'
+    return
+  fi
+  pass legacy_auxiliary_unit_restores_after_late_failure
 }
 
 test_uninstaller_removes_auxiliary_units_without_stopping_workloads() {
@@ -2265,6 +2332,8 @@ test_attended_derived_install_is_bound_and_sealed
 test_auxiliary_unit_conflict_refuses_and_rolls_back
 test_owned_auxiliary_unit_from_prior_selector_is_upgraded
 test_owned_auxiliary_unit_upgrade_restores_on_late_failure
+test_legacy_auxiliary_unit_migration_is_hash_bound
+test_legacy_auxiliary_unit_restores_after_late_failure
 test_uninstaller_removes_auxiliary_units_without_stopping_workloads
 test_uninstaller_preserves_foreign_unit_definitions
 test_packaged_uninstaller_uses_sealed_binary_and_removes_units
