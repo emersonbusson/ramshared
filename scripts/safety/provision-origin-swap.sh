@@ -84,7 +84,9 @@ parent_actual="$((16#${parent_hex%%:*})):$((16#${parent_hex##*:}))"
 device_dev_t() {
   local path=$1 hex
   [[ -b $path ]] || return 1
-  hex=$(stat -c '%t:%T' -- "$path") || return 1
+  # /proc/<pid>/fd/<n> is a symlink.  Follow it so the device number is
+  # taken from the bound block device instead of the procfs link itself.
+  hex=$(stat -Lc '%t:%T' -- "$path") || return 1
   printf '%s:%s\n' "$((16#${hex%%:*}))" "$((16#${hex##*:}))"
 }
 
