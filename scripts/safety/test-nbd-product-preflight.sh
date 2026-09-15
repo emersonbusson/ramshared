@@ -1783,7 +1783,7 @@ test_owned_auxiliary_unit_upgrade_restores_on_late_failure() {
 }
 
 test_legacy_auxiliary_unit_migration_is_hash_bound() {
-  local root source target old_hash backup
+  local root source prior target old_hash backup
   root=$(new_rollback_installer_fixture legacy-auxiliary-migration daemon-reloaded existing)
   source="$root/opt/ramshared/releases/v1.2.3"
   sed \
@@ -1794,6 +1794,12 @@ test_legacy_auxiliary_unit_migration_is_hash_bound() {
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   write_manifest "$source"
+  prior="$root/product/releases/v0.0.1"
+  chmod u+w "$prior"
+  mkdir -p "$prior/systemd"
+  printf '[Service]\nDescription=prior selected health fixture\n' >"$prior/systemd/ramshared-cascade-health.service"
+  chmod 0444 "$prior/systemd/ramshared-cascade-health.service"
+  chmod 0555 "$prior"
   target="$root/systemd/ramshared-cascade-health.service"
   printf '[Service]\nDescription=legacy health fixture\n' >"$target"
   chmod 0644 "$target"
@@ -1823,8 +1829,14 @@ test_legacy_auxiliary_unit_migration_is_hash_bound() {
 }
 
 test_legacy_auxiliary_unit_restores_after_late_failure() {
-  local root target old_hash backup reloads
+  local root prior target old_hash backup reloads
   root=$(new_rollback_installer_fixture legacy-auxiliary-rollback daemon-reloaded existing)
+  prior="$root/product/releases/v0.0.1"
+  chmod u+w "$prior"
+  mkdir -p "$prior/systemd"
+  printf '[Service]\nDescription=prior selected health fixture\n' >"$prior/systemd/ramshared-cascade-health.service"
+  chmod 0444 "$prior/systemd/ramshared-cascade-health.service"
+  chmod 0555 "$prior"
   target="$root/systemd/ramshared-cascade-health.service"
   printf '[Service]\nDescription=legacy health fixture\n' >"$target"
   chmod 0644 "$target"
