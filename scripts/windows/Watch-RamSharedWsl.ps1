@@ -1033,6 +1033,20 @@ function Invoke-ManufacturedGuardianRegistrationRollbackTests {
     if (-not $failed -or $store.task -cne "prior-task-xml" -or $store.config -cne "prior-config" -or $store.seal -cne "prior-task-seal") {
         throw "guardian register success / disable failure did not restore exact task config and seal"
     }
+    $diagnosticOperations = @{
+        begin = { [ordered]@{ task_may_be_modified = $false; config_may_be_modified = $false; task_seal_may_be_modified = $false; phase = "begin" } }
+        backup = { param($transaction) }
+        config = { param($transaction) }
+        register = { param($transaction) throw "fixture_register_root_cause" }
+        disable = { param($transaction) }
+        verify_disabled = { param($transaction) }
+        rollback = { param($transaction) throw "fixture_register_rollback_failure" }
+    }
+    $diagnostic = ""
+    try { Invoke-GuardianInstallTransaction -Operations $diagnosticOperations | Out-Null } catch { $diagnostic = $_.Exception.Message }
+    if ($diagnostic -notlike "*fixture_register_root_cause*" -or $diagnostic -notlike "*fixture_register_rollback_failure*") {
+        throw "guardian registration failure did not retain both diagnostic causes"
+    }
     # The uninstall contract is fail-closed: an unregister failure is not a
     # restore and therefore leaves the current seal and config untouched.
     $uninstallState = [ordered]@{ task = "sealed-current-task"; config = "sealed-current-config"; seal = "sealed-current-seal" }
@@ -1078,6 +1092,7 @@ function Invoke-ManufacturedGuardianRegistrationRollbackTests {
         }
     }
     Write-Output "PASS guardian_register_success_disable_failure_restores_task_config_and_seal"
+    Write-Output "PASS guardian_registration_failure_retains_root_and_rollback_causes"
     Write-Output "PASS guardian_uninstall_failure_retains_seal_and_state"
     Write-Output "PASS guardian_activation_export_failure_restores_exact_task_seal_and_operator_config"
 }
