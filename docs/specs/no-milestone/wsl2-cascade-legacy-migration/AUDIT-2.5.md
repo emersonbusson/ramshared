@@ -5,6 +5,7 @@
 | Sev | SPEC § | Issue | Required fix |
 | --- | --- | --- | --- |
 | Critical | DT-2 | Legacy state has no current sealed lifecycle binding; matching `/dev/nbd0` by name would permit a foreign swap teardown. | Require explicit CLI consent, exact topology, daemon BINARY_MATCH or narrow replaced-binary listener proof, device identity, strict snapshots, and zero initial NBD use. |
+| High | DT-4 | Earlier RamShared releases leave PID/swap runtime files without the current lifecycle binding; treating their existence as current ownership makes a safe migration unreachable. | A current lifecycle binding still refuses; legacy records are accepted only when root-owned, non-symlink regular files and exact values agree with the independently admitted daemon and devices. |
 | Critical | DT-5/DT-6 | A device can be retargeted or a PID reused between planning and effect. | Bind/revalidate device identity before each effect and signal only a revalidated pidfd. |
 | Critical | Atomicity frontier | A failed drain can leave a partial old topology; continuing into `up` could hide the failure. | Stop on first error, retain evidence, and call `up` only after legacy retirement is fully proven. |
 | High | DT-3 | Draining ZRAM can move compressed pages into RAM or the NBD fallback. | Require an available-memory budget before the first effect, retain the NBD until ZRAM absence is proven, then drain NBD. |

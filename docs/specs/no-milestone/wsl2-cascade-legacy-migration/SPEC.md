@@ -38,7 +38,7 @@
 | DT-1 | Parse only `migrate-cascade --from-legacy`; reject every other option before an action runner is called. | Explicit consent is part of the authority boundary. |
 | DT-2 | `LegacyMigrationPlan` is pure and requires exactly one non-ghost NBD, zero ublk, zero or one ZRAM, and no duplicate managed path. | Device names, a broad prefix, and an inactive-looking row do not prove a safe topology. |
 | DT-3 | Initial NBD use must be zero; eligible ZRAM may contain pages only when `MemAvailable >= zram.size_kb + hard_floor_kib`. | This bounds the legacy drain without claiming that zero use alone proves ownership. |
-| DT-4 | Before the first effect, runtime admission requires a sealed origin, healthy guardian, no current lifecycle binding/records, one exact `ramsharedd`, and a captured PID/start identity. Its executable must canonically equal the invoking release sibling, unless a replaced-binary proof shows the expected root-owned `(deleted)` path, exact legacy arguments (`--slices 1`, expected `--slice-mb`, `--listen-nbd 127.0.0.1:10809`), and ownership of that listener. | A binary replacement may orphan a live executable inode; the narrow proof retains process-role binding without selecting a process only by name. |
+| DT-4 | Before the first effect, runtime admission requires a sealed origin, healthy guardian, no current lifecycle binding, one exact `ramsharedd`, and a captured PID/start identity. Its executable must canonically equal the invoking release sibling, unless a replaced-binary proof shows the expected root-owned `(deleted)` path, exact legacy arguments (`--slices 1`, expected `--slice-mb`, `--listen-nbd 127.0.0.1:10809`), and ownership of that listener. Legacy PID/swap files may exist only as sealed root-owned regular files whose exact values agree with the admitted topology. | A binary replacement may orphan a live executable inode; strict legacy records retain diagnostic continuity without becoming a second authority path. |
 | DT-5 | Device effects use a bound block-device identity, fresh strict snapshots, and exact absence proof. Process termination uses a revalidated pidfd TERM and bounded wait. | Closes device retargeting, PID reuse, and ambiguous-command gaps. |
 | DT-6 | Order is ZRAM swapoff → proof, NBD swapoff → proof, ZRAM reset → NBD detach → daemon TERM/wait → existing sealed-origin `up`. | ZRAM pages retain the NBD/disk fallback while they drain; no teardown action occurs while either managed swap remains active. |
 | DT-7 | A failed stage does not attempt later stages, remove evidence, reformat a device, or invoke normal `up`. | Uncertain mutation is containment, not permission to continue. |
@@ -82,7 +82,8 @@ the new binding or claim a completed migration.
 - Required tests: `legacy_migration_executor_preserves_swapoff_first_order`,
   `legacy_migration_executor_stops_on_first_refusal`,
   `legacy_migration_rejects_replaced_daemon_identity`,
-  `legacy_replaced_daemon_requires_bound_root_listener`.
+  `legacy_replaced_daemon_requires_bound_root_listener`,
+  `legacy_runtime_records_require_exact_legacy_values`.
 - Cover target: N/A — external-device orchestration; required hermetic executor
   tests plus watchdog E2E and daemon BINARY_MATCH or replaced-binary listener
   proof prove the privileged boundary.
