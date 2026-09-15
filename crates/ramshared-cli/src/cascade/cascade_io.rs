@@ -5744,6 +5744,25 @@ mod tests {
     }
 
     #[test]
+    fn legacy_nbd_owner_policy_accepts_only_confirmed_absence() {
+        let live = nbd_kernel_owner_identity(
+            Some("5939-100".into()),
+            false,
+            NbdOwnerPolicy::RequireLive,
+        )
+        .expect("live NBD owner must remain admissible");
+        assert_eq!(live.as_deref(), Some("5939-100"));
+
+        assert_eq!(
+            nbd_kernel_owner_identity(None, true, NbdOwnerPolicy::PermitAbsent)
+                .expect("a confirmed absent owner is legacy-only admissible"),
+            None
+        );
+        assert!(nbd_kernel_owner_identity(None, true, NbdOwnerPolicy::RequireLive).is_err());
+        assert!(nbd_kernel_owner_identity(None, false, NbdOwnerPolicy::PermitAbsent).is_err());
+    }
+
+    #[test]
     fn legacy_runtime_records_require_exact_legacy_values() {
         assert!(legacy_runtime_record_values_match(
             Some("527\n"),
