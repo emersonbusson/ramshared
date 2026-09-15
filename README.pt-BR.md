@@ -90,8 +90,9 @@ sudo ./target/release/ramshared migrate-cascade --from-legacy
 O comando não aceita substituição de dispositivo ou capacidade. Ele recusa a
 operação se não puder comprovar a origem selada, uma única topologia legada
 ZRAM → NBD elegível, o binário correspondente do daemon (ou um daemon
-substituído, de root, ainda ligado ao listener NBD esperado), margem de memória
-e um guardião do host saudável. Ele drena o swap antes de resetar, desconectar
+substituído, de root, ainda ligado ao listener NBD esperado, ou o caminho
+legado fixo de root com o mesmo SHA-256), margem de memória e um guardião do
+host saudável. Ele drena o swap antes de resetar, desconectar
 ou encerrar o daemon e então cria o binding normal de ciclo de vida selado. Uma
 recusa mantém os dispositivos e as evidências existentes intactos.
 
