@@ -181,6 +181,12 @@ enum ManagedDeviceKind {
     Zram,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NbdOwnerPolicy {
+    RequireLive,
+    PermitAbsent,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BoundDeviceIdentity {
@@ -346,6 +352,51 @@ fn observe_bound_device(
     path: &str,
     expected_kind: ManagedDeviceKind,
 ) -> Result<BoundDeviceIdentity, CascadeError> {
+    observe_bound_device_with_nbd_owner_policy(path, expected_kind, NbdOwnerPolicy::RequireLive)
+}
+
+fn observe_legacy_bound_device(
+    path: &str,
+    expected_kind: ManagedDeviceKind,
+) -> Result<BoundDeviceIdentity, CascadeError> {
+    let owner_policy = if expected_kind == ManagedDeviceKind::Nbd {
+        NbdOwnerPolicy::PermitAbsent
+    } else {
+        NbdOwnerPolicy::RequireLive
+    };
+    observe_bound_device_with_nbd_owner_policy(path, expected_kind, owner_policy)
+}
+
+fn nbd_kernel_owner_identity(
+    live_owner: Option<String>,
+    owner_is_absent: bool,
+    policy: NbdOwnerPolicy,
+) -> Result<Option<String>, CascadeError> {
+    match live_owner {
+        Some(identity) => Ok(Some(identity)),
+        None if policy == NbdOwnerPolicy::PermitAbsent && owner_is_absent => Ok(None),
+        None => Err(CascadeError::Precondition(
+            "NBD kernel owner start identity is unavailable".into(),
+        )),
+    }
+}
+
+#[cfg(not(test))]
+fn nbd_kernel_owner_is_absent(pid: u32) -> Result<bool, CascadeError> {
+    match fs::symlink_metadata(format!("/proc/{pid}")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Ok(false),
+        Err(error) => Err(CascadeError::Precondition(format!(
+            "stat NBD kernel owner process: {error}"
+        ))),
+    }
+}
+
+fn observe_bound_device_with_nbd_owner_policy(
+    path: &str,
+    expected_kind: ManagedDeviceKind,
+    owner_policy: NbdOwnerPolicy,
+) -> Result<BoundDeviceIdentity, CascadeError> {
     let path = canonicalize_swap_path(path);
     if device_kind_for_path(&path) != Some(expected_kind) {
         return Err(CascadeError::Precondition(format!(
@@ -354,6 +405,7 @@ fn observe_bound_device(
     }
     #[cfg(test)]
     {
+        let _ = owner_policy;
         let index = path
             .bytes()
             .rev()
@@ -425,9 +477,13 @@ fn observe_bound_device(
                     "NBD kernel owner is absent".into(),
                 ));
             }
-            Some(daemon_instance_id_from_pid(pid).ok_or_else(|| {
-                CascadeError::Precondition("NBD kernel owner start identity is unavailable".into())
-            })?)
+            let live_owner = daemon_instance_id_from_pid(pid);
+            let owner_is_absent = if live_owner.is_none() {
+                nbd_kernel_owner_is_absent(pid)?
+            } else {
+                false
+            };
+            nbd_kernel_owner_identity(live_owner, owner_is_absent, owner_policy)?
         } else {
             None
         };
@@ -723,7 +779,20 @@ impl EffectBoundDevice {
 }
 
 fn bind_device_for_effect(device: &BoundDeviceIdentity) -> Result<EffectBoundDevice, CascadeError> {
-    revalidate_bound_device(device)?;
+    bind_device_for_effect_with(device, revalidate_bound_device)
+}
+
+fn bind_legacy_device_for_effect(
+    device: &BoundDeviceIdentity,
+) -> Result<EffectBoundDevice, CascadeError> {
+    bind_device_for_effect_with(device, revalidate_legacy_bound_device)
+}
+
+fn bind_device_for_effect_with(
+    device: &BoundDeviceIdentity,
+    revalidate: fn(&BoundDeviceIdentity) -> Result<(), CascadeError>,
+) -> Result<EffectBoundDevice, CascadeError> {
+    revalidate(device)?;
     #[cfg(test)]
     {
         Ok(EffectBoundDevice {
@@ -748,7 +817,7 @@ fn bind_device_for_effect(device: &BoundDeviceIdentity) -> Result<EffectBoundDev
                 "opened managed-device fd does not match the sealed dev_t".into(),
             ));
         }
-        revalidate_bound_device(device)?;
+        revalidate(device)?;
         let effect_path = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd());
         let opened = fs::metadata(&effect_path).map_err(|error| {
             CascadeError::Precondition(format!("stat managed-device proc-fd effect path: {error}"))
@@ -1087,6 +1156,17 @@ fn revalidate_bound_device(device: &BoundDeviceIdentity) -> Result<(), CascadeEr
     if &observed != device {
         return Err(CascadeError::Precondition(format!(
             "managed device identity changed before mutation: {}",
+            device.path
+        )));
+    }
+    Ok(())
+}
+
+fn revalidate_legacy_bound_device(device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+    let observed = observe_legacy_bound_device(&device.path, device.kind)?;
+    if &observed != device {
+        return Err(CascadeError::Precondition(format!(
+            "managed device identity changed before legacy migration mutation: {}",
             device.path
         )));
     }
@@ -3088,7 +3168,7 @@ fn authorize_legacy_effect(
             device.path
         )));
     }
-    revalidate_bound_device(device)
+    revalidate_legacy_bound_device(device)
 }
 
 struct RuntimeLegacyMigrationExecutor<'a, R> {
@@ -3100,14 +3180,14 @@ struct RuntimeLegacyMigrationExecutor<'a, R> {
 impl<R: CommandRunner> LegacyMigrationExecutor for RuntimeLegacyMigrationExecutor<'_, R> {
     fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
         authorize_legacy_effect(self.legacy, device)?;
-        let pinned = bind_device_for_effect(device)?;
+        let pinned = bind_legacy_device_for_effect(device)?;
         self.runner.run("swapoff", &["--", pinned.path()])?;
         prove_exact_swap_absent(device)
     }
 
     fn reset_zram(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
         prove_exact_swap_absent(device)?;
-        revalidate_bound_device(device)?;
+        revalidate_legacy_bound_device(device)?;
         self.runner
             .run("zramctl", &["-r", &device.path])
             .map(|_| ())
@@ -3115,7 +3195,7 @@ impl<R: CommandRunner> LegacyMigrationExecutor for RuntimeLegacyMigrationExecuto
 
     fn disconnect_nbd(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
         prove_exact_swap_absent(device)?;
-        revalidate_bound_device(device)?;
+        revalidate_legacy_bound_device(device)?;
         self.runner.run("nbd-client", &["-d", &device.path])?;
         observe_exact_detached_nbd(&device.path).map(|_| ())
     }
@@ -3163,7 +3243,7 @@ pub fn migrate_legacy_cascade() -> Result<(), CascadeError> {
     check_safety_net(args.vram_mb, args.force, &TierPriorities::default())?;
     let daemon = discover_legacy_daemon(&args.daemon, args.vram_mb)?;
     legacy_runtime_records_are_compatible(&paths, &legacy, &daemon)?;
-    let nbd = observe_bound_device(&legacy.nbd.canonical_path(), ManagedDeviceKind::Nbd)?;
+    let nbd = observe_legacy_bound_device(&legacy.nbd.canonical_path(), ManagedDeviceKind::Nbd)?;
     let zram = legacy
         .zram
         .as_ref()
@@ -5745,12 +5825,9 @@ mod tests {
 
     #[test]
     fn legacy_nbd_owner_policy_accepts_only_confirmed_absence() {
-        let live = nbd_kernel_owner_identity(
-            Some("5939-100".into()),
-            false,
-            NbdOwnerPolicy::RequireLive,
-        )
-        .expect("live NBD owner must remain admissible");
+        let live =
+            nbd_kernel_owner_identity(Some("5939-100".into()), false, NbdOwnerPolicy::RequireLive)
+                .expect("live NBD owner must remain admissible");
         assert_eq!(live.as_deref(), Some("5939-100"));
 
         assert_eq!(
