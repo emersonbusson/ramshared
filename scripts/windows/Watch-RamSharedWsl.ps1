@@ -1136,6 +1136,11 @@ switch ($Action) {
     "watch" { exit (Invoke-GuardianWatch) }
     "activate" { Activate-GuardianTask; Write-Output "guardian activated by explicit attended transaction: $TaskName" }
     "test" {
+        $guardianWslPrefix = Get-GuardianWslCommandPrefix
+        if ($guardianWslPrefix -cne ("-d " + $Distro + " -u root --")) {
+            throw "guardian WSL command prefix must preserve the validated distro name without quotes"
+        }
+        Write-Output "PASS guardian_wsl_arguments_are_scheduler_safe"
         $taskArguments = Get-SealedGuardianTaskArguments
         foreach ($sealedArgument in @(
             ('-Action watch -Run'),

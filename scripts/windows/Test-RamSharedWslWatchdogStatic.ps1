@@ -40,6 +40,8 @@ foreach ($required in @(
     'Invoke-GuardianInstallTransaction',
     'Rollback-GuardianInstallTransaction',
     'Register-ScheduledTask -TaskName $TaskName -Xml',
+    'function Get-GuardianWslCommandPrefix',
+    '$guardianWslPrefix = Get-GuardianWslCommandPrefix',
     'function Resolve-GuardianTaskUserName',
     '[System.Security.Principal.SecurityIdentifier]::new($Sid)',
     '$TaskUserName = Resolve-GuardianTaskUserName -Sid $UserSid',
@@ -80,6 +82,9 @@ if ($source.Contains('New-ScheduledTaskPrincipal -UserId $UserSid')) {
 }
 if ($source.Contains('[Security.Principal.WindowsIdentity]::GetCurrent().Name')) {
     throw 'ramshared_wsl_guardian: task scheduler account must resolve from the sealed policy SID'
+}
+if ($source.Contains('-d `"$Distro`"')) {
+    throw 'ramshared_wsl_guardian: WSL distro arguments must not preserve literal quotes through ProcessStartInfo'
 }
 
 foreach ($forbidden in @(
@@ -155,6 +160,7 @@ foreach ($required in @(
     'PASS guardian_requires_two_distinct_guest_failures_and_dual_host_corroboration'
     'PASS boot_bound_healthy_proof_required_before_publish'
     'PASS guardian_activation_is_explicit_and_staging_remains_disabled'
+    'PASS guardian_wsl_arguments_are_scheduler_safe'
 )) {
     if (-not ($manufactured -join "`n").Contains($required)) {
         throw "ramshared_wsl_guardian: manufactured output missing $required"
