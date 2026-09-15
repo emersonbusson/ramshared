@@ -1364,7 +1364,8 @@ fn guardian_state_from_files(
     if !fresh {
         return (GuardianState::Blocked, Some("guardian_state_stale".into()));
     }
-    let value = match serde_json::from_str::<serde_json::Value>(&text) {
+    let json = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let value = match serde_json::from_str::<serde_json::Value>(json) {
         Ok(value) => value,
         Err(_) => {
             return (
@@ -2226,7 +2227,10 @@ Filename Type Size Used Priority
         fs::write(&health, "\u{feff}not-json").unwrap();
         assert_eq!(
             guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
-            (GuardianState::Blocked, Some("guardian_state_invalid".into()))
+            (
+                GuardianState::Blocked,
+                Some("guardian_state_invalid".into())
+            )
         );
         fs::remove_dir_all(root).unwrap();
     }
