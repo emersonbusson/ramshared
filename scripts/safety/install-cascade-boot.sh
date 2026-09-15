@@ -34,9 +34,14 @@ PUBLISHED_DESTINATION=0
 UNIT_CREATED=0
 LEGACY_UNIT_REPLACED=0
 LEGACY_UNIT_RELOAD_REQUIRED=0
+SYSTEMD_RELOAD_COMPLETED=0
 declare -a AUXILIARY_UNIT_STAGING_PATHS=()
 declare -a AUXILIARY_UNIT_CREATED_PATHS=()
 declare -a AUXILIARY_UNIT_CREATED_SOURCES=()
+declare -a AUXILIARY_UNIT_REPLACED_PATHS=()
+declare -a AUXILIARY_UNIT_REPLACED_PRIOR_SOURCES=()
+declare -a AUXILIARY_UNIT_REPLACED_NEW_SOURCES=()
+declare -a AUXILIARY_UNIT_REPLACED_BACKUPS=()
 
 refuse() {
   printf 'NBD_INSTALL_STATE=REFUSED\n'
@@ -558,6 +563,39 @@ remove_created_auxiliary_units_if_owned() {
   AUXILIARY_UNIT_CREATED_SOURCES=()
 }
 
+restore_replaced_auxiliary_units() {
+  local index target prior_source new_source backup restored=0
+  for ((index = ${#AUXILIARY_UNIT_REPLACED_PATHS[@]} - 1; index >= 0; index--)); do
+    target=${AUXILIARY_UNIT_REPLACED_PATHS[$index]}
+    prior_source=${AUXILIARY_UNIT_REPLACED_PRIOR_SOURCES[$index]}
+    new_source=${AUXILIARY_UNIT_REPLACED_NEW_SOURCES[$index]}
+    backup=${AUXILIARY_UNIT_REPLACED_BACKUPS[$index]}
+    [[ -f $target && ! -L $target && -f $backup && ! -L $backup ]] || return 1
+    cmp -s "$new_source" "$target" || return 1
+    cmp -s "$prior_source" "$backup" || return 1
+    mv -Tf "$backup" "$target" || return 1
+    restored=1
+  done
+  AUXILIARY_UNIT_REPLACED_PATHS=()
+  AUXILIARY_UNIT_REPLACED_PRIOR_SOURCES=()
+  AUXILIARY_UNIT_REPLACED_NEW_SOURCES=()
+  AUXILIARY_UNIT_REPLACED_BACKUPS=()
+  if (( restored && SYSTEMD_RELOAD_COMPLETED )); then
+    systemctl daemon-reload || return 1
+  fi
+}
+
+cleanup_replaced_auxiliary_unit_backups() {
+  local backup
+  for backup in "${AUXILIARY_UNIT_REPLACED_BACKUPS[@]}"; do
+    remove_path_if_present "$backup"
+  done
+  AUXILIARY_UNIT_REPLACED_PATHS=()
+  AUXILIARY_UNIT_REPLACED_PRIOR_SOURCES=()
+  AUXILIARY_UNIT_REPLACED_NEW_SOURCES=()
+  AUXILIARY_UNIT_REPLACED_BACKUPS=()
+}
+
 restore_legacy_unit_if_replaced() {
   (( LEGACY_UNIT_REPLACED )) || return 0
   [[ -n $LEGACY_BACKUP && -f $LEGACY_BACKUP && ! -L $LEGACY_BACKUP ]] || return 1
@@ -586,6 +624,7 @@ rollback_after_failure() {
       restore_prior_selector || printf 'NBD_INSTALL_ROLLBACK=SELECTOR_RESTORE_FAILED\n' >&2
     fi
     restore_legacy_unit_if_replaced || printf 'NBD_INSTALL_ROLLBACK=LEGACY_UNIT_RESTORE_FAILED\n' >&2
+    restore_replaced_auxiliary_units || printf 'NBD_INSTALL_ROLLBACK=AUXILIARY_UNIT_RESTORE_FAILED\n' >&2
     remove_created_auxiliary_units_if_owned
     remove_created_unit_if_owned
     remove_path_if_present "$UNIT_STAGING"
@@ -636,16 +675,46 @@ check_auxiliary_unit_file() {
     [[ -f $target ]] || refuse AUXILIARY_UNIT_CONFLICT
     [[ $(stat -c '%u:%g:%a' -- "$target" 2>/dev/null || true) == '0:0:644' ]] \
       || refuse AUXILIARY_UNIT_METADATA_INVALID
-    cmp -s "$expected" "$target" || refuse AUXILIARY_UNIT_CONFLICT
   fi
 }
 
+prior_selected_auxiliary_unit() {
+  local target=$1 version prior
+  [[ $PRIOR_SELECTOR_TARGET =~ ^releases/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || return 1
+  version=${PRIOR_SELECTOR_TARGET#releases/}
+  prior="$RELEASE_ROOT/$version/systemd/$(basename -- "$target")"
+  [[ -f $prior && ! -L $prior ]] || return 1
+  [[ $(stat -c '%u:%g:%a' -- "$prior" 2>/dev/null || true) == '0:0:444' ]] || return 1
+  printf '%s\n' "$prior"
+}
+
 install_auxiliary_unit_if_absent() {
-  local expected=$1 target=$2 label=$3 staging target_dir
+  local expected=$1 target=$2 label=$3 staging target_dir prior backup
   check_auxiliary_unit_file "$expected" "$target"
-  path_exists_or_link "$target" && return 0
   target_dir=$(dirname -- "$target")
   [[ -d $target_dir && ! -L $target_dir ]] || refuse AUXILIARY_UNIT_DIRECTORY_INVALID
+  if path_exists_or_link "$target"; then
+    if cmp -s "$expected" "$target"; then
+      return 0
+    fi
+    prior=$(prior_selected_auxiliary_unit "$target") || refuse AUXILIARY_UNIT_CONFLICT
+    cmp -s "$prior" "$target" || refuse AUXILIARY_UNIT_CONFLICT
+    staging="$target_dir/.${label}.${RELEASE_VERSION}.$$"
+    backup="$target_dir/.${label}.${RELEASE_VERSION}.rollback.$$"
+    ! path_exists_or_link "$staging" && ! path_exists_or_link "$backup" || refuse INSTALL_STAGING_EXISTS
+    AUXILIARY_UNIT_STAGING_PATHS+=("$staging" "$backup")
+    install -m 0644 "$target" "$backup"
+    chown root:root "$backup"
+    cmp -s "$prior" "$backup" || refuse AUXILIARY_UNIT_CONFLICT
+    install -m 0644 "$expected" "$staging"
+    chown root:root "$staging"
+    mv -Tf "$staging" "$target"
+    AUXILIARY_UNIT_REPLACED_PATHS+=("$target")
+    AUXILIARY_UNIT_REPLACED_PRIOR_SOURCES+=("$prior")
+    AUXILIARY_UNIT_REPLACED_NEW_SOURCES+=("$expected")
+    AUXILIARY_UNIT_REPLACED_BACKUPS+=("$backup")
+    return
+  fi
   staging="$target_dir/.${label}.${RELEASE_VERSION}.$$"
   path_exists_or_link "$staging" && refuse INSTALL_STAGING_EXISTS
   AUXILIARY_UNIT_STAGING_PATHS+=("$staging")
@@ -779,7 +848,9 @@ if (( LEGACY_UNIT_REPLACED )); then
   LEGACY_UNIT_RELOAD_REQUIRED=1
 fi
 systemctl daemon-reload
+SYSTEMD_RELOAD_COMPLETED=1
 # NBD_INSTALL_POST_WRITE_PHASE=daemon-reloaded
+cleanup_replaced_auxiliary_unit_backups
 
 trap - EXIT
 printf 'NBD_INSTALL_STATE=INSTALLED\n'
