@@ -70,16 +70,12 @@ Source: [`docs/methodology/kahneman-disciplines.md`](../../docs/methodology/kahn
 
 CI / scripts / lab harnesses are **not** SSDV3 by default (see `ssdv3.md` § Out of scope); they still obey #15–#18 and host-safety in `benchmarks.md`.
 
-## Repository Boundary & Out-of-Tree Isolation
+## Repository Documentation Scope
 
-A strict, machine-enforced boundary protects the external host and ensures RamShared remains a completely self-contained open-source project.
-
-1. **Confined Workspace Execution (Zero Out-of-Tree Mutation)**:
-   - All agent operations, file edits, builds, tests, and cleanup scripts must operate exclusively within the repository tree (`$REPO_ROOT`).
-   - Automated scripts or agents are strictly forbidden from inspecting, modifying, or executing destructive operations (`rm`, `del`, `Remove-Item`) against any host system paths, hypervisor instances, or external drives outside the declared repository directory.
-2. **Zero Foreign Product / Repository Cross-Contamination**:
-   - RamShared is an independent open-source project.
-   - Never import narratives, references, private host paths, or service names from external systems or other repositories into tracked source code, documentation, or commit messages.
+RamShared is an independent open-source project. Tracked source, documentation,
+and commit messages describe RamShared only; do not import foreign product
+narratives, private host paths, credentials, or service names from external
+systems or other repositories.
 
 ## Release, Packaging & Reliability Gap Parity
 
@@ -104,7 +100,6 @@ A strict, machine-enforced boundary protects the external host and ensures RamSh
 - ❌ Directing reviewers to raw JSON files or external pages for core performance/stress claims instead of self-contained explanatory tables.
 - ❌ Mentioning internal agent/tool names ("Jules", "Codex", "Aider") or intermediate bot PR batch censuses in `README.md` or `README.pt-BR.md`.
 - ❌ Accumulating historical benchmark rows in the README without pruning superseded runs (violating the Zero-Sum README policy).
-- ❌ Touching, modifying, or executing destructive cleanup commands outside the repository workspace.
 - ❌ Cross-referencing foreign repositories, private services, or external environments in RamShared code or documentation.
 - ❌ Retaining phantom blockers or stale incident narratives in `GAP-REGISTER.md` when CI suites are passing.
 - ❌ Allowing package scripts or README badges to lag behind the current stable release tag.
