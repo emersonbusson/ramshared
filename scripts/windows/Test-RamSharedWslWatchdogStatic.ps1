@@ -40,7 +40,9 @@ foreach ($required in @(
     'Invoke-GuardianInstallTransaction',
     'Rollback-GuardianInstallTransaction',
     'Register-ScheduledTask -TaskName $TaskName -Xml',
-    '[Security.Principal.WindowsIdentity]::GetCurrent().Name',
+    'function Resolve-GuardianTaskUserName',
+    '[System.Security.Principal.SecurityIdentifier]::new($Sid)',
+    '$TaskUserName = Resolve-GuardianTaskUserName -Sid $UserSid',
     'New-ScheduledTaskTrigger -AtLogOn -User $TaskUserName',
     'New-ScheduledTaskPrincipal -UserId $TaskUserName -LogonType Interactive -RunLevel Highest',
     '--terminate',
@@ -75,6 +77,9 @@ if ($source.Contains('Get-Volume -DriveLetter I') -or $source.Contains('drive_le
 }
 if ($source.Contains('New-ScheduledTaskPrincipal -UserId $UserSid')) {
     throw 'ramshared_wsl_guardian: task scheduler principal must use the Windows account name, not the policy SID'
+}
+if ($source.Contains('[Security.Principal.WindowsIdentity]::GetCurrent().Name')) {
+    throw 'ramshared_wsl_guardian: task scheduler account must resolve from the sealed policy SID'
 }
 
 foreach ($forbidden in @(
@@ -124,7 +129,8 @@ if ($source -match '(?m)^\s*(?:Stop-Process|taskkill\.exe)') {
 
 $powershell = Join-Path $PSHOME "powershell.exe"
 if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) { $powershell = "powershell.exe" }
-$manufactured = @(& $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $target -Action test -Run -Distro "Manufactured-Ubuntu" -UserSid "S-1-5-21-100" -HeartbeatPath "C:\manufactured\heartbeat.json" -ArtifactRoot "C:\manufactured\artifacts" -StaleAfterSec 17 -PollSec 3 -GuestCommandTimeoutSec 7 2>&1)
+$currentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$manufactured = @(& $powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $target -Action test -Run -Distro "Manufactured-Ubuntu" -UserSid $currentUserSid -HeartbeatPath "C:\manufactured\heartbeat.json" -ArtifactRoot "C:\manufactured\artifacts" -StaleAfterSec 17 -PollSec 3 -GuestCommandTimeoutSec 7 2>&1)
 if ($LASTEXITCODE -ne 0) {
     throw ("ramshared_wsl_guardian: manufactured decision cases failed: " + ($manufactured -join "`n"))
 }
