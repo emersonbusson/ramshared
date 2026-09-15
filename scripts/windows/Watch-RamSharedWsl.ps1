@@ -46,6 +46,8 @@ $GuardianHealthPath = Join-Path $GuardianStateRoot ($Distro + ".health.json")
 $ResumeLeasePath = "/run/ramshared/host-resume-lease.json"
 $GuardianActionApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTION"
 $GuardianActivationApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTIVATION"
+$TaskUserName = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+if ([string]::IsNullOrWhiteSpace($TaskUserName)) { throw "guardian task account identity is missing" }
 
 function Test-AbsoluteWindowsPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -652,10 +654,10 @@ function New-GuardianTask {
     param([switch]$ActivationAuthorized)
     $taskArguments = Get-SealedGuardianTaskArguments -ActivationAuthorized:$ActivationAuthorized
     $taskAction = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument $taskArguments
-    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $UserSid
+    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUserName
     # Task Scheduler serializes the zero duration as PT0S (no execution limit).
     $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-    $taskPrincipal = New-ScheduledTaskPrincipal -UserId $UserSid -LogonType Interactive -RunLevel Highest
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId $TaskUserName -LogonType Interactive -RunLevel Highest
     return New-ScheduledTask -Action $taskAction -Trigger $taskTrigger -Settings $taskSettings -Principal $taskPrincipal
 }
 
