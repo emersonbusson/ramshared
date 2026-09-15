@@ -2863,15 +2863,13 @@ fn discover_legacy_daemon(
             Some(LegacyDaemonProof::ReplacedBinary {
                 slice_mb: expected_slice_mb,
             })
-        } else if let Some(proof) = legacy_regular_daemon_proof(
-            &observation,
-            legacy_executable.as_deref(),
-            &executable_sha256,
-            expected_slice_mb,
-        ) {
-            Some(proof)
         } else {
-            None
+            legacy_regular_daemon_proof(
+                &observation,
+                legacy_executable.as_deref(),
+                &executable_sha256,
+                expected_slice_mb,
+            )
         };
         let Some(proof) = proof else {
             foreign_daemon_seen = true;
