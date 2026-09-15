@@ -8,6 +8,7 @@ use ramshared_tier::{TierPriorities, validate_order, vram_safety_net};
 use rustix::fd::OwnedFd;
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(not(test))]
@@ -24,6 +25,7 @@ const SHORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const LIFECYCLE_BINDING_SCHEMA: u32 = 1;
 const LIFECYCLE_BINDING_MAX_BYTES: u64 = 64 * 1024;
+const LEGACY_DAEMON_PATH: &str = "/usr/local/bin/ramsharedd";
 
 #[cfg(test)]
 thread_local! {
@@ -2587,7 +2589,14 @@ fn execute_legacy_migration_transition<E: LegacyMigrationExecutor>(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum LegacyDaemonProof {
     BinaryMatch,
-    ReplacedBinary { slice_mb: u64 },
+    ReplacedBinary {
+        slice_mb: u64,
+    },
+    LegacyPathHashMatch {
+        legacy_executable: PathBuf,
+        executable_sha256: [u8; 32],
+        slice_mb: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2595,6 +2604,7 @@ struct LegacyDaemonObservation {
     uid: u32,
     executable_link: PathBuf,
     canonical_executable: Option<PathBuf>,
+    executable_sha256: Option<[u8; 32]>,
     arguments: Vec<String>,
     owns_legacy_listener: bool,
 }
@@ -2613,13 +2623,23 @@ fn legacy_daemon_identity_matches(
     observed: &LegacyDaemonObservation,
 ) -> bool {
     observed_instance_id == Some(expected.instance_id.as_str())
-        && match expected.proof {
+        && match &expected.proof {
             LegacyDaemonProof::BinaryMatch => {
                 observed.canonical_executable.as_deref() == Some(expected.executable.as_path())
             }
             LegacyDaemonProof::ReplacedBinary { slice_mb } => {
-                legacy_replaced_daemon_is_bound(observed, &expected.executable, slice_mb)
+                legacy_replaced_daemon_is_bound(observed, &expected.executable, *slice_mb)
             }
+            LegacyDaemonProof::LegacyPathHashMatch {
+                legacy_executable,
+                executable_sha256,
+                slice_mb,
+            } => legacy_regular_daemon_is_bound(
+                observed,
+                legacy_executable,
+                executable_sha256,
+                *slice_mb,
+            ),
         }
 }
 
@@ -2654,6 +2674,59 @@ fn legacy_replaced_daemon_is_bound(
         && option_value_once(&observation.arguments, "--slice-mb")
             == Some(slice_mb.to_string().as_str())
         && option_value_once(&observation.arguments, "--listen-nbd") == Some("127.0.0.1:10809")
+}
+
+fn legacy_regular_daemon_is_bound(
+    observation: &LegacyDaemonObservation,
+    legacy_executable: &Path,
+    executable_sha256: &[u8; 32],
+    slice_mb: u64,
+) -> bool {
+    observation.uid == 0
+        && observation.owns_legacy_listener
+        && observation.canonical_executable.as_deref() == Some(legacy_executable)
+        && observation.executable_sha256.as_ref() == Some(executable_sha256)
+        && observation
+            .arguments
+            .first()
+            .is_some_and(|argv0| Path::new(argv0) == legacy_executable)
+        && option_value_once(&observation.arguments, "--slices") == Some("1")
+        && option_value_once(&observation.arguments, "--slice-mb")
+            == Some(slice_mb.to_string().as_str())
+        && option_value_once(&observation.arguments, "--listen-nbd") == Some("127.0.0.1:10809")
+}
+
+fn legacy_regular_daemon_proof(
+    observation: &LegacyDaemonObservation,
+    legacy_executable: Option<&Path>,
+    executable_sha256: &[u8; 32],
+    slice_mb: u64,
+) -> Option<LegacyDaemonProof> {
+    let legacy_executable = legacy_executable?;
+    legacy_regular_daemon_is_bound(observation, legacy_executable, executable_sha256, slice_mb)
+        .then(|| LegacyDaemonProof::LegacyPathHashMatch {
+            legacy_executable: legacy_executable.to_path_buf(),
+            executable_sha256: *executable_sha256,
+            slice_mb,
+        })
+}
+
+fn sha256_file(path: &Path) -> Result<[u8; 32], CascadeError> {
+    let mut file = fs::File::open(path).map_err(|error| {
+        CascadeError::Precondition(format!("open daemon binary for hash: {error}"))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            CascadeError::Precondition(format!("read daemon binary for hash: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
 }
 
 fn process_socket_inodes(pid: u32) -> Result<std::collections::HashSet<String>, CascadeError> {
@@ -2709,6 +2782,8 @@ fn read_legacy_daemon_observation(pid: u32) -> Result<LegacyDaemonObservation, C
     let executable_link = fs::read_link(format!("/proc/{pid}/exe")).map_err(|error| {
         CascadeError::Precondition(format!("read legacy daemon executable link: {error}"))
     })?;
+    let executable_path = PathBuf::from(format!("/proc/{pid}/exe"));
+    let executable_sha256 = sha256_file(&executable_path)?;
     let arguments = fs::read(format!("/proc/{pid}/cmdline"))
         .map_err(|error| {
             CascadeError::Precondition(format!("read legacy daemon command: {error}"))
@@ -2727,6 +2802,7 @@ fn read_legacy_daemon_observation(pid: u32) -> Result<LegacyDaemonObservation, C
         uid: metadata.uid(),
         canonical_executable: fs::canonicalize(&executable_link).ok(),
         executable_link,
+        executable_sha256: Some(executable_sha256),
         arguments,
         owns_legacy_listener: process_owns_legacy_listener(pid)?,
     })
@@ -2755,6 +2831,8 @@ fn discover_legacy_daemon(
     expected_slice_mb: u64,
 ) -> Result<LegacyDaemonIdentity, CascadeError> {
     let executable = canonical_root_owned_daemon(expected_path)?;
+    let executable_sha256 = sha256_file(&executable)?;
+    let legacy_executable = canonical_root_owned_daemon(LEGACY_DAEMON_PATH).ok();
     let mut matches = Vec::new();
     let mut foreign_daemon_seen = false;
     for entry in fs::read_dir("/proc").map_err(|error| {
@@ -2785,6 +2863,13 @@ fn discover_legacy_daemon(
             Some(LegacyDaemonProof::ReplacedBinary {
                 slice_mb: expected_slice_mb,
             })
+        } else if let Some(proof) = legacy_regular_daemon_proof(
+            &observation,
+            legacy_executable.as_deref(),
+            &executable_sha256,
+            expected_slice_mb,
+        ) {
+            Some(proof)
         } else {
             None
         };
@@ -2819,6 +2904,19 @@ fn discover_legacy_daemon(
 }
 
 fn revalidate_legacy_daemon(identity: &LegacyDaemonIdentity) -> Result<(), CascadeError> {
+    if let LegacyDaemonProof::LegacyPathHashMatch {
+        legacy_executable, ..
+    } = &identity.proof
+    {
+        let sealed = canonical_root_owned_daemon(legacy_executable.to_str().ok_or_else(|| {
+            CascadeError::Precondition("legacy daemon path is not UTF-8".into())
+        })?)?;
+        if sealed != *legacy_executable {
+            return Err(CascadeError::Precondition(
+                "legacy daemon path changed before mutation".into(),
+            ));
+        }
+    }
     let observed = read_legacy_daemon_observation(identity.pid)?;
     if legacy_daemon_identity_matches(
         identity,
@@ -5526,6 +5624,7 @@ mod tests {
             uid: 0,
             executable_link: PathBuf::from("/opt/ramshared/bin/ramsharedd"),
             canonical_executable: Some(PathBuf::from("/opt/ramshared/bin/ramsharedd")),
+            executable_sha256: None,
             arguments: Vec::new(),
             owns_legacy_listener: false,
         };
@@ -5562,6 +5661,7 @@ mod tests {
             uid: 0,
             executable_link: PathBuf::from("/usr/local/bin/ramsharedd (deleted)"),
             canonical_executable: None,
+            executable_sha256: None,
             arguments: vec![
                 "/usr/local/bin/ramsharedd".into(),
                 "--slices".into(),
