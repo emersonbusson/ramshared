@@ -38,7 +38,7 @@
 | DT-1 | Parse only `migrate-cascade --from-legacy`; reject every other option before an action runner is called. | Explicit consent is part of the authority boundary. |
 | DT-2 | `LegacyMigrationPlan` is pure and requires exactly one non-ghost NBD, zero ublk, zero or one ZRAM, and no duplicate managed path. | Device names, a broad prefix, and an inactive-looking row do not prove a safe topology. |
 | DT-3 | Initial NBD use must be zero; eligible ZRAM may contain pages only when `MemAvailable >= zram.size_kb + hard_floor_kib`. | This bounds the legacy drain without claiming that zero use alone proves ownership. |
-| DT-4 | Before the first effect, runtime admission requires a sealed origin, healthy guardian, no current lifecycle binding, one exact `ramsharedd`, and a captured PID/start identity. Its executable must canonically equal the invoking release sibling, unless a replaced-binary proof shows the expected root-owned `(deleted)` path, exact legacy arguments (`--slices 1`, expected `--slice-mb`, `--listen-nbd 127.0.0.1:10809`), and ownership of that listener. Legacy PID/swap files may exist only as sealed root-owned regular files whose exact values agree with the admitted topology. | A binary replacement may orphan a live executable inode; strict legacy records retain diagnostic continuity without becoming a second authority path. |
+| DT-4 | Before the first effect, runtime admission requires a sealed origin, healthy guardian, no current lifecycle binding, one exact `ramsharedd`, and a captured PID/start identity. Its executable must canonically equal the invoking release sibling, unless a replaced-binary proof shows the expected root-owned `(deleted)` path, or the fixed root-owned `/usr/local/bin/ramsharedd` path has the exact SHA-256 of the invoking sibling as read through `/proc/<pid>/exe`. Both exceptions require exact legacy arguments (`--slices 1`, expected `--slice-mb`, `--listen-nbd 127.0.0.1:10809`) and ownership of that listener. Legacy PID/swap files may exist only as sealed root-owned regular files whose exact values agree with the admitted topology. | A binary replacement may orphan a live executable inode, while an installed direct legacy path can legitimately hold an identical binary; strict identity and content proof retain diagnostic continuity without becoming a second authority path. |
 | DT-5 | Device effects use a bound block-device identity, fresh strict snapshots, and exact absence proof. Process termination uses a revalidated pidfd TERM and bounded wait. | Closes device retargeting, PID reuse, and ambiguous-command gaps. |
 | DT-6 | Order is ZRAM swapoff → proof, NBD swapoff → proof, ZRAM reset → NBD detach → daemon TERM/wait → existing sealed-origin `up`. | ZRAM pages retain the NBD/disk fallback while they drain; no teardown action occurs while either managed swap remains active. |
 | DT-7 | A failed stage does not attempt later stages, remove evidence, reformat a device, or invoke normal `up`. | Uncertain mutation is containment, not permission to continue. |
@@ -83,6 +83,7 @@ the new binding or claim a completed migration.
   `legacy_migration_executor_stops_on_first_refusal`,
   `legacy_migration_rejects_replaced_daemon_identity`,
   `legacy_replaced_daemon_requires_bound_root_listener`,
+  `legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener`,
   `legacy_runtime_records_require_exact_legacy_values`.
 - Cover target: N/A — external-device orchestration; required hermetic executor
   tests plus watchdog E2E and daemon BINARY_MATCH or replaced-binary listener
@@ -139,7 +140,7 @@ the new binding or claim a completed migration.
 | Pure refusals | `crates/ramshared-cli/src/cascade/mod.rs` :: `legacy_migration_plan_refuses_ghost_dirty_duplicate_or_ublk` | unit | #13, #16 | ≥80% |
 | Effect ordering | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_executor_preserves_swapoff_first_order` | hermetic executor | #9, #17 | E2E-gated |
 | First error | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_executor_stops_on_first_refusal` | hermetic executor | #15, #16 | E2E-gated |
-| Identity replacement | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_rejects_replaced_daemon_identity` | hermetic | #13, #16 | E2E-gated |
+| Legacy daemon identity | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener` | hermetic | #13, #16 | E2E-gated |
 | Attended migration | watchdog harness :: before/action/after | live E2E | #13, #16, #17 | required |
 
 ## Kahneman
@@ -161,7 +162,7 @@ the new binding or claim a completed migration.
 - [ ] `cargo clippy -p ramshared-cli --all-targets -- -D warnings`
 - [ ] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/mod.rs --min 80`
 - [ ] `./scripts/docs-check.sh`
-- [ ] BINARY_MATCH or replaced-binary listener proof of the deployed daemon
+- [ ] BINARY_MATCH, replaced-binary listener proof, or fixed legacy-path SHA-256 proof of the deployed daemon
   before live E2E
 - [ ] Approved watchdog harness: before → action → after, legitimate and
       refusal evidence, terminal cleanup state

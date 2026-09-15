@@ -60,7 +60,7 @@ Discarded alternatives:
 | --- | --- | --- |
 | RF-1 | The public command is exactly `migrate-cascade --from-legacy`. | Missing, repeated, or extra options fail before any action. |
 | RF-2 | Migration requires an explicit operator request, a sealed origin, exactly one live NBD, at most one live ZRAM, no ublk, and no ghost swap. Legacy PID/swap records are observation-only and may remain only when they exactly match this admitted topology and daemon. | Ambiguous, malformed, dirty-NBD, ghost, symlinked, writable, or mismatched legacy-record fixtures execute zero commands. |
-| RF-3 | The legacy daemon must be unique and either BINARY_MATCH the invoking release's daemon sibling or prove the narrowly-defined replaced-binary condition. | The replacement condition requires a root-owned `(deleted)` link from the expected path, exact legacy command arguments, the expected local NBD listener, and a captured PID/start identity; every other stale or path-mismatched identity refuses. |
+| RF-3 | The legacy daemon must be unique and either BINARY_MATCH the invoking release's daemon sibling, prove the narrowly-defined replaced-binary condition, or prove the fixed legacy path contains the exact SHA-256 of that sibling. | The replacement condition requires a root-owned `(deleted)` link from the expected path. The fixed-path condition requires root ownership, `/usr/local/bin/ramsharedd`, an exact hash from `/proc/<pid>/exe`, exact legacy command arguments, the expected local NBD listener, and a captured PID/start identity; every other stale, hash-mismatched, or path-mismatched identity refuses. |
 | RF-4 | ZRAM and NBD are drained with fresh swap snapshots before reset/detach. | Recorded effect order is ZRAM `swapoff`, NBD `swapoff`, zram reset, NBD detach, daemon stop. |
 | RF-5 | Every mutating effect is bound to the observed device or pid identity and revalidated immediately before use. | Retargeted-device and PID-reuse tests stop before the corresponding command. |
 | RF-6 | The pre-existing WSL fallback disk swap is observation-only. | The migration never formats, disables, recreates, or detaches a non-managed disk swap. |
@@ -127,7 +127,7 @@ machine-readable source for the resulting topology.
 
 | Risk | Mitigation |
 | --- | --- |
-| A foreign NBD is mistaken for the legacy tier. | Explicit command, exact cardinality, daemon BINARY_MATCH or narrow replaced-binary listener proof, device identity, zero initial NBD use, and no name-only authorization. |
+| A foreign NBD is mistaken for the legacy tier. | Explicit command, exact cardinality, daemon BINARY_MATCH, narrow replaced-binary listener proof, or fixed root-owned legacy path with an exact running-binary hash, device identity, zero initial NBD use, and no name-only authorization. |
 | ZRAM drain increases RAM pressure. | Require an available-memory budget at least equal to the eligible ZRAM capacity plus the established hard floor before the first effect. |
 | A PID is reused before termination. | Capture start ticks, open pidfd, and revalidate executable and process identity before TERM. |
 | A swapoff or detach outcome is uncertain. | Fresh strict snapshot and exact device proof; preserve evidence and stop. |
