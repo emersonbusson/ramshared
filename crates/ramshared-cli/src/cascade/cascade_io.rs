@@ -2881,15 +2881,81 @@ fn read_kernel_free_floor_kib() -> Result<u64, CascadeError> {
         .ok_or_else(|| CascadeError::Precondition("kernel free-memory floor is invalid".into()))
 }
 
-fn legacy_runtime_records_exist(paths: &RuntimePaths) -> bool {
-    [
-        &paths.lifecycle_binding_file,
-        &paths.zram_dev_file,
-        &paths.swap_dev_file,
-        &paths.pid_file,
-    ]
-    .iter()
-    .any(|path| path.exists())
+fn legacy_runtime_record_value(path: &Path) -> Result<Option<String>, CascadeError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CascadeError::Precondition(format!(
+                "stat legacy runtime record {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    if !metadata.file_type().is_file()
+        || metadata.uid() != 0
+        || metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(CascadeError::Precondition(format!(
+            "legacy runtime record {} is not a sealed root-owned regular file",
+            path.display()
+        )));
+    }
+    let value = fs::read_to_string(path).map_err(|error| {
+        CascadeError::Precondition(format!(
+            "read legacy runtime record {}: {error}",
+            path.display()
+        ))
+    })?;
+    let value = value.trim();
+    if value.is_empty() || value.contains(['\n', '\r']) {
+        return Err(CascadeError::Precondition(format!(
+            "legacy runtime record {} is malformed",
+            path.display()
+        )));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn legacy_runtime_record_values_match(
+    pid_record: Option<&str>,
+    swap_record: Option<&str>,
+    zram_record: Option<&str>,
+    expected_pid: u32,
+    expected_swap: &str,
+    expected_zram: Option<&str>,
+) -> bool {
+    pid_record.is_none_or(|value| value.trim().parse::<u32>().ok() == Some(expected_pid))
+        && swap_record.is_none_or(|value| value.trim() == expected_swap)
+        && match expected_zram {
+            Some(expected) => zram_record.is_none_or(|value| value.trim() == expected),
+            None => zram_record.is_none(),
+        }
+}
+
+fn legacy_runtime_records_are_compatible(
+    paths: &RuntimePaths,
+    legacy: &LegacyMigrationPlan,
+    daemon: &LegacyDaemonIdentity,
+) -> Result<(), CascadeError> {
+    let pid = legacy_runtime_record_value(&paths.pid_file)?;
+    let swap = legacy_runtime_record_value(&paths.swap_dev_file)?;
+    let zram = legacy_runtime_record_value(&paths.zram_dev_file)?;
+    let expected_zram = legacy.zram.as_ref().map(SwapEntry::canonical_path);
+    if legacy_runtime_record_values_match(
+        pid.as_deref(),
+        swap.as_deref(),
+        zram.as_deref(),
+        daemon.pid,
+        &legacy.nbd.canonical_path(),
+        expected_zram.as_deref(),
+    ) {
+        Ok(())
+    } else {
+        Err(CascadeError::Precondition(
+            "legacy runtime records do not match the admitted daemon and swap topology".into(),
+        ))
+    }
 }
 
 fn authorize_legacy_effect(
@@ -2968,9 +3034,9 @@ impl<R: CommandRunner> LegacyMigrationExecutor for RuntimeLegacyMigrationExecuto
 pub fn migrate_legacy_cascade() -> Result<(), CascadeError> {
     let mut args = parse_up_args_from(&[], default_daemon())?;
     let paths = RuntimePaths::system();
-    if legacy_runtime_records_exist(&paths) {
+    if paths.lifecycle_binding_file.exists() {
         return Err(CascadeError::Precondition(
-            "legacy migration requires no current lifecycle binding or runtime records".into(),
+            "legacy migration requires no current sealed lifecycle binding".into(),
         ));
     }
     let (guardian, reason) = guardian_state_from_files(
@@ -3000,6 +3066,7 @@ pub fn migrate_legacy_cascade() -> Result<(), CascadeError> {
     }
     check_safety_net(args.vram_mb, args.force, &TierPriorities::default())?;
     let daemon = discover_legacy_daemon(&args.daemon, args.vram_mb)?;
+    legacy_runtime_records_are_compatible(&paths, &legacy, &daemon)?;
     let nbd = observe_bound_device(&legacy.nbd.canonical_path(), ManagedDeviceKind::Nbd)?;
     let zram = legacy
         .zram

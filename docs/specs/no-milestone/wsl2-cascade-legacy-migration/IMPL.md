@@ -16,7 +16,7 @@ do not close a privileged WSL2 cascade migration.
 | --- | --- | --- |
 | `crates/ramshared-cli/src/main.rs` | ITEM-1 / RF-1 | Exact command parsing, dispatch, and help text. |
 | `crates/ramshared-cli/src/cascade/mod.rs` | ITEM-2 / RF-2, RF-6 | Pure legacy eligibility plan that excludes ghosts, dirty NBD, duplicates, ublk, and fallback disk selection. |
-| `crates/ramshared-cli/src/cascade/cascade_io.rs` | ITEM-3, ITEM-4 / RF-3..7 | Bound-device/pidfd transition executor and sealed-origin handoff. |
+| `crates/ramshared-cli/src/cascade/cascade_io.rs` | ITEM-3, ITEM-4 / RF-2..7 | Bound-device/pidfd transition executor, strict legacy-record validation, and sealed-origin handoff. |
 | `README.md` | ITEM-5 / RF-1 | Concise attended operator guidance. |
 | `docs/reliability/DEGRADATION-MATRIX.md` | ITEM-5 / RF-7 | Legacy-handoff containment entry. |
 
@@ -24,7 +24,7 @@ do not close a privileged WSL2 cascade migration.
 
 - RED checkpoint: `62506cf8 test(cli): reproduce legacy cascade migration command`.
 - `cargo test -p ramshared-cli --bin ramshared -- --test-threads=1`:
-  **274 passed, 0 failed** (36.50 s).
+  **275 passed, 0 failed** (36.39 s).
 - `cargo clippy -p ramshared-cli --all-targets -- -D warnings`: exit 0.
 - `cargo fmt --all -- --check`: exit 0.
 - Slice cover: `crates/ramshared-cli/src/cascade/mod.rs` **85.4%**

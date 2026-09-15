@@ -59,7 +59,7 @@ Discarded alternatives:
 | ID | Requirement | Acceptance |
 | --- | --- | --- |
 | RF-1 | The public command is exactly `migrate-cascade --from-legacy`. | Missing, repeated, or extra options fail before any action. |
-| RF-2 | Migration requires an explicit operator request, a sealed origin, exactly one live NBD, at most one live ZRAM, no ublk, and no ghost swap. | Ambiguous, malformed, dirty-NBD, or ghost fixtures execute zero commands. |
+| RF-2 | Migration requires an explicit operator request, a sealed origin, exactly one live NBD, at most one live ZRAM, no ublk, and no ghost swap. Legacy PID/swap records are observation-only and may remain only when they exactly match this admitted topology and daemon. | Ambiguous, malformed, dirty-NBD, ghost, symlinked, writable, or mismatched legacy-record fixtures execute zero commands. |
 | RF-3 | The legacy daemon must be unique and either BINARY_MATCH the invoking release's daemon sibling or prove the narrowly-defined replaced-binary condition. | The replacement condition requires a root-owned `(deleted)` link from the expected path, exact legacy command arguments, the expected local NBD listener, and a captured PID/start identity; every other stale or path-mismatched identity refuses. |
 | RF-4 | ZRAM and NBD are drained with fresh swap snapshots before reset/detach. | Recorded effect order is ZRAM `swapoff`, NBD `swapoff`, zram reset, NBD detach, daemon stop. |
 | RF-5 | Every mutating effect is bound to the observed device or pid identity and revalidated immediately before use. | Retargeted-device and PID-reuse tests stop before the corresponding command. |
