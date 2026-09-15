@@ -119,6 +119,7 @@ for text in \
   'ORIGIN_ALIASES_ROOT_OR_ACTIVE_SWAP' \
   'flock -x -n "$origin_fd"' \
   'origin_handle="/proc/$$/fd/$origin_fd"' \
+  "stat -Lc '%t:%T' -- \"\$path\"" \
   'PREWRITE_HANDLE_IDENTITY_MISMATCH' \
   'POSTWRITE_HANDLE_IDENTITY_MISMATCH' \
   '/sbin/mkswap -L RAMSHARED -U "$expected_uuid" -- "$origin_handle"'; do
