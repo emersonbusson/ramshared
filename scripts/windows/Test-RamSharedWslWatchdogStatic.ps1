@@ -40,6 +40,9 @@ foreach ($required in @(
     'Invoke-GuardianInstallTransaction',
     'Rollback-GuardianInstallTransaction',
     'Register-ScheduledTask -TaskName $TaskName -Xml',
+    '[Security.Principal.WindowsIdentity]::GetCurrent().Name',
+    'New-ScheduledTaskTrigger -AtLogOn -User $TaskUserName',
+    'New-ScheduledTaskPrincipal -UserId $TaskUserName -LogonType Interactive -RunLevel Highest',
     '--terminate',
     'Ubuntu-24.04',
     'WaitForExit',
@@ -69,6 +72,9 @@ foreach ($required in @(
 }
 if ($source.Contains('Get-Volume -DriveLetter I') -or $source.Contains('drive_letter = "I"')) {
     throw 'ramshared_wsl_guardian: origin telemetry must discover the manifest physical volume'
+}
+if ($source.Contains('New-ScheduledTaskPrincipal -UserId $UserSid')) {
+    throw 'ramshared_wsl_guardian: task scheduler principal must use the Windows account name, not the policy SID'
 }
 
 foreach ($forbidden in @(
