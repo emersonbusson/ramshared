@@ -5332,6 +5332,60 @@ mod tests {
     }
 
     #[test]
+    fn legacy_replaced_daemon_requires_bound_root_listener() {
+        let identity = LegacyDaemonIdentity {
+            pid: 42,
+            instance_id: "42-100".into(),
+            executable: PathBuf::from("/usr/local/bin/ramsharedd"),
+            proof: LegacyDaemonProof::ReplacedBinary { slice_mb: 4096 },
+        };
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: PathBuf::from("/usr/local/bin/ramsharedd (deleted)"),
+            arguments: vec![
+                "/usr/local/bin/ramsharedd".into(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "4096".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ],
+            owns_legacy_listener: true,
+        };
+
+        assert!(legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &observation,
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                owns_legacy_listener: false,
+                ..observation.clone()
+            },
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                uid: 1000,
+                ..observation.clone()
+            },
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                arguments: vec!["/usr/local/bin/ramsharedd".into()],
+                ..observation
+            },
+        ));
+    }
+
+    #[test]
     fn down_refuses_foreign_live_device_without_running_a_command() {
         let fixture = TestDir::new();
         let daemon = spawn_fixture_daemon(&fixture, "exit 0");
