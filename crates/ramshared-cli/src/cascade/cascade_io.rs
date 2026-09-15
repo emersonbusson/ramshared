@@ -5539,6 +5539,50 @@ mod tests {
     }
 
     #[test]
+    fn legacy_runtime_records_require_exact_legacy_values() {
+        assert!(legacy_runtime_record_values_match(
+            Some("527\n"),
+            Some("/dev/nbd0\n"),
+            Some("/dev/zram0\n"),
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(legacy_runtime_record_values_match(
+            None,
+            None,
+            None,
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            Some("528"),
+            Some("/dev/nbd0"),
+            Some("/dev/zram0"),
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            Some("527"),
+            Some("/dev/nbd1"),
+            Some("/dev/zram0"),
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            Some("527"),
+            Some("/dev/nbd0"),
+            Some("/dev/zram0"),
+            527,
+            "/dev/nbd0",
+            None,
+        ));
+    }
+
+    #[test]
     fn down_refuses_foreign_live_device_without_running_a_command() {
         let fixture = TestDir::new();
         let daemon = spawn_fixture_daemon(&fixture, "exit 0");
