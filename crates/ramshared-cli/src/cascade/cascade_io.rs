@@ -5824,6 +5824,44 @@ mod tests {
     }
 
     #[test]
+    fn nbd_device_permits_confirmed_absent_kernel_owner() {
+        assert_eq!(
+            nbd_owner_policy_for_kind(ManagedDeviceKind::Nbd),
+            NbdOwnerPolicy::PermitAbsent
+        );
+        assert_eq!(
+            nbd_owner_policy_for_kind(ManagedDeviceKind::Zram),
+            NbdOwnerPolicy::RequireLive
+        );
+    }
+
+    #[test]
+    fn retire_legacy_runtime_records_removes_stale_legacy_evidence() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        fs::create_dir_all(&paths.runtime_dir).unwrap();
+        fs::write(&paths.pid_file, "123\n").unwrap();
+        fs::write(&paths.swap_dev_file, "/dev/nbd0\n").unwrap();
+        fs::write(&paths.zram_dev_file, "/dev/zram0\n").unwrap();
+        fs::write(&paths.capacity_status_file, "1\n").unwrap();
+        fs::write(&paths.socket, "sock\n").unwrap();
+
+        assert!(paths.pid_file.exists());
+        assert!(paths.swap_dev_file.exists());
+        assert!(paths.zram_dev_file.exists());
+        assert!(paths.capacity_status_file.exists());
+        assert!(paths.socket.exists());
+
+        retire_legacy_runtime_records(&paths);
+
+        assert!(!paths.pid_file.exists());
+        assert!(!paths.swap_dev_file.exists());
+        assert!(!paths.zram_dev_file.exists());
+        assert!(!paths.capacity_status_file.exists());
+        assert!(!paths.socket.exists());
+    }
+
+    #[test]
     fn legacy_nbd_owner_policy_accepts_only_confirmed_absence() {
         let live =
             nbd_kernel_owner_identity(Some("5939-100".into()), false, NbdOwnerPolicy::RequireLive)
