@@ -5979,6 +5979,72 @@ mod tests {
     }
 
     #[test]
+    fn host_manifest_accepts_five_gib_and_rejects_under_capacity() {
+        let mut host = HostOriginManifest {
+            schema_version: 3,
+            origin_vhdx: "I:\\RamShared\\ramshared-origin.vhdx".into(),
+            fixed_size_bytes: 5 * GIB,
+            logical_capacity_mib: 4096,
+            physical_cache_cap_mib: 1024,
+            chunk_mib: 128,
+            gpu_reserve_min_mib: 2048,
+            gpu_reserve_percent: 20,
+            partuuid: "11111111-2222-4333-8444-555555555555".into(),
+            disk_guid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into(),
+            expected_swap_uuid: "99999999-8888-4777-8666-555555555555".into(),
+            ownership_proof_schema: 1,
+            existing_wsl_swap_vhdx: "R:\\wsl_swap\\swap.vhdx".into(),
+            configuration_sha256: String::new(),
+        };
+        host.configuration_sha256 = sha256_hex(host_configuration_text(&host).as_bytes());
+        let bytes = serde_json::to_vec(&host).expect("serialize host origin manifest fixture");
+        let sealed = SealedOriginManifest {
+            host_manifest_sha256: sha256_hex(&bytes),
+            configuration_sha256: host.configuration_sha256.clone(),
+            origin_path: "/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555".into(),
+            partuuid: host.partuuid.clone(),
+            ptuuid: host.disk_guid.clone(),
+            partition_dev_t: "43:1".into(),
+            parent_dev_t: "43:0".into(),
+            expected_swap_uuid: host.expected_swap_uuid.clone(),
+            logical_capacity_mib: host.logical_capacity_mib,
+            physical_cache_cap_mib: host.physical_cache_cap_mib,
+        };
+        // 5 GiB fixed container with 4096 MiB swap must be accepted
+        validate_host_origin_manifest_bytes(&sealed, &bytes)
+            .expect("5 GiB container must be accepted for 4096 MiB logical swap");
+
+        // 25 GiB fixed container with 4096 MiB swap must remain accepted (backward compatibility)
+        let mut legacy_host = host.clone();
+        legacy_host.fixed_size_bytes = 25 * GIB;
+        legacy_host.configuration_sha256 =
+            sha256_hex(host_configuration_text(&legacy_host).as_bytes());
+        let legacy_bytes =
+            serde_json::to_vec(&legacy_host).expect("serialize legacy host origin manifest fixture");
+        let mut legacy_sealed = sealed.clone();
+        legacy_sealed.host_manifest_sha256 = sha256_hex(&legacy_bytes);
+        legacy_sealed.configuration_sha256 = legacy_host.configuration_sha256.clone();
+        validate_host_origin_manifest_bytes(&legacy_sealed, &legacy_bytes)
+            .expect("25 GiB legacy container must be accepted");
+
+        // Under-capacity: 5 GiB container with 8192 MiB logical swap must be rejected
+        let mut undersized_host = host.clone();
+        undersized_host.logical_capacity_mib = 8192;
+        undersized_host.configuration_sha256 =
+            sha256_hex(host_configuration_text(&undersized_host).as_bytes());
+        let undersized_bytes =
+            serde_json::to_vec(&undersized_host).expect("serialize undersized fixture");
+        let mut undersized_sealed = sealed.clone();
+        undersized_sealed.logical_capacity_mib = 8192;
+        undersized_sealed.host_manifest_sha256 = sha256_hex(&undersized_bytes);
+        undersized_sealed.configuration_sha256 = undersized_host.configuration_sha256.clone();
+        assert!(
+            validate_host_origin_manifest_bytes(&undersized_sealed, &undersized_bytes).is_err(),
+            "5 GiB container cannot host 8192 MiB swap"
+        );
+    }
+
+    #[test]
     fn origin_args_default_to_four_gib_and_enforce_one_to_twenty_four_gib() {
         let args = AppArgs::parse_from(&daemon_argv(&[
             "ramsharedd",
