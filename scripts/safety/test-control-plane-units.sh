@@ -122,7 +122,8 @@ for text in \
   "stat -Lc '%t:%T' -- \"\$path\"" \
   'PREWRITE_HANDLE_IDENTITY_MISMATCH' \
   'POSTWRITE_HANDLE_IDENTITY_MISMATCH' \
-  '/sbin/mkswap -L RAMSHARED -U "$expected_uuid" -- "$origin_handle"'; do
+  'expected_kib=$((logical_mib * 1024))' \
+  '/sbin/mkswap -L RAMSHARED -U "$expected_uuid" -- "$origin_handle" "$expected_kib"'; do
   grep -Fq "$text" "$origin_provision" || {
     printf 'origin provisioner lacks exact destructive identity gate: %s\n' "$text" >&2; exit 1;
   }
