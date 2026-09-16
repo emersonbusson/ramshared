@@ -1659,10 +1659,13 @@ fn rollback_zram_tier<R: CommandRunner>(
     }
     if prove_exact_swap_absent(&identity).is_err()
         || pinned.revalidate_named_identity().is_err()
-        // zramctl requires the canonical device name to derive its sysfs node;
-        // the exact fd remains open across this unavoidable tool boundary.
-        || runner.run("zramctl", &["-r", zram_device]).is_err()
     {
+        return false;
+    }
+    // zramctl derives its sysfs target from the canonical device name and the
+    // kernel zram driver refuses reset with EBUSY while any opener holds the fd.
+    drop(pinned);
+    if runner.run("zramctl", &["-r", zram_device]).is_err() {
         return false;
     }
     let Ok(live_devices) = detect_live_managed_devices() else {
@@ -1731,15 +1734,16 @@ fn reconcile_malformed_zram_allocation<R: CommandRunner>(
             device.path
         ))
     })?;
-    // zramctl derives the sysfs target from the canonical device name and does
-    // not accept the proc-fd path portably. Keep the exact fd open, revalidate
-    // immediately before the call, and require disappearance afterward.
+    // zramctl derives the sysfs target from the canonical device name and the
+    // kernel zram driver refuses reset with EBUSY while any opener holds the fd.
+    // Revalidate the exact descriptor first, then close before invoking reset.
     pinned.revalidate_named_identity().map_err(|error| {
         CascadeError::UnsafeContainment(format!(
             "new exact zram device {} changed identity before reset ({error}); ownership evidence preserved",
             device.path
         ))
     })?;
+    drop(pinned);
     runner
         .run("zramctl", &["-r", &device.path])
         .map_err(|error| {
@@ -3418,8 +3422,10 @@ impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, 
         let pinned = bind_device_for_effect(device)?;
         pinned.revalidate_named_identity()?;
         // zramctl does not portably accept a proc-fd target because it derives
-        // the sysfs name from /dev/<name>. The fd pin stays live across the
-        // call and exact disappearance is mandatory afterward.
+        // the sysfs name from /dev/<name>. The kernel zram driver forbids reset
+        // while any process holds an open file descriptor (returning EBUSY).
+        // Revalidate the exact descriptor first, then close before invoking reset.
+        drop(pinned);
         self.runner.run("zramctl", &["-r", &device.path])?;
         let expected_after = self
             .binding
@@ -3464,7 +3470,8 @@ impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, 
         let pinned = bind_device_for_effect(device)?;
         pinned.revalidate_named_identity()?;
         // nbd-client likewise derives NBD sysfs state from the canonical name;
-        // retain the fd/dev_t pin and prove exact disappearance after the call.
+        // revalidate the exact descriptor first, then close before invoking disconnect.
+        drop(pinned);
         self.runner.run("nbd-client", &["-d", &device.path])?;
         authorize_bound_environment(
             self.binding,
