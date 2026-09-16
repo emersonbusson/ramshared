@@ -1771,7 +1771,7 @@ mod tests {
         if is_wsl2() {
             let sysctl_min = read_sysctl_min_free_mb();
             let opts = StressOptions::default();
-            let target_physical_floor = opts.min_ram_mb.max(600);
+            let target_physical_floor = opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB);
             let hard_floor = target_physical_floor.saturating_sub(sysctl_min).max(100);
             assert!(
                 hard_floor + sysctl_min >= 600,
@@ -1779,4 +1779,36 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_buddyinfo_order_7_parsing() {
+        let sample = "Node 0, zone      DMA      1      0      1      0      2      1      1      0      1      1      3 \n\
+                      Node 0, zone    DMA32      2      1      2      0      1      1      1      2      0      2    974 \n\
+                      Node 0, zone   Normal   2702   4568   2435   1170    635    356    215    147     91    112   1292 \n";
+        assert_eq!(parse_buddyinfo_order_7_chunks(sample), Some(147));
+
+        let zero_sample = "Node 0, zone   Normal   815   1332   2330   1837   3290   753   3   0   0   0   0 \n";
+        assert_eq!(parse_buddyinfo_order_7_chunks(zero_sample), Some(0));
+
+        assert_eq!(parse_buddyinfo_order_7_chunks(""), None);
+        assert_eq!(parse_buddyinfo_order_7_chunks("Node 0, zone DMA 1 2 3"), None);
+    }
+
+    #[test]
+    fn test_buddyinfo_order_7_interlock_threshold() {
+        assert!(is_order_7_depleted(Some(0), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(is_order_7_depleted(Some(7), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(!is_order_7_depleted(Some(8), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(!is_order_7_depleted(Some(147), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(!is_order_7_depleted(None, MIN_ORDER_7_BUDDY_CHUNKS));
+    }
+
+    #[test]
+    fn test_wsl2_headroom_floor_enforces_1024_mb() {
+        assert!(
+            WSL2_MIN_PHYSICAL_HEADROOM_MB >= 1024,
+            "WSL2_MIN_PHYSICAL_HEADROOM_MB must be at least 1024 MB to provide compaction headroom"
+        );
+    }
 }
+
