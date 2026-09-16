@@ -1657,9 +1657,7 @@ fn rollback_zram_tier<R: CommandRunner>(
             return false;
         }
     }
-    if prove_exact_swap_absent(&identity).is_err()
-        || pinned.revalidate_named_identity().is_err()
-    {
+    if prove_exact_swap_absent(&identity).is_err() || pinned.revalidate_named_identity().is_err() {
         return false;
     }
     // zramctl derives its sysfs target from the canonical device name and the
