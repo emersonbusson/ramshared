@@ -36,8 +36,8 @@ or if under-capacity containers are accepted.
 
 | RF | ITEM | Commit |
 | --- | --- | --- |
-| RF-1 | ITEM-1 | pending |
-| RF-2 | ITEM-1 | pending |
-| RF-3 | ITEM-1 | pending |
-| RF-4 | ITEM-2, ITEM-4 | pending |
-| RF-5 | ITEM-2, ITEM-4 | pending |
+| RF-1 | ITEM-1 | `6f87ac3c` |
+| RF-2 | ITEM-1 | `6f87ac3c` |
+| RF-3 | ITEM-1 | `6f87ac3c` |
+| RF-4 | ITEM-2, ITEM-4 | `6f87ac3c` |
+| RF-5 | ITEM-2, ITEM-4 | `6f87ac3c` |
