@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 310,
-    "classified": 307,
+    "total": 314,
+    "classified": 311,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -3533,6 +3533,54 @@
     },
     {
       "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {
