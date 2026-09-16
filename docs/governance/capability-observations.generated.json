@@ -1488,6 +1488,37 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh",
+          "scripts/safety/ramshared-host-gate.sh",
+          "scripts/safety/test-control-plane-units.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1",
+          "scripts/windows/Test-RamSharedOriginStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-origin-capacity-policy/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-origin-capacity-policy/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-origin-capacity-policy/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-origin-capacity-policy"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
           "scripts/safety/test-wsl-relay-health.sh",
           "scripts/safety/wsl-relay-health.sh"
         ],

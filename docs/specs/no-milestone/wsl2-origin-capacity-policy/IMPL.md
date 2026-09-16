@@ -4,7 +4,7 @@
 
 ## Status
 
-In progress · TDD checkpoint pending.
+Implemented (source) · 98 tests passed · TDD verified · docs-check 100% PASS.
 
 ## Files
 
@@ -16,10 +16,12 @@ In progress · TDD checkpoint pending.
 
 ## Validation
 
-- RED checkpoint: pending
-- `cargo test -p ramshared-wsl2d`: pending
-- Slice cover: pending
-- `./scripts/docs-check.sh`: pending
+- RED checkpoint: `2b743a91 test(origin): reproduce 5 GiB origin acceptance and under-capacity rejection gap`.
+- `cargo test -p ramshared-wsl2d --bin ramsharedd`: **98 passed, 0 failed**.
+- `cargo clippy -p ramshared-wsl2d --all-targets -- -D warnings`: exit 0.
+- `cargo fmt --all -- --check`: exit 0.
+- `./scripts/safety/test-control-plane-units.sh`: 100% PASS (13/13).
+- `./scripts/docs-check.sh`: exit 0 (`✓ docs-check OK`).
 
 ## Gaps
 

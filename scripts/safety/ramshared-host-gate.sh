@@ -89,7 +89,11 @@ if (
     or not isinstance(existing_wsl_swap_vhdx, str)
     or not re.fullmatch(r"[A-Za-z]:\\.+", existing_wsl_swap_vhdx)
     or origin_vhdx.casefold() == existing_wsl_swap_vhdx.casefold()
-    or manifest["fixed_size_bytes"] != 25 * 1024**3
+    or not isinstance(manifest["fixed_size_bytes"], int)
+    or manifest["fixed_size_bytes"] < 5 * 1024**3
+    or manifest["fixed_size_bytes"] > 64 * 1024**3
+    or manifest["fixed_size_bytes"] % (1024**3) != 0
+    or manifest["fixed_size_bytes"] < (logical + 1024) * 1024**2
     or not isinstance(logical, int) or logical < 1024 or logical > 24576 or logical % 1024
     or not isinstance(physical_cap, int) or physical_cap < 1024 or physical_cap > logical or physical_cap % 1024
     or manifest["chunk_mib"] != 128

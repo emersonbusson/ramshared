@@ -72,7 +72,7 @@
 - RF / DT: RF-1, RF-2, RF-3, DT-1, DT-2, DT-3.
 - Before -> After:
   `$OriginSize = 25GB` -> `$OriginSize = if ($PSBoundParameters.ContainsKey("OriginSizeBytes")) { $OriginSizeBytes } else { 5GB }`
-  `$ApprovalToken = "RAMSHARED_ORIGIN_25GIB_PARTUUID"` -> `$ApprovalToken = "RAMSHARED_ORIGIN_${($OriginSize / 1GB)}GIB_PARTUUID"`
+  Approval string derives `RAMSHARED_ORIGIN_${($OriginSize / 1GB)}GIB_PARTUUID` (replacing fixed `RAMSHARED_ORIGIN_25GIB_PARTUUID`)
 - Tests: `scripts/windows/Test-RamSharedOriginStatic.ps1`.
 
 **`scripts/safety/ramshared-host-gate.sh`**
