@@ -248,20 +248,34 @@ awk -v wanted="$partition_dev_t" '$3 == wanted { found=1 } END { exit(found ? 0 
 
 actual_bytes=$(blockdev --getsize64 "$origin_handle") || refuse ORIGIN_CAPACITY_UNAVAILABLE
 expected_bytes=$((logical_mib * 1024 * 1024))
+expected_kib=$((logical_mib * 1024))
 (( actual_bytes >= expected_bytes )) || refuse ORIGIN_CAPACITY_MISMATCH
 existing_type=$(blkid -s TYPE -o value "$origin_handle" 2>/dev/null || true)
 existing_uuid=$(blkid -s UUID -o value "$origin_handle" 2>/dev/null || true)
-if [[ $existing_type == swap && ${existing_uuid,,} == "$expected_uuid" ]]; then
+existing_last_page=$(python3 - "$origin_handle" <<'PY' 2>/dev/null || true
+import struct, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        f.seek(1028)
+        print(struct.unpack("<I", f.read(4))[0])
+except Exception:
+    pass
+PY
+)
+expected_last_page=$((logical_mib * 256 - 1))
+if [[ $existing_type == swap && ${existing_uuid,,} == "$expected_uuid" && $existing_last_page == "$expected_last_page" ]]; then
   printf 'RAMSHARED_ORIGIN_PROVISION=ALREADY_PROVISIONED\n'
   exit 0
 fi
-[[ -z $existing_type && -z $existing_uuid ]] || refuse FOREIGN_SIGNATURE_PRESENT
+if [[ -n $existing_type || -n $existing_uuid ]]; then
+  [[ $existing_type == swap && ${existing_uuid,,} == "$expected_uuid" ]] || refuse FOREIGN_SIGNATURE_PRESENT
+fi
 
 prove_origin_not_critical || refuse PREWRITE_ACTIVE_SWAP_REVALIDATION_FAILED
 awk -v wanted="$partition_dev_t" '$3 == wanted { found=1 } END { exit(found ? 0 : 1) }' \
   /proc/self/mountinfo && refuse PREWRITE_MOUNT_REVALIDATION_FAILED
 prove_origin_handle_identity || refuse PREWRITE_HANDLE_IDENTITY_MISMATCH
-/sbin/mkswap -L RAMSHARED -U "$expected_uuid" -- "$origin_handle"
+/sbin/mkswap -L RAMSHARED -U "$expected_uuid" -- "$origin_handle" "$expected_kib"
 prove_origin_handle_identity || refuse POSTWRITE_HANDLE_IDENTITY_MISMATCH
 [[ $(blkid -s TYPE -o value "$origin_handle") == swap ]] || refuse POSTWRITE_TYPE_MISMATCH
 [[ $(blkid -s UUID -o value "$origin_handle" | tr '[:upper:]' '[:lower:]') == "$expected_uuid" ]] || refuse POSTWRITE_UUID_MISMATCH
