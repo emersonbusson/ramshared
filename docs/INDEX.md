@@ -55,4 +55,5 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-relay-lifecycle-reliability`](specs/no-milestone/wsl2-relay-lifecycle-reliability/) | WSL2 Relay lifecycle reliability | — | microsoft/WSL#41242, microsoft/WSL#41286 | UNQUALIFIED | — |
 | [`wsl2-revocable-vram-origin`](specs/no-milestone/wsl2-revocable-vram-origin/) | Revocable VRAM cache with authoritative SSD origin | — | — | UNQUALIFIED | — |
 | [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | Microsoft-native N3 — Design | microsoft/WSL#41054, #197 | UNQUALIFIED | — |
+| [`wsl2-vmbus-anti-fragmentation-governor`](specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/) | WSL2 VMBus Anti-Fragmentation Governor and Dedicated Ring Pool Resilience | — | microsoft/WSL#8768, microsoft/WSL#40795 | UNQUALIFIED | — |
 | [`wsl2-vmbus-resilience`](specs/no-milestone/wsl2-vmbus-resilience/) | WSL2 Hyper-V VMBus Memory Headroom and Anti-Starvation Governor | — | microsoft/WSL#8768, microsoft/WSL#4166, microsoft/WSL#7254, microsoft/WSL#10495 | UNQUALIFIED | — |
