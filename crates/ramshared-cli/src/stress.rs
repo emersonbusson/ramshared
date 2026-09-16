@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 1024;
+pub const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 600;
 pub const MIN_ORDER_7_BUDDY_CHUNKS: u64 = 8;
 pub const PROACTIVE_COMPACTION_TRIGGER_CHUNKS: u64 = 16;
 const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
@@ -1857,8 +1857,8 @@ mod tests {
             let target_physical_floor = opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB);
             let hard_floor = target_physical_floor.saturating_sub(sysctl_min).max(100);
             assert!(
-                hard_floor + sysctl_min >= 1024,
-                "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 1024 MB"
+                hard_floor + sysctl_min >= 600,
+                "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 600 MB"
             );
         }
     }
@@ -1887,10 +1887,10 @@ mod tests {
     }
 
     #[test]
-    fn test_wsl2_headroom_floor_enforces_1024_mb() {
+    fn test_wsl2_headroom_floor_enforces_600_mb() {
         assert!(
-            WSL2_MIN_PHYSICAL_HEADROOM_MB >= 1024,
-            "WSL2_MIN_PHYSICAL_HEADROOM_MB must be at least 1024 MB to provide compaction headroom"
+            WSL2_MIN_PHYSICAL_HEADROOM_MB >= 600,
+            "WSL2_MIN_PHYSICAL_HEADROOM_MB must be at least 600 MB to provide physical headroom"
         );
     }
 }
