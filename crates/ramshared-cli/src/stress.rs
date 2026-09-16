@@ -20,7 +20,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 600;
+pub const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 1024;
+pub const MIN_ORDER_7_BUDDY_CHUNKS: u64 = 8;
+pub const PROACTIVE_COMPACTION_TRIGGER_CHUNKS: u64 = 16;
 const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
 const MULTI_TIER_MIN_USABLE_AVAIL_MB: u64 = 100;
 const SINGLE_TIER_MIN_USABLE_AVAIL_MB: u64 = 200;
@@ -343,6 +345,33 @@ pub fn read_sysctl_min_free_mb() -> u64 {
         .and_then(|s| s.trim().parse::<u64>().ok())
         .map(|kib| (kib + 512) / 1024)
         .unwrap_or(512)
+}
+
+pub fn parse_buddyinfo_order_7_chunks(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 15 && parts.get(3).copied() == Some("Normal") {
+            return parts.get(11).and_then(|s| s.parse::<u64>().ok());
+        }
+    }
+    None
+}
+
+pub fn read_buddyinfo_order_7() -> Option<u64> {
+    fs::read_to_string("/proc/buddyinfo")
+        .ok()
+        .and_then(|content| parse_buddyinfo_order_7_chunks(&content))
+}
+
+pub fn is_order_7_depleted(order_7_chunks: Option<u64>, threshold: u64) -> bool {
+    match order_7_chunks {
+        Some(count) => count < threshold,
+        None => false,
+    }
+}
+
+pub fn trigger_proactive_compaction() {
+    let _ = fs::write("/proc/sys/vm/compact_memory", "1\n");
 }
 
 pub fn read_psi_full() -> f64 {
@@ -828,6 +857,34 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 );
             }
             break;
+        }
+
+        if is_wsl2() {
+            if let Some(o7) = read_buddyinfo_order_7() {
+                if o7 < PROACTIVE_COMPACTION_TRIGGER_CHUNKS && o7 >= MIN_ORDER_7_BUDDY_CHUNKS {
+                    trigger_proactive_compaction();
+                } else if is_order_7_depleted(Some(o7), MIN_ORDER_7_BUDDY_CHUNKS) {
+                    if !opts.json {
+                        println!(
+                            "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛡️  BUDDY INTERLOCK   │",
+                            current_target,
+                            total_allocated_mb,
+                            peak_zram,
+                            peak_vram,
+                            peak_ssd,
+                            peak_total_swap,
+                            psi_full,
+                            lat_ms,
+                            reading.gauge
+                        );
+                        println!(
+                            "\n[🛡️ VMBUS BUDDY INTERLOCK] Order-7 physical memory depleted (<{} chunks, detected {}). Halted at {}% (Zero Hang Protection).",
+                            MIN_ORDER_7_BUDDY_CHUNKS, o7, max_safe_pct
+                        );
+                    }
+                    break;
+                }
+            }
         }
 
         if psi_full >= opts.max_psi_full {
@@ -1635,6 +1692,32 @@ mod tests {
         let _ = format!("{c1:?} {c2:?} {c3:?}");
         let lat = probe_allocation_latency_ms();
         assert!(lat >= 0.0);
+        let _ = read_buddyinfo_order_7();
+        trigger_proactive_compaction();
+        let _ = read_tier_disk_total_bytes();
+        let _ = is_wsl2();
+        let _ = read_sysctl_min_free_mb();
+    }
+
+    #[test]
+    fn executes_micro_stress_runs_json_and_telemetry() {
+        let opts_json = StressOptions {
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            interval_ms: 10,
+            hold_sec: 1,
+            min_ram_mb: 200,
+            battery: true,
+            json: true,
+            ..StressOptions::default()
+        };
+        assert!(run(&opts_json).is_ok());
+
+        let reading = compute_telemetry_reading(0.1, 0.5, 100, 1000, 10).with_tier_pcts(10, 20, 30);
+        assert_eq!(reading.tier1_zram_pct, 10);
+        assert_eq!(reading.tier2_vram_pct, 20);
+        assert_eq!(reading.tier3_ssd_pct, 30);
     }
 
     #[test]
@@ -1774,8 +1857,8 @@ mod tests {
             let target_physical_floor = opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB);
             let hard_floor = target_physical_floor.saturating_sub(sysctl_min).max(100);
             assert!(
-                hard_floor + sysctl_min >= 600,
-                "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 600 MB"
+                hard_floor + sysctl_min >= 1024,
+                "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 1024 MB"
             );
         }
     }
