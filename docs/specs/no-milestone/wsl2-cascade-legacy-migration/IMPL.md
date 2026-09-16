@@ -24,11 +24,11 @@ do not close a privileged WSL2 cascade migration.
 
 - RED checkpoint: `62506cf8 test(cli): reproduce legacy cascade migration command`.
 - `cargo test -p ramshared-cli --bin ramshared -- --test-threads=1`:
-  **275 passed, 0 failed** (36.39 s).
+  **280 passed, 0 failed** (64.15 s).
 - `cargo clippy -p ramshared-cli --all-targets -- -D warnings`: exit 0.
 - `cargo fmt --all -- --check`: exit 0.
-- Slice cover: `crates/ramshared-cli/src/cascade/mod.rs` **85.4%**
-  (1,724/2,018 lines), threshold 80%.
+- Slice cover: `crates/ramshared-cli/src/cascade/mod.rs` **86.0%**
+  (1,757/2,042 lines), threshold 80%.
 - `./scripts/docs-check.sh`: exit 0.
 - BINARY_MATCH or replaced-daemon listener proof and live watchdog evidence:
   pending.
@@ -48,8 +48,8 @@ panic/hung task observed during the supervised campaign.
 
 | RF | ITEM | Commit |
 | --- | --- | --- |
-| RF-1 | ITEM-1 | pending |
-| RF-2, RF-6 | ITEM-2 | pending |
-| RF-3, RF-5 | ITEM-3 | pending |
-| RF-4, RF-7 | ITEM-4 | pending |
-| NFR-1..5 | ITEM-5 | pending |
+| RF-1 | ITEM-1 | `317a3e00` |
+| RF-2, RF-6 | ITEM-2 | `317a3e00` |
+| RF-3, RF-5 | ITEM-3 | `317a3e00`, `37ff6cd8` |
+| RF-4, RF-7 | ITEM-4 | `317a3e00`, `dbcdc263`, `11baceee`, `b4a5b733` |
+| NFR-1..5 | ITEM-5 | `317a3e00` |
