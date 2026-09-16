@@ -958,7 +958,7 @@ test_product_off_and_ready_reject_other_installed_release_daemons() {
   clone_installed_release_fixture "$root" v1.2.4
   extra="$root/opt/ramshared/releases/v1.2.4"
   chmod 0755 "$extra/bin"
-  rm -- "$extra/bin/ramsharedd"
+  rm -f -- "$extra/bin/ramsharedd"
   chmod 0555 "$extra/bin"
   mkdir -p "$root/proc/4347"
   ln -s "$extra/bin/ramsharedd (deleted)" "$root/proc/4347/exe"
