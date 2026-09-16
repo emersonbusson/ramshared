@@ -348,23 +348,30 @@ fn device_kind_for_path(path: &str) -> Option<ManagedDeviceKind> {
     }
 }
 
+fn nbd_owner_policy_for_kind(kind: ManagedDeviceKind) -> NbdOwnerPolicy {
+    if kind == ManagedDeviceKind::Nbd {
+        NbdOwnerPolicy::PermitAbsent
+    } else {
+        NbdOwnerPolicy::RequireLive
+    }
+}
+
 fn observe_bound_device(
     path: &str,
     expected_kind: ManagedDeviceKind,
 ) -> Result<BoundDeviceIdentity, CascadeError> {
-    observe_bound_device_with_nbd_owner_policy(path, expected_kind, NbdOwnerPolicy::RequireLive)
+    observe_bound_device_with_nbd_owner_policy(
+        path,
+        expected_kind,
+        nbd_owner_policy_for_kind(expected_kind),
+    )
 }
 
 fn observe_legacy_bound_device(
     path: &str,
     expected_kind: ManagedDeviceKind,
 ) -> Result<BoundDeviceIdentity, CascadeError> {
-    let owner_policy = if expected_kind == ManagedDeviceKind::Nbd {
-        NbdOwnerPolicy::PermitAbsent
-    } else {
-        NbdOwnerPolicy::RequireLive
-    };
-    observe_bound_device_with_nbd_owner_policy(path, expected_kind, owner_policy)
+    observe_bound_device(path, expected_kind)
 }
 
 fn nbd_kernel_owner_identity(
@@ -3259,8 +3266,17 @@ pub fn migrate_legacy_cascade() -> Result<(), CascadeError> {
             daemon: &daemon,
         },
     )?;
+    retire_legacy_runtime_records(&paths);
     args.disk_baseline_kib = disk_swap_used_kib(&read_swaps()?);
     up_with_config(args)
+}
+
+fn retire_legacy_runtime_records(paths: &RuntimePaths) {
+    remove_runtime_file(&paths.socket);
+    remove_runtime_file(&paths.zram_dev_file);
+    remove_runtime_file(&paths.swap_dev_file);
+    remove_runtime_file(&paths.capacity_status_file);
+    remove_runtime_file(&paths.pid_file);
 }
 
 /// One local cascade-down step. The plan is pure: it contains no process,
@@ -5839,12 +5855,12 @@ mod tests {
     fn retire_legacy_runtime_records_removes_stale_legacy_evidence() {
         let dir = TestDir::new();
         let paths = RuntimePaths::under(&dir.path);
-        fs::create_dir_all(&paths.runtime_dir).unwrap();
-        fs::write(&paths.pid_file, "123\n").unwrap();
-        fs::write(&paths.swap_dev_file, "/dev/nbd0\n").unwrap();
-        fs::write(&paths.zram_dev_file, "/dev/zram0\n").unwrap();
-        fs::write(&paths.capacity_status_file, "1\n").unwrap();
-        fs::write(&paths.socket, "sock\n").unwrap();
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime dir fixture");
+        fs::write(&paths.pid_file, "123\n").expect("write pid fixture");
+        fs::write(&paths.swap_dev_file, "/dev/nbd0\n").expect("write swap fixture");
+        fs::write(&paths.zram_dev_file, "/dev/zram0\n").expect("write zram fixture");
+        fs::write(&paths.capacity_status_file, "1\n").expect("write capacity fixture");
+        fs::write(&paths.socket, "sock\n").expect("write socket fixture");
 
         assert!(paths.pid_file.exists());
         assert!(paths.swap_dev_file.exists());
