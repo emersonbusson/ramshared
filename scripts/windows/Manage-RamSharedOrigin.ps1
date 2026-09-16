@@ -24,7 +24,9 @@ param(
     [string]$OriginVhdxPath = "",
     [string]$ExistingSwapVhdxPath = "",
     [ValidatePattern('^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$')]
-    [string]$PARTUUID = "00000000-0000-0000-0000-000000000000"
+    [string]$PARTUUID = "00000000-0000-0000-0000-000000000000",
+    [ValidateRange(5GB, 64GB)]
+    [uint64]$OriginSizeBytes = 5GB
 )
 
 Set-StrictMode -Version Latest
@@ -78,13 +80,17 @@ $OriginVhdx = if ([string]::IsNullOrWhiteSpace($OriginVhdxPath)) {
 } else {
     Resolve-AbsoluteWindowsPath -Path $OriginVhdxPath -Name "OriginVhdxPath"
 }
-$OriginSize = 25GB
+$OriginSize = if ($PSBoundParameters.ContainsKey("OriginSizeBytes")) { [uint64]$OriginSizeBytes } else { 5GB }
+if (($OriginSize % 1GB) -ne 0 -or $OriginSize -lt 5GB -or $OriginSize -gt 64GB -or $OriginSize -lt [uint64](($LogicalCapacityMiB + 1024) * 1MB)) {
+    throw "origin container size must be whole GiB between 5 GiB and 64 GiB, and at least 1 GiB larger than logical capacity"
+}
+$OriginSizeGiB = [int]($OriginSize / 1GB)
 $ChunkMiB = 128
 $GpuReserveMinMiB = 2048
 $GpuReservePercent = 20
 $ManifestPath = "C:\ProgramData\RamShared\ramshared-origin-manifest.json"
 $BackupRoot = "C:\ProgramData\RamShared\ramshared-origin-backup"
-$ApprovalToken = "RAMSHARED_ORIGIN_25GIB_PARTUUID"
+$ApprovalToken = if ($OriginSize -eq 25GB) { "RAMSHARED_ORIGIN_25GIB_PARTUUID" } else { "RAMSHARED_ORIGIN_${OriginSizeGiB}GIB_PARTUUID" }
 $OwnershipProofSchema = 1
 $PartUuidWasSupplied = $PSBoundParameters.ContainsKey("PARTUUID")
 $LogicalCapacityWasSupplied = $PSBoundParameters.ContainsKey("LogicalCapacityMiB")
@@ -108,9 +114,10 @@ function Get-OriginConfigurationSha256 {
         [Parameter(Mandatory = $true)][int]$ManifestPhysicalCacheCapMiB,
         [Parameter(Mandatory = $true)][string]$ManifestPartUuid,
         [Parameter(Mandatory = $true)][string]$ManifestDiskGuid,
-        [Parameter(Mandatory = $true)][string]$ManifestExpectedSwapUuid
+        [Parameter(Mandatory = $true)][string]$ManifestExpectedSwapUuid,
+        [Parameter(Mandatory = $false)][uint64]$ManifestFixedSizeBytes = $OriginSize
     )
-    $text = "schema=3`norigin_vhdx=$OriginVhdx`nfixed_size_bytes=$OriginSize`nlogical_capacity_mib=$ManifestLogicalCapacityMiB`nphysical_cache_cap_mib=$ManifestPhysicalCacheCapMiB`nchunk_mib=$ChunkMiB`ngpu_reserve_min_mib=$GpuReserveMinMiB`ngpu_reserve_percent=$GpuReservePercent`npartuuid=$ManifestPartUuid`ndisk_guid=$ManifestDiskGuid`nexpected_swap_uuid=$ManifestExpectedSwapUuid`nownership_proof_schema=$OwnershipProofSchema`nexisting_wsl_swap_vhdx=$ExistingSwapVhdx`n"
+    $text = "schema=3`norigin_vhdx=$OriginVhdx`nfixed_size_bytes=$ManifestFixedSizeBytes`nlogical_capacity_mib=$ManifestLogicalCapacityMiB`nphysical_cache_cap_mib=$ManifestPhysicalCacheCapMiB`nchunk_mib=$ChunkMiB`ngpu_reserve_min_mib=$GpuReserveMinMiB`ngpu_reserve_percent=$GpuReservePercent`npartuuid=$ManifestPartUuid`ndisk_guid=$ManifestDiskGuid`nexpected_swap_uuid=$ManifestExpectedSwapUuid`nownership_proof_schema=$OwnershipProofSchema`nexisting_wsl_swap_vhdx=$ExistingSwapVhdx`n"
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
         return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace("-", "").ToLowerInvariant()
@@ -128,7 +135,7 @@ function Write-OriginManifest {
     }
     $directory = Split-Path -Parent $ManifestPath
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $configurationHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $LogicalCapacityMiB -ManifestPhysicalCacheCapMiB $PhysicalCacheCapMiB -ManifestPartUuid $PARTUUID -ManifestDiskGuid $DiskGuid -ManifestExpectedSwapUuid $ExpectedSwapUuid
+    $configurationHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $LogicalCapacityMiB -ManifestPhysicalCacheCapMiB $PhysicalCacheCapMiB -ManifestPartUuid $PARTUUID -ManifestDiskGuid $DiskGuid -ManifestExpectedSwapUuid $ExpectedSwapUuid -ManifestFixedSizeBytes $OriginSize
     $manifest = [ordered]@{ schema_version = 3; origin_vhdx = $OriginVhdx; fixed_size_bytes = $OriginSize; logical_capacity_mib = $LogicalCapacityMiB; physical_cache_cap_mib = $PhysicalCacheCapMiB; chunk_mib = $ChunkMiB; gpu_reserve_min_mib = $GpuReserveMinMiB; gpu_reserve_percent = $GpuReservePercent; partuuid = $PARTUUID; disk_guid = $DiskGuid; expected_swap_uuid = $ExpectedSwapUuid; ownership_proof_schema = $OwnershipProofSchema; existing_wsl_swap_vhdx = $ExistingSwapVhdx; configuration_sha256 = $configurationHash }
     $temporary = Join-Path $directory ((Split-Path -Leaf $ManifestPath) + "." + [Guid]::NewGuid().ToString("N") + ".tmp")
     try {
@@ -159,10 +166,10 @@ function Read-SealedOriginManifest {
     $partUuid = ([string]$manifest.partuuid).ToLowerInvariant()
     $diskGuid = ([string]$manifest.disk_guid).ToLowerInvariant()
     $expectedSwapUuid = ([string]$manifest.expected_swap_uuid).ToLowerInvariant()
-    if ($manifest.schema_version -ne 3 -or $manifest.origin_vhdx -cne $OriginVhdx -or $manifest.existing_wsl_swap_vhdx -cne $ExistingSwapVhdx -or $fixedSize -ne [uint64]$OriginSize -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
+    if ($manifest.schema_version -ne 3 -or $manifest.origin_vhdx -cne $OriginVhdx -or $manifest.existing_wsl_swap_vhdx -cne $ExistingSwapVhdx -or $fixedSize -lt 5GB -or $fixedSize -gt 64GB -or ($fixedSize % 1GB) -ne 0 -or $fixedSize -lt [uint64](($logical + 1024) * 1MB) -or ($PSBoundParameters.ContainsKey("OriginSizeBytes") -and $fixedSize -ne [uint64]$OriginSize) -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
         throw "sealed origin manifest policy mismatch"
     }
-    $actualHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $logical -ManifestPhysicalCacheCapMiB $physical -ManifestPartUuid $partUuid -ManifestDiskGuid $diskGuid -ManifestExpectedSwapUuid $expectedSwapUuid
+    $actualHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $logical -ManifestPhysicalCacheCapMiB $physical -ManifestPartUuid $partUuid -ManifestDiskGuid $diskGuid -ManifestExpectedSwapUuid $expectedSwapUuid -ManifestFixedSizeBytes $fixedSize
     if ($actualHash -cne [string]$manifest.configuration_sha256) { throw "sealed origin manifest configuration hash mismatch" }
     return $manifest
 }
@@ -170,7 +177,8 @@ function Read-SealedOriginManifest {
 function Get-OriginVhdxOwnershipProof {
     param([Parameter(Mandatory = $true)][string]$VhdxPath = $OriginVhdx)
     $vhd = Get-VHD -Path $VhdxPath -ErrorAction Stop
-    if ($null -eq $vhd -or [uint64]$vhd.Size -ne [uint64]$OriginSize -or [string]$vhd.VhdType -cne "Fixed") {
+    $vhdSize = [uint64]$vhd.Size
+    if ($null -eq $vhd -or $vhdSize -lt 5GB -or $vhdSize -gt 64GB -or ($vhdSize % 1GB) -ne 0 -or [string]$vhd.VhdType -cne "Fixed") {
         throw "origin VHDX does not match the sealed fixed-size policy"
     }
     $image = Get-DiskImage -ImagePath $VhdxPath -ErrorAction Stop

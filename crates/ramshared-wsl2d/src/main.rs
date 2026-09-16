@@ -1119,7 +1119,10 @@ fn validate_host_origin_manifest_bytes(
         .ok_or_else(|| "host origin manifest configuration SHA-256 is invalid".to_string())?;
     if host.schema_version != 3
         || host.ownership_proof_schema != 1
-        || host.fixed_size_bytes != 25 * GIB
+        || host.fixed_size_bytes < 5 * GIB
+        || host.fixed_size_bytes > 64 * GIB
+        || !host.fixed_size_bytes.is_multiple_of(GIB)
+        || host.fixed_size_bytes < (host.logical_capacity_mib as u64 + 1024) * 1024 * 1024
         || host.chunk_mib != 128
         || host.gpu_reserve_min_mib != 2048
         || host.gpu_reserve_percent != 20
@@ -6019,8 +6022,8 @@ mod tests {
         legacy_host.fixed_size_bytes = 25 * GIB;
         legacy_host.configuration_sha256 =
             sha256_hex(host_configuration_text(&legacy_host).as_bytes());
-        let legacy_bytes =
-            serde_json::to_vec(&legacy_host).expect("serialize legacy host origin manifest fixture");
+        let legacy_bytes = serde_json::to_vec(&legacy_host)
+            .expect("serialize legacy host origin manifest fixture");
         let mut legacy_sealed = sealed.clone();
         legacy_sealed.host_manifest_sha256 = sha256_hex(&legacy_bytes);
         legacy_sealed.configuration_sha256 = legacy_host.configuration_sha256.clone();

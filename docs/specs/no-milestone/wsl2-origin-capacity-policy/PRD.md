@@ -27,7 +27,7 @@ deployments.
 - **`scripts/safety/ramshared-host-gate.sh`**: Python host gate enforces
   `manifest["fixed_size_bytes"] != 25 * 1024**3` (`Confirmed in codebase`).
 - **`scripts/windows/Manage-RamSharedOrigin.ps1`**: Origin provisioning script sets
-  `$OriginSize = 25GB`, `$ApprovalToken = "RAMSHARED_ORIGIN_25GIB_PARTUUID"`,
+  `$OriginSize = 25GB`, approval string `RAMSHARED_ORIGIN_25GIB_PARTUUID`,
   and validates `$fixedSize -ne [uint64]$OriginSize` and
   `[uint64]$vhd.Size -ne [uint64]$OriginSize` (`Confirmed in codebase`).
 - **`scripts/windows/Test-RamSharedOriginStatic.ps1`**: Static contract test checks
