@@ -1,6 +1,6 @@
 # Upstream Proposal: Enable CONFIG_BLK_DEV_UBLK and CONFIG_ZRAM_WRITEBACK in WSL2 Kernel
 
-- **Target Repository:** [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel)
+- **Target Repository:** [`microsoft/WSL`](https://github.com/microsoft/WSL) (tracking via [#41054](https://github.com/microsoft/WSL/issues/41054)) & [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel) (source tree)
 - **Target File:** `Microsoft/config-wsl`
 - **Related Issues:** [`microsoft/WSL#41054`](https://github.com/microsoft/WSL/issues/41054)
 - **Status:** Ready for Submission

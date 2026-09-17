@@ -1,6 +1,6 @@
 # Upstream Proposal: Prevent Hyper-V VMBus Control-Plane Starvation and Balloon Thrash
 
-- **Target Repository:** [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel) (and cross-posted to [`microsoft/WSL`](https://github.com/microsoft/WSL))
+- **Target Repository:** [`microsoft/WSL`](https://github.com/microsoft/WSL/issues) (community issue tracking) & [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel) (kernel source)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Guest Drivers)
 - **Patch Reference:** [`docs/upstream/patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch`](../patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch)
 - **Status:** Ready for Submission
@@ -75,9 +75,9 @@ Auto-calibrates `vm.min_free_kbytes` during `late_initcall` via `ms_hyperv_init_
 
 ### B. Balloon Backpressure Under Pressure (`drivers/hv/hv_balloon.c`)
 Introduces memory availability checks before allocating balloon pages:
-- If `si_mem_available() < (min_free_kbytes * 2)`, `alloc_balloon_pages()` returns 0 (`-EBUSY`) with rate-limited warning:
+- If `si_mem_available() < (totalram_pages() / 32)` (~3.125% of total system RAM), `alloc_balloon_pages()` returns 0 with rate-limited warning:
   `hv_balloon: balloon inflation deferred; guest memory constrained`
-- Prevents host dynamic memory reclamation from thrashing the guest during high reclaim load.
+- Adheres strictly to Linux MM isolation rules without out-of-core `extern` dependencies while preventing host dynamic memory reclamation from thrashing the guest during high reclaim load.
 
 ---
 
@@ -115,7 +115,9 @@ See full patch file: [`docs/upstream/patches/0001-hv-vmbus-prevent-control-plane
 A complete, battle-tested reference implementation of this patch is live and maintained in the [emersonbusson/WSL2-Linux-Kernel](https://github.com/emersonbusson/WSL2-Linux-Kernel) repository:
 
 - **Repository:** [`emersonbusson/WSL2-Linux-Kernel`](https://github.com/emersonbusson/WSL2-Linux-Kernel)
-- **Reference Branch:** [`feature/ramshared-wsl2-resilience-6.18`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/feature/ramshared-wsl2-resilience-6.18)
-- **Patch Commit:** [`0c2098c96`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/0c2098c96)
+- **Reference Branches:** [`linux-msft-wsl-6.18.y`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/linux-msft-wsl-6.18.y) (default) & [`feature/ramshared-wsl2-resilience-6.18`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/feature/ramshared-wsl2-resilience-6.18)
+- **Patch Commits:**
+  - Initial VMBus Headroom Implementation: [`0c2098c96`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/0c2098c96)
+  - LKML MM `totalram_pages() / 32` Refactoring: [`2cdfad1d0`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/2cdfad1d0)
 - **Testing on Host:** Follow the deployment guide in the fork's README to point `.wslconfig` directly to the compiled kernel.
 
