@@ -1,6 +1,6 @@
 # Upstream Proposal: Add Virtual Memory Fallback for VMBus Ring Allocations Under Fragmentation
 
-- **Target Repository:** [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel) & `linux-hyperv` (LKML)
+- **Target Repository:** [`microsoft/WSL`](https://github.com/microsoft/WSL/issues) (community tracking) & Linux Hyper-V Subsystem (LKML)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Synthetic Transport)
 - **Patch Reference:** [`docs/upstream/patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch`](../patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch)
 - **Status:** Ready for Submission
@@ -77,8 +77,10 @@ In `vmbus_establish_gpa_range()`, virtually mapped non-contiguous pages are tran
 - The PFN list is passed to the Hyper-V host via the standard GPA descriptor table.
 - Because Hyper-V natively maps scattered PFNs into the guest channel ring, this is 100% transparent to the Windows host without any host changes.
 
-### C. Safe Teardown
+### C. Safe Teardown & Confidential VM (CoCo) Isolation
 In `vmbus_free_ring()`, virtually mapped buffers are released via `vfree()` while preserving `__free_pages()` for contiguous buffers.
+- For Confidential VMs (Azure CVM / AMD SEV-SNP), respects guest encryption state:
+  `if (!channel->ringbuffer_gpadlhandle.decrypted) vfree(channel->ringbuffer_page_virt);`.
 
 ---
 
@@ -109,7 +111,9 @@ See full patch file: [`docs/upstream/patches/0002-hv-vmbus-dedicated-ring-pool-a
 A complete, battle-tested reference implementation of this patch is live and maintained in the [emersonbusson/WSL2-Linux-Kernel](https://github.com/emersonbusson/WSL2-Linux-Kernel) repository:
 
 - **Repository:** [`emersonbusson/WSL2-Linux-Kernel`](https://github.com/emersonbusson/WSL2-Linux-Kernel)
-- **Reference Branch:** [`feature/ramshared-wsl2-resilience-6.18`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/feature/ramshared-wsl2-resilience-6.18)
-- **Patch Commit:** [`b0e154669`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/b0e154669)
+- **Reference Branches:** [`linux-msft-wsl-6.18.y`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/linux-msft-wsl-6.18.y) (default) & [`feature/ramshared-wsl2-resilience-6.18`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/feature/ramshared-wsl2-resilience-6.18)
+- **Patch Commits:**
+  - Initial Virtual Ring Buffer Fallback: [`b0e154669`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/b0e154669)
+  - CoCo VM Encryption & Lifecycle Hardening: [`2cdfad1d0`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/2cdfad1d0)
 - **Testing on Host:** Follow the deployment guide in the fork's README to point `.wslconfig` directly to the compiled kernel.
 
