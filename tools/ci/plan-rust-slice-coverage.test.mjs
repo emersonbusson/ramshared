@@ -159,7 +159,7 @@ const MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY = {
   kind: 'rust-ignored-test-relocation',
   spec: 'docs/specs/no-milestone/memory-broker/SPEC.md',
   files: ['crates/ramshared-wsl2d/src/backend.rs'],
-  base_revision: '8da76c94c67088d6e56e75286326238d3dcc2da7',
+  base_revision: 'b39013e815c68a5bdd79497e394fd32bb9c88233',
   base_source_sha256: 'b58d99366164b7e898baa42492fead82416a6169ec06ce16fb274b06b6d99663',
   verification: {
     source: 'crates/ramshared-wsl2d/src/backend.rs',
