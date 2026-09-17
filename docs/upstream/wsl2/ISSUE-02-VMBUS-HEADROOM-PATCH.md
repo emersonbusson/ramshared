@@ -107,3 +107,15 @@ Tested on physical hardware (WSL2 2.7.14.0, custom kernel `6.18.40.1-microsoft-s
 ## 6. Full Patch Reference
 
 See full patch file: [`docs/upstream/patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch`](../patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch).
+
+---
+
+## 7. Reference Implementation & Ready-to-Test Fork
+
+A complete, battle-tested reference implementation of this patch is live and maintained in the [emersonbusson/WSL2-Linux-Kernel](https://github.com/emersonbusson/WSL2-Linux-Kernel) repository:
+
+- **Repository:** [`emersonbusson/WSL2-Linux-Kernel`](https://github.com/emersonbusson/WSL2-Linux-Kernel)
+- **Reference Branch:** [`feature/ramshared-wsl2-resilience-6.18`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/feature/ramshared-wsl2-resilience-6.18)
+- **Patch Commit:** [`0c2098c96`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/0c2098c96)
+- **Testing on Host:** Follow the deployment guide in the fork's README to point `.wslconfig` directly to the compiled kernel.
+
