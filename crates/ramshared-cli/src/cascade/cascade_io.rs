@@ -5943,6 +5943,271 @@ mod tests {
     }
 
     #[test]
+    fn deleted_executable_path_handles_deleted_and_normal_links() {
+        assert_eq!(
+            deleted_executable_path(Path::new("/opt/ramshared/bin/ramsharedd (deleted)")),
+            Some(PathBuf::from("/opt/ramshared/bin/ramsharedd"))
+        );
+        assert_eq!(
+            deleted_executable_path(Path::new("/opt/ramshared/bin/ramsharedd")),
+            None
+        );
+        assert_eq!(deleted_executable_path(Path::new("ramsharedd")), None);
+    }
+
+    #[test]
+    fn sha256_file_hashes_exact_content_and_reports_missing_file() {
+        let dir = TestDir::new();
+        let file_path = dir.path.join("test_bin");
+        let content = b"sealed binary payload for test";
+        fs::write(&file_path, content).expect("write temp binary");
+
+        let hash = sha256_file(&file_path).expect("hash regular file");
+        let expected: [u8; 32] = Sha256::digest(content).into();
+        assert_eq!(hash, expected);
+
+        let missing = dir.path.join("nonexistent_bin");
+        assert!(sha256_file(&missing).is_err());
+    }
+
+    #[test]
+    fn legacy_runtime_record_value_validates_file_shape_and_content() {
+        let dir = TestDir::new();
+        let missing = dir.path.join("missing_record");
+        assert_eq!(
+            legacy_runtime_record_value(&missing).expect("missing record"),
+            None
+        );
+
+        let valid = dir.path.join("valid_record");
+        fs::write(&valid, "42\n").expect("write valid record");
+        let result = legacy_runtime_record_value(&valid);
+        if rustix::process::getuid().as_raw() == 0 {
+            assert_eq!(result.expect("valid record"), Some("42".into()));
+        } else {
+            assert!(result.is_err());
+        }
+
+        let malformed = dir.path.join("malformed_record");
+        fs::write(&malformed, "\n").expect("write empty record");
+        assert!(legacy_runtime_record_value(&malformed).is_err());
+    }
+
+    #[test]
+    fn plan_legacy_migration_transition_refuses_invalid_topologies() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let wrong_path = bound_device_fixture("/dev/nbd1", ManagedDeviceKind::Nbd);
+
+        let legacy_with_zram = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 4_140,
+                priority: 100,
+            }),
+        };
+
+        assert!(
+            plan_legacy_migration_transition(&legacy_with_zram, zram.clone(), Some(zram.clone()))
+                .is_err()
+        );
+        assert!(
+            plan_legacy_migration_transition(&legacy_with_zram, wrong_path, Some(zram.clone()))
+                .is_err()
+        );
+        assert!(plan_legacy_migration_transition(&legacy_with_zram, nbd.clone(), None).is_err());
+
+        let legacy_nbd_only = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: None,
+        };
+        assert!(
+            plan_legacy_migration_transition(&legacy_nbd_only, nbd.clone(), Some(zram)).is_err()
+        );
+
+        let plan = plan_legacy_migration_transition(&legacy_nbd_only, nbd, None)
+            .expect("plan nbd-only transition");
+        assert_eq!(plan.actions.len(), 3);
+    }
+
+    #[test]
+    fn legacy_regular_daemon_proof_validates_matching_and_refuses_mismatch() {
+        let digest = [0x7c; 32];
+        let legacy_executable = PathBuf::from("/usr/local/bin/ramsharedd");
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: legacy_executable.clone(),
+            canonical_executable: Some(legacy_executable.clone()),
+            executable_sha256: Some(digest),
+            arguments: vec![
+                "/usr/local/bin/ramsharedd".into(),
+                "--backend".into(),
+                "auto".into(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "4096".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ],
+            owns_legacy_listener: true,
+        };
+
+        assert!(
+            legacy_regular_daemon_proof(&observation, Some(&legacy_executable), &digest, 4096)
+                .is_some()
+        );
+
+        assert!(legacy_regular_daemon_proof(&observation, None, &digest, 4096).is_none());
+
+        assert!(
+            legacy_regular_daemon_proof(&observation, Some(&legacy_executable), &[0x11; 32], 4096)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn canonical_root_owned_daemon_refuses_nonexistent_and_unsealed() {
+        let dir = TestDir::new();
+        let nonexistent = dir.path.join("missing_daemon");
+        assert!(canonical_root_owned_daemon(nonexistent.to_str().expect("valid utf-8")).is_err());
+
+        let regular = dir.path.join("unsealed_daemon");
+        fs::write(&regular, b"binary content").expect("write daemon test file");
+        let result = canonical_root_owned_daemon(regular.to_str().expect("valid utf-8"));
+        if rustix::process::getuid().as_raw() != 0 {
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn execute_legacy_migration_transition_covers_all_action_variants() {
+        struct MockExecutor {
+            swapoff_calls: RefCell<usize>,
+            reset_zram_calls: RefCell<usize>,
+            disconnect_nbd_calls: RefCell<usize>,
+            stop_daemon_calls: RefCell<usize>,
+            fail_on: Option<String>,
+        }
+
+        impl LegacyMigrationExecutor for MockExecutor {
+            fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                *self.swapoff_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("swapoff") {
+                    Err(CascadeError::Precondition(format!(
+                        "swapoff failed for {}",
+                        device.path
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            fn reset_zram(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                *self.reset_zram_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("reset_zram") {
+                    Err(CascadeError::Precondition(format!(
+                        "reset_zram failed for {}",
+                        device.path
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            fn disconnect_nbd(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                *self.disconnect_nbd_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("disconnect_nbd") {
+                    Err(CascadeError::Precondition(format!(
+                        "disconnect_nbd failed for {}",
+                        device.path
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            fn stop_daemon(&self) -> Result<(), CascadeError> {
+                *self.stop_daemon_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("stop_daemon") {
+                    Err(CascadeError::Precondition("stop_daemon failed".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let transition = LegacyMigrationTransition {
+            actions: vec![
+                LegacyMigrationAction::Swapoff(zram.clone()),
+                LegacyMigrationAction::Swapoff(nbd.clone()),
+                LegacyMigrationAction::ResetZram(zram.clone()),
+                LegacyMigrationAction::DisconnectNbd(nbd.clone()),
+                LegacyMigrationAction::StopDaemon,
+            ],
+        };
+
+        let executor = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: None,
+        };
+
+        assert!(execute_legacy_migration_transition(&transition, &executor).is_ok());
+        assert_eq!(*executor.swapoff_calls.borrow(), 2);
+        assert_eq!(*executor.reset_zram_calls.borrow(), 1);
+        assert_eq!(*executor.disconnect_nbd_calls.borrow(), 1);
+        assert_eq!(*executor.stop_daemon_calls.borrow(), 1);
+
+        let failing_reset = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: Some("reset_zram".into()),
+        };
+        assert!(execute_legacy_migration_transition(&transition, &failing_reset).is_err());
+
+        let failing_disc = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: Some("disconnect_nbd".into()),
+        };
+        assert!(execute_legacy_migration_transition(&transition, &failing_disc).is_err());
+
+        let failing_stop = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: Some("stop_daemon".into()),
+        };
+        assert!(execute_legacy_migration_transition(&transition, &failing_stop).is_err());
+    }
+
+    #[test]
+    fn legacy_drain_budget_checks_overflow_and_boundaries() {
+        assert!(legacy_drain_budget_is_sufficient(0, 1024, 0));
+        assert!(!legacy_drain_budget_is_sufficient(u64::MAX, 1024, 1024));
+        assert!(!legacy_drain_budget_is_sufficient(1024, 1024, u64::MAX));
+    }
+
+    #[test]
     fn down_refuses_foreign_live_device_without_running_a_command() {
         let fixture = TestDir::new();
         let daemon = spawn_fixture_daemon(&fixture, "exit 0");
@@ -6713,6 +6978,261 @@ mod tests {
 
         assert_eq!(command_label("test", &["a", "b"]), "test a b");
         assert_eq!(command_label("test", &[]), "test");
+    }
+
+    #[test]
+    fn legacy_runtime_records_are_compatible_validates_files() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime dir");
+
+        let legacy_with_zram = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 0,
+                priority: 100,
+            }),
+        };
+        let daemon = LegacyDaemonIdentity {
+            pid: 4242,
+            instance_id: "4242-100".into(),
+            executable: PathBuf::from("/usr/local/bin/ramsharedd"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+
+        // None present is compatible (optional legacy records)
+        assert!(legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_ok());
+
+        // When a record is written by non-root, legacy_runtime_record_value rejects it (not root-owned)
+        fs::write(&paths.pid_file, "4242\n").expect("write pid");
+        if rustix::process::getuid().as_raw() == 0 {
+            fs::write(&paths.swap_dev_file, "/dev/nbd0\n").expect("write swap");
+            fs::write(&paths.zram_dev_file, "/dev/zram0\n").expect("write zram");
+            assert!(
+                legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_ok()
+            );
+
+            // Mismatched PID
+            fs::write(&paths.pid_file, "9999\n").expect("write bad pid");
+            assert!(
+                legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_err()
+            );
+        } else {
+            assert!(
+                legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn process_socket_and_listener_probes_cover_live_and_dead_pids() {
+        let my_pid = std::process::id();
+        let inodes = process_socket_inodes(my_pid);
+        assert!(inodes.is_ok());
+
+        assert!(process_socket_inodes(999_999_999).is_err());
+
+        let listener_inodes = legacy_listener_socket_inodes();
+        assert!(listener_inodes.is_ok());
+
+        let owns = process_owns_legacy_listener(my_pid);
+        assert!(owns.is_ok());
+    }
+
+    #[test]
+    fn read_legacy_daemon_observation_covers_current_process_and_refuses_missing() {
+        let my_pid = std::process::id();
+        let obs = read_legacy_daemon_observation(my_pid).expect("current process observation");
+        assert_eq!(obs.uid, rustix::process::getuid().as_raw());
+        assert!(obs.executable_sha256.is_some());
+        assert!(!obs.arguments.is_empty());
+
+        assert!(read_legacy_daemon_observation(999_999_999).is_err());
+    }
+
+    #[test]
+    fn revalidate_and_stop_legacy_daemon_refuse_unverifiable_daemons() {
+        let fake_dead = LegacyDaemonIdentity {
+            pid: 999_999_999,
+            instance_id: "999999999-100".into(),
+            executable: PathBuf::from("/bin/sh"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+        assert!(revalidate_legacy_daemon(&fake_dead).is_err());
+        assert!(stop_legacy_daemon(&fake_dead).is_err());
+
+        let fake_legacy = LegacyDaemonIdentity {
+            pid: 999_999_999,
+            instance_id: "999999999-100".into(),
+            executable: PathBuf::from("/bin/sh"),
+            proof: LegacyDaemonProof::LegacyPathHashMatch {
+                legacy_executable: PathBuf::from("/nonexistent/ramsharedd"),
+                executable_sha256: [0u8; 32],
+                slice_mb: 4096,
+            },
+        };
+        assert!(revalidate_legacy_daemon(&fake_legacy).is_err());
+    }
+
+    #[test]
+    fn revalidate_legacy_bound_device_checks_exact_identity() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        assert!(revalidate_legacy_bound_device(&nbd).is_ok());
+
+        let mut mutated = nbd;
+        mutated.dev_t = "99:99".into();
+        assert!(revalidate_legacy_bound_device(&mutated).is_err());
+    }
+
+    #[test]
+    fn read_kernel_free_floor_kib_reads_sysfs_when_available() {
+        if Path::new("/proc/sys/vm/min_free_kbytes").exists() {
+            let floor = read_kernel_free_floor_kib().expect("read floor");
+            assert!(floor > 0);
+        }
+    }
+
+    #[test]
+    fn authorize_legacy_effect_validates_ghosts_and_presence() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let legacy = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 0,
+                priority: 100,
+            }),
+        };
+
+        // Ghost swap present
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0 (deleted)\tpartition\t4194300\t0\t50\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_err());
+        }
+
+        // Unexpected swap present
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0\tpartition\t4194300\t0\t50\n/dev/nbd9\tpartition\t4194300\t0\t40\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_err());
+        }
+
+        // Target device absent
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/zram0\tpartition\t1048572\t0\t100\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_err());
+        }
+
+        // Both present and matching
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0\tpartition\t4194300\t0\t50\n/dev/zram0\tpartition\t1048572\t0\t100\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_ok());
+            assert!(authorize_legacy_effect(&legacy, &zram).is_ok());
+        }
+    }
+
+    #[test]
+    fn runtime_legacy_migration_executor_exercises_all_transition_steps() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let legacy = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 0,
+                priority: 100,
+            }),
+        };
+        let daemon = LegacyDaemonIdentity {
+            pid: 999_999_999,
+            instance_id: "999999999-100".into(),
+            executable: PathBuf::from("/bin/sh"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+
+        let runner = ScriptedRunner::new(vec![
+            ("swapoff -- /dev/nbd0".into(), Ok(String::new())),
+            ("zramctl -r /dev/zram0".into(), Ok(String::new())),
+            ("nbd-client -d /dev/nbd0".into(), Ok(String::new())),
+        ]);
+
+        let executor = RuntimeLegacyMigrationExecutor {
+            runner: &runner,
+            legacy: &legacy,
+            daemon: &daemon,
+        };
+
+        // Swapoff sequence with seams
+        {
+            let _seams = ParentSeams::install("", 0);
+            set_swap_snapshots([
+                Ok("Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0\tpartition\t4194300\t0\t50\n"),
+                Ok("Filename\tType\tSize\tUsed\tPriority\n"),
+            ]);
+            assert!(executor.swapoff(&nbd).is_ok());
+        }
+
+        // Reset zram when swap absent
+        {
+            let _seams = ParentSeams::install("Filename\tType\tSize\tUsed\tPriority\n", 0);
+            assert!(executor.reset_zram(&zram).is_ok());
+            assert!(executor.disconnect_nbd(&nbd).is_ok());
+        }
+
+        // Stop daemon fails for dead PID
+        assert!(executor.stop_daemon().is_err());
+    }
+
+    #[test]
+    fn migrate_legacy_cascade_fails_closed_without_active_legacy_setup() {
+        assert!(migrate_legacy_cascade().is_err());
+    }
+
+    #[test]
+    fn read_lifecycle_binding_refuses_unsealed_or_malformed() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        assert!(read_lifecycle_binding(&paths).is_err());
+
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime dir");
+        fs::write(&paths.lifecycle_binding_file, b"not valid json").expect("write binding file");
+        fs::set_permissions(
+            &paths.lifecycle_binding_file,
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("set mode");
+        assert!(read_lifecycle_binding(&paths).is_err());
     }
 
     #[test]
