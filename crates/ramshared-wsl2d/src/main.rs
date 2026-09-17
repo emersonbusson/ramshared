@@ -4557,14 +4557,11 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
 /// On shared-memory environments (such as WSL2/dxgkrnl), GPU VRAM is shared between the host OS
 /// display manager (DWM), host applications, and WSL2. Allocating too much VRAM starves the host
 /// GPU memory manager, leading to driver timeouts (TDR) and system deadlocks.
-/// Rules:
-/// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
-///   environment, and no clamping is applied.
-/// - HOST_RESERVE_FLOOR = max(1536 MB, total_vram * 20%) preserves dedicated headroom for the
-///   host Desktop Window Manager (DWM) while allowing a full 4 GiB slice on 6GB+ GPUs (SSDV3 Principle 11).
 /// Calculates the maximum safe VRAM slice size (in bytes) to prevent GPU starvation.
 ///
 /// Ensures:
+/// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
+///   environment, and no clamping is applied.
 /// - Windows Host DWM and desktop apps retain at least `max(1536 MiB, 20% of total VRAM)`.
 /// - If `free_vram` is known, allocation strictly respects runtime free headroom (768 MiB)
 ///   to prevent runtime CUDA/DirectX allocation failures under external graphics pressure (SPEC §DT-1).
