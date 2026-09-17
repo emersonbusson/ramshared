@@ -502,6 +502,38 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/elastic_cache.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-block/src/lib.rs",
+          "crates/ramshared-wsl2d/src/governor.rs",
+          "crates/ramshared-wsl2d/src/lib.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/elastic-vram-cooperative-tier/IMPL.md",
+        "prd": "docs/specs/no-milestone/elastic-vram-cooperative-tier/PRD.md",
+        "spec": "docs/specs/no-milestone/elastic-vram-cooperative-tier/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "elastic-vram-cooperative-tier"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
           "scripts/p0/Invoke-ExternalGpuWddmPressureAudit.ps1",
           "scripts/p0/Invoke-GpuWorkloadGate.ps1",
           "scripts/p0/Test-ExternalGpuWddmPressureAuditStatic.ps1"

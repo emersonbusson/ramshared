@@ -24,6 +24,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | UNQUALIFIED | — |
 | [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | PARTIAL | — |
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
+| [`elastic-vram-cooperative-tier`](specs/no-milestone/elastic-vram-cooperative-tier/) | Elastic cooperative VRAM tiering, dynamic host borrowing, and non-blocking SSD spillover | — | — | UNQUALIFIED | — |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED | — |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD | — |
 | [`kernel-pci-bar-capacity-contract`](specs/no-milestone/kernel-pci-bar-capacity-contract/) | Exact PCI BAR capacity contract for the RamShared block driver | — | — | UNQUALIFIED | — |

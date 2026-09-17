@@ -9,6 +9,7 @@ pub mod broker_srv;
 pub mod canary_probe;
 pub mod conn;
 pub mod demote_status;
+pub mod governor;
 pub mod residency;
 pub mod state;
 pub mod swap;
@@ -26,6 +27,7 @@ pub use demote_status::{
     DEMOTE_STATUS_PATH, DemoteStatusFile, parse_demote_status, render_demote_status_json,
     write_demote_status,
 };
+pub use governor::{DynamicHeadroomGovernor, HeadroomZone};
 pub use residency::{Canary, DemoteReason, ResidencyConfig, ResidencySampler, Verdict};
 pub use state::State;
 pub use telemetry::{

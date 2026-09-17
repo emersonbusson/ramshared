@@ -9,6 +9,7 @@
 //! root + device) — this lib is only the protocol and logic.
 #![forbid(unsafe_code)]
 
+pub mod elastic_cache;
 pub mod handshake;
 pub mod inflight;
 pub mod isolated_origin;
@@ -18,6 +19,9 @@ pub mod request;
 pub mod sparse_vram;
 pub mod vram_backend;
 
+pub use elastic_cache::{
+    ELASTIC_CHUNK_BYTES, ElasticCacheConfig, ElasticExtentTable, ElasticVramCache,
+};
 pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
 pub use isolated_origin::{
