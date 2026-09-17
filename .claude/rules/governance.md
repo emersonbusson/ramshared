@@ -80,7 +80,7 @@ systems or other repositories.
 ## Release, Packaging & Reliability Gap Parity
 
 1. **Stable Release Alignment**:
-   - Production posture is strictly stable (`v0.13.4`). No beta or prerelease flags remain on public releases.
+   - Production posture is strictly stable (`v0.14.0`). No beta or prerelease flags remain on public releases.
    - Package build scripts (`scripts/package/build-deb-package.sh`, `build-rpm-package.sh`), documentation badges (`README.md`, `README.pt-BR.md`), and manifests (`docs/localization/manifest.json`) must stay synchronized with the active release tag.
 2. **Semantic Gap Register Governance**:
    - `docs/reliability/GAP-REGISTER.md` must accurately reflect real CI and repository state.
