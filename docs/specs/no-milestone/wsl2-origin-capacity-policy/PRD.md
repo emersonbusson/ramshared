@@ -147,7 +147,7 @@ deployments.
 ## 12. Out of scope
 
 - Dynamic VHDX conversion or runtime compacting.
-- Altering the WSL2 root disk (`/dev/sdc`) or fallback swap (`/dev/sdb`).
+- Altering the WSL2 root disk or fallback swap device.
 - Live in-place resizing of an attached origin VHDX without re-provisioning.
 
 ## 13. Acceptance criteria

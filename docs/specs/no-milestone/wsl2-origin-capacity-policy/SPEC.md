@@ -12,7 +12,7 @@
 - Unit tests covering 5 GiB acceptance, 25 GiB backward compatibility, and under-capacity rejection.
 
 ### Out now
-- Dynamic VHDX expansion; modifying WSL2 fallback swap (`/dev/sdb`); automated live partition resize.
+- Dynamic VHDX expansion; modifying WSL2 fallback swap device; automated live partition resize.
 
 ### Assumed-ready dependencies
 - Windows Hyper-V PowerShell module (`New-VHD`, `Mount-VHD`, `Initialize-Disk`, `New-Partition`).
