@@ -195,7 +195,32 @@
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test -p ramshared-block -p ramshared-wsl2d`
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80`
+- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80 --report-json tmp/elastic-vram-cooperative-tier-cov.json`
 - [ ] `./scripts/docs-check.sh`
 - [ ] Every matrix row has a real test name
 - [ ] Kahneman critical rows have executable evidence
+
+<!-- rust-slice-structural-contract-v1
+{
+  "schema_version": 1,
+  "id": "elastic-vram-cooperative-tier-structural",
+  "kind": "rust-structural-contract",
+  "files": [
+    "crates/ramshared-wsl2d/src/lib.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-wsl2d/src/lib.rs",
+      "package": "ramshared-wsl2d",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-wsl2d",
+        "--lib"
+      ]
+    }
+  ]
+}
+-->
+
