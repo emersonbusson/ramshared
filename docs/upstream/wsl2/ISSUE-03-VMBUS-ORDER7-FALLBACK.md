@@ -101,3 +101,15 @@ In `vmbus_free_ring()`, virtually mapped buffers are released via `vfree()` whil
 ## 6. Full Patch Reference
 
 See full patch file: [`docs/upstream/patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch`](../patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch).
+
+---
+
+## 7. Reference Implementation & Ready-to-Test Fork
+
+A complete, battle-tested reference implementation of this patch is live and maintained in the [emersonbusson/WSL2-Linux-Kernel](https://github.com/emersonbusson/WSL2-Linux-Kernel) repository:
+
+- **Repository:** [`emersonbusson/WSL2-Linux-Kernel`](https://github.com/emersonbusson/WSL2-Linux-Kernel)
+- **Reference Branch:** [`feature/ramshared-wsl2-resilience-6.18`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/feature/ramshared-wsl2-resilience-6.18)
+- **Patch Commit:** [`b0e154669`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/b0e154669)
+- **Testing on Host:** Follow the deployment guide in the fork's README to point `.wslconfig` directly to the compiled kernel.
+

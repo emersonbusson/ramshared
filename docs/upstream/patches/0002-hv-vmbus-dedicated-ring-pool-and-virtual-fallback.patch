@@ -1,113 +1,168 @@
+From b0e1546697178e01cf77326703d9d193d5b46e8d Mon Sep 17 00:00:00 2001
 From: Emerson Busson
-Subject: [PATCH] hv: vmbus: add virtual memory fallback and dedicated pool for ring buffer allocations under memory pressure
-Date: Wed, 16 Sep 2026 07:50:00 -0300
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
-
-Under Microsoft WSL2 and Hyper-V guest environments, memory-intensive
-workloads causing buddy allocator fragmentation frequently exhaust high-order
-contiguous physical page allocations (specifically order-7, 512 KiB contiguous
-chunks required by Hyper-V VMBus sockets and synthetic channels).
-
-When `vmbus_alloc_ring()` attempts to allocate high-order pages using
-`alloc_pages(GFP_KERNEL | __GFP_ZERO, order)`, the buddy allocator fails
-with `page allocation failure: order:7, mode:0xdc0` under fragmentation, even
-when multiple gigabytes of memory remain free or swappable.
-
-Because `vmbus_open()` / `hvs_probe()` fails to allocate the ring buffer,
-the Hyper-V socket communication channel cannot be established. This causes
-the host Windows Compute System (HCS) and `wslservice.exe` to deadlock or
-timeout, ultimately hanging the guest and triggering `Wsl/Service/E_UNEXPECTED`
-or unrecoverable VM freeze.
-
-This patch introduces a virtual memory fallback (`vzalloc` / `vzalloc_node`)
-and dedicated ring page allocation fallback mechanism:
-1. In `drivers/hv/ring_buffer.c`, if `alloc_pages_node()` or `alloc_pages()`
-   fails to provide physically contiguous pages for orders > 0, fall back to
-   `vzalloc_node()` / `vzalloc()` with `__GFP_ZERO`.
-2. Marks the channel ring buffer as virtually allocated (`is_virt_allocated`)
-   so that `vmbus_free_ring()` safely releases via `vfree()` rather than
-   `__free_pages()`.
-3. In `vmbus_establish_gpa_range()`, gracefully translates virtually mapped
-   pages using `vmalloc_to_page()` into the PFN list passed to the Hyper-V host,
-   enabling the host to map the fragmented physical pages seamlessly into
-   guest physical address space.
+Date: Thu, 17 Sep 2026 10:28:10 -0300
+Subject: [PATCH] hv: vmbus: add virtual memory fallback for ring buffer
+ allocations under memory pressure
 
 Signed-off-by: Emerson Busson
 ---
- drivers/hv/channel.c     | 18 ++++++++++++++++--
- drivers/hv/hyperv_vmbus.h |  1 +
- drivers/hv/ring_buffer.c | 30 ++++++++++++++++++++++++++----
- include/linux/hyperv.h   |  1 +
- 4 files changed, 44 insertions(+), 6 deletions(-)
+ drivers/hv/channel.c      | 39 +++++++++++++++++++++++++++++++++------
+ drivers/hv/hyperv_vmbus.h |  2 +-
+ drivers/hv/ring_buffer.c  | 19 ++++++++++++++-----
+ include/linux/hyperv.h    |  2 ++
+ 4 files changed, 50 insertions(+), 12 deletions(-)
 
-diff --git a/drivers/hv/ring_buffer.c b/drivers/hv/ring_buffer.c
-index a2d49b1e0..3f2b1897c 100644
---- a/drivers/hv/ring_buffer.c
-+++ b/drivers/hv/ring_buffer.c
-@@ -19,6 +19,7 @@
- #include <linux/slab.h>
+diff --git a/drivers/hv/channel.c b/drivers/hv/channel.c
+index 162d6aeec..f1aa8100a 100644
+--- a/drivers/hv/channel.c
++++ b/drivers/hv/channel.c
+@@ -12,6 +12,7 @@
+ #include <linux/sched.h>
+ #include <linux/wait.h>
  #include <linux/mm.h>
- #include <linux/hyperv.h>
 +#include <linux/vmalloc.h>
- #include <linux/io.h>
- #include "hyperv_vmbus.h"
-
-@@ -45,15 +46,36 @@ int vmbus_alloc_ring(struct vmbus_channel *newchannel,
- 	pages = alloc_pages_node(cpu_to_node(newchannel->target_cpu),
- 				 GFP_KERNEL|__GFP_ZERO, order);
-
--	if (!pages)
-+	if (!pages) {
- 		pages = alloc_pages(GFP_KERNEL|__GFP_ZERO, order);
-+	}
-
--	if (!pages)
+ #include <linux/slab.h>
+ #include <linux/module.h>
+ #include <linux/hyperv.h>
+@@ -153,13 +154,18 @@ void vmbus_free_ring(struct vmbus_channel *channel)
+ 	hv_ringbuffer_cleanup(&channel->outbound);
+ 	hv_ringbuffer_cleanup(&channel->inbound);
+ 
+-	if (channel->ringbuffer_page) {
++	if (channel->ringbuffer_is_vmalloc && channel->ringbuffer_page_virt) {
++		vfree(channel->ringbuffer_page_virt);
++		channel->ringbuffer_page_virt = NULL;
++		channel->ringbuffer_is_vmalloc = false;
++	} else if (channel->ringbuffer_page) {
+ 		/* In a CoCo VM leak the memory if it didn't get re-encrypted */
+ 		if (!channel->ringbuffer_gpadlhandle.decrypted)
+ 			__free_pages(channel->ringbuffer_page,
+ 			     get_order(channel->ringbuffer_pagecount
+ 				       << PAGE_SHIFT));
+ 		channel->ringbuffer_page = NULL;
++		channel->ringbuffer_page_virt = NULL;
+ 	}
+ }
+ EXPORT_SYMBOL_GPL(vmbus_free_ring);
+@@ -182,10 +188,26 @@ int vmbus_alloc_ring(struct vmbus_channel *newchannel,
+ 	if (!page)
+ 		page = alloc_pages(GFP_KERNEL|__GFP_ZERO, order);
+ 
+-	if (!page)
 -		return -ENOMEM;
-+	if (!pages) {
-+		/* Fallback to non-contiguous virtual allocation under buddy fragmentation */
++	if (!page) {
++		/* Fallback to virtual memory allocation under buddy fragmentation */
 +		void *virt_addr = vzalloc_node(send_size + recv_size,
 +					       cpu_to_node(newchannel->target_cpu));
++
 +		if (!virt_addr)
 +			virt_addr = vzalloc(send_size + recv_size);
++
 +		if (!virt_addr)
 +			return -ENOMEM;
 +
++		newchannel->ringbuffer_page = NULL;
 +		newchannel->ringbuffer_page_virt = virt_addr;
-+		newchannel->ringbuffer_pages = NULL;
-+		newchannel->ringbuffer_order = order;
 +		newchannel->ringbuffer_is_vmalloc = true;
-+		goto setup_rings;
++	} else {
++		newchannel->ringbuffer_page = page;
++		newchannel->ringbuffer_page_virt = page_address(page);
++		newchannel->ringbuffer_is_vmalloc = false;
 +	}
-
- 	newchannel->ringbuffer_pages = pages;
- 	newchannel->ringbuffer_order = order;
- 	newchannel->ringbuffer_page_virt = page_address(pages);
-+	newchannel->ringbuffer_is_vmalloc = false;
+ 
+-	newchannel->ringbuffer_page = page;
+ 	newchannel->ringbuffer_pagecount = (send_size + recv_size) >> PAGE_SHIFT;
+ 	newchannel->ringbuffer_send_offset = send_size >> PAGE_SHIFT;
+ 
+@@ -669,6 +691,8 @@ static int __vmbus_open(struct vmbus_channel *newchannel,
+ 	newchannel->ringbuffer_gpadlhandle.gpadl_handle = 0;
+ 
+ 	err = __vmbus_establish_gpadl(newchannel, HV_GPADL_RING,
++				      newchannel->ringbuffer_page_virt ?
++				      newchannel->ringbuffer_page_virt :
+ 				      page_address(newchannel->ringbuffer_page),
+ 				      (send_pages + recv_pages) << PAGE_SHIFT,
+ 				      newchannel->ringbuffer_send_offset << PAGE_SHIFT,
+@@ -677,11 +701,14 @@ static int __vmbus_open(struct vmbus_channel *newchannel,
+ 		goto error_clean_ring;
+ 
+ 	err = hv_ringbuffer_init(&newchannel->outbound,
+-				 page, send_pages, 0);
++				 page, newchannel->ringbuffer_page_virt,
++				 send_pages, 0);
+ 	if (err)
+ 		goto error_free_gpadl;
+ 
+-	err = hv_ringbuffer_init(&newchannel->inbound, &page[send_pages],
++	err = hv_ringbuffer_init(&newchannel->inbound,
++				 page ? &page[send_pages] : NULL,
++				 newchannel->ringbuffer_page_virt ? (newchannel->ringbuffer_page_virt + (send_pages << PAGE_SHIFT)) : NULL,
+ 				 recv_pages, newchannel->max_pkt_size);
+ 	if (err)
+ 		goto error_free_gpadl;
+diff --git a/drivers/hv/hyperv_vmbus.h b/drivers/hv/hyperv_vmbus.h
+index 34943de7d..ec06c30d2 100644
+--- a/drivers/hv/hyperv_vmbus.h
++++ b/drivers/hv/hyperv_vmbus.h
+@@ -182,7 +182,7 @@ extern int hv_synic_cleanup(unsigned int cpu);
+ void hv_ringbuffer_pre_init(struct vmbus_channel *channel);
+ 
+ int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
+-		       struct page *pages, u32 pagecnt, u32 max_pkt_size);
++		       struct page *pages, void *virt_addr, u32 pagecnt, u32 max_pkt_size);
+ 
+ void hv_ringbuffer_cleanup(struct hv_ring_buffer_info *ring_info);
+ 
+diff --git a/drivers/hv/ring_buffer.c b/drivers/hv/ring_buffer.c
+index 23ce1fb70..e6d4cf185 100644
+--- a/drivers/hv/ring_buffer.c
++++ b/drivers/hv/ring_buffer.c
+@@ -184,7 +184,7 @@ void hv_ringbuffer_pre_init(struct vmbus_channel *channel)
+ 
+ /* Initialize the ring buffer. */
+ int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
+-		       struct page *pages, u32 page_cnt, u32 max_pkt_size)
++		       struct page *pages, void *virt_addr, u32 page_cnt, u32 max_pkt_size)
+ {
+ 	struct page **pages_wraparound;
+ 	int i;
+@@ -201,10 +201,19 @@ int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
+ 	if (!pages_wraparound)
+ 		return -ENOMEM;
+ 
+-	pages_wraparound[0] = pages;
+-	for (i = 0; i < 2 * (page_cnt - 1); i++)
+-		pages_wraparound[i + 1] =
+-			&pages[i % (page_cnt - 1) + 1];
++	if (virt_addr && is_vmalloc_addr(virt_addr)) {
++		pages_wraparound[0] = vmalloc_to_page(virt_addr);
++		for (i = 0; i < 2 * (page_cnt - 1); i++) {
++			void *curr_virt = virt_addr + ((i % (page_cnt - 1) + 1) << PAGE_SHIFT);
 +
-+setup_rings:
-+	return 0;
-+}
-+
-+void vmbus_free_ring(struct vmbus_channel *channel)
-+{
-+	if (channel->ringbuffer_is_vmalloc) {
-+		vfree(channel->ringbuffer_page_virt);
-+	} else if (channel->ringbuffer_pages) {
-+		__free_pages(channel->ringbuffer_pages, channel->ringbuffer_order);
++			pages_wraparound[i + 1] = vmalloc_to_page(curr_virt);
++		}
++	} else {
++		pages_wraparound[0] = pages;
++		for (i = 0; i < 2 * (page_cnt - 1); i++)
++			pages_wraparound[i + 1] =
++				&pages[i % (page_cnt - 1) + 1];
 +	}
-+	channel->ringbuffer_page_virt = NULL;
-+	channel->ringbuffer_pages = NULL;
-+}
+ 
+ 	ring_info->ring_buffer = (struct hv_ring_buffer *)
+ 		vmap(pages_wraparound, page_cnt * 2 - 1, VM_MAP,
 diff --git a/include/linux/hyperv.h b/include/linux/hyperv.h
-index e513c72b1..fa339291b 100644
+index a76f556f5..63203df4d 100644
 --- a/include/linux/hyperv.h
 +++ b/include/linux/hyperv.h
-@@ -820,6 +820,7 @@ struct vmbus_channel {
- 	struct page *ringbuffer_pages;
- 	size_t ringbuffer_order;
- 	void *ringbuffer_page_virt;
+@@ -807,6 +807,8 @@ struct vmbus_channel {
+ 
+ 	/* Allocated memory for ring buffer */
+ 	struct page *ringbuffer_page;
++	void *ringbuffer_page_virt;
 +	bool ringbuffer_is_vmalloc;
+ 	u32 ringbuffer_pagecount;
  	u32 ringbuffer_send_offset;
- };
+ 	struct hv_ring_buffer_info outbound;	/* send to parent */
+-- 
+2.43.0
+
