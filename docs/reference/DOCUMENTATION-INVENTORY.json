@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 318,
-    "classified": 315,
+    "total": 321,
+    "classified": 318,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -3713,6 +3713,42 @@
     },
     {
       "path": "docs/upstream/wsl-40795-sanitized-evidence-checklist.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
+      "path": "docs/upstream/wsl2/ISSUE-01-UBLK-ZRAM-CONFIG.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
+      "path": "docs/upstream/wsl2/ISSUE-02-VMBUS-HEADROOM-PATCH.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
+      "path": "docs/upstream/wsl2/ISSUE-03-VMBUS-ORDER7-FALLBACK.md",
       "disposition": "classified",
       "ruleId": "upstream-drafts",
       "verification": {

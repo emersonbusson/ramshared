@@ -12,7 +12,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.13.4"><img alt="Versão v0.13.4" src="https://img.shields.io/badge/release-v0.13.4-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.0"><img alt="Versão v0.14.0" src="https://img.shields.io/badge/release-v0.14.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-estável-2f855a?style=flat-square">
 </p>
@@ -40,7 +40,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 
 ## Status atual
 
-Última release publicada: **[v0.13.4](https://github.com/emersonbusson/ramshared/releases/tag/v0.13.4)**. Este checkout compila a versão **0.13.4**, a manutenção estável atual.
+Última release publicada: **[v0.14.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.0)**. Este checkout compila a versão **0.14.0**, a manutenção estável atual.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
@@ -205,7 +205,7 @@ segurança, modelos de serviços systemd, documentação e assinaturas criptogr�
 Caches de compilação, credenciais e artefatos de ambientes transitórios são estritamente excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-As versões oficiais para Linux (incluindo v0.13.4 e marcos anteriores) e
+As versões oficiais para Linux (incluindo v0.14.0 e marcos anteriores) e
 seus checksums criptográficos são qualificados pelo fluxo automatizado de promoção de releases.
 
 ## Arquitetura do Driver Windows StorPort
