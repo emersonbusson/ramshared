@@ -42,6 +42,10 @@ impl Drop for Harness {
 }
 
 fn setup(k: u16, tick_ms: u64) -> Harness {
+    setup_with_lease_ttl(k, tick_ms, Duration::from_secs(30))
+}
+
+fn setup_with_lease_ttl(k: u16, tick_ms: u64, lease_ttl: Duration) -> Harness {
     let (demote_tx, demote_rx) = mpsc::channel::<DemoteReason>();
     let (jobs_tx, jobs_rx) = mpsc::sync_channel::<WMsg>(64);
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -58,6 +62,7 @@ fn setup(k: u16, tick_ms: u64) -> Harness {
         vram: Arc::new(VramGauge::default()),
         tol_frac: 0.10,
         recon_streak: 1,
+        lease_ttl,
         telemetry_jsonl: None,
     };
     let (core, addr) = spawn_broker(
@@ -92,15 +97,30 @@ fn connect(addr: SocketAddr) -> (TcpStream, BufReader<TcpStream>) {
 }
 
 fn register(s: &mut TcpStream, name: &str) {
+    register_with_transport(s, name, TransportKind::NbdTcp);
+}
+
+fn register_with_transport(s: &mut TcpStream, name: &str, transport: TransportKind) {
     write_msg(
         s,
         &Msg::Register {
             proto: PROTO_VERSION,
             tenant: name.into(),
-            transport: TransportKind::NbdTcp,
+            transport,
         },
     )
     .unwrap();
+}
+
+fn request_status(
+    s: &mut TcpStream,
+    r: &mut BufReader<TcpStream>,
+) -> Vec<ramshared_broker::model::Slice> {
+    write_msg(s, &Msg::Status).unwrap();
+    match read_until(r, |message| matches!(message, Msg::StatusReply { .. })) {
+        Some(Msg::StatusReply { slices, .. }) => slices,
+        _ => panic!("broker did not return a status reply"),
+    }
 }
 
 /// Reads messages until `pred` matches (or timeout/EOF → None).
@@ -159,6 +179,54 @@ fn e2e_tick_assigns_swapon_over_socket() {
         matches!(m, Some(Msg::SwapOn { slice: 0, .. })),
         "tick must assign s0 and send SwapOn (complete IO wiring)"
     );
+}
+
+#[test]
+fn e2e_disconnected_lease_expires_without_reuse_before_deadline() {
+    let h = setup_with_lease_ttl(1, 10, Duration::from_millis(400));
+    let (mut holder, mut holder_reader) = connect(h.addr);
+    register_with_transport(&mut holder, "holder", TransportKind::DccAgent);
+    assert!(matches!(
+        read_until(&mut holder_reader, |message| matches!(
+            message,
+            Msg::Registered { .. }
+        )),
+        Some(Msg::Registered { .. })
+    ));
+    write_msg(&mut holder, &Msg::LeaseRequest { bytes: SLICE }).unwrap();
+    assert!(matches!(
+        read_until(&mut holder_reader, |message| matches!(
+            message,
+            Msg::LeaseGranted { .. }
+        )),
+        Some(Msg::LeaseGranted { .. })
+    ));
+
+    let (mut observer, mut observer_reader) = connect(h.addr);
+    register_with_transport(&mut observer, "observer", TransportKind::DccAgent);
+    assert!(matches!(
+        read_until(&mut observer_reader, |message| matches!(
+            message,
+            Msg::Registered { .. }
+        )),
+        Some(Msg::Registered { .. })
+    ));
+    drop(holder_reader);
+    drop(holder);
+
+    std::thread::sleep(Duration::from_millis(100));
+    let before = request_status(&mut observer, &mut observer_reader);
+    assert!(matches!(
+        before[0].state,
+        ramshared_broker::model::SliceState::Leased
+    ));
+
+    std::thread::sleep(Duration::from_millis(500));
+    let after = request_status(&mut observer, &mut observer_reader);
+    assert!(matches!(
+        after[0].state,
+        ramshared_broker::model::SliceState::Free
+    ));
 }
 
 #[test]

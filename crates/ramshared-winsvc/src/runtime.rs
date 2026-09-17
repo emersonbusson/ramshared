@@ -940,4 +940,146 @@ mod tests {
         );
         assert!(parse_product_cli(&["start".into(), "now".into()]).is_err());
     }
+
+    #[test]
+    fn parse_product_cli_install_and_repair() {
+        let install_res = parse_product_cli(&[
+            "install".into(),
+            "--manifest".into(),
+            "/etc/manifest.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            install_res,
+            ProductCommand::Install {
+                manifest: "/etc/manifest.json".into()
+            }
+        );
+
+        let repair_res = parse_product_cli(&[
+            "repair".into(),
+            "--manifest".into(),
+            r"C:\manifest.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            repair_res,
+            ProductCommand::Repair {
+                manifest: r"C:\manifest.json".into()
+            }
+        );
+
+        let err_missing = parse_product_cli(&["install".into()]).unwrap_err();
+        assert_eq!(err_missing.class, RuntimeErrorClass::Config);
+        assert!(err_missing.message.contains("missing --manifest"));
+
+        let err_rel = parse_product_cli(&[
+            "install".into(),
+            "--manifest".into(),
+            "relative/manifest.json".into(),
+        ])
+        .unwrap_err();
+        assert_eq!(err_rel.class, RuntimeErrorClass::Config);
+        assert!(err_rel.message.contains("path must be absolute"));
+
+        let err_no_val = parse_product_cli(&["install".into(), "--manifest".into()]).unwrap_err();
+        assert_eq!(err_no_val.class, RuntimeErrorClass::Config);
+        assert!(err_no_val.message.contains("requires a path"));
+    }
+
+    #[test]
+    fn parse_product_cli_probe_cuda() {
+        let res = parse_product_cli(&[
+            "probe-cuda".into(),
+            "--config".into(),
+            "/etc/winsvc.toml".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            res,
+            ProductCommand::ProbeCuda {
+                config: "/etc/winsvc.toml".into()
+            }
+        );
+
+        let err = parse_product_cli(&["probe-cuda".into()]).unwrap_err();
+        assert_eq!(err.class, RuntimeErrorClass::Config);
+        assert!(err.message.contains("missing --config"));
+    }
+
+    #[test]
+    fn parse_product_cli_config_flag_variations() {
+        let cfg_res = parse_product_cli(&["--config".into(), "/etc/winsvc.toml".into()]).unwrap();
+        assert_eq!(
+            cfg_res,
+            ProductCommand::ScmDefault {
+                config: Some("/etc/winsvc.toml".into())
+            }
+        );
+
+        let err_one = parse_product_cli(&["--config".into()]).unwrap_err();
+        assert_eq!(err_one.class, RuntimeErrorClass::Config);
+        assert!(err_one.message.contains("unknown command"));
+
+        let err_three =
+            parse_product_cli(&["--config".into(), "/etc/winsvc.toml".into(), "extra".into()])
+                .unwrap_err();
+        assert_eq!(err_three.class, RuntimeErrorClass::Config);
+        assert!(err_three.message.contains("unknown command"));
+    }
+
+    #[test]
+    fn parse_product_cli_path_formats() {
+        let unc_res = parse_product_cli(&[
+            "install".into(),
+            "--manifest".into(),
+            r"\\server\share\manifest.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            unc_res,
+            ProductCommand::Install {
+                manifest: r"\\server\share\manifest.json".into()
+            }
+        );
+
+        let win_slash_res = parse_product_cli(&[
+            "install".into(),
+            "--manifest".into(),
+            "C:/manifest.json".into(),
+        ])
+        .unwrap();
+        assert_eq!(
+            win_slash_res,
+            ProductCommand::Install {
+                manifest: "C:/manifest.json".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_product_cli_unknown_and_lab_commands() {
+        let err_unknown = parse_product_cli(&["foobar".into()]).unwrap_err();
+        assert_eq!(err_unknown.class, RuntimeErrorClass::Config);
+        assert!(err_unknown.message.contains("unknown command: foobar"));
+
+        for verb in ["run", "stop-console", "lab", "start-scripts"] {
+            let e = parse_product_cli(&[verb.into()]).unwrap_err();
+            assert_eq!(e.class, RuntimeErrorClass::Config);
+            assert!(e.message.contains("lab backend command removed"));
+        }
+    }
+
+    #[test]
+    fn parse_product_cli_uninstall_and_scm_default() {
+        assert_eq!(
+            parse_product_cli(&["uninstall".into()]).unwrap(),
+            ProductCommand::Uninstall
+        );
+
+        assert_eq!(
+            parse_product_cli(&["".into()]).unwrap(),
+            ProductCommand::ScmDefault { config: None }
+        );
+    }
 }

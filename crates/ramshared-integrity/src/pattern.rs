@@ -80,15 +80,26 @@ pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), Integrity
 
     let mut expected = vec![0u8; stride];
     fill_block(&mut expected, idx, kind);
+    let mut single_bit_error: Option<(usize, u8, u8)> = None;
+
     for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
         if actual != exp {
             let diff = actual ^ exp;
             if diff.count_ones() == 1 {
-                return Err(IntegrityError::SingleBitError {
-                    offset,
-                    bit_index: diff.trailing_zeros() as u8,
-                });
+                if let Some((first_offset, first_diff, _)) = single_bit_error {
+                    return Err(IntegrityError::CorruptedMemory {
+                        offset: first_offset,
+                        bit_flip_mask: first_diff,
+                    });
+                }
+                single_bit_error = Some((offset, diff, diff.trailing_zeros() as u8));
             } else {
+                if let Some((first_offset, first_diff, _)) = single_bit_error {
+                    return Err(IntegrityError::CorruptedMemory {
+                        offset: first_offset,
+                        bit_flip_mask: first_diff,
+                    });
+                }
                 return Err(IntegrityError::CorruptedMemory {
                     offset,
                     bit_flip_mask: diff,
@@ -96,6 +107,11 @@ pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), Integrity
             }
         }
     }
+
+    if let Some((offset, _, bit_index)) = single_bit_error {
+        return Err(IntegrityError::SingleBitError { offset, bit_index });
+    }
+
     Ok(())
 }
 
@@ -240,6 +256,22 @@ mod tests {
             Err(IntegrityError::InvalidStride {
                 stride: 123,
                 page_size: 4096
+            })
+        );
+    }
+
+    #[test]
+    fn multiple_single_bit_flips_are_corrupted_memory() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, 8, Pattern::Random);
+        buf[100] ^= 0x01;
+        buf[200] ^= 0x80;
+
+        assert_eq!(
+            verify_block(&buf, 8, Pattern::Random),
+            Err(IntegrityError::CorruptedMemory {
+                offset: 100,
+                bit_flip_mask: 0x01,
             })
         );
     }

@@ -46,6 +46,22 @@ $GuardianHealthPath = Join-Path $GuardianStateRoot ($Distro + ".health.json")
 $ResumeLeasePath = "/run/ramshared/host-resume-lease.json"
 $GuardianActionApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTION"
 $GuardianActivationApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTIVATION"
+$script:LastGuestBootProbe = $null
+
+function Resolve-GuardianTaskUserName {
+    param([Parameter(Mandatory = $true)][string]$Sid)
+    try {
+        $taskUserName = [System.Security.Principal.SecurityIdentifier]::new($Sid).Translate([System.Security.Principal.NTAccount]).Value
+    } catch {
+        throw ("guardian policy SID cannot resolve to a task account: " + $Sid)
+    }
+    if ([string]::IsNullOrWhiteSpace($taskUserName)) {
+        throw "guardian policy SID resolved to an empty task account"
+    }
+    return $taskUserName
+}
+
+$TaskUserName = Resolve-GuardianTaskUserName -Sid $UserSid
 
 function Test-AbsoluteWindowsPath {
     param([Parameter(Mandatory = $true)][string]$Path)
@@ -236,11 +252,39 @@ function Get-HeartbeatState {
     return [ordered]@{ stale = ($age -ge $StaleAfterSec); age_seconds = $age }
 }
 
+function Get-GuardianWslCommandPrefix {
+    # Distro is constrained by the top-level parameter validation.  Passing it
+    # without quotes avoids preserving literal quotes through ProcessStartInfo.
+    return ("-d " + $Distro + " -u root --")
+}
+
+function Get-GuardianBootProbeSummary {
+    param([AllowNull()][object]$Probe)
+    if ($null -eq $Probe) {
+        return [pscustomobject]@{ completed = $false; exit_code = $null; reason = "missing" }
+    }
+    return [pscustomobject]@{
+        completed = [bool]$Probe.completed
+        exit_code = if ($null -eq $Probe.exit_code) { $null } else { [int]$Probe.exit_code }
+        reason = [string]$Probe.reason
+    }
+}
+
+function Get-GuardianBootProbeEventData {
+    param([AllowNull()][object]$Probe)
+    $summary = Get-GuardianBootProbeSummary -Probe $Probe
+    return @{
+        probe_completed = [bool]$summary.completed
+        probe_exit_code = $summary.exit_code
+        probe_reason = [string]$summary.reason
+    }
+}
+
 function Invoke-GuestProbe {
     $first = Invoke-BoundedProcess -FileName "wsl.exe" `
-        -Arguments ("-d `"$Distro`" -u root -- /bin/true") -TimeoutSeconds $GuestCommandTimeoutSec
+        -Arguments ((Get-GuardianWslCommandPrefix) + " /bin/true") -TimeoutSeconds $GuestCommandTimeoutSec
     $second = Invoke-BoundedProcess -FileName "wsl.exe" `
-        -Arguments ("-d `"$Distro`" -u root -- cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
+        -Arguments ((Get-GuardianWslCommandPrefix) + " cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
     $probes = @(
         [ordered]@{ name = "guest_process_probe"; result = $first },
         [ordered]@{ name = "guest_boot_identity_probe"; result = $second }
@@ -510,7 +554,10 @@ function Invoke-GuardianInstallTransaction {
         $failure = $_
         $rollback = $Operations["rollback"]
         if ($null -eq $rollback) { throw "guardian install transaction has no rollback operation" }
-        try { & $rollback $transaction } catch { throw ("guardian install transaction failed at " + $transaction.phase + " and rollback was incomplete: " + $_.Exception.Message) }
+        try { & $rollback $transaction } catch {
+            $rollbackFailure = $_.Exception.Message
+            throw ("guardian install transaction failed at " + $transaction.phase + ": " + $failure.Exception.Message + "; rollback incomplete: " + $rollbackFailure)
+        }
         throw ("guardian install transaction failed at " + $transaction.phase + ": " + $failure.Exception.Message)
     }
 }
@@ -593,7 +640,8 @@ function Restore-SealedGuardianBackup {
 }
 
 function Get-GuestBootId {
-    $boot = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("-d `"$Distro`" -u root -- cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
+    $boot = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ((Get-GuardianWslCommandPrefix) + " cat /proc/sys/kernel/random/boot_id") -TimeoutSeconds $GuestCommandTimeoutSec
+    $script:LastGuestBootProbe = Get-GuardianBootProbeSummary -Probe $boot
     $candidate = if ($null -eq $boot.stdout) { $null } else { $boot.stdout.Trim().ToLowerInvariant() }
     if (-not $boot.completed -or $boot.exit_code -ne 0 -or -not (Test-CanonicalGuestBootId -BootId $candidate)) { return $null }
     return $candidate
@@ -604,7 +652,7 @@ function Mirror-GuestSafeMode {
     $payload = [ordered]@{ schema_version = 1; incident_id = $IncidentId; distro = $Distro; boot_id = $BootId } | ConvertTo-Json -Compress
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
     $command = "install -d -m 0700 /var/lib/ramshared; printf '%s' '$encoded' | base64 -d > /var/lib/ramshared/.safe-mode.tmp; chmod 0600 /var/lib/ramshared/.safe-mode.tmp; mv /var/lib/ramshared/.safe-mode.tmp /var/lib/ramshared/safe-mode.json"
-    return Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("-d `"$Distro`" -u root -- sh -c `"$command`"") -TimeoutSeconds $GuestCommandTimeoutSec
+    return Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ((Get-GuardianWslCommandPrefix) + " sh -c `"$command`"") -TimeoutSeconds $GuestCommandTimeoutSec
 }
 
 function Invoke-TargetedTerminate {
@@ -612,7 +660,7 @@ function Invoke-TargetedTerminate {
     $terminationPath = Get-TerminationPath
     if (Test-Path -LiteralPath $terminationPath -PathType Leaf) { return [ordered]@{ started = $false; completed = $false; reason = "termination_already_recorded" } }
     Write-AtomicJson -Path $terminationPath -Value ([ordered]@{ incident_id = $IncidentId; distro = $Distro; prior_boot_id = $PriorBootId; started_utc = [DateTime]::UtcNow.ToString("o") })
-    $result = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("--terminate `"$Distro`"") -TimeoutSeconds $GuestCommandTimeoutSec
+    $result = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments ("--terminate " + $Distro) -TimeoutSeconds $GuestCommandTimeoutSec
     if (-not $result.completed) { return [ordered]@{ started = $true; completed = $false; reason = "terminate_timeout"; detail = $result } }
     return [ordered]@{ started = $true; completed = ($result.exit_code -eq 0); reason = $result.reason; detail = $result }
 }
@@ -649,10 +697,10 @@ function New-GuardianTask {
     param([switch]$ActivationAuthorized)
     $taskArguments = Get-SealedGuardianTaskArguments -ActivationAuthorized:$ActivationAuthorized
     $taskAction = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument $taskArguments
-    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $UserSid
+    $taskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUserName
     # Task Scheduler serializes the zero duration as PT0S (no execution limit).
     $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-    $taskPrincipal = New-ScheduledTaskPrincipal -UserId $UserSid -LogonType Interactive -RunLevel Highest
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId $TaskUserName -LogonType Interactive -RunLevel Highest
     return New-ScheduledTask -Action $taskAction -Trigger $taskTrigger -Settings $taskSettings -Principal $taskPrincipal
 }
 
@@ -796,6 +844,7 @@ function Invoke-GuardianWatch {
                 Publish-GuardianState -State "SAFE_MODE" -Reason "host_safe_mode_gate_present" -BootId $publishedBootId
             } elseif ($null -eq $publishedBootId) {
                 Publish-GuardianState -State "BLOCKED" -Reason "boot_identity_unavailable" -BootId $null
+                Write-GuardianEvent -Path $eventPath -Event "guardian_boot_identity_unavailable" -Data (Get-GuardianBootProbeEventData -Probe $script:LastGuestBootProbe)
             } else {
                 Publish-GuardianState -State "HEALTHY" -Reason "watching" -BootId $publishedBootId
             }
@@ -1033,6 +1082,20 @@ function Invoke-ManufacturedGuardianRegistrationRollbackTests {
     if (-not $failed -or $store.task -cne "prior-task-xml" -or $store.config -cne "prior-config" -or $store.seal -cne "prior-task-seal") {
         throw "guardian register success / disable failure did not restore exact task config and seal"
     }
+    $diagnosticOperations = @{
+        begin = { [ordered]@{ task_may_be_modified = $false; config_may_be_modified = $false; task_seal_may_be_modified = $false; phase = "begin" } }
+        backup = { param($transaction) }
+        config = { param($transaction) }
+        register = { param($transaction) throw "fixture_register_root_cause" }
+        disable = { param($transaction) }
+        verify_disabled = { param($transaction) }
+        rollback = { param($transaction) throw "fixture_register_rollback_failure" }
+    }
+    $diagnostic = ""
+    try { Invoke-GuardianInstallTransaction -Operations $diagnosticOperations | Out-Null } catch { $diagnostic = $_.Exception.Message }
+    if ($diagnostic -notlike "*fixture_register_root_cause*" -or $diagnostic -notlike "*fixture_register_rollback_failure*") {
+        throw "guardian registration failure did not retain both diagnostic causes"
+    }
     # The uninstall contract is fail-closed: an unregister failure is not a
     # restore and therefore leaves the current seal and config untouched.
     $uninstallState = [ordered]@{ task = "sealed-current-task"; config = "sealed-current-config"; seal = "sealed-current-seal" }
@@ -1078,6 +1141,7 @@ function Invoke-ManufacturedGuardianRegistrationRollbackTests {
         }
     }
     Write-Output "PASS guardian_register_success_disable_failure_restores_task_config_and_seal"
+    Write-Output "PASS guardian_registration_failure_retains_root_and_rollback_causes"
     Write-Output "PASS guardian_uninstall_failure_retains_seal_and_state"
     Write-Output "PASS guardian_activation_export_failure_restores_exact_task_seal_and_operator_config"
 }
@@ -1103,6 +1167,23 @@ switch ($Action) {
     "watch" { exit (Invoke-GuardianWatch) }
     "activate" { Activate-GuardianTask; Write-Output "guardian activated by explicit attended transaction: $TaskName" }
     "test" {
+        $bootProbeSummary = Get-GuardianBootProbeSummary -Probe ([ordered]@{ completed = $true; exit_code = 0; reason = "success"; stdout = "sensitive"; stderr = "sensitive" })
+        if (-not $bootProbeSummary.completed -or $bootProbeSummary.exit_code -ne 0 -or $bootProbeSummary.reason -cne "success" -or
+            $bootProbeSummary.PSObject.Properties.Name -contains "stdout" -or $bootProbeSummary.PSObject.Properties.Name -contains "stderr") {
+            throw "guardian boot probe summary did not remain sanitized"
+        }
+        Write-Output "PASS guardian_boot_probe_summary_is_sanitized"
+        $bootProbeEventData = Get-GuardianBootProbeEventData -Probe $bootProbeSummary
+        if ($bootProbeEventData.probe_completed -ne $true -or $bootProbeEventData.probe_exit_code -ne 0 -or
+            $bootProbeEventData.probe_reason -cne "success" -or $bootProbeEventData.Keys.Count -ne 3) {
+            throw "guardian boot probe event payload was not flat and sanitized"
+        }
+        Write-Output "PASS guardian_boot_probe_event_payload_is_flat"
+        $guardianWslPrefix = Get-GuardianWslCommandPrefix
+        if ($guardianWslPrefix -cne ("-d " + $Distro + " -u root --")) {
+            throw "guardian WSL command prefix must preserve the validated distro name without quotes"
+        }
+        Write-Output "PASS guardian_wsl_arguments_are_scheduler_safe"
         $taskArguments = Get-SealedGuardianTaskArguments
         foreach ($sealedArgument in @(
             ('-Action watch -Run'),

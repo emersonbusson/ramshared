@@ -23,13 +23,27 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	bar_start = pci_resource_start(pdev, bar);
 	bar_len = pci_resource_len(pdev, bar);
 
-	if (!bar_start || bar_len == 0) {
+	if (!bar_start) {
 		dev_err(&pdev->dev, "invalid PCIe BAR0 resource\n");
 		return -ENODEV;
 	}
 
+	/* SPEC: kernel-pci-bar-capacity-contract §RF-2. */
+	if (bar_len == 0 || (u64)bar_len < rs_dev->capacity_bytes) {
+		dev_err(&pdev->dev,
+			"BAR0 is smaller than requested capacity (%llu < %llu)\n",
+			(unsigned long long)bar_len,
+			(unsigned long long)rs_dev->capacity_bytes);
+		return -ERANGE;
+	}
+
+	if (rs_dev->capacity_bytes > SIZE_MAX) {
+		dev_err(&pdev->dev, "requested capacity exceeds mapping width\n");
+		return -EOVERFLOW;
+	}
+
 	rs_dev->dma.pci_addr = bar_start;
-	rs_dev->dma.size = min_t(size_t, bar_len, rs_dev->capacity_bytes);
+	rs_dev->dma.size = (size_t)rs_dev->capacity_bytes;
 
 	if (!IS_ALIGNED(rs_dev->dma.pci_addr, PAGE_SIZE)) {
 		dev_err(&pdev->dev, "PCIe BAR0 address not %lu-byte aligned\n", PAGE_SIZE);

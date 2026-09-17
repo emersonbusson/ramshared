@@ -8,6 +8,7 @@ use ramshared_tier::{TierPriorities, validate_order, vram_safety_net};
 use rustix::fd::OwnedFd;
 use rustix::process::{Pid, PidfdFlags, Signal, pidfd_open, pidfd_send_signal};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(not(test))]
@@ -24,6 +25,7 @@ const SHORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const LIFECYCLE_BINDING_SCHEMA: u32 = 1;
 const LIFECYCLE_BINDING_MAX_BYTES: u64 = 64 * 1024;
+const LEGACY_DAEMON_PATH: &str = "/usr/local/bin/ramsharedd";
 
 #[cfg(test)]
 thread_local! {
@@ -177,6 +179,12 @@ enum ManagedDeviceKind {
     Nbd,
     Ublk,
     Zram,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NbdOwnerPolicy {
+    RequireLive,
+    PermitAbsent,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -340,9 +348,61 @@ fn device_kind_for_path(path: &str) -> Option<ManagedDeviceKind> {
     }
 }
 
+fn nbd_owner_policy_for_kind(kind: ManagedDeviceKind) -> NbdOwnerPolicy {
+    if kind == ManagedDeviceKind::Nbd {
+        NbdOwnerPolicy::PermitAbsent
+    } else {
+        NbdOwnerPolicy::RequireLive
+    }
+}
+
 fn observe_bound_device(
     path: &str,
     expected_kind: ManagedDeviceKind,
+) -> Result<BoundDeviceIdentity, CascadeError> {
+    observe_bound_device_with_nbd_owner_policy(
+        path,
+        expected_kind,
+        nbd_owner_policy_for_kind(expected_kind),
+    )
+}
+
+fn observe_legacy_bound_device(
+    path: &str,
+    expected_kind: ManagedDeviceKind,
+) -> Result<BoundDeviceIdentity, CascadeError> {
+    observe_bound_device(path, expected_kind)
+}
+
+fn nbd_kernel_owner_identity(
+    live_owner: Option<String>,
+    owner_is_absent: bool,
+    policy: NbdOwnerPolicy,
+) -> Result<Option<String>, CascadeError> {
+    match live_owner {
+        Some(identity) => Ok(Some(identity)),
+        None if policy == NbdOwnerPolicy::PermitAbsent && owner_is_absent => Ok(None),
+        None => Err(CascadeError::Precondition(
+            "NBD kernel owner start identity is unavailable".into(),
+        )),
+    }
+}
+
+#[cfg(not(test))]
+fn nbd_kernel_owner_is_absent(pid: u32) -> Result<bool, CascadeError> {
+    match fs::symlink_metadata(format!("/proc/{pid}")) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Ok(_) => Ok(false),
+        Err(error) => Err(CascadeError::Precondition(format!(
+            "stat NBD kernel owner process: {error}"
+        ))),
+    }
+}
+
+fn observe_bound_device_with_nbd_owner_policy(
+    path: &str,
+    expected_kind: ManagedDeviceKind,
+    owner_policy: NbdOwnerPolicy,
 ) -> Result<BoundDeviceIdentity, CascadeError> {
     let path = canonicalize_swap_path(path);
     if device_kind_for_path(&path) != Some(expected_kind) {
@@ -352,6 +412,7 @@ fn observe_bound_device(
     }
     #[cfg(test)]
     {
+        let _ = owner_policy;
         let index = path
             .bytes()
             .rev()
@@ -370,7 +431,6 @@ fn observe_bound_device(
         };
         Ok(BoundDeviceIdentity {
             kind: expected_kind,
-            path: path.clone(),
             dev_t: format!("{major}:{index}"),
             sysfs_path: format!(
                 "/sys/devices/virtual/block/{}",
@@ -378,6 +438,7 @@ fn observe_bound_device(
             ),
             sysfs_dev_t: format!("{major}:{index}"),
             kernel_owner_instance_id: owner,
+            path,
         })
     }
     #[cfg(not(test))]
@@ -423,9 +484,13 @@ fn observe_bound_device(
                     "NBD kernel owner is absent".into(),
                 ));
             }
-            Some(daemon_instance_id_from_pid(pid).ok_or_else(|| {
-                CascadeError::Precondition("NBD kernel owner start identity is unavailable".into())
-            })?)
+            let live_owner = daemon_instance_id_from_pid(pid);
+            let owner_is_absent = if live_owner.is_none() {
+                nbd_kernel_owner_is_absent(pid)?
+            } else {
+                false
+            };
+            nbd_kernel_owner_identity(live_owner, owner_is_absent, owner_policy)?
         } else {
             None
         };
@@ -721,7 +786,20 @@ impl EffectBoundDevice {
 }
 
 fn bind_device_for_effect(device: &BoundDeviceIdentity) -> Result<EffectBoundDevice, CascadeError> {
-    revalidate_bound_device(device)?;
+    bind_device_for_effect_with(device, revalidate_bound_device)
+}
+
+fn bind_legacy_device_for_effect(
+    device: &BoundDeviceIdentity,
+) -> Result<EffectBoundDevice, CascadeError> {
+    bind_device_for_effect_with(device, revalidate_legacy_bound_device)
+}
+
+fn bind_device_for_effect_with(
+    device: &BoundDeviceIdentity,
+    revalidate: fn(&BoundDeviceIdentity) -> Result<(), CascadeError>,
+) -> Result<EffectBoundDevice, CascadeError> {
+    revalidate(device)?;
     #[cfg(test)]
     {
         Ok(EffectBoundDevice {
@@ -746,7 +824,7 @@ fn bind_device_for_effect(device: &BoundDeviceIdentity) -> Result<EffectBoundDev
                 "opened managed-device fd does not match the sealed dev_t".into(),
             ));
         }
-        revalidate_bound_device(device)?;
+        revalidate(device)?;
         let effect_path = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd());
         let opened = fs::metadata(&effect_path).map_err(|error| {
             CascadeError::Precondition(format!("stat managed-device proc-fd effect path: {error}"))
@@ -1085,6 +1163,17 @@ fn revalidate_bound_device(device: &BoundDeviceIdentity) -> Result<(), CascadeEr
     if &observed != device {
         return Err(CascadeError::Precondition(format!(
             "managed device identity changed before mutation: {}",
+            device.path
+        )));
+    }
+    Ok(())
+}
+
+fn revalidate_legacy_bound_device(device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+    let observed = observe_legacy_bound_device(&device.path, device.kind)?;
+    if &observed != device {
+        return Err(CascadeError::Precondition(format!(
+            "managed device identity changed before legacy migration mutation: {}",
             device.path
         )));
     }
@@ -1568,12 +1657,13 @@ fn rollback_zram_tier<R: CommandRunner>(
             return false;
         }
     }
-    if prove_exact_swap_absent(&identity).is_err()
-        || pinned.revalidate_named_identity().is_err()
-        // zramctl requires the canonical device name to derive its sysfs node;
-        // the exact fd remains open across this unavoidable tool boundary.
-        || runner.run("zramctl", &["-r", zram_device]).is_err()
-    {
+    if prove_exact_swap_absent(&identity).is_err() || pinned.revalidate_named_identity().is_err() {
+        return false;
+    }
+    // zramctl derives its sysfs target from the canonical device name and the
+    // kernel zram driver refuses reset with EBUSY while any opener holds the fd.
+    drop(pinned);
+    if runner.run("zramctl", &["-r", zram_device]).is_err() {
         return false;
     }
     let Ok(live_devices) = detect_live_managed_devices() else {
@@ -1642,15 +1732,16 @@ fn reconcile_malformed_zram_allocation<R: CommandRunner>(
             device.path
         ))
     })?;
-    // zramctl derives the sysfs target from the canonical device name and does
-    // not accept the proc-fd path portably. Keep the exact fd open, revalidate
-    // immediately before the call, and require disappearance afterward.
+    // zramctl derives the sysfs target from the canonical device name and the
+    // kernel zram driver refuses reset with EBUSY while any opener holds the fd.
+    // Revalidate the exact descriptor first, then close before invoking reset.
     pinned.revalidate_named_identity().map_err(|error| {
         CascadeError::UnsafeContainment(format!(
             "new exact zram device {} changed identity before reset ({error}); ownership evidence preserved",
             device.path
         ))
     })?;
+    drop(pinned);
     runner
         .run("zramctl", &["-r", &device.path])
         .map_err(|error| {
@@ -2515,6 +2606,681 @@ fn up_with_config(mut a: UpArgs) -> Result<(), CascadeError> {
     status(false)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LegacyMigrationAction {
+    Swapoff(BoundDeviceIdentity),
+    ResetZram(BoundDeviceIdentity),
+    DisconnectNbd(BoundDeviceIdentity),
+    StopDaemon,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyMigrationTransition {
+    actions: Vec<LegacyMigrationAction>,
+}
+
+fn plan_legacy_migration_transition(
+    legacy: &LegacyMigrationPlan,
+    nbd: BoundDeviceIdentity,
+    zram: Option<BoundDeviceIdentity>,
+) -> Result<LegacyMigrationTransition, CascadeError> {
+    if nbd.kind != ManagedDeviceKind::Nbd
+        || nbd.path != legacy.nbd.canonical_path()
+        || zram.as_ref().is_some_and(|device| {
+            device.kind != ManagedDeviceKind::Zram
+                || legacy
+                    .zram
+                    .as_ref()
+                    .is_none_or(|entry| device.path != entry.canonical_path())
+        })
+        || (legacy.zram.is_some() != zram.is_some())
+    {
+        return Err(CascadeError::Precondition(
+            "legacy migration device identity does not match the admitted topology".into(),
+        ));
+    }
+
+    let mut actions = Vec::new();
+    if let Some(zram) = zram {
+        actions.push(LegacyMigrationAction::Swapoff(zram.clone()));
+        actions.push(LegacyMigrationAction::Swapoff(nbd.clone()));
+        actions.push(LegacyMigrationAction::ResetZram(zram));
+    } else {
+        actions.push(LegacyMigrationAction::Swapoff(nbd.clone()));
+    }
+    actions.push(LegacyMigrationAction::DisconnectNbd(nbd));
+    actions.push(LegacyMigrationAction::StopDaemon);
+    Ok(LegacyMigrationTransition { actions })
+}
+
+trait LegacyMigrationExecutor {
+    fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError>;
+    fn reset_zram(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError>;
+    fn disconnect_nbd(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError>;
+    fn stop_daemon(&self) -> Result<(), CascadeError>;
+}
+
+fn execute_legacy_migration_transition<E: LegacyMigrationExecutor>(
+    transition: &LegacyMigrationTransition,
+    executor: &E,
+) -> Result<(), CascadeError> {
+    for action in &transition.actions {
+        match action {
+            LegacyMigrationAction::Swapoff(device) => executor.swapoff(device)?,
+            LegacyMigrationAction::ResetZram(device) => executor.reset_zram(device)?,
+            LegacyMigrationAction::DisconnectNbd(device) => executor.disconnect_nbd(device)?,
+            LegacyMigrationAction::StopDaemon => executor.stop_daemon()?,
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum LegacyDaemonProof {
+    BinaryMatch,
+    ReplacedBinary {
+        slice_mb: u64,
+    },
+    LegacyPathHashMatch {
+        legacy_executable: PathBuf,
+        executable_sha256: [u8; 32],
+        slice_mb: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyDaemonObservation {
+    uid: u32,
+    executable_link: PathBuf,
+    canonical_executable: Option<PathBuf>,
+    executable_sha256: Option<[u8; 32]>,
+    arguments: Vec<String>,
+    owns_legacy_listener: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyDaemonIdentity {
+    pid: u32,
+    instance_id: String,
+    executable: PathBuf,
+    proof: LegacyDaemonProof,
+}
+
+fn legacy_daemon_identity_matches(
+    expected: &LegacyDaemonIdentity,
+    observed_instance_id: Option<&str>,
+    observed: &LegacyDaemonObservation,
+) -> bool {
+    observed_instance_id == Some(expected.instance_id.as_str())
+        && match &expected.proof {
+            LegacyDaemonProof::BinaryMatch => {
+                observed.canonical_executable.as_deref() == Some(expected.executable.as_path())
+            }
+            LegacyDaemonProof::ReplacedBinary { slice_mb } => {
+                legacy_replaced_daemon_is_bound(observed, &expected.executable, *slice_mb)
+            }
+            LegacyDaemonProof::LegacyPathHashMatch {
+                legacy_executable,
+                executable_sha256,
+                slice_mb,
+            } => legacy_regular_daemon_is_bound(
+                observed,
+                legacy_executable,
+                executable_sha256,
+                *slice_mb,
+            ),
+        }
+}
+
+fn option_value_once<'a>(arguments: &'a [String], option: &str) -> Option<&'a str> {
+    let mut found = None;
+    for pair in arguments.windows(2) {
+        if pair[0] == option && found.replace(pair[1].as_str()).is_some() {
+            return None;
+        }
+    }
+    found
+}
+
+fn deleted_executable_path(link: &Path) -> Option<PathBuf> {
+    link.to_str()?.strip_suffix(" (deleted)").map(PathBuf::from)
+}
+
+fn legacy_replaced_daemon_is_bound(
+    observation: &LegacyDaemonObservation,
+    expected_executable: &Path,
+    slice_mb: u64,
+) -> bool {
+    observation.uid == 0
+        && observation.owns_legacy_listener
+        && deleted_executable_path(&observation.executable_link).as_deref()
+            == Some(expected_executable)
+        && observation
+            .arguments
+            .first()
+            .is_some_and(|argv0| Path::new(argv0) == expected_executable)
+        && option_value_once(&observation.arguments, "--slices") == Some("1")
+        && option_value_once(&observation.arguments, "--slice-mb")
+            == Some(slice_mb.to_string().as_str())
+        && option_value_once(&observation.arguments, "--listen-nbd") == Some("127.0.0.1:10809")
+}
+
+fn legacy_regular_daemon_is_bound(
+    observation: &LegacyDaemonObservation,
+    legacy_executable: &Path,
+    executable_sha256: &[u8; 32],
+    slice_mb: u64,
+) -> bool {
+    observation.uid == 0
+        && observation.owns_legacy_listener
+        && observation.canonical_executable.as_deref() == Some(legacy_executable)
+        && observation.executable_sha256.as_ref() == Some(executable_sha256)
+        && observation
+            .arguments
+            .first()
+            .is_some_and(|argv0| Path::new(argv0) == legacy_executable)
+        && option_value_once(&observation.arguments, "--slices") == Some("1")
+        && option_value_once(&observation.arguments, "--slice-mb")
+            == Some(slice_mb.to_string().as_str())
+        && option_value_once(&observation.arguments, "--listen-nbd") == Some("127.0.0.1:10809")
+}
+
+fn legacy_regular_daemon_proof(
+    observation: &LegacyDaemonObservation,
+    legacy_executable: Option<&Path>,
+    executable_sha256: &[u8; 32],
+    slice_mb: u64,
+) -> Option<LegacyDaemonProof> {
+    let legacy_executable = legacy_executable?;
+    legacy_regular_daemon_is_bound(observation, legacy_executable, executable_sha256, slice_mb)
+        .then(|| LegacyDaemonProof::LegacyPathHashMatch {
+            legacy_executable: legacy_executable.to_path_buf(),
+            executable_sha256: *executable_sha256,
+            slice_mb,
+        })
+}
+
+fn sha256_file(path: &Path) -> Result<[u8; 32], CascadeError> {
+    let mut file = fs::File::open(path).map_err(|error| {
+        CascadeError::Precondition(format!("open daemon binary for hash: {error}"))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            CascadeError::Precondition(format!("read daemon binary for hash: {error}"))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn process_socket_inodes(pid: u32) -> Result<std::collections::HashSet<String>, CascadeError> {
+    let entries = fs::read_dir(format!("/proc/{pid}/fd")).map_err(|error| {
+        CascadeError::Precondition(format!("read legacy daemon descriptors: {error}"))
+    })?;
+    let mut inodes = std::collections::HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CascadeError::Precondition(format!("read legacy daemon descriptor: {error}"))
+        })?;
+        let Ok(link) = fs::read_link(entry.path()) else {
+            continue;
+        };
+        let Some(link) = link.to_str() else {
+            continue;
+        };
+        if let Some(inode) = link
+            .strip_prefix("socket:[")
+            .and_then(|value| value.strip_suffix(']'))
+        {
+            inodes.insert(inode.to_string());
+        }
+    }
+    Ok(inodes)
+}
+
+fn legacy_listener_socket_inodes() -> Result<std::collections::HashSet<String>, CascadeError> {
+    let content = fs::read_to_string("/proc/net/tcp")
+        .map_err(|error| CascadeError::Io(format!("read TCP listener table: {error}")))?;
+    Ok(content
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let fields: Vec<_> = line.split_whitespace().collect();
+            (fields.len() > 9 && fields[1] == "0100007F:2A39" && fields[3] == "0A")
+                .then(|| fields[9].to_string())
+        })
+        .collect())
+}
+
+fn process_owns_legacy_listener(pid: u32) -> Result<bool, CascadeError> {
+    let owned = process_socket_inodes(pid)?;
+    Ok(legacy_listener_socket_inodes()?
+        .iter()
+        .any(|inode| owned.contains(inode)))
+}
+
+fn read_legacy_daemon_observation(pid: u32) -> Result<LegacyDaemonObservation, CascadeError> {
+    let metadata = fs::metadata(format!("/proc/{pid}")).map_err(|error| {
+        CascadeError::Precondition(format!("stat legacy daemon process: {error}"))
+    })?;
+    let executable_link = fs::read_link(format!("/proc/{pid}/exe")).map_err(|error| {
+        CascadeError::Precondition(format!("read legacy daemon executable link: {error}"))
+    })?;
+    let executable_path = PathBuf::from(format!("/proc/{pid}/exe"));
+    let executable_sha256 = sha256_file(&executable_path)?;
+    let arguments = fs::read(format!("/proc/{pid}/cmdline"))
+        .map_err(|error| {
+            CascadeError::Precondition(format!("read legacy daemon command: {error}"))
+        })?
+        .split(|byte| *byte == 0)
+        .filter(|argument| !argument.is_empty())
+        .map(|argument| {
+            std::str::from_utf8(argument)
+                .map(str::to_string)
+                .map_err(|_| {
+                    CascadeError::Precondition("legacy daemon command is not UTF-8".into())
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(LegacyDaemonObservation {
+        uid: metadata.uid(),
+        canonical_executable: fs::canonicalize(&executable_link).ok(),
+        executable_link,
+        executable_sha256: Some(executable_sha256),
+        arguments,
+        owns_legacy_listener: process_owns_legacy_listener(pid)?,
+    })
+}
+
+fn canonical_root_owned_daemon(path: &str) -> Result<PathBuf, CascadeError> {
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        CascadeError::Precondition(format!("resolve legacy daemon binary: {error}"))
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        CascadeError::Precondition(format!("stat legacy daemon binary: {error}"))
+    })?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != 0
+        || metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(CascadeError::Precondition(
+            "legacy daemon binary is not a sealed root-owned regular file".into(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn discover_legacy_daemon(
+    expected_path: &str,
+    expected_slice_mb: u64,
+) -> Result<LegacyDaemonIdentity, CascadeError> {
+    let executable = canonical_root_owned_daemon(expected_path)?;
+    let executable_sha256 = sha256_file(&executable)?;
+    let legacy_executable = canonical_root_owned_daemon(LEGACY_DAEMON_PATH).ok();
+    let mut matches = Vec::new();
+    let mut foreign_daemon_seen = false;
+    for entry in fs::read_dir("/proc").map_err(|error| {
+        CascadeError::Io(format!("enumerate processes for legacy daemon: {error}"))
+    })? {
+        let entry =
+            entry.map_err(|error| CascadeError::Io(format!("read process entry: {error}")))?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|pid| *pid > 0)
+        else {
+            continue;
+        };
+        let comm = fs::read_to_string(format!("/proc/{pid}/comm"));
+        if comm.ok().as_deref().map(str::trim) != Some("ramsharedd") {
+            continue;
+        }
+        let observation = read_legacy_daemon_observation(pid)?;
+        let proof = if fs::canonicalize(&observation.executable_link)
+            .ok()
+            .as_deref()
+            == Some(executable.as_path())
+        {
+            Some(LegacyDaemonProof::BinaryMatch)
+        } else if legacy_replaced_daemon_is_bound(&observation, &executable, expected_slice_mb) {
+            Some(LegacyDaemonProof::ReplacedBinary {
+                slice_mb: expected_slice_mb,
+            })
+        } else {
+            legacy_regular_daemon_proof(
+                &observation,
+                legacy_executable.as_deref(),
+                &executable_sha256,
+                expected_slice_mb,
+            )
+        };
+        let Some(proof) = proof else {
+            foreign_daemon_seen = true;
+            continue;
+        };
+        let instance_id = daemon_instance_id_from_pid(pid).ok_or_else(|| {
+            CascadeError::Precondition("legacy daemon start identity is unavailable".into())
+        })?;
+        matches.push(LegacyDaemonIdentity {
+            pid,
+            instance_id,
+            executable: executable.clone(),
+            proof,
+        });
+    }
+    if foreign_daemon_seen {
+        return Err(CascadeError::Precondition(
+            "legacy migration refuses a foreign ramsharedd process".into(),
+        ));
+    }
+    match matches.as_slice() {
+        [identity] => Ok(identity.clone()),
+        [] => Err(CascadeError::Precondition(
+            "legacy migration requires one BINARY_MATCH ramsharedd process".into(),
+        )),
+        _ => Err(CascadeError::Precondition(
+            "legacy migration refuses multiple BINARY_MATCH ramsharedd processes".into(),
+        )),
+    }
+}
+
+fn revalidate_legacy_daemon(identity: &LegacyDaemonIdentity) -> Result<(), CascadeError> {
+    if let LegacyDaemonProof::LegacyPathHashMatch {
+        legacy_executable, ..
+    } = &identity.proof
+    {
+        let sealed = canonical_root_owned_daemon(legacy_executable.to_str().ok_or_else(|| {
+            CascadeError::Precondition("legacy daemon path is not UTF-8".into())
+        })?)?;
+        if sealed != *legacy_executable {
+            return Err(CascadeError::Precondition(
+                "legacy daemon path changed before mutation".into(),
+            ));
+        }
+    }
+    let observed = read_legacy_daemon_observation(identity.pid)?;
+    if legacy_daemon_identity_matches(
+        identity,
+        daemon_instance_id_from_pid(identity.pid).as_deref(),
+        &observed,
+    ) {
+        Ok(())
+    } else {
+        Err(CascadeError::Precondition(
+            "legacy daemon identity changed before mutation".into(),
+        ))
+    }
+}
+
+fn stop_legacy_daemon(identity: &LegacyDaemonIdentity) -> Result<(), CascadeError> {
+    revalidate_legacy_daemon(identity)?;
+    let raw_pid = i32::try_from(identity.pid).map_err(|_| {
+        CascadeError::Precondition("legacy daemon PID is outside the pidfd range".into())
+    })?;
+    let pid = Pid::from_raw(raw_pid).ok_or_else(|| {
+        CascadeError::Precondition("legacy daemon PID cannot be bound to a pidfd".into())
+    })?;
+    let pidfd = pidfd_open(pid, PidfdFlags::empty()).map_err(|error| {
+        CascadeError::Precondition(format!("open legacy daemon pidfd: {error}"))
+    })?;
+    revalidate_legacy_daemon(identity)?;
+    pidfd_send_signal(&pidfd, Signal::TERM).map_err(|error| {
+        CascadeError::Precondition(format!("legacy daemon pidfd TERM failed: {error}"))
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while Instant::now() < deadline {
+        if process_is_gone_or_zombie(identity.pid) {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(50));
+    }
+    Err(CascadeError::UnsafeContainment(
+        "legacy daemon did not exit after bounded pidfd TERM; migration evidence retained".into(),
+    ))
+}
+
+fn legacy_drain_budget_is_sufficient(
+    zram_size_kib: u64,
+    available_bytes: u64,
+    kernel_floor_kib: u64,
+) -> bool {
+    zram_size_kib
+        .checked_add(kernel_floor_kib)
+        .and_then(|kib| kib.checked_mul(1024))
+        .is_some_and(|required| available_bytes >= required)
+}
+
+fn read_kernel_free_floor_kib() -> Result<u64, CascadeError> {
+    fs::read_to_string("/proc/sys/vm/min_free_kbytes")
+        .map_err(|error| CascadeError::Io(format!("read kernel free-memory floor: {error}")))?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| CascadeError::Precondition("kernel free-memory floor is invalid".into()))
+}
+
+fn legacy_runtime_record_value(path: &Path) -> Result<Option<String>, CascadeError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(CascadeError::Precondition(format!(
+                "stat legacy runtime record {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    if !metadata.file_type().is_file()
+        || metadata.uid() != 0
+        || metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(CascadeError::Precondition(format!(
+            "legacy runtime record {} is not a sealed root-owned regular file",
+            path.display()
+        )));
+    }
+    let value = fs::read_to_string(path).map_err(|error| {
+        CascadeError::Precondition(format!(
+            "read legacy runtime record {}: {error}",
+            path.display()
+        ))
+    })?;
+    let value = value.trim();
+    if value.is_empty() || value.contains(['\n', '\r']) {
+        return Err(CascadeError::Precondition(format!(
+            "legacy runtime record {} is malformed",
+            path.display()
+        )));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn legacy_runtime_record_values_match(
+    pid_record: Option<&str>,
+    swap_record: Option<&str>,
+    zram_record: Option<&str>,
+    expected_pid: u32,
+    expected_swap: &str,
+    expected_zram: Option<&str>,
+) -> bool {
+    pid_record.is_none_or(|value| value.trim().parse::<u32>().ok() == Some(expected_pid))
+        && swap_record.is_none_or(|value| value.trim() == expected_swap)
+        && match expected_zram {
+            Some(expected) => zram_record.is_none_or(|value| value.trim() == expected),
+            None => zram_record.is_none(),
+        }
+}
+
+fn legacy_runtime_records_are_compatible(
+    paths: &RuntimePaths,
+    legacy: &LegacyMigrationPlan,
+    daemon: &LegacyDaemonIdentity,
+) -> Result<(), CascadeError> {
+    let pid = legacy_runtime_record_value(&paths.pid_file)?;
+    let swap = legacy_runtime_record_value(&paths.swap_dev_file)?;
+    let zram = legacy_runtime_record_value(&paths.zram_dev_file)?;
+    let expected_zram = legacy.zram.as_ref().map(SwapEntry::canonical_path);
+    if legacy_runtime_record_values_match(
+        pid.as_deref(),
+        swap.as_deref(),
+        zram.as_deref(),
+        daemon.pid,
+        &legacy.nbd.canonical_path(),
+        expected_zram.as_deref(),
+    ) {
+        Ok(())
+    } else {
+        Err(CascadeError::Precondition(
+            "legacy runtime records do not match the admitted daemon and swap topology".into(),
+        ))
+    }
+}
+
+fn authorize_legacy_effect(
+    legacy: &LegacyMigrationPlan,
+    device: &BoundDeviceIdentity,
+) -> Result<(), CascadeError> {
+    let entries = read_swaps()?;
+    if entries
+        .iter()
+        .any(|entry| entry.is_ghost() && entry.is_managed_or_orphan_vram_tier())
+    {
+        return Err(CascadeError::UnsafeContainment(
+            "managed ghost swap appeared during legacy migration".into(),
+        ));
+    }
+    let expected_nbd = legacy.nbd.canonical_path();
+    let expected_zram = legacy.zram.as_ref().map(SwapEntry::canonical_path);
+    if entries.iter().any(|entry| {
+        !entry.is_ghost()
+            && entry.is_managed_or_orphan_vram_tier()
+            && entry.canonical_path() != expected_nbd
+            && expected_zram.as_deref() != Some(entry.canonical_path().as_str())
+    }) {
+        return Err(CascadeError::Precondition(
+            "unexpected managed swap appeared during legacy migration".into(),
+        ));
+    }
+    if !entries
+        .iter()
+        .any(|entry| !entry.is_ghost() && entry.canonical_path() == device.path)
+    {
+        return Err(CascadeError::UnsafeContainment(format!(
+            "{} is absent before its planned legacy migration effect",
+            device.path
+        )));
+    }
+    revalidate_legacy_bound_device(device)
+}
+
+struct RuntimeLegacyMigrationExecutor<'a, R> {
+    runner: &'a R,
+    legacy: &'a LegacyMigrationPlan,
+    daemon: &'a LegacyDaemonIdentity,
+}
+
+impl<R: CommandRunner> LegacyMigrationExecutor for RuntimeLegacyMigrationExecutor<'_, R> {
+    fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+        authorize_legacy_effect(self.legacy, device)?;
+        let pinned = bind_legacy_device_for_effect(device)?;
+        self.runner.run("swapoff", &["--", pinned.path()])?;
+        prove_exact_swap_absent(device)
+    }
+
+    fn reset_zram(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+        prove_exact_swap_absent(device)?;
+        revalidate_legacy_bound_device(device)?;
+        self.runner
+            .run("zramctl", &["-r", &device.path])
+            .map(|_| ())
+    }
+
+    fn disconnect_nbd(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+        prove_exact_swap_absent(device)?;
+        revalidate_legacy_bound_device(device)?;
+        self.runner.run("nbd-client", &["-d", &device.path])?;
+        observe_exact_detached_nbd(&device.path).map(|_| ())
+    }
+
+    fn stop_daemon(&self) -> Result<(), CascadeError> {
+        stop_legacy_daemon(self.daemon)
+    }
+}
+
+/// Explicitly retire one proven legacy cascade and attach the sealed-origin
+/// cascade. No normal `up` or recovery path calls this function.
+pub fn migrate_legacy_cascade() -> Result<(), CascadeError> {
+    let mut args = parse_up_args_from(&[], default_daemon())?;
+    let paths = RuntimePaths::system();
+    if paths.lifecycle_binding_file.exists() {
+        return Err(CascadeError::Precondition(
+            "legacy migration requires no current sealed lifecycle binding".into(),
+        ));
+    }
+    let (guardian, reason) = guardian_state_from_files(
+        Path::new(SAFE_MODE_FILE),
+        Path::new(GUARDIAN_HEALTH_FILE),
+        Duration::from_secs(15),
+    );
+    if guardian != GuardianState::Healthy {
+        return Err(CascadeError::Precondition(format!(
+            "legacy migration requires a healthy host guardian ({})",
+            reason.unwrap_or_else(|| "guardian_state_not_healthy".into())
+        )));
+    }
+    check_transport(args.transport)?;
+    origin_partuuid(&args.origin_path)?;
+    validate_origin_logical_capacity(args.vram_mb)?;
+    refuse_ghost_swap_state()?;
+    let entries = read_swaps()?;
+    let legacy = plan_legacy_migration(&entries)?;
+    let kernel_floor_kib = read_kernel_free_floor_kib()?;
+    let zram_size_kib = legacy.zram.as_ref().map_or(0, |entry| entry.size_kb);
+    if !legacy_drain_budget_is_sufficient(zram_size_kib, mem_available_bytes(), kernel_floor_kib) {
+        return Err(CascadeError::Precondition(
+            "legacy migration drain budget is below the ZRAM capacity plus kernel free-memory floor"
+                .into(),
+        ));
+    }
+    check_safety_net(args.vram_mb, args.force, &TierPriorities::default())?;
+    let daemon = discover_legacy_daemon(&args.daemon, args.vram_mb)?;
+    legacy_runtime_records_are_compatible(&paths, &legacy, &daemon)?;
+    let nbd = observe_legacy_bound_device(&legacy.nbd.canonical_path(), ManagedDeviceKind::Nbd)?;
+    let zram = legacy
+        .zram
+        .as_ref()
+        .map(|entry| observe_bound_device(&entry.canonical_path(), ManagedDeviceKind::Zram))
+        .transpose()?;
+    let transition = plan_legacy_migration_transition(&legacy, nbd, zram)?;
+    let runner = SystemCommandRunner;
+    execute_legacy_migration_transition(
+        &transition,
+        &RuntimeLegacyMigrationExecutor {
+            runner: &runner,
+            legacy: &legacy,
+            daemon: &daemon,
+        },
+    )?;
+    retire_legacy_runtime_records(&paths);
+    args.disk_baseline_kib = disk_swap_used_kib(&read_swaps()?);
+    up_with_config(args)
+}
+
+fn retire_legacy_runtime_records(paths: &RuntimePaths) {
+    remove_runtime_file(&paths.socket);
+    remove_runtime_file(&paths.zram_dev_file);
+    remove_runtime_file(&paths.swap_dev_file);
+    remove_runtime_file(&paths.capacity_status_file);
+    remove_runtime_file(&paths.pid_file);
+}
+
 /// One local cascade-down step. The plan is pure: it contains no process,
 /// filesystem, daemon, or device operation by itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2654,8 +3420,10 @@ impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, 
         let pinned = bind_device_for_effect(device)?;
         pinned.revalidate_named_identity()?;
         // zramctl does not portably accept a proc-fd target because it derives
-        // the sysfs name from /dev/<name>. The fd pin stays live across the
-        // call and exact disappearance is mandatory afterward.
+        // the sysfs name from /dev/<name>. The kernel zram driver forbids reset
+        // while any process holds an open file descriptor (returning EBUSY).
+        // Revalidate the exact descriptor first, then close before invoking reset.
+        drop(pinned);
         self.runner.run("zramctl", &["-r", &device.path])?;
         let expected_after = self
             .binding
@@ -2700,7 +3468,8 @@ impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, 
         let pinned = bind_device_for_effect(device)?;
         pinned.revalidate_named_identity()?;
         // nbd-client likewise derives NBD sysfs state from the canonical name;
-        // retain the fd/dev_t pin and prove exact disappearance after the call.
+        // revalidate the exact descriptor first, then close before invoking disconnect.
+        drop(pinned);
         self.runner.run("nbd-client", &["-d", &device.path])?;
         authorize_bound_environment(
             self.binding,
@@ -4817,6 +5586,628 @@ mod tests {
     }
 
     #[test]
+    fn legacy_migration_executor_preserves_swapoff_first_order() {
+        struct RecordingExecutor(RefCell<Vec<String>>);
+
+        impl LegacyMigrationExecutor for RecordingExecutor {
+            fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                self.0.borrow_mut().push(format!("swapoff {}", device.path));
+                Ok(())
+            }
+
+            fn reset_zram(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                self.0
+                    .borrow_mut()
+                    .push(format!("reset-zram {}", device.path));
+                Ok(())
+            }
+
+            fn disconnect_nbd(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                self.0
+                    .borrow_mut()
+                    .push(format!("disconnect-nbd {}", device.path));
+                Ok(())
+            }
+
+            fn stop_daemon(&self) -> Result<(), CascadeError> {
+                self.0.borrow_mut().push("stop-daemon".into());
+                Ok(())
+            }
+        }
+
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let legacy = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 4_140,
+                priority: 100,
+            }),
+        };
+        let transition = plan_legacy_migration_transition(&legacy, nbd, Some(zram))
+            .expect("bound legacy transition");
+        let executor = RecordingExecutor(RefCell::new(Vec::new()));
+
+        execute_legacy_migration_transition(&transition, &executor)
+            .expect("ordered legacy transition");
+
+        assert_eq!(
+            executor.0.into_inner(),
+            vec![
+                "swapoff /dev/zram0",
+                "swapoff /dev/nbd0",
+                "reset-zram /dev/zram0",
+                "disconnect-nbd /dev/nbd0",
+                "stop-daemon",
+            ]
+        );
+        assert!(legacy_drain_budget_is_sufficient(
+            1_048_572,
+            2 * 1024 * 1024 * 1024,
+            524_288
+        ));
+        assert!(!legacy_drain_budget_is_sufficient(
+            1_048_572,
+            1_500 * 1024 * 1024,
+            524_288
+        ));
+    }
+
+    #[test]
+    fn legacy_migration_executor_stops_on_first_refusal() {
+        struct RefusingExecutor(RefCell<Vec<String>>);
+
+        impl LegacyMigrationExecutor for RefusingExecutor {
+            fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                self.0.borrow_mut().push(format!("swapoff {}", device.path));
+                Err(CascadeError::UnsafeContainment(
+                    "manufactured swapoff refusal".into(),
+                ))
+            }
+
+            fn reset_zram(&self, _device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                self.0.borrow_mut().push("reset-zram".into());
+                Ok(())
+            }
+
+            fn disconnect_nbd(&self, _device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                self.0.borrow_mut().push("disconnect-nbd".into());
+                Ok(())
+            }
+
+            fn stop_daemon(&self) -> Result<(), CascadeError> {
+                self.0.borrow_mut().push("stop-daemon".into());
+                Ok(())
+            }
+        }
+
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let legacy = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: None,
+        };
+        let transition =
+            plan_legacy_migration_transition(&legacy, nbd, None).expect("bound legacy transition");
+        let executor = RefusingExecutor(RefCell::new(Vec::new()));
+
+        let error = error_from(
+            execute_legacy_migration_transition(&transition, &executor),
+            "first legacy effect must stop the transition",
+        );
+
+        assert!(error.to_string().contains("manufactured swapoff refusal"));
+        assert_eq!(executor.0.into_inner(), vec!["swapoff /dev/nbd0"]);
+    }
+
+    #[test]
+    fn legacy_migration_rejects_replaced_daemon_identity() {
+        let identity = LegacyDaemonIdentity {
+            pid: 42,
+            instance_id: "42-100".into(),
+            executable: PathBuf::from("/opt/ramshared/bin/ramsharedd"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: PathBuf::from("/opt/ramshared/bin/ramsharedd"),
+            canonical_executable: Some(PathBuf::from("/opt/ramshared/bin/ramsharedd")),
+            executable_sha256: None,
+            arguments: Vec::new(),
+            owns_legacy_listener: false,
+        };
+
+        assert!(legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &observation,
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-101"),
+            &observation,
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                canonical_executable: Some(PathBuf::from("/opt/ramshared/bin/replaced")),
+                ..observation
+            },
+        ));
+    }
+
+    #[test]
+    fn legacy_replaced_daemon_requires_bound_root_listener() {
+        let identity = LegacyDaemonIdentity {
+            pid: 42,
+            instance_id: "42-100".into(),
+            executable: PathBuf::from("/usr/local/bin/ramsharedd"),
+            proof: LegacyDaemonProof::ReplacedBinary { slice_mb: 4096 },
+        };
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: PathBuf::from("/usr/local/bin/ramsharedd (deleted)"),
+            canonical_executable: None,
+            executable_sha256: None,
+            arguments: vec![
+                "/usr/local/bin/ramsharedd".into(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "4096".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ],
+            owns_legacy_listener: true,
+        };
+
+        assert!(legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &observation,
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                owns_legacy_listener: false,
+                ..observation.clone()
+            },
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                uid: 1000,
+                ..observation.clone()
+            },
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity,
+            Some("42-100"),
+            &LegacyDaemonObservation {
+                arguments: vec!["/usr/local/bin/ramsharedd".into()],
+                ..observation
+            },
+        ));
+    }
+
+    #[test]
+    fn legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener() {
+        let digest = [0x5a; 32];
+        let legacy_executable = PathBuf::from("/usr/local/bin/ramsharedd");
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: legacy_executable.clone(),
+            canonical_executable: Some(legacy_executable.clone()),
+            executable_sha256: Some(digest),
+            arguments: vec![
+                "/usr/local/bin/ramsharedd".into(),
+                "--backend".into(),
+                "auto".into(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "4096".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ],
+            owns_legacy_listener: true,
+        };
+
+        assert!(legacy_regular_daemon_is_bound(
+            &observation,
+            &legacy_executable,
+            &digest,
+            4096,
+        ));
+        assert!(!legacy_regular_daemon_is_bound(
+            &LegacyDaemonObservation {
+                executable_sha256: Some([0xa5; 32]),
+                ..observation
+            },
+            &legacy_executable,
+            &digest,
+            4096,
+        ));
+    }
+
+    #[test]
+    fn nbd_device_permits_confirmed_absent_kernel_owner() {
+        assert_eq!(
+            nbd_owner_policy_for_kind(ManagedDeviceKind::Nbd),
+            NbdOwnerPolicy::PermitAbsent
+        );
+        assert_eq!(
+            nbd_owner_policy_for_kind(ManagedDeviceKind::Zram),
+            NbdOwnerPolicy::RequireLive
+        );
+    }
+
+    #[test]
+    fn retire_legacy_runtime_records_removes_stale_legacy_evidence() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime dir fixture");
+        fs::write(&paths.pid_file, "123\n").expect("write pid fixture");
+        fs::write(&paths.swap_dev_file, "/dev/nbd0\n").expect("write swap fixture");
+        fs::write(&paths.zram_dev_file, "/dev/zram0\n").expect("write zram fixture");
+        fs::write(&paths.capacity_status_file, "1\n").expect("write capacity fixture");
+        fs::write(&paths.socket, "sock\n").expect("write socket fixture");
+
+        assert!(paths.pid_file.exists());
+        assert!(paths.swap_dev_file.exists());
+        assert!(paths.zram_dev_file.exists());
+        assert!(paths.capacity_status_file.exists());
+        assert!(paths.socket.exists());
+
+        retire_legacy_runtime_records(&paths);
+
+        assert!(!paths.pid_file.exists());
+        assert!(!paths.swap_dev_file.exists());
+        assert!(!paths.zram_dev_file.exists());
+        assert!(!paths.capacity_status_file.exists());
+        assert!(!paths.socket.exists());
+    }
+
+    #[test]
+    fn legacy_nbd_owner_policy_accepts_only_confirmed_absence() {
+        let live =
+            nbd_kernel_owner_identity(Some("5939-100".into()), false, NbdOwnerPolicy::RequireLive)
+                .expect("live NBD owner must remain admissible");
+        assert_eq!(live.as_deref(), Some("5939-100"));
+
+        assert_eq!(
+            nbd_kernel_owner_identity(None, true, NbdOwnerPolicy::PermitAbsent)
+                .expect("a confirmed absent owner is legacy-only admissible"),
+            None
+        );
+        assert!(nbd_kernel_owner_identity(None, true, NbdOwnerPolicy::RequireLive).is_err());
+        assert!(nbd_kernel_owner_identity(None, false, NbdOwnerPolicy::PermitAbsent).is_err());
+    }
+
+    #[test]
+    fn legacy_runtime_records_require_exact_legacy_values() {
+        assert!(legacy_runtime_record_values_match(
+            Some("527\n"),
+            Some("/dev/nbd0\n"),
+            Some("/dev/zram0\n"),
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(legacy_runtime_record_values_match(
+            None,
+            None,
+            None,
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            Some("528"),
+            Some("/dev/nbd0"),
+            Some("/dev/zram0"),
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            Some("527"),
+            Some("/dev/nbd1"),
+            Some("/dev/zram0"),
+            527,
+            "/dev/nbd0",
+            Some("/dev/zram0"),
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            Some("527"),
+            Some("/dev/nbd0"),
+            Some("/dev/zram0"),
+            527,
+            "/dev/nbd0",
+            None,
+        ));
+    }
+
+    #[test]
+    fn deleted_executable_path_handles_deleted_and_normal_links() {
+        assert_eq!(
+            deleted_executable_path(Path::new("/opt/ramshared/bin/ramsharedd (deleted)")),
+            Some(PathBuf::from("/opt/ramshared/bin/ramsharedd"))
+        );
+        assert_eq!(
+            deleted_executable_path(Path::new("/opt/ramshared/bin/ramsharedd")),
+            None
+        );
+        assert_eq!(deleted_executable_path(Path::new("ramsharedd")), None);
+    }
+
+    #[test]
+    fn sha256_file_hashes_exact_content_and_reports_missing_file() {
+        let dir = TestDir::new();
+        let file_path = dir.path.join("test_bin");
+        let content = b"sealed binary payload for test";
+        fs::write(&file_path, content).expect("write temp binary");
+
+        let hash = sha256_file(&file_path).expect("hash regular file");
+        let expected: [u8; 32] = Sha256::digest(content).into();
+        assert_eq!(hash, expected);
+
+        let missing = dir.path.join("nonexistent_bin");
+        assert!(sha256_file(&missing).is_err());
+    }
+
+    #[test]
+    fn legacy_runtime_record_value_validates_file_shape_and_content() {
+        let dir = TestDir::new();
+        let missing = dir.path.join("missing_record");
+        assert_eq!(
+            legacy_runtime_record_value(&missing).expect("missing record"),
+            None
+        );
+
+        let valid = dir.path.join("valid_record");
+        fs::write(&valid, "42\n").expect("write valid record");
+        let result = legacy_runtime_record_value(&valid);
+        if rustix::process::getuid().as_raw() == 0 {
+            assert_eq!(result.expect("valid record"), Some("42".into()));
+        } else {
+            assert!(result.is_err());
+        }
+
+        let malformed = dir.path.join("malformed_record");
+        fs::write(&malformed, "\n").expect("write empty record");
+        assert!(legacy_runtime_record_value(&malformed).is_err());
+    }
+
+    #[test]
+    fn plan_legacy_migration_transition_refuses_invalid_topologies() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let wrong_path = bound_device_fixture("/dev/nbd1", ManagedDeviceKind::Nbd);
+
+        let legacy_with_zram = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 4_140,
+                priority: 100,
+            }),
+        };
+
+        assert!(
+            plan_legacy_migration_transition(&legacy_with_zram, zram.clone(), Some(zram.clone()))
+                .is_err()
+        );
+        assert!(
+            plan_legacy_migration_transition(&legacy_with_zram, wrong_path, Some(zram.clone()))
+                .is_err()
+        );
+        assert!(plan_legacy_migration_transition(&legacy_with_zram, nbd.clone(), None).is_err());
+
+        let legacy_nbd_only = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: None,
+        };
+        assert!(
+            plan_legacy_migration_transition(&legacy_nbd_only, nbd.clone(), Some(zram)).is_err()
+        );
+
+        let plan = plan_legacy_migration_transition(&legacy_nbd_only, nbd, None)
+            .expect("plan nbd-only transition");
+        assert_eq!(plan.actions.len(), 3);
+    }
+
+    #[test]
+    fn legacy_regular_daemon_proof_validates_matching_and_refuses_mismatch() {
+        let digest = [0x7c; 32];
+        let legacy_executable = PathBuf::from("/usr/local/bin/ramsharedd");
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: legacy_executable.clone(),
+            canonical_executable: Some(legacy_executable.clone()),
+            executable_sha256: Some(digest),
+            arguments: vec![
+                "/usr/local/bin/ramsharedd".into(),
+                "--backend".into(),
+                "auto".into(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "4096".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ],
+            owns_legacy_listener: true,
+        };
+
+        assert!(
+            legacy_regular_daemon_proof(&observation, Some(&legacy_executable), &digest, 4096)
+                .is_some()
+        );
+
+        assert!(legacy_regular_daemon_proof(&observation, None, &digest, 4096).is_none());
+
+        assert!(
+            legacy_regular_daemon_proof(&observation, Some(&legacy_executable), &[0x11; 32], 4096)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn canonical_root_owned_daemon_refuses_nonexistent_and_unsealed() {
+        let dir = TestDir::new();
+        let nonexistent = dir.path.join("missing_daemon");
+        assert!(canonical_root_owned_daemon(nonexistent.to_str().expect("valid utf-8")).is_err());
+
+        let regular = dir.path.join("unsealed_daemon");
+        fs::write(&regular, b"binary content").expect("write daemon test file");
+        let result = canonical_root_owned_daemon(regular.to_str().expect("valid utf-8"));
+        if rustix::process::getuid().as_raw() != 0 {
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn execute_legacy_migration_transition_covers_all_action_variants() {
+        struct MockExecutor {
+            swapoff_calls: RefCell<usize>,
+            reset_zram_calls: RefCell<usize>,
+            disconnect_nbd_calls: RefCell<usize>,
+            stop_daemon_calls: RefCell<usize>,
+            fail_on: Option<String>,
+        }
+
+        impl LegacyMigrationExecutor for MockExecutor {
+            fn swapoff(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                *self.swapoff_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("swapoff") {
+                    Err(CascadeError::Precondition(format!(
+                        "swapoff failed for {}",
+                        device.path
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            fn reset_zram(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                *self.reset_zram_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("reset_zram") {
+                    Err(CascadeError::Precondition(format!(
+                        "reset_zram failed for {}",
+                        device.path
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            fn disconnect_nbd(&self, device: &BoundDeviceIdentity) -> Result<(), CascadeError> {
+                *self.disconnect_nbd_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("disconnect_nbd") {
+                    Err(CascadeError::Precondition(format!(
+                        "disconnect_nbd failed for {}",
+                        device.path
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+            fn stop_daemon(&self) -> Result<(), CascadeError> {
+                *self.stop_daemon_calls.borrow_mut() += 1;
+                if self.fail_on.as_deref() == Some("stop_daemon") {
+                    Err(CascadeError::Precondition("stop_daemon failed".into()))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let transition = LegacyMigrationTransition {
+            actions: vec![
+                LegacyMigrationAction::Swapoff(zram.clone()),
+                LegacyMigrationAction::Swapoff(nbd.clone()),
+                LegacyMigrationAction::ResetZram(zram.clone()),
+                LegacyMigrationAction::DisconnectNbd(nbd.clone()),
+                LegacyMigrationAction::StopDaemon,
+            ],
+        };
+
+        let executor = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: None,
+        };
+
+        assert!(execute_legacy_migration_transition(&transition, &executor).is_ok());
+        assert_eq!(*executor.swapoff_calls.borrow(), 2);
+        assert_eq!(*executor.reset_zram_calls.borrow(), 1);
+        assert_eq!(*executor.disconnect_nbd_calls.borrow(), 1);
+        assert_eq!(*executor.stop_daemon_calls.borrow(), 1);
+
+        let failing_reset = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: Some("reset_zram".into()),
+        };
+        assert!(execute_legacy_migration_transition(&transition, &failing_reset).is_err());
+
+        let failing_disc = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: Some("disconnect_nbd".into()),
+        };
+        assert!(execute_legacy_migration_transition(&transition, &failing_disc).is_err());
+
+        let failing_stop = MockExecutor {
+            swapoff_calls: RefCell::new(0),
+            reset_zram_calls: RefCell::new(0),
+            disconnect_nbd_calls: RefCell::new(0),
+            stop_daemon_calls: RefCell::new(0),
+            fail_on: Some("stop_daemon".into()),
+        };
+        assert!(execute_legacy_migration_transition(&transition, &failing_stop).is_err());
+    }
+
+    #[test]
+    fn legacy_drain_budget_checks_overflow_and_boundaries() {
+        assert!(legacy_drain_budget_is_sufficient(0, 1024, 0));
+        assert!(!legacy_drain_budget_is_sufficient(u64::MAX, 1024, 1024));
+        assert!(!legacy_drain_budget_is_sufficient(1024, 1024, u64::MAX));
+    }
+
+    #[test]
     fn down_refuses_foreign_live_device_without_running_a_command() {
         let fixture = TestDir::new();
         let daemon = spawn_fixture_daemon(&fixture, "exit 0");
@@ -5587,6 +6978,261 @@ mod tests {
 
         assert_eq!(command_label("test", &["a", "b"]), "test a b");
         assert_eq!(command_label("test", &[]), "test");
+    }
+
+    #[test]
+    fn legacy_runtime_records_are_compatible_validates_files() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime dir");
+
+        let legacy_with_zram = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 0,
+                priority: 100,
+            }),
+        };
+        let daemon = LegacyDaemonIdentity {
+            pid: 4242,
+            instance_id: "4242-100".into(),
+            executable: PathBuf::from("/usr/local/bin/ramsharedd"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+
+        // None present is compatible (optional legacy records)
+        assert!(legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_ok());
+
+        // When a record is written by non-root, legacy_runtime_record_value rejects it (not root-owned)
+        fs::write(&paths.pid_file, "4242\n").expect("write pid");
+        if rustix::process::getuid().as_raw() == 0 {
+            fs::write(&paths.swap_dev_file, "/dev/nbd0\n").expect("write swap");
+            fs::write(&paths.zram_dev_file, "/dev/zram0\n").expect("write zram");
+            assert!(
+                legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_ok()
+            );
+
+            // Mismatched PID
+            fs::write(&paths.pid_file, "9999\n").expect("write bad pid");
+            assert!(
+                legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_err()
+            );
+        } else {
+            assert!(
+                legacy_runtime_records_are_compatible(&paths, &legacy_with_zram, &daemon).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn process_socket_and_listener_probes_cover_live_and_dead_pids() {
+        let my_pid = std::process::id();
+        let inodes = process_socket_inodes(my_pid);
+        assert!(inodes.is_ok());
+
+        assert!(process_socket_inodes(999_999_999).is_err());
+
+        let listener_inodes = legacy_listener_socket_inodes();
+        assert!(listener_inodes.is_ok());
+
+        let owns = process_owns_legacy_listener(my_pid);
+        assert!(owns.is_ok());
+    }
+
+    #[test]
+    fn read_legacy_daemon_observation_covers_current_process_and_refuses_missing() {
+        let my_pid = std::process::id();
+        let obs = read_legacy_daemon_observation(my_pid).expect("current process observation");
+        assert_eq!(obs.uid, rustix::process::getuid().as_raw());
+        assert!(obs.executable_sha256.is_some());
+        assert!(!obs.arguments.is_empty());
+
+        assert!(read_legacy_daemon_observation(999_999_999).is_err());
+    }
+
+    #[test]
+    fn revalidate_and_stop_legacy_daemon_refuse_unverifiable_daemons() {
+        let fake_dead = LegacyDaemonIdentity {
+            pid: 999_999_999,
+            instance_id: "999999999-100".into(),
+            executable: PathBuf::from("/bin/sh"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+        assert!(revalidate_legacy_daemon(&fake_dead).is_err());
+        assert!(stop_legacy_daemon(&fake_dead).is_err());
+
+        let fake_legacy = LegacyDaemonIdentity {
+            pid: 999_999_999,
+            instance_id: "999999999-100".into(),
+            executable: PathBuf::from("/bin/sh"),
+            proof: LegacyDaemonProof::LegacyPathHashMatch {
+                legacy_executable: PathBuf::from("/nonexistent/ramsharedd"),
+                executable_sha256: [0u8; 32],
+                slice_mb: 4096,
+            },
+        };
+        assert!(revalidate_legacy_daemon(&fake_legacy).is_err());
+    }
+
+    #[test]
+    fn revalidate_legacy_bound_device_checks_exact_identity() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        assert!(revalidate_legacy_bound_device(&nbd).is_ok());
+
+        let mut mutated = nbd;
+        mutated.dev_t = "99:99".into();
+        assert!(revalidate_legacy_bound_device(&mutated).is_err());
+    }
+
+    #[test]
+    fn read_kernel_free_floor_kib_reads_sysfs_when_available() {
+        if Path::new("/proc/sys/vm/min_free_kbytes").exists() {
+            let floor = read_kernel_free_floor_kib().expect("read floor");
+            assert!(floor > 0);
+        }
+    }
+
+    #[test]
+    fn authorize_legacy_effect_validates_ghosts_and_presence() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let legacy = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 0,
+                priority: 100,
+            }),
+        };
+
+        // Ghost swap present
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0 (deleted)\tpartition\t4194300\t0\t50\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_err());
+        }
+
+        // Unexpected swap present
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0\tpartition\t4194300\t0\t50\n/dev/nbd9\tpartition\t4194300\t0\t40\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_err());
+        }
+
+        // Target device absent
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/zram0\tpartition\t1048572\t0\t100\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_err());
+        }
+
+        // Both present and matching
+        {
+            let _seams = ParentSeams::install(
+                "Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0\tpartition\t4194300\t0\t50\n/dev/zram0\tpartition\t1048572\t0\t100\n",
+                0,
+            );
+            assert!(authorize_legacy_effect(&legacy, &nbd).is_ok());
+            assert!(authorize_legacy_effect(&legacy, &zram).is_ok());
+        }
+    }
+
+    #[test]
+    fn runtime_legacy_migration_executor_exercises_all_transition_steps() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let legacy = LegacyMigrationPlan {
+            nbd: SwapEntry {
+                filename: "/dev/nbd0".into(),
+                size_kb: 4_194_300,
+                used_kb: 0,
+                priority: 50,
+            },
+            zram: Some(SwapEntry {
+                filename: "/dev/zram0".into(),
+                size_kb: 1_048_572,
+                used_kb: 0,
+                priority: 100,
+            }),
+        };
+        let daemon = LegacyDaemonIdentity {
+            pid: 999_999_999,
+            instance_id: "999999999-100".into(),
+            executable: PathBuf::from("/bin/sh"),
+            proof: LegacyDaemonProof::BinaryMatch,
+        };
+
+        let runner = ScriptedRunner::new(vec![
+            ("swapoff -- /dev/nbd0".into(), Ok(String::new())),
+            ("zramctl -r /dev/zram0".into(), Ok(String::new())),
+            ("nbd-client -d /dev/nbd0".into(), Ok(String::new())),
+        ]);
+
+        let executor = RuntimeLegacyMigrationExecutor {
+            runner: &runner,
+            legacy: &legacy,
+            daemon: &daemon,
+        };
+
+        // Swapoff sequence with seams
+        {
+            let _seams = ParentSeams::install("", 0);
+            set_swap_snapshots([
+                Ok("Filename\tType\tSize\tUsed\tPriority\n/dev/nbd0\tpartition\t4194300\t0\t50\n"),
+                Ok("Filename\tType\tSize\tUsed\tPriority\n"),
+            ]);
+            assert!(executor.swapoff(&nbd).is_ok());
+        }
+
+        // Reset zram when swap absent
+        {
+            let _seams = ParentSeams::install("Filename\tType\tSize\tUsed\tPriority\n", 0);
+            assert!(executor.reset_zram(&zram).is_ok());
+            assert!(executor.disconnect_nbd(&nbd).is_ok());
+        }
+
+        // Stop daemon fails for dead PID
+        assert!(executor.stop_daemon().is_err());
+    }
+
+    #[test]
+    fn migrate_legacy_cascade_fails_closed_without_active_legacy_setup() {
+        assert!(migrate_legacy_cascade().is_err());
+    }
+
+    #[test]
+    fn read_lifecycle_binding_refuses_unsealed_or_malformed() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        assert!(read_lifecycle_binding(&paths).is_err());
+
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime dir");
+        fs::write(&paths.lifecycle_binding_file, b"not valid json").expect("write binding file");
+        fs::set_permissions(
+            &paths.lifecycle_binding_file,
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("set mode");
+        assert!(read_lifecycle_binding(&paths).is_err());
     }
 
     #[test]

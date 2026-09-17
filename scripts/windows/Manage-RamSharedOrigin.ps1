@@ -10,7 +10,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet("plan", "install", "configure", "status", "uninstall", "test")]
+    [ValidateSet("plan", "install", "configure", "status", "uninstall", "attach", "test")]
     [string]$Action = "plan",
     [switch]$Run,
     [switch]$AttendedOriginApply,
@@ -24,7 +24,9 @@ param(
     [string]$OriginVhdxPath = "",
     [string]$ExistingSwapVhdxPath = "",
     [ValidatePattern('^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$')]
-    [string]$PARTUUID = "00000000-0000-0000-0000-000000000000"
+    [string]$PARTUUID = "00000000-0000-0000-0000-000000000000",
+    [ValidateRange(5GB, 64GB)]
+    [uint64]$OriginSizeBytes = 5GB
 )
 
 Set-StrictMode -Version Latest
@@ -78,13 +80,17 @@ $OriginVhdx = if ([string]::IsNullOrWhiteSpace($OriginVhdxPath)) {
 } else {
     Resolve-AbsoluteWindowsPath -Path $OriginVhdxPath -Name "OriginVhdxPath"
 }
-$OriginSize = 25GB
+$OriginSize = if ($PSBoundParameters.ContainsKey("OriginSizeBytes")) { [uint64]$OriginSizeBytes } else { 5GB }
+if (($OriginSize % 1GB) -ne 0 -or $OriginSize -lt 5GB -or $OriginSize -gt 64GB -or $OriginSize -lt [uint64](($LogicalCapacityMiB + 1024) * 1MB)) {
+    throw "origin container size must be whole GiB between 5 GiB and 64 GiB, and at least 1 GiB larger than logical capacity"
+}
+$OriginSizeGiB = [int]($OriginSize / 1GB)
 $ChunkMiB = 128
 $GpuReserveMinMiB = 2048
 $GpuReservePercent = 20
 $ManifestPath = "C:\ProgramData\RamShared\ramshared-origin-manifest.json"
 $BackupRoot = "C:\ProgramData\RamShared\ramshared-origin-backup"
-$ApprovalToken = "RAMSHARED_ORIGIN_25GIB_PARTUUID"
+$ApprovalToken = if ($OriginSize -eq 25GB) { "RAMSHARED_ORIGIN_25GIB_PARTUUID" } else { "RAMSHARED_ORIGIN_${OriginSizeGiB}GIB_PARTUUID" }
 $OwnershipProofSchema = 1
 $PartUuidWasSupplied = $PSBoundParameters.ContainsKey("PARTUUID")
 $LogicalCapacityWasSupplied = $PSBoundParameters.ContainsKey("LogicalCapacityMiB")
@@ -108,9 +114,10 @@ function Get-OriginConfigurationSha256 {
         [Parameter(Mandatory = $true)][int]$ManifestPhysicalCacheCapMiB,
         [Parameter(Mandatory = $true)][string]$ManifestPartUuid,
         [Parameter(Mandatory = $true)][string]$ManifestDiskGuid,
-        [Parameter(Mandatory = $true)][string]$ManifestExpectedSwapUuid
+        [Parameter(Mandatory = $true)][string]$ManifestExpectedSwapUuid,
+        [Parameter(Mandatory = $false)][uint64]$ManifestFixedSizeBytes = $OriginSize
     )
-    $text = "schema=3`norigin_vhdx=$OriginVhdx`nfixed_size_bytes=$OriginSize`nlogical_capacity_mib=$ManifestLogicalCapacityMiB`nphysical_cache_cap_mib=$ManifestPhysicalCacheCapMiB`nchunk_mib=$ChunkMiB`ngpu_reserve_min_mib=$GpuReserveMinMiB`ngpu_reserve_percent=$GpuReservePercent`npartuuid=$ManifestPartUuid`ndisk_guid=$ManifestDiskGuid`nexpected_swap_uuid=$ManifestExpectedSwapUuid`nownership_proof_schema=$OwnershipProofSchema`nexisting_wsl_swap_vhdx=$ExistingSwapVhdx`n"
+    $text = "schema=3`norigin_vhdx=$OriginVhdx`nfixed_size_bytes=$ManifestFixedSizeBytes`nlogical_capacity_mib=$ManifestLogicalCapacityMiB`nphysical_cache_cap_mib=$ManifestPhysicalCacheCapMiB`nchunk_mib=$ChunkMiB`ngpu_reserve_min_mib=$GpuReserveMinMiB`ngpu_reserve_percent=$GpuReservePercent`npartuuid=$ManifestPartUuid`ndisk_guid=$ManifestDiskGuid`nexpected_swap_uuid=$ManifestExpectedSwapUuid`nownership_proof_schema=$OwnershipProofSchema`nexisting_wsl_swap_vhdx=$ExistingSwapVhdx`n"
     $sha = [Security.Cryptography.SHA256]::Create()
     try {
         return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace("-", "").ToLowerInvariant()
@@ -128,7 +135,7 @@ function Write-OriginManifest {
     }
     $directory = Split-Path -Parent $ManifestPath
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $configurationHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $LogicalCapacityMiB -ManifestPhysicalCacheCapMiB $PhysicalCacheCapMiB -ManifestPartUuid $PARTUUID -ManifestDiskGuid $DiskGuid -ManifestExpectedSwapUuid $ExpectedSwapUuid
+    $configurationHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $LogicalCapacityMiB -ManifestPhysicalCacheCapMiB $PhysicalCacheCapMiB -ManifestPartUuid $PARTUUID -ManifestDiskGuid $DiskGuid -ManifestExpectedSwapUuid $ExpectedSwapUuid -ManifestFixedSizeBytes $OriginSize
     $manifest = [ordered]@{ schema_version = 3; origin_vhdx = $OriginVhdx; fixed_size_bytes = $OriginSize; logical_capacity_mib = $LogicalCapacityMiB; physical_cache_cap_mib = $PhysicalCacheCapMiB; chunk_mib = $ChunkMiB; gpu_reserve_min_mib = $GpuReserveMinMiB; gpu_reserve_percent = $GpuReservePercent; partuuid = $PARTUUID; disk_guid = $DiskGuid; expected_swap_uuid = $ExpectedSwapUuid; ownership_proof_schema = $OwnershipProofSchema; existing_wsl_swap_vhdx = $ExistingSwapVhdx; configuration_sha256 = $configurationHash }
     $temporary = Join-Path $directory ((Split-Path -Leaf $ManifestPath) + "." + [Guid]::NewGuid().ToString("N") + ".tmp")
     try {
@@ -159,10 +166,10 @@ function Read-SealedOriginManifest {
     $partUuid = ([string]$manifest.partuuid).ToLowerInvariant()
     $diskGuid = ([string]$manifest.disk_guid).ToLowerInvariant()
     $expectedSwapUuid = ([string]$manifest.expected_swap_uuid).ToLowerInvariant()
-    if ($manifest.schema_version -ne 3 -or $manifest.origin_vhdx -cne $OriginVhdx -or $manifest.existing_wsl_swap_vhdx -cne $ExistingSwapVhdx -or $fixedSize -ne [uint64]$OriginSize -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
+    if ($manifest.schema_version -ne 3 -or $manifest.origin_vhdx -cne $OriginVhdx -or $manifest.existing_wsl_swap_vhdx -cne $ExistingSwapVhdx -or $fixedSize -lt 5GB -or $fixedSize -gt 64GB -or ($fixedSize % 1GB) -ne 0 -or $fixedSize -lt [uint64](($logical + 1024) * 1MB) -or ($PSBoundParameters.ContainsKey("OriginSizeBytes") -and $fixedSize -ne [uint64]$OriginSize) -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
         throw "sealed origin manifest policy mismatch"
     }
-    $actualHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $logical -ManifestPhysicalCacheCapMiB $physical -ManifestPartUuid $partUuid -ManifestDiskGuid $diskGuid -ManifestExpectedSwapUuid $expectedSwapUuid
+    $actualHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $logical -ManifestPhysicalCacheCapMiB $physical -ManifestPartUuid $partUuid -ManifestDiskGuid $diskGuid -ManifestExpectedSwapUuid $expectedSwapUuid -ManifestFixedSizeBytes $fixedSize
     if ($actualHash -cne [string]$manifest.configuration_sha256) { throw "sealed origin manifest configuration hash mismatch" }
     return $manifest
 }
@@ -170,7 +177,8 @@ function Read-SealedOriginManifest {
 function Get-OriginVhdxOwnershipProof {
     param([Parameter(Mandatory = $true)][string]$VhdxPath = $OriginVhdx)
     $vhd = Get-VHD -Path $VhdxPath -ErrorAction Stop
-    if ($null -eq $vhd -or [uint64]$vhd.Size -ne [uint64]$OriginSize -or [string]$vhd.VhdType -cne "Fixed") {
+    $vhdSize = [uint64]$vhd.Size
+    if ($null -eq $vhd -or $vhdSize -lt 5GB -or $vhdSize -gt 64GB -or ($vhdSize % 1GB) -ne 0 -or [string]$vhd.VhdType -cne "Fixed") {
         throw "origin VHDX does not match the sealed fixed-size policy"
     }
     $image = Get-DiskImage -ImagePath $VhdxPath -ErrorAction Stop
@@ -203,6 +211,109 @@ function Test-OriginProofMatchesManifest {
         (Test-CanonicalOriginGuid -Value ([string]$Manifest.disk_guid)) -and
         $Proof.partuuid -ceq ([string]$Manifest.partuuid) -and
         $Proof.disk_guid -ceq ([string]$Manifest.disk_guid)
+}
+
+function Test-OriginAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Invoke-OriginBoundedProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [Parameter(Mandatory = $true)][string]$Arguments,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 30)][int]$TimeoutSeconds
+    )
+    $start = New-Object System.Diagnostics.ProcessStartInfo
+    $start.FileName = $FileName
+    $start.Arguments = $Arguments
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw "origin bounded process did not start" }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        $terminated = $false
+        if (-not $completed) {
+            try {
+                $process.Kill()
+                $terminated = $process.WaitForExit(5000)
+            } catch {
+                $terminated = $false
+            }
+        }
+        $streamsDrained = $false
+        try {
+            $streamsDrained = [Threading.Tasks.Task]::WaitAll(
+                [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), 5000)
+        } catch {
+            $streamsDrained = $false
+        }
+        return [ordered]@{
+            completed = [bool]($completed -and $streamsDrained)
+            exit_code = if ($completed -and $streamsDrained) { [int]$process.ExitCode } else { $null }
+            timed_out = [bool](-not $completed)
+            process_terminated = [bool]$terminated
+        }
+    } finally {
+        $process.Dispose()
+    }
+}
+
+function Invoke-OriginGuestPartUuidProbe {
+    param([Parameter(Mandatory = $true)][string]$PartUuid)
+    if (-not (Test-CanonicalOriginGuid -Value $PartUuid)) {
+        throw "origin guest PARTUUID probe received an invalid identity"
+    }
+    $arguments = "-d " + $Distro + " -u root -- test -b /dev/disk/by-partuuid/" + $PartUuid.ToLowerInvariant()
+    $probe = Invoke-OriginBoundedProcess -FileName "wsl.exe" -Arguments $arguments -TimeoutSeconds 5
+    if (-not $probe.completed) { throw "origin guest PARTUUID probe did not complete" }
+    if ($probe.exit_code -eq 0) { return $true }
+    if ($probe.exit_code -eq 1) { return $false }
+    throw "origin guest PARTUUID probe failed"
+}
+
+function Get-OriginAttachmentDecision {
+    param([Parameter(Mandatory = $true)][bool]$GuestPartuuidPresent)
+    if ($GuestPartuuidPresent) {
+        return [ordered]@{ state = "ALREADY_ATTACHED"; host_mutation = $false }
+    }
+    return [ordered]@{ state = "ATTACH_REQUIRED"; host_mutation = $true }
+}
+
+function Invoke-OriginAttachment {
+    param([Parameter(Mandatory = $true)][object]$Manifest)
+    if (-not (Test-OriginAdministrator)) { throw "origin attach requires an administrator token" }
+    $partUuid = ([string]$Manifest.partuuid).ToLowerInvariant()
+    $diskGuid = ([string]$Manifest.disk_guid).ToLowerInvariant()
+    $decision = Get-OriginAttachmentDecision -GuestPartuuidPresent (Invoke-OriginGuestPartUuidProbe -PartUuid $partUuid)
+    if ($decision.state -eq "ALREADY_ATTACHED") {
+        [ordered]@{ state = $decision.state; action = "attach"; partuuid = $partUuid; disk_guid = $diskGuid; host_mutation = $false } | ConvertTo-Json -Depth 4
+        return
+    }
+    if ($OriginVhdx -match '\s') { throw "origin attach requires a whitespace-free sealed VHDX path" }
+    $proof = Get-OriginVhdxOwnershipProof -VhdxPath $OriginVhdx
+    if (-not (Test-OriginProofMatchesManifest -Proof $proof -Manifest $Manifest)) {
+        throw "origin attach ownership proof does not match the sealed VHDX"
+    }
+    $mount = Invoke-OriginBoundedProcess -FileName "wsl.exe" `
+        -Arguments ("--mount --vhd " + $OriginVhdx + " --bare") -TimeoutSeconds 15
+    if (-not $mount.completed) { throw "origin attach did not complete within the bounded deadline" }
+    if ($mount.exit_code -ne 0) { throw "origin attach command failed" }
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        if (Invoke-OriginGuestPartUuidProbe -PartUuid $partUuid) {
+            [ordered]@{ state = "ATTACHED"; action = "attach"; partuuid = $partUuid; disk_guid = $diskGuid; host_mutation = $true } | ConvertTo-Json -Depth 4
+            return
+        }
+        if ($attempt -lt 5) { Start-Sleep -Seconds 1 }
+    }
+    throw "origin attach did not expose the sealed PARTUUID"
 }
 
 function New-OriginInstallTransaction {
@@ -379,6 +490,12 @@ function Invoke-OriginManufacturedTests {
     $uninstallFailure = @{ manifest = $manifest; manifest_backup = "I:\RamShared\uninstall.manifest.json"; staging_vhdx = "I:\RamShared\uninstall.staging"; origin_staged = $true; manifest_removed = $true }
     $uninstallRollback = Get-OriginUninstallRollbackTargets -Transaction $uninstallFailure
     if (-not $uninstallRollback.restore_origin -or -not $uninstallRollback.restore_manifest) { throw "manufactured uninstall rollback did not preserve authority" }
+    $alreadyAttached = Get-OriginAttachmentDecision -GuestPartuuidPresent $true
+    $attachRequired = Get-OriginAttachmentDecision -GuestPartuuidPresent $false
+    if ($alreadyAttached.state -cne "ALREADY_ATTACHED" -or $alreadyAttached.host_mutation -or
+        $attachRequired.state -cne "ATTACH_REQUIRED" -or -not $attachRequired.host_mutation) {
+        throw "manufactured origin attachment decision was not idempotent and fail closed"
+    }
     Write-Output "PASS origin_plan_is_separate_fixed_and_identity_bound"
     Write-Output "PASS foreign_or_unproven_partuuid_is_rejected"
     Write-Output "PASS origin_install_failure_rolls_back_current_run_only"
@@ -387,6 +504,7 @@ function Invoke-OriginManufacturedTests {
     Write-Output "PASS canonical_vhdx_guid_and_partuuid_are_accepted"
     Write-Output "PASS malformed_or_foreign_origin_identity_is_refused"
     Write-Output "PASS origin_uninstall_failure_restores_vhdx_and_manifest_authority"
+    Write-Output "PASS origin_attach_decision_is_idempotent_and_fail_closed"
 }
 
 if ($Action -eq "plan" -or (-not $Run -and $Action -ne "status" -and $Action -ne "test")) { Write-OriginPlan; exit 0 }
@@ -443,6 +561,12 @@ switch ($Action) {
         if ($proof.partuuid -cne [string]$manifest.partuuid) { throw "PARTUUID ownership proof does not match the sealed origin VHDX" }
         if ($proof.disk_guid -cne [string]$manifest.disk_guid) { throw "disk GUID ownership proof does not match the sealed origin VHDX" }
         [ordered]@{ state = "VERIFIED"; action = $Action; partuuid = $proof.partuuid; disk_guid = $proof.disk_guid; host_mutation = $false } | ConvertTo-Json -Depth 4
+    }
+    "attach" {
+        if ($PartUuidWasSupplied) { throw "origin attach does not accept a caller PARTUUID" }
+        if ($LogicalCapacityWasSupplied -or $PhysicalCacheCapWasSupplied) { throw "origin attach does not accept caller capacity policy" }
+        $manifest = Read-SealedOriginManifest
+        Invoke-OriginAttachment -Manifest $manifest
     }
     "uninstall" {
         if ($PartUuidWasSupplied -or $LogicalCapacityWasSupplied -or $PhysicalCacheCapWasSupplied) { throw "origin uninstall does not accept caller identity or policy values" }

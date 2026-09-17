@@ -616,6 +616,139 @@ mod tests {
             ReadinessReason::Refusal(RefusalCode::NbdLifecycleIncomplete)
         );
     }
+
+    #[test]
+    fn validate_lower_tier_capacity_success() {
+        let vram = GIB;
+        let required = match minimum_lower_tier_bytes(vram) {
+            Ok(value) => value,
+            Err(error) => panic!("valid one GiB capacity requirement: {error:?}"),
+        };
+
+        // Exact required capacity
+        let sample_exact = CapacitySample::Observed {
+            sink: LowerTierSink::Known("valid-sink".into()),
+            free_absorbable_bytes: required,
+            alignment_bytes: MIB_BYTES,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &sample_exact),
+            Ok(required)
+        );
+
+        // Excess capacity
+        let sample_excess = CapacitySample::Observed {
+            sink: LowerTierSink::Known("valid-sink".into()),
+            free_absorbable_bytes: required + 10 * MIB_BYTES,
+            alignment_bytes: MIB_BYTES,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &sample_excess),
+            Ok(required)
+        );
+    }
+
+    #[test]
+    fn validate_lower_tier_capacity_vram_errors() {
+        let sample = CapacitySample::Observed {
+            sink: LowerTierSink::Known("valid-sink".into()),
+            free_absorbable_bytes: 2 * GIB,
+            alignment_bytes: MIB_BYTES,
+        };
+
+        // Zero VRAM size
+        assert_eq!(
+            validate_lower_tier_capacity(0, &sample),
+            Err(RefusalCode::InvalidVramSize)
+        );
+
+        // VRAM overflow
+        assert_eq!(
+            validate_lower_tier_capacity(u64::MAX, &sample),
+            Err(RefusalCode::CapacityOverflow)
+        );
+    }
+
+    #[test]
+    fn validate_lower_tier_capacity_sample_and_sink_errors() {
+        let vram = GIB;
+
+        // Unknown sample
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &CapacitySample::Unknown),
+            Err(RefusalCode::LowerTierSinkUnknown)
+        );
+
+        // Stale sample
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &CapacitySample::Stale),
+            Err(RefusalCode::LowerTierMeasurementStale)
+        );
+
+        // Empty sink identity
+        let empty_sink = CapacitySample::Observed {
+            sink: LowerTierSink::Known("   ".into()),
+            free_absorbable_bytes: 2 * GIB,
+            alignment_bytes: MIB_BYTES,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &empty_sink),
+            Err(RefusalCode::LowerTierSinkUnknown)
+        );
+
+        // Ambiguous sink
+        let ambiguous_sink = CapacitySample::Observed {
+            sink: LowerTierSink::Ambiguous,
+            free_absorbable_bytes: 2 * GIB,
+            alignment_bytes: MIB_BYTES,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &ambiguous_sink),
+            Err(RefusalCode::LowerTierSinkAmbiguous)
+        );
+    }
+
+    #[test]
+    fn validate_lower_tier_capacity_alignment_and_shortfall_errors() {
+        let vram = GIB;
+        let required = match minimum_lower_tier_bytes(vram) {
+            Ok(value) => value,
+            Err(error) => panic!("valid one GiB capacity requirement: {error:?}"),
+        };
+
+        // Alignment bytes == 0
+        let zero_alignment = CapacitySample::Observed {
+            sink: LowerTierSink::Known("sink".into()),
+            free_absorbable_bytes: required,
+            alignment_bytes: 0,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &zero_alignment),
+            Err(RefusalCode::LowerTierAlignmentInvalid)
+        );
+
+        // Misaligned absorbable bytes
+        let misaligned = CapacitySample::Observed {
+            sink: LowerTierSink::Known("sink".into()),
+            free_absorbable_bytes: required + 500,
+            alignment_bytes: MIB_BYTES,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &misaligned),
+            Err(RefusalCode::LowerTierAlignmentInvalid)
+        );
+
+        // Capacity shortfall
+        let shortfall = CapacitySample::Observed {
+            sink: LowerTierSink::Known("sink".into()),
+            free_absorbable_bytes: required - MIB_BYTES,
+            alignment_bytes: MIB_BYTES,
+        };
+        assert_eq!(
+            validate_lower_tier_capacity(vram, &shortfall),
+            Err(RefusalCode::LowerTierShortfall)
+        );
+    }
 }
 
 /// Semantic error for NBD probe connection failures.

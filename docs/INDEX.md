@@ -11,6 +11,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | Slug | Title | Milestone | Issues | Status | Qualified revision |
 | --- | --- | --- | --- | --- | --- |
 | [`benchmark-evidence-integrity`](specs/no-milestone/benchmark-evidence-integrity/) | Benchmark and validation evidence integrity | — | — | PARTIAL | — |
+| [`broker-lease-lifecycle`](specs/no-milestone/broker-lease-lifecycle/) | Renewable broker lease lifecycle | — | — | UNQUALIFIED | — |
 | [`broker-telemetry-reconciliation`](specs/no-milestone/broker-telemetry-reconciliation/) | Memory broker telemetry collection and reconciliation | — | — | UNQUALIFIED | — |
 | [`campaign-evidence-lifecycle`](specs/no-milestone/campaign-evidence-lifecycle/) | Campaign evidence lifecycle and custody | — | — | UNQUALIFIED | — |
 | [`cascade-desktop-app`](specs/no-milestone/cascade-desktop-app/) | Desktop control app for WSL2/Linux cascade (zenity + CLI) | — | — | UNQUALIFIED | — |
@@ -23,8 +24,10 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | UNQUALIFIED | — |
 | [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | PARTIAL | — |
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
+| [`elastic-vram-cooperative-tier`](specs/no-milestone/elastic-vram-cooperative-tier/) | Elastic cooperative VRAM tiering, dynamic host borrowing, and non-blocking SSD spillover | — | — | UNQUALIFIED | — |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED | — |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD | — |
+| [`kernel-pci-bar-capacity-contract`](specs/no-milestone/kernel-pci-bar-capacity-contract/) | Exact PCI BAR capacity contract for the RamShared block driver | — | — | UNQUALIFIED | — |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD | — |
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD | — |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker | — | — | UNQUALIFIED | — |
@@ -38,6 +41,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`windows-swap-driver`](specs/no-milestone/windows-swap-driver/) | Swap-to-VRAM on Native Windows (StorPort virtual miniport) | P4 | — | UNQUALIFIED | — |
 | [`windows-task-manager-disk-counters`](specs/no-milestone/windows-task-manager-disk-counters/) | Windows virtual disk identity, counters, and performance matrix | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-boot`](specs/no-milestone/wsl2-cascade-boot/) | WSL2 cascade auto-start on boot with fail-closed anti-hang | — | — | UNQUALIFIED | — |
+| [`wsl2-cascade-legacy-migration`](specs/no-milestone/wsl2-cascade-legacy-migration/) | Attended migration from a legacy WSL2 cascade | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan detection and bound recovery | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-swap`](specs/no-milestone/wsl2-cascade-swap/) | Product Requirements Document — VRAM as a Cold Tier in WSL2 Swap Cascade (zram → VRAM → VHDX) | M01 | — | SPEC | — |
 | [`wsl2-control-plane-pressure-incident`](specs/no-milestone/wsl2-control-plane-pressure-incident/) | WSL2 control-plane pressure containment | — | — | UNQUALIFIED | — |
@@ -47,7 +51,10 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | UNQUALIFIED | — |
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD | — |
 | [`wsl2-nbd-product-readiness`](specs/no-milestone/wsl2-nbd-product-readiness/) | WSL2 NBD-only product readiness | v0.9.0-beta.1 — WSL2 NBD | #194 | UNQUALIFIED | — |
+| [`wsl2-origin-attachment-recovery`](specs/no-milestone/wsl2-origin-attachment-recovery/) | Attended recovery of the sealed WSL2 origin attachment | — | — | UNQUALIFIED | — |
+| [`wsl2-origin-capacity-policy`](specs/no-milestone/wsl2-origin-capacity-policy/) | Parameterized WSL2 origin capacity policy and safe storage bounds | — | — | UNQUALIFIED | — |
 | [`wsl2-relay-lifecycle-reliability`](specs/no-milestone/wsl2-relay-lifecycle-reliability/) | WSL2 Relay lifecycle reliability | — | microsoft/WSL#41242, microsoft/WSL#41286 | UNQUALIFIED | — |
 | [`wsl2-revocable-vram-origin`](specs/no-milestone/wsl2-revocable-vram-origin/) | Revocable VRAM cache with authoritative SSD origin | — | — | UNQUALIFIED | — |
 | [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | Microsoft-native N3 — Design | microsoft/WSL#41054, #197 | UNQUALIFIED | — |
+| [`wsl2-vmbus-anti-fragmentation-governor`](specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/) | WSL2 VMBus Anti-Fragmentation Governor and Dedicated Ring Pool Resilience | — | microsoft/WSL#8768, microsoft/WSL#40795 | UNQUALIFIED | — |
 | [`wsl2-vmbus-resilience`](specs/no-milestone/wsl2-vmbus-resilience/) | WSL2 Hyper-V VMBus Memory Headroom and Anti-Starvation Governor | — | microsoft/WSL#8768, microsoft/WSL#4166, microsoft/WSL#7254, microsoft/WSL#10495 | UNQUALIFIED | — |

@@ -53,22 +53,31 @@ detect_vram_capacity() {
     fi
 
     if [[ "$total_mib" =~ ^[0-9]+$ ]] && [[ "$total_mib" -gt 0 ]]; then
-        local reserve_mib=$(( total_mib * 20 / 100 ))
-        if [[ $reserve_mib -lt 1536 ]]; then
-            reserve_mib=1536
+        local min_reserve_floor_mib=1536
+        local reserve_percent=20
+        local max_slice_cap_mib=4096
+        local runtime_free_headroom_mib=768
+        local slice_align_mib=128
+        local min_viable_tier_mib=512
+
+        local reserve_mib=$(( total_mib * reserve_percent / 100 ))
+        if [[ $reserve_mib -lt $min_reserve_floor_mib ]]; then
+            reserve_mib=$min_reserve_floor_mib
         fi
         local target_mib=$(( total_mib - reserve_mib ))
-        if [[ $target_mib -gt 4096 ]]; then
-            target_mib=4096
+        if [[ $target_mib -gt $max_slice_cap_mib ]]; then
+            target_mib=$max_slice_cap_mib
         fi
-        # If active free VRAM is reported and below target, preserve 512 MiB free buffer
-        if [[ "$free_mib" =~ ^[0-9]+$ ]] && [[ $free_mib -gt 0 && $free_mib -lt $target_mib ]]; then
-            local safe_free=$(( free_mib - 512 ))
-            if [[ $safe_free -gt 0 ]]; then
+        # If active free VRAM is reported, strictly preserve free headroom (SPEC §DT-1)
+        if [[ "$free_mib" =~ ^[0-9]+$ ]] && [[ $free_mib -gt 0 ]]; then
+            local safe_free=$(( free_mib - runtime_free_headroom_mib ))
+            if [[ $safe_free -lt $target_mib ]]; then
                 target_mib=$safe_free
             fi
         fi
-        if [[ $target_mib -lt 512 ]]; then
+        # Align down to boundary
+        target_mib=$(( (target_mib / slice_align_mib) * slice_align_mib ))
+        if [[ $target_mib -lt $min_viable_tier_mib ]]; then
             echo 0
             return 0
         fi
@@ -105,7 +114,7 @@ start_tier() {
     vram_mib=$(detect_vram_capacity)
     local backend_type="auto"
     local backend_mb="$vram_mib"
-    local backend_desc="GPU VRAM (resilient in-process RAM failover)"
+    local backend_desc="GPU VRAM"
     if [[ "$vram_mib" -eq 0 ]]; then
         echo "[!] GPU is not accessible (e.g. host NVIDIA driver update in Windows requires a WSL restart: wsl --shutdown)."
         echo "[+] Starting RamShared with native auto-fallback to keep swap alive..."
@@ -113,7 +122,7 @@ start_tier() {
         backend_mb="1024"
         backend_desc="native RAM fallback"
     else
-        echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU (with resilient native RAM failover)"
+        echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
     fi
 
     # Clean prior stale sockets if daemon is dead
@@ -144,7 +153,7 @@ start_tier() {
         done
         
         if kill -0 "$daemon_pid" 2>/dev/null && [[ -S "$SOCK_PATH" ]]; then
-            echo "[+] Connecting $NBD_DEV to $backend_desc daemon (with swap immunity & zero-timeout protection)..."
+            echo "[+] Connecting $NBD_DEV to $backend_desc daemon (with swap immunity & zero block-layer timeout)..."
             nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1 || true
             sleep 1
             if [[ -b "$NBD_DEV" ]]; then
@@ -160,7 +169,7 @@ start_tier() {
         echo "[!] VRAM tier is already active on $NBD_DEV"
         echo "$NBD_DEV" > "$SWAP_DEV_FILE"
         echo "1" > "$CAPACITY_STATUS_FILE"
-        pgrep -f "ramsharedd" | head -n 1 > "$PID_FILE" || true
+        pgrep -x "ramsharedd" | head -n 1 > "$PID_FILE" || true
     fi
 
     chmod 0644 /run/ramshared/* 2>/dev/null || true

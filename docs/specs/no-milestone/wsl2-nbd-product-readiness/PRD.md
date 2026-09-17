@@ -72,6 +72,7 @@ Ship one NBD-only WSL2 path with these decisions:
 | Release root | Sealed `/opt/ramshared/releases/<version>` artifacts; no in-place mutation. |
 | Legacy ublk | Retire product service/autostart/control-plane references; never unload `ublk_drv`. |
 | Legacy unit migration | Replace an inactive, disabled legacy `ramshared-cascade.service` only with a current approval bound to its observed SHA-256; preserve an immutable backup before the atomic replacement. |
+| Product-owned auxiliary units | An existing health service or workload slice may be updated when it byte-matches the same file in the previously selected sealed release. If it does not match, a one-time historical migration requires a name-and-SHA-256 approval and creates an immutable backup; an unknown file otherwise remains a conflict. |
 | Status | `PRODUCT_OFF`, `READY`, or `BLOCKED`, with an independent readiness reason. |
 | Capacity | Enforce `L >= V + max(ceil(10% of V), 512 MiB)` before activation and demotion. |
 | Sizes | Promote in order: 1 GiB pilot, then 2 GiB, then 4 GiB. No skipped size. |
@@ -109,6 +110,7 @@ to an external communication.
 | RF-NBD-18 | Capture enough context to reproduce and audit each benchmark result. | Evidence records branch/commit and dirty state, sealed release and script hashes, kernel, GPU total/free/utilization/temperature, RAM and swap baselines, lower-tier identity/free capacity, exact command parameters, pair identity, and terminal classification, with a sanitized public envelope. |
 | RF-NBD-19 | Keep test seams out of approved live execution. | Fixture overrides for roots, swap files, PIDs, and lower sinks are accepted only by manufactured tests; an approved live invocation rejects or ignores them and uses the sealed product paths. |
 | RF-NBD-20 | Quantify backend tradeoffs and detect compatible historical regressions. | Every pair reports NBD/disk median and p99 ratios; optional baseline comparisons require an exact environment/workload fingerprint and use the SPEC's numeric GREEN/YELLOW/RED thresholds. |
+| RF-NBD-21 | Upgrade product-owned auxiliary systemd definitions without a blind overwrite. | The installer replaces an existing health service or workload slice only after it proves root ownership, regular-file metadata, and byte equality with the corresponding file in the prior selected sealed release. When that equality is absent, a one-time legacy exception requires the exact unit name and observed SHA-256 in the attended approval, creates an immutable backup, and is subject to the same rollback; all other cases refuse. |
 
 ## Non-functional requirements
 

@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
 }
 $source = Get-Content -Raw -LiteralPath $target
 foreach ($required in @(
-    'ValidateSet("plan", "install", "configure", "status", "uninstall", "test")',
+    'ValidateSet("plan", "install", "configure", "status", "uninstall", "attach", "test")',
     'Get-WslDistroStorageRoot',
     'Get-ConfiguredWslSwapVhdxPath',
     'OriginVhdxPath',
@@ -48,6 +48,11 @@ foreach ($required in @(
     'Get-Partition -DiskNumber',
     'Set-Partition',
     'Get-OriginVhdxOwnershipProof',
+    'Get-OriginAttachmentDecision',
+    'Invoke-OriginGuestPartUuidProbe',
+    'Invoke-OriginBoundedProcess',
+    'origin attach requires a whitespace-free sealed VHDX path',
+    'origin attach requires an administrator token',
     'Test-CanonicalOriginGuid',
     'Get-DiskImage',
     '$OriginVhdx -ieq $ExistingSwapVhdx',
@@ -57,7 +62,7 @@ foreach ($required in @(
         throw "ramshared_origin: missing contract $required"
     }
 }
-foreach ($forbidden in @('Clear-Disk', 'Remove-Partition', 'Remove-Item -Recurse', 'Get-Disk |')) {
+foreach ($forbidden in @('Clear-Disk', 'Remove-Partition', 'Remove-Item -Recurse', 'Get-Disk |', '--shutdown', '--unmount')) {
     if ($source.Contains($forbidden)) {
         throw "ramshared_origin: forbidden storage action $forbidden"
     }
@@ -136,6 +141,7 @@ foreach ($required in @(
     'PASS canonical_vhdx_guid_and_partuuid_are_accepted',
     'PASS malformed_or_foreign_origin_identity_is_refused'
     'PASS origin_uninstall_failure_restores_vhdx_and_manifest_authority'
+    'PASS origin_attach_decision_is_idempotent_and_fail_closed'
 )) {
     if (-not ($manufactured -join "`n").Contains($required)) {
         throw "ramshared_origin: manufactured output missing $required"

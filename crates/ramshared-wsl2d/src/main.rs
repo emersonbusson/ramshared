@@ -11,7 +11,7 @@
 //! per-request, **serve-only**) + §9.4 (content/free probe).
 //! Backoff remains as future work.
 
-use core::ffi::c_int;
+use core::ffi::{c_int, c_ulong};
 use std::fs::File;
 use std::io::{Read, Seek};
 use std::os::fd::AsRawFd;
@@ -35,6 +35,7 @@ use ramshared_block::{
 #[cfg(test)]
 use ramshared_block::{GpuSample, WriteThroughCacheBackend};
 use ramshared_broker::arbiter::ArbiterConfig;
+use ramshared_broker::lease::DEFAULT_LEASE_TTL;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
 use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
@@ -55,12 +56,14 @@ use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 // Discipline 3 (anti-deadlock): the daemon serves swap, so it cannot be swapped out.
 unsafe extern "C" {
     fn mlockall(flags: c_int) -> c_int;
+    fn prctl(option: c_int, arg2: c_ulong, arg3: c_ulong, arg4: c_ulong, arg5: c_ulong) -> c_int;
     // Signal handler registration (sighandler_t is a function pointer; the previous
     // return is ignored). Used only for SIGINT/SIGTERM in ublk mode.
     fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> usize;
     #[link_name = "kill"]
     fn kill_process_group_raw(pid: c_int, signal: c_int) -> c_int;
 }
+const PR_SET_IO_FLUSHER: c_int = 57;
 const MCL_CURRENT: c_int = 1;
 const SIGINT: c_int = 2;
 const SIGTERM: c_int = 15;
@@ -159,12 +162,14 @@ impl VramProvider for UnavailableVramProvider {
 /// When VRAM operations fail (e.g. GPU channel dropped during Windows NVIDIA driver reload),
 /// the backend seamlessly switches I/O to the RAM fallback buffer in-memory, avoiding any
 /// NBD_EIO replies, protecting the kernel swap subsystem from panics or teardowns.
+#[cfg(test)]
 struct ResilientBackend<M: VramMemory> {
     vram: Option<VramBackend<M>>,
     ram: RamBackend,
     failed_over: bool,
 }
 
+#[cfg(test)]
 impl<M: VramMemory> ResilientBackend<M> {
     fn new(vram: VramBackend<M>, total_bytes: usize) -> Self {
         Self {
@@ -174,6 +179,7 @@ impl<M: VramMemory> ResilientBackend<M> {
         }
     }
 
+    #[allow(dead_code)]
     fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
         if let Some(ref mut vram) = self.vram {
             vram.zero()?;
@@ -192,12 +198,12 @@ impl<M: VramMemory> ResilientBackend<M> {
         }
     }
 
-    #[cfg(test)]
     fn is_failed_over(&self) -> bool {
         self.failed_over
     }
 }
 
+#[cfg(test)]
 impl<M: VramMemory> BlockBackend for ResilientBackend<M> {
     fn size_bytes(&self) -> u64 {
         self.ram.size_bytes()
@@ -1118,7 +1124,10 @@ fn validate_host_origin_manifest_bytes(
         .ok_or_else(|| "host origin manifest configuration SHA-256 is invalid".to_string())?;
     if host.schema_version != 3
         || host.ownership_proof_schema != 1
-        || host.fixed_size_bytes != 25 * GIB
+        || host.fixed_size_bytes < 5 * GIB
+        || host.fixed_size_bytes > 64 * GIB
+        || !host.fixed_size_bytes.is_multiple_of(GIB)
+        || host.fixed_size_bytes < (host.logical_capacity_mib as u64 + 1024) * 1024 * 1024
         || host.chunk_mib != 128
         || host.gpu_reserve_min_mib != 2048
         || host.gpu_reserve_percent != 20
@@ -4111,6 +4120,7 @@ fn build_broker_config_with_tick(
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
         tick,
+        lease_ttl: DEFAULT_LEASE_TTL,
         slice_io,
         vram,
         tol_frac: RECON_TOL_FRAC,
@@ -4547,13 +4557,14 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
 /// On shared-memory environments (such as WSL2/dxgkrnl), GPU VRAM is shared between the host OS
 /// display manager (DWM), host applications, and WSL2. Allocating too much VRAM starves the host
 /// GPU memory manager, leading to driver timeouts (TDR) and system deadlocks.
-/// Rules:
+/// Calculates the maximum safe VRAM slice size (in bytes) to prevent GPU starvation.
+///
+/// Ensures:
 /// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
 ///   environment, and no clamping is applied.
-/// - HOST_RESERVE_FLOOR = max(1536 MB, total_vram * 20%) preserves dedicated headroom for the
-///   host Desktop Window Manager (DWM) while allowing a full 4 GiB slice on 6GB+ GPUs (SSDV3 Principle 11).
-/// - If `free_vram` is known and lower than the ceiling, allocation respects runtime free headroom (512 MiB)
-///   to prevent runtime CUDA allocation failures under external graphics pressure.
+/// - Windows Host DWM and desktop apps retain at least `max(1536 MiB, 20% of total VRAM)`.
+/// - If `free_vram` is known, allocation strictly respects runtime free headroom (768 MiB)
+///   to prevent runtime CUDA/DirectX allocation failures under external graphics pressure (SPEC §DT-1).
 /// - Slices are aligned to 128 MiB boundaries.
 pub fn calculate_safe_vram_slice(
     requested_slice_bytes: u64,
@@ -4564,7 +4575,7 @@ pub fn calculate_safe_vram_slice(
     const MIN_REAL_GPU_BYTES: u64 = 2048 * 1024 * 1024; // 2048 MiB
     const MIN_HOST_RESERVE_BYTES: u64 = 1536 * 1024 * 1024; // 1536 MiB for Windows DWM
     const HOST_RESERVE_PERCENT: u64 = 20; // 20% of total VRAM
-    const RUNTIME_FREE_HEADROOM_BYTES: u64 = 512 * 1024 * 1024; // 512 MiB runtime buffer
+    const RUNTIME_FREE_HEADROOM_BYTES: u64 = 768 * 1024 * 1024; // 768 MiB runtime buffer (SPEC §DT-1)
     const SLICE_ALIGNMENT_BYTES: u64 = 128 * 1024 * 1024; // 128 MiB boundary
 
     if slices == 0 || requested_slice_bytes == 0 || total_vram < MIN_REAL_GPU_BYTES {
@@ -4580,12 +4591,10 @@ pub fn calculate_safe_vram_slice(
     let host_floor = std::cmp::max(MIN_HOST_RESERVE_BYTES, floor_pct);
     let mut max_safe_total = total_vram.saturating_sub(host_floor);
 
-    // If active free VRAM is reported and below the theoretical ceiling, respect active free headroom
-    if free_vram > 0 && free_vram < max_safe_total {
+    // If active free VRAM is reported, allocation must strictly leave at least RUNTIME_FREE_HEADROOM_BYTES
+    if free_vram > 0 {
         let safe_by_free = free_vram.saturating_sub(RUNTIME_FREE_HEADROOM_BYTES);
-        if safe_by_free > 0 {
-            max_safe_total = safe_by_free;
-        }
+        max_safe_total = std::cmp::min(max_safe_total, safe_by_free);
     }
 
     let max_safe_per_slice = max_safe_total / (slices as u64);
@@ -4692,9 +4701,9 @@ where
         let _ = mem.zero();
         return Err(error);
     }
-    let mut backend = ResilientBackend::new(VramBackend::new(mem, BLOCK_SIZE), total as usize);
+    let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
-        "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE} (resilient in-process RAM failover enabled)",
+        "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
         slice_bytes >> 20,
         total >> 20
     );
@@ -5203,6 +5212,15 @@ fn memory_lock_status(
     }
 }
 
+/// Configures PF_MEMALLOC_NOIO on the calling thread via PR_SET_IO_FLUSHER.
+///
+/// This strictly prevents the Linux kernel from entering direct swap-out reclaim (__swap_writepage)
+/// on allocations made by this daemon, mathematically eliminating recursive swap deadlocks on /dev/nbd0.
+fn enable_anti_deadlock_io_flusher() -> bool {
+    // SAFETY: prctl with PR_SET_IO_FLUSHER only affects memory allocation flags of the calling thread.
+    unsafe { prctl(PR_SET_IO_FLUSHER, 1, 0, 0, 0) == 0 }
+}
+
 /// Locks memory (mlockall) + protects from OOM killer (oom_score_adj=-1000) BEFORE
 /// serving swap (Discipline 3, anti-deadlock). `--force` continues without protection, warning.
 ///
@@ -5217,6 +5235,11 @@ fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error:
     // SAFETY: mlockall is a syscall with no unsafe memory side effects.
     let locked = unsafe { mlockall(MCL_CURRENT) } == 0;
     let oom_ok = std::fs::write("/proc/self/oom_score_adj", "-1000").is_ok();
+
+    if enable_anti_deadlock_io_flusher() {
+        eprintln!("[ramsharedd] anti-deadlock: PR_SET_IO_FLUSHER active (PF_MEMALLOC_NOIO)");
+    }
+
     match memory_lock_status(locked, oom_ok, force)? {
         MemoryLockStatus::Protected => {
             eprintln!("[ramsharedd] memory locked (mlockall) + oom_score_adj=-1000");
@@ -5973,6 +5996,72 @@ mod tests {
                 &wrong_configuration
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn host_manifest_accepts_five_gib_and_rejects_under_capacity() {
+        let mut host = HostOriginManifest {
+            schema_version: 3,
+            origin_vhdx: "I:\\RamShared\\ramshared-origin.vhdx".into(),
+            fixed_size_bytes: 5 * GIB,
+            logical_capacity_mib: 4096,
+            physical_cache_cap_mib: 1024,
+            chunk_mib: 128,
+            gpu_reserve_min_mib: 2048,
+            gpu_reserve_percent: 20,
+            partuuid: "11111111-2222-4333-8444-555555555555".into(),
+            disk_guid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into(),
+            expected_swap_uuid: "99999999-8888-4777-8666-555555555555".into(),
+            ownership_proof_schema: 1,
+            existing_wsl_swap_vhdx: "R:\\wsl_swap\\swap.vhdx".into(),
+            configuration_sha256: String::new(),
+        };
+        host.configuration_sha256 = sha256_hex(host_configuration_text(&host).as_bytes());
+        let bytes = serde_json::to_vec(&host).expect("serialize host origin manifest fixture");
+        let sealed = SealedOriginManifest {
+            host_manifest_sha256: sha256_hex(&bytes),
+            configuration_sha256: host.configuration_sha256.clone(),
+            origin_path: "/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555".into(),
+            partuuid: host.partuuid.clone(),
+            ptuuid: host.disk_guid.clone(),
+            partition_dev_t: "43:1".into(),
+            parent_dev_t: "43:0".into(),
+            expected_swap_uuid: host.expected_swap_uuid.clone(),
+            logical_capacity_mib: host.logical_capacity_mib,
+            physical_cache_cap_mib: host.physical_cache_cap_mib,
+        };
+        // 5 GiB fixed container with 4096 MiB swap must be accepted
+        validate_host_origin_manifest_bytes(&sealed, &bytes)
+            .expect("5 GiB container must be accepted for 4096 MiB logical swap");
+
+        // 25 GiB fixed container with 4096 MiB swap must remain accepted (backward compatibility)
+        let mut legacy_host = host.clone();
+        legacy_host.fixed_size_bytes = 25 * GIB;
+        legacy_host.configuration_sha256 =
+            sha256_hex(host_configuration_text(&legacy_host).as_bytes());
+        let legacy_bytes = serde_json::to_vec(&legacy_host)
+            .expect("serialize legacy host origin manifest fixture");
+        let mut legacy_sealed = sealed.clone();
+        legacy_sealed.host_manifest_sha256 = sha256_hex(&legacy_bytes);
+        legacy_sealed.configuration_sha256 = legacy_host.configuration_sha256.clone();
+        validate_host_origin_manifest_bytes(&legacy_sealed, &legacy_bytes)
+            .expect("25 GiB legacy container must be accepted");
+
+        // Under-capacity: 5 GiB container with 8192 MiB logical swap must be rejected
+        let mut undersized_host = host.clone();
+        undersized_host.logical_capacity_mib = 8192;
+        undersized_host.configuration_sha256 =
+            sha256_hex(host_configuration_text(&undersized_host).as_bytes());
+        let undersized_bytes =
+            serde_json::to_vec(&undersized_host).expect("serialize undersized fixture");
+        let mut undersized_sealed = sealed.clone();
+        undersized_sealed.logical_capacity_mib = 8192;
+        undersized_sealed.host_manifest_sha256 = sha256_hex(&undersized_bytes);
+        undersized_sealed.configuration_sha256 = undersized_host.configuration_sha256.clone();
+        assert!(
+            validate_host_origin_manifest_bytes(&undersized_sealed, &undersized_bytes).is_err(),
+            "5 GiB container cannot host 8192 MiB swap"
         );
     }
 
@@ -10663,24 +10752,40 @@ Filename Type Size Used Priority
 
     #[test]
     fn test_host_vram_clamping_rtx2060() {
-        // RTX 2060: 6144 MiB total, 4800 MiB free
+        // RTX 2060: 6144 MiB total, 5000 MiB free (headroom 768 MiB preserves >= 904 MiB)
         let total_vram = 6144 * 1024 * 1024;
-        let free_vram = 4800 * 1024 * 1024;
+        let free_vram = 5000 * 1024 * 1024;
         let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
         let (safe_slice, clamped) =
             calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
         assert!(
             !clamped,
-            "4096 MiB allocation on 6GB GPU must be granted with 1.5GB host reserve"
+            "4096 MiB allocation on 6GB GPU must be granted when free VRAM leaves >= 768 MiB headroom"
         );
         assert_eq!(safe_slice, requested_slice);
     }
 
     #[test]
-    fn test_host_vram_clamping_rtx2060_over_request() {
-        // RTX 2060: 6144 MiB total, 4800 MiB free
+    fn test_host_vram_clamping_rtx2060_live_pressure() {
+        // RTX 2060: 6144 MiB total, 4581 MiB free (observed live during DWM activity)
         let total_vram = 6144 * 1024 * 1024;
-        let free_vram = 4800 * 1024 * 1024;
+        let free_vram = 4581 * 1024 * 1024;
+        let requested_slice = 4096 * 1024 * 1024;
+        let (safe_slice, clamped) =
+            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
+        assert!(
+            clamped,
+            "allocation must clamp to preserve 768 MiB headroom under live pressure"
+        );
+        // (4581 - 768 = 3813 MiB) aligned to 128 MiB boundary -> 3712 MiB
+        assert_eq!(safe_slice, 3712 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_host_vram_clamping_rtx2060_over_request() {
+        // RTX 2060: 6144 MiB total, 6144 MiB free
+        let total_vram = 6144 * 1024 * 1024;
+        let free_vram = 6144 * 1024 * 1024;
         let requested_slice = 5120 * 1024 * 1024; // 5120 MiB requested (> 4608 max safe)
         let (safe_slice, clamped) =
             calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);

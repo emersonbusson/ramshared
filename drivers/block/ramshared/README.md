@@ -19,6 +19,9 @@ Native in-tree Linux block driver designed for hardware-accelerated, ultra-low l
 
 4. **Checked Arithmetic & Boundary Hardening:**
    - Safe 64-bit capacity calculation via `check_mul_overflow()` to eliminate integer overflow during device initialization.
+   - Exact BAR0 capacity contract: probe refuses a missing or undersized BAR0
+     with `-ERANGE`; a successful device maps exactly its advertised capacity
+     and never silently truncates the mapping to fit the aperture.
    - Bio and request bounds checking: verifies sector start and total byte length against physical PCIe aperture bounds, returning semantic `-ERANGE` on violations.
    - BAR0 `PAGE_SIZE` alignment validation on device probe.
    - Queue depth parameter clamping: strictly bounds `queue_depth` within `[16..1024]` (default: 128) to prevent kernel allocation failures.

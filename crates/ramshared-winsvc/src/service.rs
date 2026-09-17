@@ -606,6 +606,85 @@ mod tests {
     }
 
     #[test]
+    fn provision_disk_create_failure_leaves_not_created() {
+        struct FailCreateDisk;
+        impl DiskControl for FailCreateDisk {
+            fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
+                Err("create failed".into())
+            }
+            fn destroy_disk(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn register_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn unregister_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = FailCreateDisk;
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap_err();
+        assert!(matches!(e, ProvisionError::Disk(s) if s == "create failed"));
+        assert!(!state.disk_created);
+        assert!(!state.online);
+    }
+
+    #[test]
+    fn provision_disk_register_failure_leaves_disk_created_but_not_online() {
+        struct FailRegisterDisk {
+            created: bool,
+        }
+        impl DiskControl for FailRegisterDisk {
+            fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
+                self.created = true;
+                Ok(())
+            }
+            fn destroy_disk(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn register_queue(&mut self) -> Result<(), String> {
+                Err("register failed".into())
+            }
+            fn unregister_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = FailRegisterDisk { created: false };
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap_err();
+        assert!(matches!(e, ProvisionError::Disk(s) if s == "register failed"));
+        assert!(state.disk_created);
+        assert!(!state.online);
+    }
+
+    #[test]
     fn pagefile_active_refuses_before_mutation() {
         let c = cfg();
         let mut state = online_state();
@@ -979,8 +1058,30 @@ mod tests {
             parse_product_friendly_name("RAMSHARE VRAMDISK").unwrap(),
             ("RAMSHARE".into(), "VRAMDISK".into())
         );
+        assert_eq!(
+            parse_product_friendly_name("ramshare vramdisk scsi disk device").unwrap(),
+            ("RAMSHARE".into(), "VRAMDISK".into())
+        );
+        assert_eq!(
+            parse_product_friendly_name("  RAMSHARE   VRAMDISK \t SCSI  Disk  Device \n").unwrap(),
+            ("RAMSHARE".into(), "VRAMDISK".into())
+        );
         assert!(parse_product_friendly_name("RAMSHARE OTHER SCSI Disk Device").is_err());
         assert!(parse_product_friendly_name("RAMSHARE VRAMDISK USB Device").is_err());
+        assert!(parse_product_friendly_name("").is_err());
+        assert!(parse_product_friendly_name("   \t\n").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK SCSI").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK SCSI Disk").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK SCSI Disk Device Extra").is_err());
+        assert!(parse_product_friendly_name("OTHER VRAMDISK").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE OTHER").is_err());
+        assert!(parse_product_friendly_name("VRAMDISK RAMSHARE").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK USB Disk Device").is_err());
+        assert_eq!(
+            parse_product_friendly_name("INVALID").unwrap_err(),
+            "unexpected product friendly name"
+        );
     }
 
     #[test]

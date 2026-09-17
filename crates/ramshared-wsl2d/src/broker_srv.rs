@@ -88,6 +88,8 @@ pub struct BrokerCoreConfig {
     pub arbiter_cfg: ArbiterConfig,
     pub endpoints: EndpointCfg,
     pub swap_prio: Option<i32>,
+    /// Bound on an orphaned active lease. A holder's authenticated Psi heartbeat renews it.
+    pub lease_ttl: Duration,
     pub slice_io: Arc<Vec<SliceIoCounters>>,
     pub vram: Arc<VramGauge>,
     pub tol_frac: f64,
@@ -102,6 +104,7 @@ pub struct BrokerCore {
     arbiter: Arbiter,
     endpoints: EndpointCfg,
     swap_prio: Option<i32>,
+    lease_ttl: Duration,
     tenants: BTreeMap<TenantId, TenantState>,
     sessions: HashMap<usize, TenantId>, // live connection → tenant
     name_to_id: HashMap<String, TenantId>, // stable ID by name (DT-22)
@@ -158,6 +161,7 @@ impl BrokerCore {
             arbiter: Arbiter::new(cfg.arbiter_cfg),
             endpoints: cfg.endpoints,
             swap_prio: cfg.swap_prio,
+            lease_ttl: cfg.lease_ttl,
             tenants: BTreeMap::new(),
             sessions: HashMap::new(),
             name_to_id: HashMap::new(),
@@ -181,7 +185,7 @@ impl BrokerCore {
     pub fn handle(&mut self, ev: CoreEvent, now: Instant) -> Vec<Outbound> {
         let mut out = Vec::new();
         match ev {
-            CoreEvent::Msg(sid, msg) => self.on_msg(sid, msg, &mut out),
+            CoreEvent::Msg(sid, msg) => self.on_msg(sid, msg, now, &mut out),
             CoreEvent::Disconnected(sid) => self.on_disconnect(sid, &mut out),
             CoreEvent::ZeroDone(slice, ok) => self.on_zero_done(slice, ok, &mut out),
             CoreEvent::Demote(reason) => self.on_demote(&reason, &mut out),
@@ -226,14 +230,14 @@ impl BrokerCore {
             .collect()
     }
 
-    fn on_msg(&mut self, sid: usize, msg: Msg, out: &mut Vec<Outbound>) {
+    fn on_msg(&mut self, sid: usize, msg: Msg, now: Instant, out: &mut Vec<Outbound>) {
         match msg {
             Msg::Register {
                 proto,
                 tenant,
                 transport,
             } => self.on_register(sid, proto, tenant, transport, out),
-            Msg::Psi { sample, swaps, mem } => self.on_psi(sid, sample, swaps, mem, out),
+            Msg::Psi { sample, swaps, mem } => self.on_psi(sid, sample, swaps, mem, now, out),
             Msg::SwapOnDone { slice, ok, detail } => {
                 if ok {
                     out.push(Outbound::Log(format!(
@@ -351,6 +355,7 @@ impl BrokerCore {
         sample: PsiSample,
         swaps: Vec<SwapEntry>,
         mem: Option<TenantMem>,
+        now: Instant,
         out: &mut Vec<Outbound>,
     ) {
         let Some(&id) = self.sessions.get(&sid) else {
@@ -398,6 +403,7 @@ impl BrokerCore {
         if let Some(t) = self.tenants.get_mut(&id) {
             t.occupied_bytes = occupied;
         }
+        self.lease_book.renew_active(id, now, self.lease_ttl);
         out.push(Outbound::ToSession(sid, Msg::Ack)); // DT-18: heartbeat
     }
 
@@ -485,10 +491,15 @@ impl BrokerCore {
             out.push(Outbound::Log(format!(
                 "[ramsharedd] tenant {id} desconectou; slices congeladas (DT-20)"
             )));
-            // Lease holder/requester dropped → automatic release/cancel (DT-19).
+            // A requester is cancelled. An active lease remains reserved until
+            // its monotonic deadline, so a transient disconnect cannot cause
+            // premature reuse of the slices.
             let disconnected = self.lease_book.disconnect(id);
-            if let Some(lease) = disconnected.released {
-                self.release_slices(lease.id, out);
+            if let Some(lease) = disconnected.retained_active {
+                out.push(Outbound::Log(format!(
+                    "[ramsharedd] lease {} retained after holder disconnect until expiry",
+                    lease.id
+                )));
             }
         }
     }
@@ -615,6 +626,13 @@ impl BrokerCore {
     }
 
     fn on_tick(&mut self, now: Instant, out: &mut Vec<Outbound>) {
+        if let Some(lease) = self.lease_book.expire(now) {
+            out.push(Outbound::Log(format!(
+                "[ramsharedd] lease {} expired; returning slices to the allocator",
+                lease.id
+            )));
+            self.release_slices(lease.id, out);
+        }
         self.tick_arbiter(now, out);
         self.retry_stuck_zeroing(out);
         self.emit_telemetry(out);
@@ -703,20 +721,61 @@ impl BrokerCore {
                     }
                 }
                 Action::GrantLease { holder, slices } => {
-                    let mut granted = 0u64;
-                    for s in &slices {
-                        if let Some(len) = self.slice_map.get(*s).map(|sl| sl.len)
-                            && self.slice_map.lease(*s).is_ok()
-                        {
-                            granted += len; // Free → Leased
-                        }
-                    }
-                    let Ok(lease) = self.lease_book.grant_pending(granted) else {
+                    if self.lease_ttl.is_zero() || now.checked_add(self.lease_ttl).is_none() {
+                        let _ = self.lease_book.cancel_pending(holder);
                         out.push(Outbound::Log(
-                            "[ramsharedd] ERRO lease grant divergiu do LeaseBook".into(),
+                            "[ramsharedd] refusing lease grant with invalid lease TTL".into(),
+                        ));
+                        self.to_tenant(
+                            holder,
+                            Msg::LeaseDenied {
+                                reason: "lease_ttl_invalid".into(),
+                            },
+                            out,
+                        );
+                        continue;
+                    }
+
+                    let Some(granted) = slices.iter().try_fold(0_u64, |total, slice| {
+                        self.slice_map
+                            .get(*slice)
+                            .filter(|current| current.state == SliceState::Free)
+                            .and_then(|current| total.checked_add(current.len))
+                    }) else {
+                        out.push(Outbound::Log(
+                            "[ramsharedd] refusing lease grant with unavailable slices".into(),
                         ));
                         continue;
                     };
+
+                    let Ok(lease) = self.lease_book.grant_pending(granted, now, self.lease_ttl)
+                    else {
+                        out.push(Outbound::Log(
+                            "[ramsharedd] lease grant diverged from LeaseBook".into(),
+                        ));
+                        continue;
+                    };
+
+                    let mut leased = Vec::with_capacity(slices.len());
+                    let mut transition_failed = false;
+                    for slice in &slices {
+                        if self.slice_map.lease(*slice).is_ok() {
+                            leased.push(*slice);
+                        } else {
+                            transition_failed = true;
+                            break;
+                        }
+                    }
+                    if transition_failed {
+                        for leased_slice in leased {
+                            let _ = self.slice_map.unlease(leased_slice);
+                        }
+                        let _ = self.lease_book.release(holder, lease.id);
+                        out.push(Outbound::Log(
+                            "[ramsharedd] rolled back incomplete lease slice transition".into(),
+                        ));
+                        continue;
+                    }
                     out.push(Outbound::Log(format!(
                         "[ramsharedd] lease {} concedido holder={holder} slices={slices:?}",
                         lease.id
@@ -857,6 +916,8 @@ pub struct BrokerConfig {
     pub swap_prio: Option<i32>,
     pub arbiter: ArbiterConfig,
     pub tick: Duration,
+    /// Bound on an orphaned active lease. Production uses [`DEFAULT_LEASE_TTL`].
+    pub lease_ttl: Duration,
     /// Telemetry (SPEC): counters per slice + VRAM gauge (shared with the worker).
     pub slice_io: Arc<Vec<SliceIoCounters>>,
     pub vram: Arc<VramGauge>,
@@ -913,6 +974,7 @@ pub fn spawn_broker(
             arbiter_cfg: cfg.arbiter,
             endpoints: cfg.endpoints,
             swap_prio: cfg.swap_prio,
+            lease_ttl: cfg.lease_ttl,
             slice_io: cfg.slice_io,
             vram: cfg.vram,
             tol_frac: cfg.tol_frac,
@@ -1129,6 +1191,10 @@ mod tests {
 
     /// Like `core`, but with configurable `recon_streak` (tests the actual production hysteresis).
     fn core_streak(k: u16, recon_streak: u32) -> BrokerCore {
+        core_with_lease_ttl(k, recon_streak, Duration::from_secs(30))
+    }
+
+    fn core_with_lease_ttl(k: u16, recon_streak: u32, lease_ttl: Duration) -> BrokerCore {
         let cfg = ArbiterConfig {
             streak: 1, // move already on the 1st tick above delta (tests)
             ..ArbiterConfig::default()
@@ -1146,6 +1212,7 @@ mod tests {
                 vram: Arc::new(VramGauge::default()),
                 tol_frac: 0.10,
                 recon_streak,
+                lease_ttl,
             },
         )
     }
@@ -1605,6 +1672,34 @@ mod tests {
             .count()
     }
 
+    fn register_at(c: &mut BrokerCore, sid: usize, name: &str, now: Instant) {
+        c.handle(
+            CoreEvent::Msg(
+                sid,
+                Msg::Register {
+                    proto: PROTO_VERSION,
+                    tenant: name.into(),
+                    transport: TransportKind::DccAgent,
+                },
+            ),
+            now,
+        );
+    }
+
+    fn heartbeat_at(c: &mut BrokerCore, sid: usize, now: Instant) {
+        c.handle(
+            CoreEvent::Msg(
+                sid,
+                Msg::Psi {
+                    sample: PsiSample::default(),
+                    swaps: vec![],
+                    mem: None,
+                },
+            ),
+            now,
+        );
+    }
+
     #[test]
     fn lease_granted_from_free_slices() {
         let mut c = core(2);
@@ -1659,6 +1754,53 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(n_leased(&c), 0); // devolvida ao tier de swap
+    }
+
+    #[test]
+    fn disconnect_holds_active_lease_until_deadline() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut c = core_with_lease_ttl(1, 1, ttl);
+        register_at(&mut c, 10, "holder", started);
+        heartbeat_at(&mut c, 10, started);
+        c.handle(
+            CoreEvent::Msg(10, Msg::LeaseRequest { bytes: SLICE }),
+            started,
+        );
+        c.handle(CoreEvent::Tick, started);
+        assert_eq!(n_leased(&c), 1);
+
+        c.handle(
+            CoreEvent::Disconnected(10),
+            started + Duration::from_secs(1),
+        );
+        assert_eq!(n_leased(&c), 1, "disconnect must not reclaim immediately");
+
+        c.handle(CoreEvent::Tick, started + Duration::from_secs(2));
+        assert_eq!(n_leased(&c), 1, "pre-deadline tick retains the lease");
+        c.handle(CoreEvent::Tick, started + ttl);
+        assert_eq!(n_leased(&c), 0, "deadline tick returns the lease slices");
+    }
+
+    #[test]
+    fn holder_heartbeat_renews_active_lease() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut c = core_with_lease_ttl(1, 1, ttl);
+        register_at(&mut c, 10, "holder", started);
+        heartbeat_at(&mut c, 10, started);
+        c.handle(
+            CoreEvent::Msg(10, Msg::LeaseRequest { bytes: SLICE }),
+            started,
+        );
+        c.handle(CoreEvent::Tick, started);
+        assert_eq!(n_leased(&c), 1);
+
+        heartbeat_at(&mut c, 10, started + Duration::from_secs(2));
+        c.handle(CoreEvent::Tick, started + ttl);
+        assert_eq!(n_leased(&c), 1, "holder heartbeat extends the deadline");
+        c.handle(CoreEvent::Tick, started + Duration::from_secs(5));
+        assert_eq!(n_leased(&c), 0, "renewed deadline eventually expires");
     }
 
     #[test]
@@ -1756,15 +1898,14 @@ mod tests {
     }
 
     #[test]
-    fn lease_released_when_holder_disconnects() {
+    fn pending_lease_is_cancelled_when_holder_disconnects() {
         let mut c = core(2);
         reg(&mut c, 10, "dcc");
         psi(&mut c, 10, 0.0);
         lease_req(&mut c, 10, SLICE);
-        c.handle(CoreEvent::Tick, Instant::now()); // grant
-        assert_eq!(n_leased(&c), 1);
-        c.handle(CoreEvent::Disconnected(10), Instant::now()); // holder cai
-        assert_eq!(n_leased(&c), 0); // lease released (DT-19)
+        c.handle(CoreEvent::Disconnected(10), Instant::now());
+        c.handle(CoreEvent::Tick, Instant::now());
+        assert_eq!(n_leased(&c), 0, "disconnect cancels an ungranted request");
     }
 
     fn reg_transport(

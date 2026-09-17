@@ -60,67 +60,11 @@ const ARMED_MARKER_CANDIDATES: &[&str] = &["/mnt/c/wsl-forensics/.armed", "/run/
 /// Algorithms tried in order for zram (kernel WSL 6.6 may reject some).
 const ZRAM_ALGOS: &[&str] = &["lzo-rle", "lzo", "zstd", "lz4", "deflate"];
 
-/// Typed error for the cascade orchestration.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-#[allow(dead_code)]
-pub enum CascadeIoErrorKind {
-    NotFound,
-    PermissionDenied,
-    InvalidInput,
-    OutOfRange,
-    AlreadyExists,
-    TimedOut,
-    Other,
-}
-
-impl fmt::Display for CascadeIoErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "NotFound"),
-            Self::PermissionDenied => write!(f, "PermissionDenied"),
-            Self::InvalidInput => write!(f, "InvalidInput"),
-            Self::OutOfRange => write!(f, "OutOfRange"),
-            Self::AlreadyExists => write!(f, "AlreadyExists"),
-            Self::TimedOut => write!(f, "TimedOut"),
-            Self::Other => write!(f, "Other"),
-        }
-    }
-}
-
-impl From<std::io::ErrorKind> for CascadeIoErrorKind {
-    fn from(kind: std::io::ErrorKind) -> Self {
-        match kind {
-            std::io::ErrorKind::NotFound => Self::NotFound,
-            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
-            std::io::ErrorKind::InvalidInput => Self::InvalidInput,
-            std::io::ErrorKind::AlreadyExists => Self::AlreadyExists,
-            std::io::ErrorKind::TimedOut => Self::TimedOut,
-            _ => Self::Other,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CascadeIoError {
-    pub kind: CascadeIoErrorKind,
-    pub path: String,
-    pub message: String,
-}
-
-impl fmt::Display for CascadeIoError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} at {}: {}", self.kind, self.path, self.message)
-    }
-}
-
-impl std::error::Error for CascadeIoError {}
-
 #[derive(Debug)]
 pub enum CascadeError {
     Shell { cmd: String, msg: String },
     Arg(String),
     Io(String),
-    SysfsIo(CascadeIoError),
     Precondition(String),
     UnsafeContainment(String),
 }
@@ -131,7 +75,6 @@ impl fmt::Display for CascadeError {
             CascadeError::Shell { cmd, msg } => write!(f, "command `{cmd}` failed: {msg}"),
             CascadeError::Arg(m) => write!(f, "invalid argument: {m}"),
             CascadeError::Io(m) => write!(f, "I/O: {m}"),
-            CascadeError::SysfsIo(e) => write!(f, "Sysfs I/O: {e}"),
             CascadeError::Precondition(m) => write!(f, "{m}"),
             CascadeError::UnsafeContainment(m) => write!(f, "unsafe containment: {m}"),
         }
@@ -529,6 +472,75 @@ fn plan_orphan_action(entries: &[SwapEntry], cascade_healthy: bool) -> OrphanPla
         return OrphanPlan::RefuseDirtyBackend;
     }
     OrphanPlan::DetectedUnboundZeroUsed
+}
+
+/// One attended transition plan from the pre-binding ZRAM → NBD topology.
+///
+/// It deliberately proves topology only. Runtime code must still bind the
+/// selected devices and daemon immediately before each effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LegacyMigrationPlan {
+    nbd: SwapEntry,
+    zram: Option<SwapEntry>,
+}
+
+/// Build the only legacy topology the attended migration may retire.
+///
+/// Zero-used NBD is a necessary drain precondition, not ownership proof. The
+/// caller supplies explicit operator intent and the runtime daemon/device proof
+/// before this plan can cause any mutation.
+fn plan_legacy_migration(entries: &[SwapEntry]) -> Result<LegacyMigrationPlan, CascadeError> {
+    if entries
+        .iter()
+        .any(|entry| entry.is_ghost() && entry.is_managed_or_orphan_vram_tier())
+    {
+        return Err(CascadeError::Precondition(
+            "legacy migration refused: managed ghost swap is present".into(),
+        ));
+    }
+
+    let managed = entries
+        .iter()
+        .filter(|entry| !entry.is_ghost() && entry.is_managed_or_orphan_vram_tier())
+        .collect::<Vec<_>>();
+    let nbd = managed
+        .iter()
+        .filter(|entry| is_nbd_device_path(&entry.filename))
+        .copied()
+        .collect::<Vec<_>>();
+    let zram = managed
+        .iter()
+        .filter(|entry| is_zram_device_path(&entry.filename))
+        .copied()
+        .collect::<Vec<_>>();
+    let has_ublk = managed
+        .iter()
+        .any(|entry| is_ublk_device_path(&entry.filename));
+
+    if has_ublk || nbd.len() != 1 || zram.len() > 1 || managed.len() != nbd.len() + zram.len() {
+        return Err(CascadeError::Precondition(
+            "legacy migration requires exactly one NBD, at most one ZRAM, and no ublk".into(),
+        ));
+    }
+    let nbd = nbd[0];
+    if nbd.used_kb != 0 {
+        return Err(CascadeError::Precondition(format!(
+            "legacy migration requires a drained NBD before handoff; used_kb={}",
+            nbd.used_kb
+        )));
+    }
+    if let Some(zram) = zram.first()
+        && zram.priority <= nbd.priority
+    {
+        return Err(CascadeError::Precondition(
+            "legacy migration requires ZRAM priority above the NBD tier".into(),
+        ));
+    }
+
+    Ok(LegacyMigrationPlan {
+        nbd: nbd.clone(),
+        zram: zram.first().map(|entry| (*entry).clone()),
+    })
 }
 
 fn disk_swap_used_kib(entries: &[SwapEntry]) -> u64 {
@@ -1352,7 +1364,8 @@ fn guardian_state_from_files(
     if !fresh {
         return (GuardianState::Blocked, Some("guardian_state_stale".into()));
     }
-    let value = match serde_json::from_str::<serde_json::Value>(&text) {
+    let json = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let value = match serde_json::from_str::<serde_json::Value>(json) {
         Ok(value) => value,
         Err(_) => {
             return (
@@ -1719,13 +1732,7 @@ fn print_tier(name: &str, t: &TierSample) {
 }
 
 mod cascade_io;
-pub use cascade_io::{down, up_with_args};
-
-impl From<CascadeIoError> for CascadeError {
-    fn from(error: CascadeIoError) -> Self {
-        CascadeError::SysfsIo(error)
-    }
-}
+pub use cascade_io::{down, migrate_legacy_cascade, up_with_args};
 
 #[cfg(test)]
 mod tests {
@@ -1876,6 +1883,40 @@ mod tests {
              /dev/sdc partition 8388608 0 -2\n",
         );
         assert_eq!(plan_orphan_action(&e, false), OrphanPlan::None);
+    }
+
+    #[test]
+    fn legacy_migration_plan_accepts_single_clean_nbd_and_zram() {
+        let entries = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sdb partition 4194304 0 -2\n\
+             /dev/zram0 partition 1048572 4140 100\n\
+             /dev/nbd0 partition 4194300 0 50\n",
+        );
+
+        let plan = plan_legacy_migration(&entries).expect("eligible legacy plan");
+
+        assert_eq!(plan.nbd.canonical_path(), "/dev/nbd0");
+        assert_eq!(plan.nbd.used_kb, 0);
+        assert_eq!(
+            plan.zram.as_ref().map(SwapEntry::canonical_path),
+            Some("/dev/zram0".into())
+        );
+    }
+
+    #[test]
+    fn legacy_migration_plan_refuses_ghost_dirty_duplicate_or_ublk() {
+        for fixture in [
+            "Filename Type Size Used Priority\n/dev/nbd0\\040(deleted) partition 1024 0 50\n",
+            "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 1 50\n",
+            "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 0 50\n/dev/nbd1 partition 1024 0 50\n",
+            "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 0 50\n/dev/ublkb0 partition 1024 0 40\n",
+        ] {
+            assert!(
+                plan_legacy_migration(&parse_proc_swaps(fixture)).is_err(),
+                "{fixture}"
+            );
+        }
     }
 
     #[test]
@@ -2158,6 +2199,38 @@ Filename Type Size Used Priority
         assert_eq!(
             guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
             (GuardianState::SafeMode, None)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guardian_health_accepts_a_windows_utf8_bom_and_rejects_malformed_json() {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-guardian-bom-state-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let safe = root.join("safe.json");
+        let health = root.join("health.json");
+
+        fs::write(
+            &health,
+            "\u{feff}{\"schema_version\":3,\"distro\":\"Ubuntu-24.04\",\"state\":\"HEALTHY\"}",
+        )
+        .unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::Healthy, None)
+        );
+
+        fs::write(&health, "\u{feff}not-json").unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (
+                GuardianState::Blocked,
+                Some("guardian_state_invalid".into())
+            )
         );
         fs::remove_dir_all(root).unwrap();
     }

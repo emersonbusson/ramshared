@@ -290,6 +290,57 @@ mod tests {
     }
 
     #[test]
+    fn rejects_zero_slices() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slices = 0;
+        let err = cfg.validate().expect_err("should reject zero slices");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.slices" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_slice_mib() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slice_mib = 0;
+        let err = cfg.validate().expect_err("should reject zero slice_mib");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.slice_mib" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_watchdog_secs() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.agent.watchdog_secs = 0;
+        let err = cfg
+            .validate()
+            .expect_err("should reject zero watchdog_secs");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "agent.watchdog_secs" && reason == "must be > 0"
+        ));
+    }
+
+    #[test]
+    fn accepts_vulkan_backend() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.backend = "vulkan".into();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
     fn rejects_small_slice() {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.slice_mib = 15;
@@ -306,5 +357,47 @@ mod tests {
             let err = cfg.validate().expect_err("should reject excessive ram");
             assert!(matches!(err, ConfigError::OutOfRange(_)));
         }
+    }
+
+    #[test]
+    fn parses_syntax_error_captures_line_col() {
+        let err = Config::parse("[broker]\nlisten = '127.0.0.1:7777'\ninvalid = = syntax")
+            .expect_err("expected syntax error");
+        assert!(matches!(
+            err,
+            ConfigError::Parse {
+                line: Some(3),
+                column: Some(11),
+                ref key_path,
+                ..
+            } if key_path.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parses_type_mismatch_in_agent_captures_key_path_and_location() {
+        let err = Config::parse("[agent]\nwatchdog_secs = 'not_a_number'")
+            .expect_err("expected parse error");
+        assert!(matches!(
+            err,
+            ConfigError::Parse {
+                line: Some(2),
+                column: Some(17),
+                ref key_path,
+                ..
+            } if key_path == "agent.watchdog_secs"
+        ));
+    }
+
+    #[test]
+    fn parses_partial_agent_config_and_applies_defaults() {
+        let cfg = Config::parse("[agent]\ntenant = 'my-tenant'").expect("parse partial config");
+        assert_eq!(cfg.agent.tenant, "my-tenant");
+        assert_eq!(cfg.agent.broker, "127.0.0.1:7777");
+        assert_eq!(cfg.agent.watchdog_secs, 90);
+        assert_eq!(cfg.broker.listen, "127.0.0.1:7777");
+        assert_eq!(cfg.broker.slices, 1);
+        assert_eq!(cfg.broker.slice_mib, 256);
+        assert_eq!(cfg.broker.backend, "cuda");
     }
 }
