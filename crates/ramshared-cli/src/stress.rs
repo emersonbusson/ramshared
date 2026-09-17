@@ -60,6 +60,7 @@ pub struct StressOptions {
     pub telemetry_log: String,
     pub json: bool,
     pub threads: u64,
+    pub min_order_7_chunks: u64,
 }
 
 impl Default for StressOptions {
@@ -79,6 +80,7 @@ impl Default for StressOptions {
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
             json: false,
             threads: 1,
+            min_order_7_chunks: MIN_ORDER_7_BUDDY_CHUNKS,
         }
     }
 }
@@ -280,6 +282,14 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                     .parse()
                     .map_err(|_| "invalid --max-latency-ms value")?;
             }
+            "--min-order-7-chunks" => {
+                i += 1;
+                opts.min_order_7_chunks = args
+                    .get(i)
+                    .ok_or_else(|| "--min-order-7-chunks requires a value".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --min-order-7-chunks value")?;
+            }
             "--log" => {
                 i += 1;
                 opts.telemetry_log = args
@@ -463,15 +473,25 @@ pub enum BuddyInterlockAction {
     Halt { detected_chunks: u64 },
 }
 
+#[allow(dead_code)]
 pub fn decide_buddyinfo_action(effective_order_7: Option<u64>) -> BuddyInterlockAction {
+    decide_buddyinfo_action_with_threshold(effective_order_7, MIN_ORDER_7_BUDDY_CHUNKS)
+}
+
+pub fn decide_buddyinfo_action_with_threshold(
+    effective_order_7: Option<u64>,
+    threshold: u64,
+) -> BuddyInterlockAction {
+    if threshold == 0 {
+        return BuddyInterlockAction::Continue;
+    }
     match effective_order_7 {
-        Some(o7) if is_order_7_depleted(Some(o7), MIN_ORDER_7_BUDDY_CHUNKS) => {
-            BuddyInterlockAction::Halt {
-                detected_chunks: o7,
-            }
-        }
+        Some(o7) if is_order_7_depleted(Some(o7), threshold) => BuddyInterlockAction::Halt {
+            detected_chunks: o7,
+        },
         Some(o7)
-            if (MIN_ORDER_7_BUDDY_CHUNKS..PROACTIVE_COMPACTION_TRIGGER_CHUNKS).contains(&o7) =>
+            if (threshold..PROACTIVE_COMPACTION_TRIGGER_CHUNKS.max(threshold + 8))
+                .contains(&o7) =>
         {
             trigger_proactive_compaction();
             BuddyInterlockAction::CompactionTriggered
@@ -969,8 +989,27 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             break;
         }
 
-        if is_wsl2() {
-            let action = decide_buddyinfo_action(read_buddyinfo_order_7());
+        if is_wsl2() && opts.min_order_7_chunks > 0 {
+            let mut action = decide_buddyinfo_action_with_threshold(
+                read_buddyinfo_order_7(),
+                opts.min_order_7_chunks,
+            );
+            if let BuddyInterlockAction::CompactionTriggered = action {
+                thread::sleep(Duration::from_millis(150));
+            } else if let BuddyInterlockAction::Halt { .. } = action {
+                // Before halting, trigger proactive compaction and allow kcompactd to coalesce pages
+                for _ in 0..3 {
+                    trigger_proactive_compaction();
+                    thread::sleep(Duration::from_millis(200));
+                    action = decide_buddyinfo_action_with_threshold(
+                        read_buddyinfo_order_7(),
+                        opts.min_order_7_chunks,
+                    );
+                    if !matches!(action, BuddyInterlockAction::Halt { .. }) {
+                        break;
+                    }
+                }
+            }
             if let BuddyInterlockAction::Halt { detected_chunks } = action {
                 if !opts.json {
                     println!(
@@ -987,7 +1026,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                     );
                     println!(
                         "\n[🛡️ VMBUS BUDDY INTERLOCK] Order-7 physical memory depleted (<{} chunks, detected {}). Halted at {}% (Zero Hang Protection).",
-                        MIN_ORDER_7_BUDDY_CHUNKS, detected_chunks, max_safe_pct
+                        opts.min_order_7_chunks, detected_chunks, max_safe_pct
                     );
                 }
                 break;
