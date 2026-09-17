@@ -420,9 +420,18 @@ pub fn parse_buddyinfo_effective_order_7_chunks(content: &str) -> Option<u64> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 15 && parts.get(3).copied() == Some("Normal") {
             let o7 = parts.get(11).and_then(|s| s.parse::<u64>().ok())?;
-            let o8 = parts.get(12).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let o9 = parts.get(13).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-            let o10 = parts.get(14).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+            let o8 = parts
+                .get(12)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let o9 = parts
+                .get(13)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let o10 = parts
+                .get(14)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
             let higher_equivalent = (o8 * 2) + (o9 * 4) + (o10 * 8);
             return Some(o7 + higher_equivalent);
         }
@@ -457,9 +466,13 @@ pub enum BuddyInterlockAction {
 pub fn decide_buddyinfo_action(effective_order_7: Option<u64>) -> BuddyInterlockAction {
     match effective_order_7 {
         Some(o7) if is_order_7_depleted(Some(o7), MIN_ORDER_7_BUDDY_CHUNKS) => {
-            BuddyInterlockAction::Halt { detected_chunks: o7 }
+            BuddyInterlockAction::Halt {
+                detected_chunks: o7,
+            }
         }
-        Some(o7) if (MIN_ORDER_7_BUDDY_CHUNKS..PROACTIVE_COMPACTION_TRIGGER_CHUNKS).contains(&o7) => {
+        Some(o7)
+            if (MIN_ORDER_7_BUDDY_CHUNKS..PROACTIVE_COMPACTION_TRIGGER_CHUNKS).contains(&o7) =>
+        {
             trigger_proactive_compaction();
             BuddyInterlockAction::CompactionTriggered
         }
@@ -1999,15 +2012,24 @@ mod tests {
                       Node 0, zone    DMA32      2      1      2      0      1      1      1      2      0      2    974 \n\
                       Node 0, zone   Normal   2702   4568   2435   1170    635    356    215    147     91    112   1292 \n";
         // 147 + (91 * 2) + (112 * 4) + (1292 * 8) = 11113
-        assert_eq!(parse_buddyinfo_effective_order_7_chunks(sample), Some(11113));
+        assert_eq!(
+            parse_buddyinfo_effective_order_7_chunks(sample),
+            Some(11113)
+        );
 
         // When order-7 is 3, but order-10 has 1030 chunks, effective order-7 is 3 + (1030 * 8) = 8243
         let abundant_higher = "Node 0, zone   Normal   710   882   1943   488   488   331   143     3     0      0   1030 \n";
-        assert_eq!(parse_buddyinfo_effective_order_7_chunks(abundant_higher), Some(8243));
+        assert_eq!(
+            parse_buddyinfo_effective_order_7_chunks(abundant_higher),
+            Some(8243)
+        );
 
         let zero_sample =
             "Node 0, zone   Normal   815   1332   2330   1837   3290   753   3   0   0   0   0 \n";
-        assert_eq!(parse_buddyinfo_effective_order_7_chunks(zero_sample), Some(0));
+        assert_eq!(
+            parse_buddyinfo_effective_order_7_chunks(zero_sample),
+            Some(0)
+        );
     }
 
     #[test]
@@ -2048,7 +2070,10 @@ mod tests {
         );
 
         // None (not readable or non-WSL2) -> Continue
-        assert_eq!(decide_buddyinfo_action(None), BuddyInterlockAction::Continue);
+        assert_eq!(
+            decide_buddyinfo_action(None),
+            BuddyInterlockAction::Continue
+        );
     }
 
     #[test]
