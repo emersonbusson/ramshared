@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.14.0](https://github.com/emersonbusson/ramshared/compare/v0.13.4...v0.14.0) (2026-09-17)
+
+
+### Features
+
+* **block,wsl2d:** add elastic cooperative cache and headroom governor ([a8eebcc](https://github.com/emersonbusson/ramshared/commit/a8eebcc4a0a9651180b20ea80fa948517e4fe8f0))
+* **cascade:** migrate bound legacy WSL2 cascades ([317a3e0](https://github.com/emersonbusson/ramshared/commit/317a3e00ecbf78d3b81045319f99ec536f1ea46a))
+* **core:** consolidate wave 8 qualification, cooperative tiering, and swap anti-deadlock ([0421c95](https://github.com/emersonbusson/ramshared/commit/0421c95413bd6079b77d908caa08bba5188dc110))
+* **governor:** implement buddyinfo order-7 interlock and elevate wsl2 headroom floor ([3a1b75e](https://github.com/emersonbusson/ramshared/commit/3a1b75eb11b2f04c600d11aacd737722693afbb5))
+* **origin:** recover sealed WSL attachment ([48c2d53](https://github.com/emersonbusson/ramshared/commit/48c2d53ab6aa3f4b057bbdccf8e15e3aeb8f7c69))
+* **stress:** add min-order-7-chunks option and qualify 100% tier 3 ([f4a6d38](https://github.com/emersonbusson/ramshared/commit/f4a6d389cf56e1b6cc4ac700e7f03b4d8b566e5e))
+* **stress:** calibrate order-7 buddyinfo interlock and expand cascade ceiling ([83eb9ce](https://github.com/emersonbusson/ramshared/commit/83eb9ce6582f3584827739014ed7ae5f1bafd858))
+
+
+### Bug Fixes
+
+* **broker:** bound renewable lease lifecycle ([bd66562](https://github.com/emersonbusson/ramshared/commit/bd665627015bb3b77338d2f6a9d2ddf8e1fe2840))
+* **broker:** complete bounded lease lifecycle ([5a40bed](https://github.com/emersonbusson/ramshared/commit/5a40bed9d4f6bfbfc99a91dd9019456ee1636532))
+* **cascade:** accept Windows BOM in guardian health ([24e0766](https://github.com/emersonbusson/ramshared/commit/24e07662026d05aafb067088487d5dc15e773223))
+* **cascade:** admit confirmed stale legacy NBD owner ([11bacee](https://github.com/emersonbusson/ramshared/commit/11baceee75a3a940dbc2d7756337d211a4b34552))
+* **cascade:** admit sealed legacy daemon by hash ([b4a5b73](https://github.com/emersonbusson/ramshared/commit/b4a5b733440ae8c1f23f95ffdd68a5cdb9a5978a))
+* **cascade:** admit verified replaced legacy daemon ([1f17c0b](https://github.com/emersonbusson/ramshared/commit/1f17c0b2801747b65699d0a297d60cdf51125e50))
+* **cascade:** classify verified legacy runtime records ([ee4a0cf](https://github.com/emersonbusson/ramshared/commit/ee4a0cf185a4cfa3c8f196ff60602ddf0573c0d3))
+* **cascade:** close open descriptors before device reset or disconnect ([37ff6cd](https://github.com/emersonbusson/ramshared/commit/37ff6cd8239db8546c7298bbccb70a38fcaea8af))
+* **cascade:** retire legacy records and permit absent netlink NBD owner ([dbcdc26](https://github.com/emersonbusson/ramshared/commit/dbcdc26330f70e7c77c9a9857de2918ba4a7d1be))
+* **ci:** pin persistent base revision and register elastic vram coverage ([7678452](https://github.com/emersonbusson/ramshared/commit/767845203e16a5c35528ec4ac5777dc74a17f368))
+* **ci:** refresh RustSec advisory database snapshot to HEAD ([b9f8deb](https://github.com/emersonbusson/ramshared/commit/b9f8deb443d0046fb6626f1c584bd7d9d1fba52b))
+* **governor:** calibrate physical headroom floor to 600 MB while enforcing buddyinfo order-7 interlock ([40c3722](https://github.com/emersonbusson/ramshared/commit/40c372230cc457093bdda2d77d13ea98a316d24a))
+* **guardian:** bind task user to policy SID ([9565e4d](https://github.com/emersonbusson/ramshared/commit/9565e4dc770a70ca5815b21ed285cceff7349bd9))
+* **guardian:** flatten boot probe artifact fields ([a2402f2](https://github.com/emersonbusson/ramshared/commit/a2402f2663e09d10122ce3814c8785dc9aa84c59))
+* **guardian:** pass validated WSL distro without quotes ([ed07221](https://github.com/emersonbusson/ramshared/commit/ed07221c6ad95db8df802d5b87ca1ebddeea837e))
+* **guardian:** retain registration failure cause ([4a74a50](https://github.com/emersonbusson/ramshared/commit/4a74a50e5b7a669c37cae18c4cccbf16a7b5ca0d))
+* **guardian:** retain sanitized boot probe summary ([ea92c72](https://github.com/emersonbusson/ramshared/commit/ea92c7215b6973e0fe93da3177f976a3d1c0a5bc))
+* **guardian:** use account identity for task principal ([1ef00a0](https://github.com/emersonbusson/ramshared/commit/1ef00a0d57a00e6a124b0d4238add073e9f44ba0))
+* **integrity:** classify multi-bit corruption accurately ([8c78abe](https://github.com/emersonbusson/ramshared/commit/8c78abe4a035132265a9b5a22c50fd9fa89c154b))
+* **kernel:** enforce PCI BAR capacity contract ([7eb5bb2](https://github.com/emersonbusson/ramshared/commit/7eb5bb2f13156f471f469d208f5bb95310d06025))
+* **origin:** bound mkswap to logical capacity KiB and verify exact swap size ([ea08ff8](https://github.com/emersonbusson/ramshared/commit/ea08ff8a0f103f4aed6502cbffad48eb1471de2b))
+* **origin:** follow bound descriptor for device identity ([9de43bc](https://github.com/emersonbusson/ramshared/commit/9de43bcd88693128a395c6cc382ce4b26495c202))
+* **origin:** parameterize origin capacity bounds and validate mathematical headroom ([6f87ac3](https://github.com/emersonbusson/ramshared/commit/6f87ac3c760fe7458290fcd0f41f657143aa5f81))
+* **packaging:** honor approved divergent auxiliary units ([db01e38](https://github.com/emersonbusson/ramshared/commit/db01e381610b880f68e87aaef1b6760a7f589493))
+* **packaging:** migrate approved legacy auxiliary units ([1e01c71](https://github.com/emersonbusson/ramshared/commit/1e01c716a8c2907320925600a16e61c147e12c4f))
+* **packaging:** upgrade owned auxiliary units ([a812774](https://github.com/emersonbusson/ramshared/commit/a81277430778205bdd95db98d9d77481db6eb281))
+* **tier:** correct constrained demotion transition ([9f2b6a4](https://github.com/emersonbusson/ramshared/commit/9f2b6a44d11896d3647df51f7433923af7d3fdbc))
+* **vram:** eliminate recursive swap deadlock and bound NBD tiering ([91c0e6d](https://github.com/emersonbusson/ramshared/commit/91c0e6d190eb9e2f292254aad6a82c15fe242d67))
+* **winbroker:** handle no-data pipe disconnects ([8b6f9bb](https://github.com/emersonbusson/ramshared/commit/8b6f9bb84bf7bdab719c6ccb3fcd13e86ab6cf87))
+
+
+### Performance
+
+* **broker:** validate slice layouts in sorted order ([d577098](https://github.com/emersonbusson/ramshared/commit/d57709846b0fb6cb172563fb61a112e904b553bc))
+
+
+### Refactor
+
+* **cascade:** simplify legacy proof selection ([f571a11](https://github.com/emersonbusson/ramshared/commit/f571a113e84cf654edbe02a7f298d00b48451441))
+* **core:** remove stale error paths and copies ([9e35f85](https://github.com/emersonbusson/ramshared/commit/9e35f8554120d3e33b6aeaaee4ef5d942359c368))
+
+
+### Documentation
+
+* **broker:** record bounded lease lifecycle ([9c21ec4](https://github.com/emersonbusson/ramshared/commit/9c21ec4d7b64b334640614f03a1c22121a5733b2))
+* **cascade:** define sealed legacy hash proof ([54174d8](https://github.com/emersonbusson/ramshared/commit/54174d8c6c6d79bb3f9e919f154bafc81dc4511c))
+* **cascade:** define stale legacy NBD owner proof ([995e69d](https://github.com/emersonbusson/ramshared/commit/995e69d0690e87a9958883b0fcb3e843ef609e8b))
+* **cascade:** record verified metrics and commit hashes in migration IMPL ([42a8949](https://github.com/emersonbusson/ramshared/commit/42a8949bc2b3989ab08cb1da51bef51a2933d82b))
+* **governor:** qualify implementation evidence and record coverage pass ([9fcbc1c](https://github.com/emersonbusson/ramshared/commit/9fcbc1cae642ddee8dfb639297f387d29436e3f3))
+* **governor:** specify WSL2 VMBus anti-fragmentation governor and ring pool resilience ([3a26df8](https://github.com/emersonbusson/ramshared/commit/3a26df8d1647b1abf92363054fd829963ec404c1))
+* **origin:** record commit traceability in wsl2-origin-capacity-policy IMPL ([1599655](https://github.com/emersonbusson/ramshared/commit/1599655bdf21ec1fd288a495ba96a35a44c3e5a8))
+* **origin:** record live qualification and E2E verification in wsl2-origin-capacity-policy IMPL ([8b55a1a](https://github.com/emersonbusson/ramshared/commit/8b55a1a60880858c0dcff8082bcf51610010382d))
+* **origin:** sanitize raw device paths in origin capacity policy ([e0c919f](https://github.com/emersonbusson/ramshared/commit/e0c919f6bf0321d5443522b61f80a033be7361a4))
+* **origin:** specify attended WSL attachment recovery ([4a97f1e](https://github.com/emersonbusson/ramshared/commit/4a97f1e4b5560cb1ef3186953841a682a57dab69))
+* **origin:** specify parameterized WSL2 origin capacity policy and safe storage bounds ([8a8daf7](https://github.com/emersonbusson/ramshared/commit/8a8daf716fa14dc9b54a7e753e68e1899e9b9dd2))
+* **reliability:** reconcile consolidation and release docs ([fdc0aab](https://github.com/emersonbusson/ramshared/commit/fdc0aab1c67dd853f106865b6c2e4d426c85b4af))
+* **wsl2d:** format calculate_safe_vram_slice doc comment ([b93326e](https://github.com/emersonbusson/ramshared/commit/b93326e9274abeae74c4b78ddc6cec7b6a348c92))
+
+
+### CI
+
+* **packaging:** harden auto-deploy script with dynamic path resolution ([f99d0a2](https://github.com/emersonbusson/ramshared/commit/f99d0a2a5bbaf24c8b5318c81a9a1172153fc6eb))
+
 ## [0.13.4](https://github.com/emersonbusson/ramshared/compare/v0.13.3...v0.13.4) (2026-09-14)
 
 
