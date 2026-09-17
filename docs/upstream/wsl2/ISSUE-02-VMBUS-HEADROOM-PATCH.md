@@ -1,9 +1,9 @@
 # Upstream Proposal: Prevent Hyper-V VMBus Control-Plane Starvation and Balloon Thrash
 
-- **Target Repository:** [`microsoft/WSL`](https://github.com/microsoft/WSL/issues) (community issue tracking) & [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel) (kernel source)
+- **Target Repository:** [`microsoft/WSL#41634`](https://github.com/microsoft/WSL/issues/41634) (community issue tracking) & [`microsoft/WSL2-Linux-Kernel`](https://github.com/microsoft/WSL2-Linux-Kernel) (kernel source)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Guest Drivers)
 - **Patch Reference:** [`docs/upstream/patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch`](../patches/0001-hv-vmbus-prevent-control-plane-starvation-under-m.patch)
-- **Status:** Ready for Submission
+- **Status:** Submitted
 
 ---
 
