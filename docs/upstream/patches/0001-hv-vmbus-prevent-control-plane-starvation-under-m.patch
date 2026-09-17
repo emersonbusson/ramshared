@@ -48,26 +48,20 @@ index 2b4080e51..cc24eb742 100644
  #include <linux/sizes.h>
 +#include <linux/mm.h>
 
+ 
  #include <linux/hyperv.h>
  #include <hyperv/hvhdk.h>
-@@ -1197,6 +1198,8 @@ static void free_balloon_pages(struct hv_dynmem_device *dm,
- 	}
- }
-
-+extern int min_free_kbytes;
-+
- static unsigned int alloc_balloon_pages(struct hv_dynmem_device *dm,
- 					unsigned int num_pages,
- 					struct dm_balloon_response *bl_resp,
-@@ -1205,6 +1208,15 @@ static unsigned int alloc_balloon_pages(struct hv_dynmem_device *dm,
+@@ -1205,6 +1206,17 @@ static unsigned int alloc_balloon_pages(struct hv_dynmem_device *dm,
  	unsigned int i, j;
  	struct page *pg;
-
+ 
 +	/*
 +	 * Defer balloon inflation if guest is in critical reclaim zone.
 +	 * Competing with kswapd under pressure starves VMBus channels.
++	 * Evaluates against 3.125% of total system RAM to avoid forbidden
++	 * out-of-core extern mutations while maintaining memory headroom.
 +	 */
-+	if (si_mem_available() < (min_free_kbytes * 2)) {
++	if (si_mem_available() < (totalram_pages() / 32)) {
 +		pr_warn_ratelimited("hv_balloon: balloon inflation deferred; guest memory constrained\n");
 +		return 0;
 +	}

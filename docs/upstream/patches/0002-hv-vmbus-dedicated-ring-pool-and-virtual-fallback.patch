@@ -30,7 +30,9 @@ index 162d6aeec..f1aa8100a 100644
  
 -	if (channel->ringbuffer_page) {
 +	if (channel->ringbuffer_is_vmalloc && channel->ringbuffer_page_virt) {
-+		vfree(channel->ringbuffer_page_virt);
++		/* In a CoCo VM leak the memory if it didn't get re-encrypted */
++		if (!channel->ringbuffer_gpadlhandle.decrypted)
++			vfree(channel->ringbuffer_page_virt);
 +		channel->ringbuffer_page_virt = NULL;
 +		channel->ringbuffer_is_vmalloc = false;
 +	} else if (channel->ringbuffer_page) {
