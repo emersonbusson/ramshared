@@ -1,9 +1,9 @@
 # Upstream Proposal: Add Virtual Memory Fallback for VMBus Ring Allocations Under Fragmentation
 
-- **Target Repository:** [`microsoft/WSL`](https://github.com/microsoft/WSL/issues) (community tracking) & Linux Hyper-V Subsystem (LKML)
+- **Target Repository:** [`microsoft/WSL#41634`](https://github.com/microsoft/WSL/issues/41634) (combined proposal) · [`microsoft/WSL#40795`](https://github.com/microsoft/WSL/issues/40795#issuecomment-5716513649) (solution comment) & Linux Hyper-V Subsystem (LKML)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Synthetic Transport)
 - **Patch Reference:** [`docs/upstream/patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch`](../patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch)
-- **Status:** Ready for Submission
+- **Status:** Submitted
 
 ---
 
