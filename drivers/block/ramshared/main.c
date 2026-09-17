@@ -29,6 +29,8 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *id)
 {
 	struct ramshared_device *rs_dev;
+	resource_size_t bar_len;
+	u64 capacity_bytes;
 	int ret;
 
 	if (!pdev || !id)
@@ -40,6 +42,22 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
 		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
 			capacity_mb);
+		return -ERANGE;
+	}
+
+	if (check_mul_overflow((u64)capacity_mb, 1024ULL * 1024ULL,
+			       &capacity_bytes)) {
+		dev_err(&pdev->dev, "capacity_bytes integer overflow\n");
+		return -EOVERFLOW;
+	}
+
+	bar_len = pci_resource_len(pdev, 0);
+	/* SPEC: kernel-pci-bar-capacity-contract §RF-1. */
+	if (bar_len == 0 || (u64)bar_len < capacity_bytes) {
+		dev_err(&pdev->dev,
+			"BAR0 is smaller than requested capacity (%llu < %llu)\n",
+			(unsigned long long)bar_len,
+			(unsigned long long)capacity_bytes);
 		return -ERANGE;
 	}
 
@@ -58,10 +76,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	rs_dev->dev = &pdev->dev;
-	if (check_mul_overflow((u64)capacity_mb, 1024ULL * 1024ULL, &rs_dev->capacity_bytes)) {
-		dev_err(&pdev->dev, "capacity_bytes integer overflow\n");
-		return -EOVERFLOW;
-	}
+	rs_dev->capacity_bytes = capacity_bytes;
 	mutex_init(&rs_dev->lock);
 	atomic64_set(&rs_dev->dma_transfers_total, 0);
 	atomic64_set(&rs_dev->read_bytes, 0);
@@ -69,8 +84,9 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 
 	ret = pci_enable_device_mem(pdev);
 	if (ret) {
-		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
-		return -ENODEV;
+		dev_err(&pdev->dev, "failed to enable PCIe memory device: %d\n",
+			ret);
+		return ret;
 	}
 
 	pci_set_master(pdev);

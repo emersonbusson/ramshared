@@ -42,6 +42,38 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-broker/src/lease.rs",
+          "crates/ramshared-winbroker/src/lib.rs",
+          "crates/ramshared-wsl2d/src/broker_srv.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": [
+          "crates/ramshared-wsl2d/tests/broker_e2e.rs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/broker-lease-lifecycle/IMPL.md",
+        "prd": "docs/specs/no-milestone/broker-lease-lifecycle/PRD.md",
+        "spec": "docs/specs/no-milestone/broker-lease-lifecycle/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "broker-lease-lifecycle"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
           "crates/ramshared-agent/src/main.rs",
           "crates/ramshared-agent/src/psi.rs",
           "crates/ramshared-broker/src/protocol.rs",
@@ -470,6 +502,38 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/elastic_cache.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-block/src/lib.rs",
+          "crates/ramshared-wsl2d/src/governor.rs",
+          "crates/ramshared-wsl2d/src/lib.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/elastic-vram-cooperative-tier/IMPL.md",
+        "prd": "docs/specs/no-milestone/elastic-vram-cooperative-tier/PRD.md",
+        "spec": "docs/specs/no-milestone/elastic-vram-cooperative-tier/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "elastic-vram-cooperative-tier"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
           "scripts/p0/Invoke-ExternalGpuWddmPressureAudit.ps1",
           "scripts/p0/Invoke-GpuWorkloadGate.ps1",
           "scripts/p0/Test-ExternalGpuWddmPressureAuditStatic.ps1"
@@ -512,6 +576,34 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "kernel-native-language"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": [
+          "tools/ci/kernel-probe-contract.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/kernel-pci-bar-capacity-contract/IMPL.md",
+        "prd": "docs/specs/no-milestone/kernel-pci-bar-capacity-contract/PRD.md",
+        "spec": "docs/specs/no-milestone/kernel-pci-bar-capacity-contract/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "kernel-pci-bar-capacity-contract"
     },
     {
       "claim_reconciliation": {
@@ -1054,6 +1146,35 @@
         "registry_state": null
       },
       "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-cascade-legacy-migration/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-cascade-legacy-migration/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-cascade-legacy-migration/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-cascade-legacy-migration"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
         "implementation_paths": [],
         "test_paths": []
       },
@@ -1371,6 +1492,65 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "scripts/docs-check.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1",
+          "scripts/windows/Test-RamSharedOriginStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-origin-attachment-recovery/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-origin-attachment-recovery/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-origin-attachment-recovery/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-origin-attachment-recovery"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh",
+          "scripts/safety/ramshared-host-gate.sh",
+          "scripts/safety/test-control-plane-units.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1",
+          "scripts/windows/Test-RamSharedOriginStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-origin-capacity-policy/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-origin-capacity-policy/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-origin-capacity-policy/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-origin-capacity-policy"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
           "scripts/safety/test-wsl-relay-health.sh",
           "scripts/safety/wsl-relay-health.sh"
         ],
@@ -1446,6 +1626,33 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "wsl2-upstream-native-contribution"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/stress.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-vmbus-anti-fragmentation-governor/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-vmbus-anti-fragmentation-governor"
     },
     {
       "claim_reconciliation": {

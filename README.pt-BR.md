@@ -12,7 +12,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0"><img alt="Versão v0.12.0" src="https://img.shields.io/badge/release-v0.12.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.13.4"><img alt="Versão v0.13.4" src="https://img.shields.io/badge/release-v0.13.4-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-estável-2f855a?style=flat-square">
 </p>
@@ -40,7 +40,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 
 ## Status atual
 
-Última release publicada: **[v0.12.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.12.0)**. Este checkout compila a versão **0.13.0**, a próxima manutenção estável em desenvolvimento; ela ainda não foi publicada.
+Última release publicada: **[v0.13.4](https://github.com/emersonbusson/ramshared/releases/tag/v0.13.4)**. Este checkout compila a versão **0.13.4**, a manutenção estável atual.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
@@ -53,9 +53,9 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 
 As medições históricas estão em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Entradas sem envelope público de evidência são registros históricos, não baselines atuais de release. Limites e qualificações em aberto estão em [`docs/reliability/`](docs/reliability/).
 
-### Snapshot de qualificação da v0.12
+### Snapshot de qualificação da v0.13
 
-A qualificação publicada da v0.12 alcançou **19.777 MB** entre Tier 0 (ZRAM), Tier 1 (cache de VRAM da GPU) e Tier 3 (origem SSD), com veredito `PASS_ZERO_PANIC` no hardware qualificado. Isso registra a evidência da release; não é promessa de capacidade ou desempenho para outra máquina.
+A qualificação da v0.13 alcançou **19.777 MB** entre Tier 0 (ZRAM), Tier 1 (cache de VRAM da GPU) e Tier 3 (origem SSD), com veredito `PASS_ZERO_PANIC` no hardware qualificado. Isso registra a evidência da release; não é promessa de capacidade ou desempenho para outra máquina.
 
 ## Operação Segura e Guia de Início Rápido
 <a id="safe-operation"></a><a id="quick-start"></a>
@@ -76,6 +76,25 @@ ramshared top
 ```
 
 Transições de ativação exigem comando explícito do operador (`sudo ramshared up` / `sudo ramshared down`).
+
+### Transição única de uma cascata legada
+
+Se uma instalação anterior do RamShared ainda estiver em execução sem o binding
+de ciclo de vida atual, não desconecte manualmente os dispositivos de swap nem
+encerre o daemon. Use a transição assistida:
+
+```bash
+sudo ./target/release/ramshared migrate-cascade --from-legacy
+```
+
+O comando não aceita substituição de dispositivo ou capacidade. Ele recusa a
+operação se não puder comprovar a origem selada, uma única topologia legada
+ZRAM → NBD elegível, o binário correspondente do daemon (ou um daemon
+substituído, de root, ainda ligado ao listener NBD esperado, ou o caminho
+legado fixo de root com o mesmo SHA-256), margem de memória e um guardião do
+host saudável. Ele drena o swap antes de resetar, desconectar
+ou encerrar o daemon e então cria o binding normal de ciclo de vida selado. Uma
+recusa mantém os dispositivos e as evidências existentes intactos.
 
 O perfil padrão define 4 GiB de capacidade lógica com um teto de cache físico de 1 GiB. Você pode ajustar a capacidade de 1 a 24 GiB sob demanda, sem precisar pré-alocar essa quantia na VRAM física.
 
@@ -164,6 +183,7 @@ ramshared top
 - **Alocação dinâmica, sem desperdício:** O RamShared só aloca memória de vídeo sob demanda. Se jogos, navegadores ou aplicativos 3D precisarem de VRAM, o RamShared devolve o espaço na hora.
 - **Proteção do Gerenciador de Janelas (DWM):** Pelo menos 1,5 GB (ou 20% da VRAM) fica sempre reservado para a interface do Windows, garantindo que suas telas, janelas e cursor continuem perfeitamente fluidos.
 - **Segurança total de armazenamento:** As operações em disco vinculam-se estritamente ao identificador único do volume (UUID), nunca a letras voláteis de unidade.
+- **Transição legada assistida:** `migrate-cascade --from-legacy` é o único caminho suportado para sair de uma cascata anterior sem binding; não é recuperação automática.
 
 ## Integração de Sistema e Segurança
 
@@ -185,7 +205,7 @@ segurança, modelos de serviços systemd, documentação e assinaturas criptogr�
 Caches de compilação, credenciais e artefatos de ambientes transitórios são estritamente excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-As versões oficiais para Linux (incluindo v0.12.0 e marcos anteriores) e
+As versões oficiais para Linux (incluindo v0.13.4 e marcos anteriores) e
 seus checksums criptográficos são qualificados pelo fluxo automatizado de promoção de releases.
 
 ## Arquitetura do Driver Windows StorPort

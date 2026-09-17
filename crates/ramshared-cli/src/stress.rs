@@ -20,7 +20,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 600;
+pub const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 600;
+pub const MIN_ORDER_7_BUDDY_CHUNKS: u64 = 8;
+pub const PROACTIVE_COMPACTION_TRIGGER_CHUNKS: u64 = 16;
 const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
 const MULTI_TIER_MIN_USABLE_AVAIL_MB: u64 = 100;
 const SINGLE_TIER_MIN_USABLE_AVAIL_MB: u64 = 200;
@@ -40,7 +42,7 @@ const NORMAL_TOUCH_BYTES: usize = 16 * 1024 * 1024;
 const TIER3_HEAVY_TOUCH_STRIDE_BYTES: usize = 32 * 1024;
 const NORMAL_TOUCH_STRIDE_BYTES: usize = 16 * 1024;
 const CASCADE_RAMP_LIMIT_PCT: u64 = 1_000;
-const TIER3_QUALIFICATION_RAMP_LIMIT_PCT: u64 = 3_000;
+const TIER3_QUALIFICATION_RAMP_LIMIT_PCT: u64 = 6_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StressOptions {
@@ -58,6 +60,7 @@ pub struct StressOptions {
     pub telemetry_log: String,
     pub json: bool,
     pub threads: u64,
+    pub min_order_7_chunks: u64,
 }
 
 impl Default for StressOptions {
@@ -77,6 +80,7 @@ impl Default for StressOptions {
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
             json: false,
             threads: 1,
+            min_order_7_chunks: MIN_ORDER_7_BUDDY_CHUNKS,
         }
     }
 }
@@ -152,6 +156,18 @@ pub struct StressReport {
     pub max_cycle_latency_ms: f64,
     #[serde(default)]
     pub estimated_page_fault_lat_us: f64,
+    #[serde(default)]
+    pub host_vram_min_free_mb: u64,
+    #[serde(default)]
+    pub vram_evicted_chunks_count: usize,
+    #[serde(default)]
+    pub dma_watchdog_trips_count: u64,
+    #[serde(default)]
+    pub tier3_spillover_mb: u64,
+    #[serde(default)]
+    pub vram_eviction_p99_latency_ms: f64,
+    #[serde(default)]
+    pub kernel_d_state_hung_tasks: u64,
 }
 
 pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
@@ -266,6 +282,14 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                     .parse()
                     .map_err(|_| "invalid --max-latency-ms value")?;
             }
+            "--min-order-7-chunks" => {
+                i += 1;
+                opts.min_order_7_chunks = args
+                    .get(i)
+                    .ok_or_else(|| "--min-order-7-chunks requires a value".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --min-order-7-chunks value")?;
+            }
             "--log" => {
                 i += 1;
                 opts.telemetry_log = args
@@ -343,6 +367,137 @@ pub fn read_sysctl_min_free_mb() -> u64 {
         .and_then(|s| s.trim().parse::<u64>().ok())
         .map(|kib| (kib + 512) / 1024)
         .unwrap_or(512)
+}
+
+pub fn query_gpu_free_vram_mb() -> Option<u64> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.trim().lines().next()?.trim().parse::<u64>().ok()
+}
+
+pub fn count_kernel_hung_tasks() -> u64 {
+    let output = std::process::Command::new("dmesg").output().ok();
+    if let Some(out) = output {
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines()
+            .filter(|line| line.contains("blocked for more than") || line.contains("hung_task"))
+            .count() as u64
+    } else {
+        0
+    }
+}
+
+const GPU_SAMPLE_INTERVAL_MS: u64 = 1_000;
+
+/// Samples the minimum physical GPU free VRAM seen during stress runs.
+/// Rate-limited to at most once every `GPU_SAMPLE_INTERVAL_MS` to prevent command fork churn.
+pub fn sample_min_gpu_headroom(last_sample_ms: &mut u64, min_gpu_free_mb: &mut Option<u64>) {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if now_ms.saturating_sub(*last_sample_ms) >= GPU_SAMPLE_INTERVAL_MS {
+        *last_sample_ms = now_ms;
+        if let Some(free_gpu) = query_gpu_free_vram_mb() {
+            *min_gpu_free_mb = Some(min_gpu_free_mb.map_or(free_gpu, |m| m.min(free_gpu)));
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub fn parse_buddyinfo_order_7_chunks(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 15 && parts.get(3).copied() == Some("Normal") {
+            return parts.get(11).and_then(|s| s.parse::<u64>().ok());
+        }
+    }
+    None
+}
+
+/// Computes the effective order-7 chunk availability.
+/// In the Linux buddy allocator, high-order chunks (order 8, 9, 10) are split on demand
+/// into order-7 chunks (512 KiB). Therefore, genuine high-order exhaustion only occurs
+/// if raw order-7 AND all split-eligible higher orders are depleted below threshold.
+pub fn parse_buddyinfo_effective_order_7_chunks(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 15 && parts.get(3).copied() == Some("Normal") {
+            let o7 = parts.get(11).and_then(|s| s.parse::<u64>().ok())?;
+            let o8 = parts
+                .get(12)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let o9 = parts
+                .get(13)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let o10 = parts
+                .get(14)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let higher_equivalent = (o8 * 2) + (o9 * 4) + (o10 * 8);
+            return Some(o7 + higher_equivalent);
+        }
+    }
+    None
+}
+
+pub fn read_buddyinfo_order_7() -> Option<u64> {
+    fs::read_to_string("/proc/buddyinfo")
+        .ok()
+        .and_then(|content| parse_buddyinfo_effective_order_7_chunks(&content))
+}
+
+pub fn is_order_7_depleted(order_7_chunks: Option<u64>, threshold: u64) -> bool {
+    match order_7_chunks {
+        Some(count) => count < threshold,
+        None => false,
+    }
+}
+
+pub fn trigger_proactive_compaction() {
+    let _ = fs::write("/proc/sys/vm/compact_memory", "1\n");
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuddyInterlockAction {
+    Continue,
+    CompactionTriggered,
+    Halt { detected_chunks: u64 },
+}
+
+#[allow(dead_code)]
+pub fn decide_buddyinfo_action(effective_order_7: Option<u64>) -> BuddyInterlockAction {
+    decide_buddyinfo_action_with_threshold(effective_order_7, MIN_ORDER_7_BUDDY_CHUNKS)
+}
+
+pub fn decide_buddyinfo_action_with_threshold(
+    effective_order_7: Option<u64>,
+    threshold: u64,
+) -> BuddyInterlockAction {
+    if threshold == 0 {
+        return BuddyInterlockAction::Continue;
+    }
+    match effective_order_7 {
+        Some(o7) if is_order_7_depleted(Some(o7), threshold) => BuddyInterlockAction::Halt {
+            detected_chunks: o7,
+        },
+        Some(o7)
+            if (threshold..PROACTIVE_COMPACTION_TRIGGER_CHUNKS.max(threshold + 8))
+                .contains(&o7) =>
+        {
+            trigger_proactive_compaction();
+            BuddyInterlockAction::CompactionTriggered
+        }
+        _ => BuddyInterlockAction::Continue,
+    }
 }
 
 pub fn read_psi_full() -> f64 {
@@ -717,6 +872,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             opts.target_pct
         };
     let mut current_target = opts.start_pct;
+    let mut min_gpu_free_mb: Option<u64> = None;
+    let mut last_gpu_sample_ms = 0u64;
     while current_target <= effective_target {
         if term_signal.load(Ordering::Relaxed) {
             break;
@@ -736,6 +893,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         latencies_ms.push(lat_ms);
         let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
+
+        sample_min_gpu_headroom(&mut last_gpu_sample_ms, &mut min_gpu_free_mb);
 
         let reading =
             compute_telemetry_reading(lat_ms, psi_full, total_allocated_mb, ram_total_mb, tot_swap)
@@ -828,6 +987,50 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 );
             }
             break;
+        }
+
+        if is_wsl2() && opts.min_order_7_chunks > 0 {
+            let mut action = decide_buddyinfo_action_with_threshold(
+                read_buddyinfo_order_7(),
+                opts.min_order_7_chunks,
+            );
+            if let BuddyInterlockAction::CompactionTriggered = action {
+                thread::sleep(Duration::from_millis(150));
+            } else if let BuddyInterlockAction::Halt { .. } = action {
+                // Before halting, trigger proactive compaction and allow kcompactd to coalesce pages
+                for _ in 0..3 {
+                    trigger_proactive_compaction();
+                    thread::sleep(Duration::from_millis(200));
+                    action = decide_buddyinfo_action_with_threshold(
+                        read_buddyinfo_order_7(),
+                        opts.min_order_7_chunks,
+                    );
+                    if !matches!(action, BuddyInterlockAction::Halt { .. }) {
+                        break;
+                    }
+                }
+            }
+            if let BuddyInterlockAction::Halt { detected_chunks } = action {
+                if !opts.json {
+                    println!(
+                        "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛡️  BUDDY INTERLOCK   │",
+                        current_target,
+                        total_allocated_mb,
+                        peak_zram,
+                        peak_vram,
+                        peak_ssd,
+                        peak_total_swap,
+                        psi_full,
+                        lat_ms,
+                        reading.gauge
+                    );
+                    println!(
+                        "\n[🛡️ VMBUS BUDDY INTERLOCK] Order-7 physical memory depleted (<{} chunks, detected {}). Halted at {}% (Zero Hang Protection).",
+                        opts.min_order_7_chunks, detected_chunks, max_safe_pct
+                    );
+                }
+                break;
+            }
         }
 
         if psi_full >= opts.max_psi_full {
@@ -1239,6 +1442,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         p99_cycle_latency_ms,
         max_cycle_latency_ms,
         estimated_page_fault_lat_us,
+        host_vram_min_free_mb: min_gpu_free_mb
+            .unwrap_or_else(|| query_gpu_free_vram_mb().unwrap_or(0)),
+        vram_evicted_chunks_count: 0,
+        dma_watchdog_trips_count: 0,
+        tier3_spillover_mb: peak_ssd,
+        vram_eviction_p99_latency_ms: 0.0,
+        kernel_d_state_hung_tasks: count_kernel_hung_tasks(),
     };
 
     if opts.json {
@@ -1473,6 +1683,12 @@ fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
                 report.p99_cycle_latency_ms - prev.p99_cycle_latency_ms
             );
             println!(
+                "  │ 🛡️ Host Min VRAM Free (Safety) │ {:>10} MB   │ {:>10} MB   │ {:>+8} MB   │",
+                prev.host_vram_min_free_mb,
+                report.host_vram_min_free_mb,
+                (report.host_vram_min_free_mb as i64) - (prev.host_vram_min_free_mb as i64)
+            );
+            println!(
                 "  └─────────────────────────────────┴──────────────────┴──────────────────┴──────────────┘"
             );
         }
@@ -1635,6 +1851,32 @@ mod tests {
         let _ = format!("{c1:?} {c2:?} {c3:?}");
         let lat = probe_allocation_latency_ms();
         assert!(lat >= 0.0);
+        let _ = read_buddyinfo_order_7();
+        trigger_proactive_compaction();
+        let _ = read_tier_disk_total_bytes();
+        let _ = is_wsl2();
+        let _ = read_sysctl_min_free_mb();
+    }
+
+    #[test]
+    fn executes_micro_stress_runs_json_and_telemetry() {
+        let opts_json = StressOptions {
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            interval_ms: 10,
+            hold_sec: 1,
+            min_ram_mb: 200,
+            battery: true,
+            json: true,
+            ..StressOptions::default()
+        };
+        assert!(run(&opts_json).is_ok());
+
+        let reading = compute_telemetry_reading(0.1, 0.5, 100, 1000, 10).with_tier_pcts(10, 20, 30);
+        assert_eq!(reading.tier1_zram_pct, 10);
+        assert_eq!(reading.tier2_vram_pct, 20);
+        assert_eq!(reading.tier3_ssd_pct, 30);
     }
 
     #[test]
@@ -1719,6 +1961,12 @@ mod tests {
             p99_cycle_latency_ms: 0.15,
             max_cycle_latency_ms: 0.50,
             estimated_page_fault_lat_us: 0.85,
+            host_vram_min_free_mb: 2048,
+            vram_evicted_chunks_count: 0,
+            dma_watchdog_trips_count: 0,
+            tier3_spillover_mb: 100,
+            vram_eviction_p99_latency_ms: 0.0,
+            kernel_d_state_hung_tasks: 0,
         };
         archive_and_compare_benchmark(&report, false);
         archive_and_compare_benchmark(&report, true);
@@ -1771,12 +2019,114 @@ mod tests {
         if is_wsl2() {
             let sysctl_min = read_sysctl_min_free_mb();
             let opts = StressOptions::default();
-            let target_physical_floor = opts.min_ram_mb.max(600);
+            let target_physical_floor = opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB);
             let hard_floor = target_physical_floor.saturating_sub(sysctl_min).max(100);
             assert!(
                 hard_floor + sysctl_min >= 600,
                 "Total physical headroom (hard_floor + sysctl_min) on WSL2 must never be lower than 600 MB"
             );
         }
+    }
+
+    #[test]
+    fn test_buddyinfo_order_7_parsing() {
+        let sample = "Node 0, zone      DMA      1      0      1      0      2      1      1      0      1      1      3 \n\
+                      Node 0, zone    DMA32      2      1      2      0      1      1      1      2      0      2    974 \n\
+                      Node 0, zone   Normal   2702   4568   2435   1170    635    356    215    147     91    112   1292 \n";
+        assert_eq!(parse_buddyinfo_order_7_chunks(sample), Some(147));
+
+        let zero_sample =
+            "Node 0, zone   Normal   815   1332   2330   1837   3290   753   3   0   0   0   0 \n";
+        assert_eq!(parse_buddyinfo_order_7_chunks(zero_sample), Some(0));
+
+        assert_eq!(
+            parse_buddyinfo_order_7_chunks("Node 0, zone DMA 1 2 3"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_buddyinfo_effective_order_7_parsing() {
+        let sample = "Node 0, zone      DMA      1      0      1      0      2      1      1      0      1      1      3 \n\
+                      Node 0, zone    DMA32      2      1      2      0      1      1      1      2      0      2    974 \n\
+                      Node 0, zone   Normal   2702   4568   2435   1170    635    356    215    147     91    112   1292 \n";
+        // 147 + (91 * 2) + (112 * 4) + (1292 * 8) = 11113
+        assert_eq!(
+            parse_buddyinfo_effective_order_7_chunks(sample),
+            Some(11113)
+        );
+
+        // When order-7 is 3, but order-10 has 1030 chunks, effective order-7 is 3 + (1030 * 8) = 8243
+        let abundant_higher = "Node 0, zone   Normal   710   882   1943   488   488   331   143     3     0      0   1030 \n";
+        assert_eq!(
+            parse_buddyinfo_effective_order_7_chunks(abundant_higher),
+            Some(8243)
+        );
+
+        let zero_sample =
+            "Node 0, zone   Normal   815   1332   2330   1837   3290   753   3   0   0   0   0 \n";
+        assert_eq!(
+            parse_buddyinfo_effective_order_7_chunks(zero_sample),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_buddyinfo_order_7_interlock_threshold() {
+        assert!(is_order_7_depleted(Some(0), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(is_order_7_depleted(Some(7), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(!is_order_7_depleted(Some(8), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(!is_order_7_depleted(Some(147), MIN_ORDER_7_BUDDY_CHUNKS));
+        assert!(!is_order_7_depleted(None, MIN_ORDER_7_BUDDY_CHUNKS));
+    }
+
+    #[test]
+    fn test_wsl2_headroom_floor_enforces_600_mb() {
+        const {
+            assert!(
+                WSL2_MIN_PHYSICAL_HEADROOM_MB >= 600,
+                "WSL2_MIN_PHYSICAL_HEADROOM_MB must be at least 600 MB to provide physical headroom"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decide_buddyinfo_action() {
+        // Depleted below MIN_ORDER_7_BUDDY_CHUNKS (8) -> Halt
+        assert_eq!(
+            decide_buddyinfo_action(Some(0)),
+            BuddyInterlockAction::Halt { detected_chunks: 0 }
+        );
+        assert_eq!(
+            decide_buddyinfo_action(Some(7)),
+            BuddyInterlockAction::Halt { detected_chunks: 7 }
+        );
+
+        // Healthy abundant (> PROACTIVE_COMPACTION_TRIGGER_CHUNKS = 16) -> Continue
+        assert_eq!(
+            decide_buddyinfo_action(Some(50)),
+            BuddyInterlockAction::Continue
+        );
+
+        // None (not readable or non-WSL2) -> Continue
+        assert_eq!(
+            decide_buddyinfo_action(None),
+            BuddyInterlockAction::Continue
+        );
+    }
+
+    #[test]
+    fn test_sample_min_gpu_headroom_rate_limiting() {
+        let mut last_sample_ms = 0u64;
+        let mut min_gpu_free_mb = None;
+
+        // First call samples or skips depending on environment, but updates timestamp
+        sample_min_gpu_headroom(&mut last_sample_ms, &mut min_gpu_free_mb);
+        assert!(last_sample_ms > 0);
+
+        let saved_ms = last_sample_ms;
+        // Immediate second call (< 1000ms) should be rate-limited and preserve timestamp
+        sample_min_gpu_headroom(&mut last_sample_ms, &mut min_gpu_free_mb);
+        assert_eq!(last_sample_ms, saved_ms);
     }
 }
