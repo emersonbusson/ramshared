@@ -20,6 +20,15 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	if (!rs_dev || !pdev)
 		return -EINVAL;
 
+	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64))) {
+		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
+		if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32))) {
+			dev_err(&pdev->dev, "no usable DMA configuration\n");
+			return -EIO;
+		}
+	}
+
+
 	bar_start = pci_resource_start(pdev, bar);
 	bar_len = pci_resource_len(pdev, bar);
 
