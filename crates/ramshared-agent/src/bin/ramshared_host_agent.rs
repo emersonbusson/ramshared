@@ -8,18 +8,19 @@
 use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
 
-use ramshared_agent::local::{LocalMsg, LocalReply, read_json_line, write_json_line};
+use ramshared_agent::local::{AgentState, LocalMsg, LocalReply, read_json_line, write_json_line};
 use ramshared_broker::model::TransportKind;
 use ramshared_broker::protocol::{Msg, PROTO_VERSION, read_msg, write_msg};
 
 fn usage() -> &'static str {
-    "ramshared-host-agent --broker HOST:PORT [--listen HOST:PORT] [--tenant NAME]"
+    "ramshared-host-agent --broker HOST:PORT [--listen HOST:PORT] [--tenant NAME] [--checkpoint FILE]"
 }
 
-fn parse_args(args: &[String]) -> Result<(String, String, String), String> {
+fn parse_args(args: &[String]) -> Result<(String, String, String, Option<String>), String> {
     let mut broker = None;
     let mut listen = "127.0.0.1:7788".to_string();
     let mut tenant = "dcc".to_string();
+    let mut checkpoint = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let value = |name: &str, it: &mut std::slice::Iter<'_, String>| {
@@ -31,14 +32,18 @@ fn parse_args(args: &[String]) -> Result<(String, String, String), String> {
             "--broker" => broker = Some(value("--broker", &mut it)?),
             "--listen" => listen = value("--listen", &mut it)?,
             "--tenant" => tenant = value("--tenant", &mut it)?,
+            "--checkpoint" => checkpoint = Some(value("--checkpoint", &mut it)?),
             "-h" | "--help" => return Err(usage().into()),
-            other => return Err(format!("unknown argument: {other}\n{}", usage())),
+            other => return Err(format!("unknown argument: {other}
+{}", usage())),
         }
     }
     Ok((
-        broker.ok_or_else(|| format!("--broker is required\n{}", usage()))?,
+        broker.ok_or_else(|| format!("--broker is required
+{}", usage()))?,
         listen,
         tenant,
+        checkpoint,
     ))
 }
 
@@ -72,7 +77,7 @@ fn connect_broker(
     }
 }
 
-fn handle(local: TcpStream, broker_addr: &str, tenant: &str) -> Result<(), String> {
+fn handle(local: TcpStream, broker_addr: &str, tenant: &str, checkpoint: Option<&str>) -> Result<(), String> {
     local
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .map_err(|e| e.to_string())?;
@@ -95,7 +100,19 @@ fn handle(local: TcpStream, broker_addr: &str, tenant: &str) -> Result<(), Strin
             return Err("broker closed without a reply".into());
         };
         let local_reply = match reply {
-            Msg::LeaseGranted { lease, bytes } => LocalReply::LeaseGranted { lease, bytes },
+                        Msg::LeaseGranted { lease, bytes } => {
+                if let Some(path) = checkpoint {
+                    let state = AgentState {
+                        tenant: tenant.to_string(),
+                        last_lease: Some(lease),
+                        last_bytes: Some(bytes),
+                    };
+                    if let Err(e) = state.save(std::path::Path::new(path)) {
+                        eprintln!("[host-agent] failed to save checkpoint: {}", e);
+                    }
+                }
+                LocalReply::LeaseGranted { lease, bytes }
+            }
             Msg::LeaseDenied { reason } => LocalReply::LeaseDenied { reason },
             Msg::StatusReply {
                 last_rebalance_secs,
@@ -117,13 +134,25 @@ fn handle(local: TcpStream, broker_addr: &str, tenant: &str) -> Result<(), Strin
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (broker, listen, tenant) = parse_args(&args).map_err(std::io::Error::other)?;
+    let (broker, listen, mut tenant, checkpoint) = parse_args(&args).map_err(std::io::Error::other)?;
+
+    if let Some(path) = &checkpoint {
+        match AgentState::load(std::path::Path::new(path)) {
+            Ok(state) => {
+                eprintln!("[host-agent] loaded checkpoint: {:?}", state);
+                tenant = state.tenant;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) => eprintln!("[host-agent] failed to load checkpoint: {}", e),
+        }
+    }
+
     let listener = TcpListener::bind(&listen)?;
-    eprintln!("[host-agent] listening={listen} broker={broker} tenant={tenant}");
+    eprintln!("[host-agent] listening={listen} broker={broker} tenant={tenant} checkpoint={checkpoint:?}");
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(error) = handle(stream, &broker, &tenant) {
+                if let Err(error) = handle(stream, &broker, &tenant, checkpoint.as_deref()) {
                     eprintln!("[host-agent] request_error={error}");
                 }
             }
