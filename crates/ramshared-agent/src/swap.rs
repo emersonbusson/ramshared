@@ -89,9 +89,25 @@ pub fn swapon_args(dev: &str, prio: Option<i32>) -> Vec<String> {
     a
 }
 
+/// Resolves binary name to an absolute path if found in standard system directories.
+pub fn resolve_binary(cmd: &str) -> String {
+    if cmd.starts_with("/") {
+        return cmd.to_string();
+    }
+    const PATHS: &[&str] = &["/usr/sbin", "/sbin", "/usr/bin", "/bin"];
+    for dir in PATHS {
+        let p = std::path::Path::new(dir).join(cmd);
+        if p.exists() {
+            return p.to_string_lossy().into_owned();
+        }
+    }
+    cmd.to_string()
+}
+
 /// Runs a command and converts non-zero exit into `Err` with details (never swallows the error).
 fn run(cmd: &str, args: &[String]) -> Result<()> {
-    let status = Command::new(cmd).args(args).status()?;
+    let executable = resolve_binary(cmd);
+    let status = Command::new(&executable).args(args).status()?;
     if status.success() {
         Ok(())
     } else {
@@ -335,6 +351,17 @@ mod tests {
                 size: 128 * 1024 * 1024,
                 max: 64 * 1024 * 1024
             }
+        );
+    }
+
+    #[test]
+    fn test_resolve_binary_fallback_and_absolute() {
+        assert_eq!(resolve_binary("/bin/sh"), "/bin/sh");
+        let res = resolve_binary("sh");
+        assert!(res == "/bin/sh" || res == "/usr/bin/sh" || res == "sh");
+        assert_eq!(
+            resolve_binary("nonexistent_binary_xyz_123"),
+            "nonexistent_binary_xyz_123"
         );
     }
 
