@@ -48,6 +48,7 @@ pub enum DiagnoseError {
     Io(std::io::Error, std::path::PathBuf),
     ParseJson(String),
     Timeout(String),
+    MissingPrerequisite(String),
 }
 
 impl std::fmt::Display for DiagnoseError {
@@ -57,6 +58,7 @@ impl std::fmt::Display for DiagnoseError {
             Self::Io(err, path) => write!(f, "read {}: {err}", path.display()),
             Self::ParseJson(msg) => write!(f, "{msg}"),
             Self::Timeout(msg) => write!(f, "timeout: {msg}"),
+            Self::MissingPrerequisite(msg) => write!(f, "missing prerequisite: {msg}"),
         }
     }
 }
@@ -68,6 +70,7 @@ impl DiagnoseError {
             Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
             Self::ParseJson(_) => 22, // EINVAL for malformed json
             Self::Timeout(_) => 110,  // ETIMEDOUT
+            Self::MissingPrerequisite(_) => 13,
         }
     }
 }
@@ -102,7 +105,22 @@ pub fn run_probe_with_timeout<T: Send + 'static, F: FnOnce() -> T + Send + 'stat
 }
 
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
+    if !std::path::Path::new("/proc/self").exists() {
+        return Err(DiagnoseError::MissingPrerequisite(
+            "procfs not mounted".to_string(),
+        ));
+    }
     let (path, json) = parse_args(args)?;
+
+    // Robust file permission check
+    if let Err(e) = std::fs::File::open(&path)
+        && e.kind() == std::io::ErrorKind::PermissionDenied
+    {
+        return Err(DiagnoseError::MissingPrerequisite(
+            "insufficient permissions to read events".to_string(),
+        ));
+    }
+
     let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
     let diagnosis = run_probe_with_timeout(
         "diagnose_jsonl",
@@ -484,5 +502,23 @@ mod tests {
         let json_str = render_json(&d);
         assert!(json_str.contains("S3"));
         print_text(&d);
+    }
+
+    #[test]
+    fn run_rejects_missing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-diagnose-test-no-perm-{}.jsonl",
+            std::process::id()
+        ));
+        std::fs::write(&path, "{}").unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        let res = run(&["--events".to_string(), path.to_str().unwrap().to_string()]);
+        assert!(matches!(res, Err(DiagnoseError::MissingPrerequisite(_))));
+
+        let _ = std::fs::remove_file(path);
     }
 }
