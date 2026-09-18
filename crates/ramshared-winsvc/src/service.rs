@@ -644,6 +644,90 @@ mod tests {
     }
 
     #[test]
+    fn coresidence_fail_closed_with_missing_tenant_dependency() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk::default();
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+
+        // Simulating missing dependency by providing not enough VRAM in the mock
+        let free_mem = FixedFree(c.size_bytes / 2); // missing dependency: lack of sufficient free memory
+
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState { lease: 2, bytes: c.size_bytes },
+            &free_mem,
+            &mut disk,
+            &mut tenant,
+        ).unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Broker(BrokerTenantError::CoresidenceFailClosed { .. })));
+        assert!(!disk.created);
+        assert!(state.lease.is_none());
+    }
+
+    #[test]
+    fn provision_disk_create_failure_invalid_config() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+
+        struct InvalidConfigDisk;
+        impl DiskControl for InvalidConfigDisk {
+            fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
+                Err("invalid block size configuration".into())
+            }
+            fn destroy_disk(&mut self) -> Result<(), String> { Ok(()) }
+            fn register_queue(&mut self) -> Result<(), String> { Ok(()) }
+            fn unregister_queue(&mut self) -> Result<(), String> { Ok(()) }
+        }
+
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState { lease: 1, bytes: c.size_bytes },
+            &FixedFree(2 << 30),
+            &mut InvalidConfigDisk,
+            &mut BrokerTenant::new("wd", Duration::from_secs(5)),
+        ).unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Disk(ref s) if s.contains("invalid block size")));
+        assert!(!state.disk_created);
+    }
+
+    #[test]
+    fn coresidence_fail_closed_occupied_ports() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+
+        struct MockDisk;
+        impl DiskControl for MockDisk {
+            fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
+                // If disk creation fails simulating ports occupied / disk device already exists
+                Err("Occupied ports/device".into())
+            }
+            fn destroy_disk(&mut self) -> Result<(), String> { Ok(()) }
+            fn register_queue(&mut self) -> Result<(), String> { Ok(()) }
+            fn unregister_queue(&mut self) -> Result<(), String> { Ok(()) }
+        }
+
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+        tenant.force_lease_for_test(1, c.size_bytes);
+
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState { lease: 1, bytes: c.size_bytes },
+            &FixedFree(2 << 30), // Sufficient VRAM
+            &mut MockDisk,
+            &mut tenant,
+        ).unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Disk(ref s) if s.contains("Occupied ports/device")));
+        assert!(!state.disk_created);
+    }
+
+    #[test]
     fn provision_disk_register_failure_leaves_disk_created_but_not_online() {
         struct FailRegisterDisk {
             created: bool,
