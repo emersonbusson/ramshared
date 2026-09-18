@@ -25,6 +25,49 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $script:Win11LabMediaContractPath = Join-Path $PSScriptRoot "Win11LabMediaContract.ps1"
 
+
+function Assert-Win11LabDiskSpace {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    $root = [System.IO.Path]::GetPathRoot($candidate)
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("win11_lab_media_contract_disk_space_path_invalid")
+    }
+
+    if (-not (Test-Path -LiteralPath $root)) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("win11_lab_media_contract_disk_space_path_missing")
+    }
+
+    try {
+        $driveInfo = [System.IO.DriveInfo]::new($root)
+        $freeSpaceGB = $driveInfo.AvailableFreeSpace / 1GB
+        if ($freeSpaceGB -lt 15) {
+            throw [System.InvalidOperationException]::new("win11_lab_media_contract_insufficient_disk_space")
+        }
+    } catch {
+        if ($_.Exception -is [System.InvalidOperationException]) {
+            throw
+        }
+        throw [System.IO.IOException]::new("win11_lab_media_contract_disk_space_check_failed")
+    }
+}
+
+function Assert-Win11LabNetworkConnectivity {
+    [CmdletBinding()]
+    param()
+
+    try {
+        Invoke-WebRequest -Uri "https://www.microsoft.com" -Method HEAD -TimeoutSec 15 -UseBasicParsing -ErrorAction Stop | Out-Null
+    } catch {
+        throw [System.InvalidOperationException]::new("win11_lab_media_contract_network_unavailable")
+    }
+}
+
 function Normalize-Win11LabSha256 {
     [CmdletBinding()]
     param(
