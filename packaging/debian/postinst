@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ "${1:-}" = "configure" ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        if [ -d /run/systemd/system ]; then
+            echo "Reloading systemd daemon..."
+            systemctl daemon-reload || true
+        else
+            echo "systemd is not running. Skipping daemon-reload."
+        fi
+    fi
+
+    if command -v udevadm >/dev/null 2>&1; then
+        if [ -d /run/udev ]; then
+            echo "Reloading udev rules..."
+            udevadm control --reload-rules || true
+            udevadm trigger || true
+        else
+            echo "udev is not running. Skipping udev rules reload."
+        fi
+    fi
+fi
