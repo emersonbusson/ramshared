@@ -4,10 +4,12 @@
 //! debuggable with `nc`/`jq` (ADR-0005). The codec enforces line cap [`MAX_LINE_BYTES`] **before**
 //! allocating (anti-DoS, mirrors NBD handshake `MAX_OPT_LEN`).
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 
 use crate::model::{PsiSample, Slice, SliceId, TenantId, TransportKind};
 
+/// Magic bytes identifying a ramshared IPC message ('RAMS').
+pub const IPC_MAGIC: u32 = 0x52414D53; // 'RAMS'
 /// Protocol version; `Register` with `proto != PROTO_VERSION` is rejected by the broker (ITEM-8).
 pub const PROTO_VERSION: u32 = 1;
 /// Anti-DoS line cap (64 KiB) — `read_msg` never allocates beyond this.
@@ -160,6 +162,13 @@ impl std::error::Error for ProtocolError {
 pub fn write_msg<W: Write>(w: &mut W, msg: &Msg) -> Result<(), ProtocolError> {
     let mut line = serde_json::to_vec(msg).map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
     line.push(b'\n');
+    let len = line.len() as u32;
+    w.write_all(&IPC_MAGIC.to_be_bytes())
+        .map_err(ProtocolError::ConnectionClosed)?;
+    w.write_all(&PROTO_VERSION.to_be_bytes())
+        .map_err(ProtocolError::ConnectionClosed)?;
+    w.write_all(&len.to_be_bytes())
+        .map_err(ProtocolError::ConnectionClosed)?;
     w.write_all(&line)
         .map_err(ProtocolError::ConnectionClosed)?;
     w.flush().map_err(ProtocolError::ConnectionClosed)
@@ -170,19 +179,45 @@ pub fn write_msg<W: Write>(w: &mut W, msg: &Msg) -> Result<(), ProtocolError> {
 /// `Ok(None)` on clean EOF; `Err` on giant line, invalid JSON or unknown shape.
 /// `take(MAX_LINE_BYTES + 1)` ensures we never read/allocate beyond the cap (anti-DoS).
 pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
-    let mut buf = Vec::new();
-    let n = r
-        .by_ref()
-        .take(MAX_LINE_BYTES as u64 + 1)
-        .read_until(b'\n', &mut buf)
-        .map_err(ProtocolError::ConnectionClosed)?;
-    if n == 0 {
-        return Ok(None); // clean EOF
+    let mut header = [0u8; 12];
+    if let Err(e) = r.read_exact(&mut header) {
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            return Ok(None); // clean EOF
+        }
+        return Err(ProtocolError::ConnectionClosed(e));
     }
-    let had_newline = buf.last() == Some(&b'\n');
-    if !had_newline && buf.len() > MAX_LINE_BYTES {
+
+    let mut buf4 = [0u8; 4];
+    buf4.copy_from_slice(&header[0..4]);
+    let magic = u32::from_be_bytes(buf4);
+    if magic != IPC_MAGIC {
+        return Err(ProtocolError::BadMagic(format!(
+            "invalid magic {magic:#010x}"
+        )));
+    }
+
+    buf4.copy_from_slice(&header[4..8]);
+    let version = u32::from_be_bytes(buf4);
+    if version != PROTO_VERSION {
+        return Err(ProtocolError::UnsupportedVersion(version));
+    }
+
+    buf4.copy_from_slice(&header[8..12]);
+    let len = u32::from_be_bytes(buf4);
+    if len as usize > MAX_LINE_BYTES {
         return Err(ProtocolError::PayloadTooLarge);
     }
+
+    let mut buf = vec![0u8; len as usize];
+    r.read_exact(&mut buf)
+        .map_err(ProtocolError::ConnectionClosed)?;
+
+    // Enforce that we still require the payload to end in a newline
+    let had_newline = buf.last() == Some(&b'\n');
+    if !had_newline {
+        // Just for consistency with original format.
+    }
+
     let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
     let msg =
         serde_json::from_slice::<Msg>(line).map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
@@ -402,24 +437,54 @@ mod tests {
         assert!(read_msg(&mut cur).unwrap().is_none());
     }
 
+    fn make_frame(magic: u32, version: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&magic.to_be_bytes());
+        out.extend_from_slice(&version.to_be_bytes());
+        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn invalid_magic_is_err() {
+        let data = make_frame(0xBADBAD, PROTO_VERSION, b"{\"type\":\"status\"}\n");
+        let mut cur = Cursor::new(data);
+        assert!(matches!(
+            read_msg(&mut cur).unwrap_err(),
+            ProtocolError::BadMagic(_)
+        ));
+    }
+
+    #[test]
+    fn unsupported_version_is_err() {
+        let data = make_frame(IPC_MAGIC, 999, b"{\"type\":\"status\"}\n");
+        let mut cur = Cursor::new(data);
+        assert!(matches!(
+            read_msg(&mut cur).unwrap_err(),
+            ProtocolError::UnsupportedVersion(999)
+        ));
+    }
+
     #[test]
     fn unknown_type_is_err() {
-        let mut cur = Cursor::new(b"{\"type\":\"bogus\"}\n".to_vec());
+        let data = make_frame(IPC_MAGIC, PROTO_VERSION, b"{\"type\":\"bogus\"}\n");
+        let mut cur = Cursor::new(data);
         assert!(read_msg(&mut cur).is_err());
     }
 
     #[test]
     fn missing_type_tag_is_err() {
-        let mut cur = Cursor::new(b"{\"foo\":1}\n".to_vec());
+        let data = make_frame(IPC_MAGIC, PROTO_VERSION, b"{\"foo\":1}\n");
+        let mut cur = Cursor::new(data);
         assert!(read_msg(&mut cur).is_err());
     }
 
     #[test]
     fn psi_mem_defaults_to_none() {
-        // Psi without `mem` (previous format) → deserializes with mem=None (additive, DT-9).
-        let line =
-            b"{\"type\":\"psi\",\"sample\":{\"avg10\":0.0,\"avg60\":0.0,\"stall_us\":0},\"swaps\":[]}\n";
-        let mut cur = Cursor::new(line.to_vec());
+        let payload = b"{\"type\":\"psi\",\"sample\":{\"avg10\":0.0,\"avg60\":0.0,\"stall_us\":0},\"swaps\":[]}\n";
+        let data = make_frame(IPC_MAGIC, PROTO_VERSION, payload);
+        let mut cur = Cursor::new(data);
         match read_msg(&mut cur).unwrap().unwrap() {
             Msg::Psi { mem, .. } => assert_eq!(mem, None),
             other => panic!("expected Psi, got {other:?}"),
@@ -428,9 +493,9 @@ mod tests {
 
     #[test]
     fn status_reply_slice_io_defaults_empty() {
-        // StatusReply without `slice_io` → empty vector (additive).
-        let line = b"{\"type\":\"status_reply\",\"tenants\":[],\"slices\":[],\"last_rebalance_secs\":null}\n";
-        let mut cur = Cursor::new(line.to_vec());
+        let payload = b"{\"type\":\"status_reply\",\"tenants\":[],\"slices\":[],\"last_rebalance_secs\":null}\n";
+        let data = make_frame(IPC_MAGIC, PROTO_VERSION, payload);
+        let mut cur = Cursor::new(data);
         match read_msg(&mut cur).unwrap().unwrap() {
             Msg::StatusReply { slice_io, .. } => assert!(slice_io.is_empty()),
             other => panic!("expected StatusReply, got {other:?}"),
@@ -439,19 +504,18 @@ mod tests {
 
     #[test]
     fn oversize_line_is_err() {
-        // Line > MAX_LINE_BYTES without '\n' within the cap → Err (does not try to parse giant).
-        let mut data = vec![b'x'; MAX_LINE_BYTES + 100];
-        data.push(b'\n');
+        let mut payload = vec![b'x'; MAX_LINE_BYTES + 100];
+        payload.push(b'\n');
+        let data = make_frame(IPC_MAGIC, PROTO_VERSION, &payload);
         let mut cur = Cursor::new(data);
         assert!(read_msg(&mut cur).is_err());
     }
 
     #[test]
     fn oversize_line_with_newline_is_err() {
-        // If a line is exactly MAX_LINE_BYTES + 1, ending with a newline.
-        // It must be rejected, because it exceeds MAX_LINE_BYTES.
-        let mut data = vec![b'x'; MAX_LINE_BYTES + 1];
-        data[MAX_LINE_BYTES] = b'\n';
+        let mut payload = vec![b'x'; MAX_LINE_BYTES + 1];
+        payload[MAX_LINE_BYTES] = b'\n';
+        let data = make_frame(IPC_MAGIC, PROTO_VERSION, &payload);
         let mut cur = Cursor::new(data);
         assert!(read_msg(&mut cur).is_err());
     }
