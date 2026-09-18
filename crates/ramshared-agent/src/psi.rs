@@ -27,13 +27,19 @@ pub fn read_psi() -> Result<PsiSample> {
 ///
 /// Format: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
 pub fn parse_psi(content: &str) -> Option<PsiSample> {
+    // Defend against partial reads by requiring a trailing newline
+    // in the sysfs/procfs output, and guard against empty content.
+    if !content.ends_with('\n') {
+        return None;
+    }
+
     let line = content.lines().find(|l| l.starts_with("some "))?;
     let (mut avg10, mut avg60, mut total) = (None, None, None);
     for tok in line.split_whitespace() {
         if let Some(v) = tok.strip_prefix("avg10=") {
-            avg10 = v.parse::<f32>().ok();
+            avg10 = v.parse::<f32>().ok().filter(|&f| f.is_finite() && f >= 0.0);
         } else if let Some(v) = tok.strip_prefix("avg60=") {
-            avg60 = v.parse::<f32>().ok();
+            avg60 = v.parse::<f32>().ok().filter(|&f| f.is_finite() && f >= 0.0);
         } else if let Some(v) = tok.strip_prefix("total=") {
             total = v.parse::<u64>().ok();
         }
@@ -181,6 +187,17 @@ mod tests {
     #[test]
     fn parse_psi_no_some_line_is_none() {
         assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
+    }
+
+    #[test]
+    fn parse_psi_rejects_partial_read_missing_newline() {
+        assert!(parse_psi("some avg10=1.0 avg60=2.0 avg300=3.0 total=5").is_none());
+    }
+
+    #[test]
+    fn parse_psi_rejects_malformed_floats() {
+        assert!(parse_psi("some avg10=NaN avg60=inf avg300=3.0 total=5\n").is_none());
+        assert!(parse_psi("some avg10=-1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
     }
 
     #[test]
