@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.1](https://github.com/emersonbusson/ramshared/compare/v0.14.0...v0.14.1) (2026-09-18)
+
+
+### Documentation
+
+* **upstream:** align wsl issue templates and add submission helper ([#1884](https://github.com/emersonbusson/ramshared/issues/1884)) ([3610b14](https://github.com/emersonbusson/ramshared/commit/3610b1414bf05cbb2e6368f4707ed0a7dffa42ca))
+* **upstream:** harden patch series for LKML CoCo isolation and MM standards ([#1883](https://github.com/emersonbusson/ramshared/issues/1883)) ([d8df456](https://github.com/emersonbusson/ramshared/commit/d8df456f8a4b06c6e6838858c3644a45e2f8565a))
+* **upstream:** link Microsoft WSL proposals directly to maintained kernel fork ([#1881](https://github.com/emersonbusson/ramshared/issues/1881)) ([01079ac](https://github.com/emersonbusson/ramshared/commit/01079ace32db8f92bdddf5b530af237d2495bbe5))
+
+
+### CI
+
+* **deps:** bump github/codeql-action/upload-sarif ([#1874](https://github.com/emersonbusson/ramshared/issues/1874)) ([051cc27](https://github.com/emersonbusson/ramshared/commit/051cc27fdfc7a95daf4febce70d4aa411e1333ca))
+* **hygiene:** establish ephemeral script blocklist gate and policy ([#1886](https://github.com/emersonbusson/ramshared/issues/1886)) ([bd12578](https://github.com/emersonbusson/ramshared/commit/bd12578942e0e8ec6134a0a1a4036ce3ccff173a))
+
 ## [0.14.0](https://github.com/emersonbusson/ramshared/compare/v0.13.4...v0.14.0) (2026-09-17)
 
 
