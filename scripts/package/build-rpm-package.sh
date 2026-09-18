@@ -42,7 +42,7 @@ Name:           ramshared
 Version:        ${RPM_VERSION}
 Release:        1%{?dist}
 Summary:        Hardware-accelerated VRAM memory tiering & low-level kernel drivers
-License:        GPL-2.0-only
+License:        Apache-2.0
 URL:            https://github.com/emersonbusson/ramshared
 
 %description
@@ -78,6 +78,25 @@ fi
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
+
+
+TARBALL_PATH="$RPM_ROOT/SOURCES/ramshared-${RPM_VERSION}.tar.gz"
+if [[ -f "$TARBALL_PATH" ]]; then
+  echo "==> Verifying source tarball SHA-256..."
+  EXPECTED_SHA_FILE="${TARBALL_PATH}.sha256"
+  if [[ -f "$EXPECTED_SHA_FILE" ]]; then
+    if ! sha256sum -c "$EXPECTED_SHA_FILE" --status; then
+      echo "ERROR: SHA-256 checksum mismatch for tarball" >&2
+      exit 1
+    fi
+  else
+    echo "ERROR: Missing SHA-256 checksum file ($EXPECTED_SHA_FILE)" >&2
+    exit 1
+  fi
+  echo "✓ Tarball verified"
+else
+  echo "==> No tarball to verify at $TARBALL_PATH (not building from source tarball)"
+fi
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
