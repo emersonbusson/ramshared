@@ -52,7 +52,11 @@ impl Watchdog {
         Self::with_threshold(deadline, 1, now)
     }
 
-    pub fn with_threshold(deadline: Duration, max_failures: u32, now: Instant) -> Result<Self, WatchdogError> {
+    pub fn with_threshold(
+        deadline: Duration,
+        max_failures: u32,
+        now: Instant,
+    ) -> Result<Self, WatchdogError> {
         if max_failures == 0 {
             return Err(WatchdogError::InvalidThreshold);
         }
