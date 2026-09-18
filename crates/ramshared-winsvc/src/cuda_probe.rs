@@ -4,7 +4,10 @@
 //! hardware path is E2E evidence; pure offset planning lives in `ramshared_cuda::probe`.
 
 use crate::config::WinDriveConfig;
+#[cfg(not(test))]
 use ramshared_cuda::Cuda;
+#[cfg(test)]
+use tests::mock_cuda::Cuda;
 use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
 
 /// Result of a successful probe-cuda run.
@@ -22,6 +25,7 @@ pub struct ProbeCudaReport {
 /// Errors from probe-cuda (stable classes, no pointers).
 #[derive(Debug)]
 pub enum ProbeCudaError {
+    NoDevice,
     Config(String),
     Cuda(String),
     Mismatch { offset: usize },
@@ -32,6 +36,7 @@ pub enum ProbeCudaError {
 impl std::fmt::Display for ProbeCudaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ProbeCudaError::NoDevice => write!(f, "no CUDA device available"),
             ProbeCudaError::Config(s) => write!(f, "config: {s}"),
             ProbeCudaError::Cuda(s) => write!(f, "cuda: {s}"),
             ProbeCudaError::Mismatch { offset } => write!(f, "pattern mismatch at {offset}"),
@@ -57,7 +62,10 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
     let cuda = Cuda::load().map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
     let count = cuda
         .device_count()
-        .map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
+        .map_err(|e| match e {
+            ramshared_cuda::CudaError::NoDevice => ProbeCudaError::NoDevice,
+            _ => ProbeCudaError::Cuda(e.to_string()),
+        })?;
     if cfg.cuda_device as i32 >= count {
         return Err(ProbeCudaError::Cuda(format!(
             "cuda_device {} >= count {count}",
@@ -134,6 +142,39 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use std::path::PathBuf;
+
+
+    pub mod mock_cuda {
+        use ramshared_cuda::CudaError;
+        use ramshared_cuda::{Device, Context};
+
+        pub struct Cuda {}
+
+        impl Cuda {
+            pub fn load() -> Result<Self, CudaError> {
+                Ok(Self {})
+            }
+
+            pub fn device_count(&self) -> Result<i32, CudaError> {
+                Err(CudaError::NoDevice)
+            }
+
+            pub fn device(&self, _ordinal: i32) -> Result<Device, CudaError> {
+                unimplemented!()
+            }
+
+            pub fn create_context(&self, _dev: &Device) -> Result<Context<'_>, CudaError> {
+                unimplemented!()
+            }
+        }
+    }
+
+    #[test]
+    fn test_probe_cuda_no_device_returns_cuda_error() {
+        let cfg = cfg_64m();
+        let result = super::probe_cuda_allocates_roundtrips_and_restores(&cfg);
+        assert!(matches!(result, Err(ProbeCudaError::NoDevice)));
+    }
 
     fn cfg_64m() -> WinDriveConfig {
         WinDriveConfig {

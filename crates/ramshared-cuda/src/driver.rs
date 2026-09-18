@@ -17,6 +17,8 @@ use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms}
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
 #[derive(Debug)]
 pub enum CudaError {
+    /// No CUDA-capable device was found on the host.
+    NoDevice,
     /// Dynamic library loading failed to find a candidate library.
     Load(String),
     /// Symbol resolution failed for a required symbol.
@@ -38,6 +40,7 @@ pub enum CudaError {
 impl fmt::Display for CudaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CudaError::NoDevice => write!(f, "no CUDA-capable device found"),
             CudaError::Load(s) => write!(f, "failed to load CUDA library: {s}"),
             CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
             CudaError::Driver { op, code, msg } => {
@@ -167,6 +170,9 @@ impl Cuda {
         // SAFETY: count points to a valid local memory location.
         let r = unsafe { (self.syms.device_get_count)(&mut count) };
         check(&self.syms, r, "cuDeviceGetCount")?;
+        if count == 0 {
+            return Err(CudaError::NoDevice);
+        }
         Ok(count)
     }
 
