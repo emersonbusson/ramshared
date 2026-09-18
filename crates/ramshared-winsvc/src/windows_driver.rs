@@ -401,6 +401,9 @@ impl WindowsDriverLink {
 
     /// One pending COMMIT_AND_FETCH only (DT-4). Timeout uses CancelIoEx + GetOverlappedResult.
     pub fn commit_and_fetch(&mut self, timeout: Duration) -> Result<(), IoctlError> {
+        if self.handle == INVALID_HANDLE_VALUE || self.handle.is_null() {
+            return Err(IoctlError::Invalid("invalid handle".into()));
+        }
         if self.pending {
             return Err(IoctlError::Invalid("commit already pending".into()));
         }
@@ -479,6 +482,15 @@ impl WindowsDriverLink {
         input: Option<&[u8]>,
         _output: Option<&mut [u8]>,
     ) -> Result<(), IoctlError> {
+        if self.handle == INVALID_HANDLE_VALUE || self.handle.is_null() {
+            return Err(IoctlError::Invalid("invalid handle".into()));
+        }
+        if let Some(b) = input {
+            if (b.as_ptr() as usize) % 4096 != 0 {
+                return Err(IoctlError::Invalid("unaligned input buffer".into()));
+            }
+        }
+
         unsafe {
             let _ = ResetEvent(self.event);
         }
@@ -560,4 +572,60 @@ fn struct_bytes<T>(v: &T) -> Vec<u8> {
         ptr::copy_nonoverlapping((v as *const T) as *const u8, out.as_mut_ptr(), n);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ptr;
+
+    #[test]
+    fn test_driver_handle() {
+        let mut link = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        assert!(matches!(
+            link.commit_and_fetch(Duration::from_millis(1)),
+            Err(IoctlError::Invalid(_))
+        ));
+        assert!(matches!(
+            link.ioctl_sync(0, None, None),
+            Err(IoctlError::Invalid(_))
+        ));
+
+        let mut link2 = WindowsDriverLink {
+            handle: INVALID_HANDLE_VALUE,
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        assert!(matches!(
+            link2.commit_and_fetch(Duration::from_millis(1)),
+            Err(IoctlError::Invalid(_))
+        ));
+        assert!(matches!(
+            link2.ioctl_sync(0, None, None),
+            Err(IoctlError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn test_buffer_alignment() {
+        let mut link = WindowsDriverLink {
+            handle: 1 as _,
+            event: ptr::null_mut(),
+            pending: false,
+        };
+
+        let mut data = vec![0u8; 16];
+        let ptr = data.as_ptr();
+        let offset = if ptr as usize % 8 == 0 { 1 } else { 0 };
+        let unaligned_slice = &data[offset..offset+7];
+
+        assert!(matches!(
+            link.ioctl_sync(0, Some(unaligned_slice), None),
+            Err(IoctlError::Invalid(_))
+        ));
+    }
 }
