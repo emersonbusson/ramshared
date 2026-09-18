@@ -110,7 +110,7 @@ impl BlockBackend for FailingBackend {
 
     fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), IoError> {
         if self.fail_read {
-            Err(IoError("simulated read failure".into()))
+            Err(IoError::Fatal("simulated read failure".into()))
         } else {
             Ok(())
         }
@@ -118,7 +118,7 @@ impl BlockBackend for FailingBackend {
 
     fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), IoError> {
         if self.fail_write {
-            Err(IoError("simulated write failure".into()))
+            Err(IoError::Fatal("simulated write failure".into()))
         } else {
             Ok(())
         }
@@ -126,7 +126,7 @@ impl BlockBackend for FailingBackend {
 
     fn flush(&mut self) -> Result<(), IoError> {
         if self.fail_flush {
-            Err(IoError("simulated flush failure".into()))
+            Err(IoError::Fatal("simulated flush failure".into()))
         } else {
             Ok(())
         }
