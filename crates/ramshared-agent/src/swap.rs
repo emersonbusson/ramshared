@@ -177,10 +177,9 @@ where
     let md = std::fs::metadata(dev).map_err(|_| SwapError::DeviceMissing)?;
 
     use std::os::unix::fs::FileTypeExt;
-    if !md.file_type().is_block_device() && !md.file_type().is_char_device()
-        && cfg!(not(test)) {
-            return Err(SwapError::DeviceMissing);
-        }
+    if !md.file_type().is_block_device() && !md.file_type().is_char_device() && cfg!(not(test)) {
+        return Err(SwapError::DeviceMissing);
+    }
 
     use std::os::unix::fs::PermissionsExt;
     let mode = md.permissions().mode();
