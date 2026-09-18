@@ -1111,4 +1111,88 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn test_service_valid_transitions_stopped_starting_running_stopping_stopped() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk::default();
+        let mut wipe = NopWipe;
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+
+        // 1. Stopped -> Starting -> Running (Provision)
+        provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 1,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap();
+        assert!(state.disk_created);
+        assert!(state.registered_queue);
+        assert!(state.online);
+        assert!(state.lease.is_some());
+
+        // 2. Running -> Stopping -> Stopped (Teardown)
+        let mut gates = CountingGates {
+            a: Ok(vec![]),
+            b: Ok(vec![]),
+            n: std::cell::Cell::new(0),
+            lock_fail: false,
+            locked: false,
+        };
+        let mut phases = Vec::new();
+        teardown_storage_only(
+            &c,
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut gates,
+            &mut phases,
+        )
+        .unwrap();
+
+        assert!(!state.disk_created);
+        assert!(!state.registered_queue);
+        assert!(!state.online);
+        assert!(state.lease.is_none());
+        assert!(phases.contains(&TeardownPhase::Release));
+    }
+
+    #[test]
+    fn test_service_invalid_transitions_rejected() {
+        // Attempt teardown from already stopped state.
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk::default();
+        let mut wipe = NopWipe;
+        let mut gates = CountingGates {
+            a: Ok(vec![]),
+            b: Ok(vec![]),
+            n: std::cell::Cell::new(0),
+            lock_fail: false,
+            locked: false,
+        };
+        let mut phases = Vec::new();
+
+        // Teardown should return Ok(()) but execute zero phases (rejected/ignored).
+        teardown_storage_only(
+            &c,
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut gates,
+            &mut phases,
+        )
+        .unwrap();
+        assert!(
+            phases.is_empty(),
+            "Teardown from stopped should execute 0 phases"
+        );
+    }
 }
