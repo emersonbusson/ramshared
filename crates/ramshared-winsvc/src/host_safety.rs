@@ -103,6 +103,15 @@ impl CampaignVerdict {
     }
 }
 
+/// Domain errors for host safety operations.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HostSafetyError {
+    InsufficientMemory { available: u64, required: u64 },
+    InsufficientDiskSpace { available: u64, required: u64 },
+    DiskSpaceQueryFailed(String),
+    InvalidCpuLoad(String),
+    CpuLoadExceedsMaximum { current: String, maximum: String },
+}
 
 /// Abstract provider for system information.
 pub trait SysInfoProvider {
@@ -112,34 +121,61 @@ pub trait SysInfoProvider {
 }
 
 /// Validates that available system memory meets the required threshold.
-pub fn memory_threshold_guard(sysinfo: &impl SysInfoProvider, required_bytes: u64) -> Result<(), String> {
+pub fn memory_threshold_guard(
+    sysinfo: &impl SysInfoProvider,
+    required_bytes: u64,
+) -> Result<(), HostSafetyError> {
     let available = sysinfo.available_memory();
     if available < required_bytes {
-        return Err(format!("insufficient memory: {} < {}", available, required_bytes));
+        return Err(HostSafetyError::InsufficientMemory {
+            available,
+            required: required_bytes,
+        });
     }
     Ok(())
 }
 
 /// Validates that available disk space on the specified path meets the required threshold.
-pub fn disk_space_guard(sysinfo: &impl SysInfoProvider, path: &str, required_bytes: u64) -> Result<(), String> {
-    let available = sysinfo.available_disk_space(path)?;
+pub fn disk_space_guard(
+    sysinfo: &impl SysInfoProvider,
+    path: &str,
+    required_bytes: u64,
+) -> Result<(), HostSafetyError> {
+    let available = sysinfo
+        .available_disk_space(path)
+        .map_err(HostSafetyError::DiskSpaceQueryFailed)?;
     if available < required_bytes {
-        return Err(format!("insufficient disk space: {} < {}", available, required_bytes));
+        return Err(HostSafetyError::InsufficientDiskSpace {
+            available,
+            required: required_bytes,
+        });
     }
     Ok(())
 }
 
 /// Validates that the current CPU load does not exceed the maximum allowed percentage.
-pub fn cpu_load_guard(sysinfo: &impl SysInfoProvider, max_load_percent: f32) -> Result<(), String> {
+pub fn cpu_load_guard(
+    sysinfo: &impl SysInfoProvider,
+    max_load_percent: f32,
+) -> Result<(), HostSafetyError> {
     let current_load = sysinfo.cpu_load_percent();
     if current_load.is_nan() || current_load < 0.0 || current_load > 100.0 {
-        return Err(format!("invalid cpu load: {}", current_load));
+        return Err(HostSafetyError::InvalidCpuLoad(format!(
+            "invalid cpu load: {}",
+            current_load
+        )));
     }
     if max_load_percent.is_nan() || max_load_percent < 0.0 || max_load_percent > 100.0 {
-        return Err(format!("invalid max cpu load: {}", max_load_percent));
+        return Err(HostSafetyError::InvalidCpuLoad(format!(
+            "invalid max cpu load: {}",
+            max_load_percent
+        )));
     }
     if current_load > max_load_percent {
-        return Err(format!("cpu load exceeds maximum: {} > {}", current_load, max_load_percent));
+        return Err(HostSafetyError::CpuLoadExceedsMaximum {
+            current: current_load.to_string(),
+            maximum: max_load_percent.to_string(),
+        });
     }
     Ok(())
 }
