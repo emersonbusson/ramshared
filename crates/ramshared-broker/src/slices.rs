@@ -59,6 +59,12 @@ impl SliceMap {
                 max: MAX_SLICES,
             });
         }
+        if !slice_bytes.is_power_of_two() {
+            return Err(SliceError::CapacityExceeded {
+                required: slice_bytes,
+                available: backing_bytes,
+            }); // TODO: Use better error
+        }
         let required =
             u64::from(k)
                 .checked_mul(slice_bytes)
@@ -83,6 +89,20 @@ impl SliceMap {
             })
             .collect();
         Ok(Self { slices })
+    }
+
+    /// Gets the fragmentation ratio of the slices.
+    pub fn fragmentation_ratio(&self) -> f64 {
+        let free = self.slices.iter().filter(|s| s.state == SliceState::Free).count() as f64;
+        let total = self.slices.len() as f64;
+        if total == 0.0 {
+            return 0.0;
+        }
+        free / total
+    }
+
+    pub fn emit_fragmentation_metrics(&self) {
+        metrics::gauge!("vram_fragmentation_ratio").set(self.fragmentation_ratio());
     }
 
     /// Sum of sizes (total exportable capacity).
@@ -264,6 +284,34 @@ mod tests {
         // lease cannot be drained (not Active).
         m.lease(0).unwrap();
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
+    }
+
+    #[test]
+    fn fragmentation_ratio() {
+        let mut m = SliceMap::new(4, 64, 256).unwrap();
+        assert_eq!(m.fragmentation_ratio(), 1.0);
+        m.assign(0, 7).unwrap();
+        assert_eq!(m.fragmentation_ratio(), 0.75);
+        m.assign(1, 8).unwrap();
+        assert_eq!(m.fragmentation_ratio(), 0.5);
+    }
+
+    #[test]
+    fn fragmentation_metrics_emitted() {
+        let mut m = SliceMap::new(4, 64, 256).unwrap();
+        m.assign(0, 7).unwrap();
+        m.emit_fragmentation_metrics();
+    }
+
+    #[test]
+    fn new_rejects_non_power_of_two_slice_bytes() {
+        assert!(matches!(
+            SliceMap::new(2, 63, 256),
+            Err(SliceError::CapacityExceeded {
+                required: 63,
+                available: 256
+            })
+        ));
     }
 
     #[test]
