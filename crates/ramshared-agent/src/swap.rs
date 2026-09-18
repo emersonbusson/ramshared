@@ -303,7 +303,7 @@ mod tests {
         };
         let dev_str = "/dev/null";
 
-        let res = attach_swap_with(&ep, "export", &dev_str, None, |cmd, _| {
+        let res = attach_swap_with(&ep, "export", dev_str, None, |cmd, _| {
             if cmd == "nbd-client" {
                 Err(Error::other("mock error"))
             } else {
@@ -320,7 +320,7 @@ mod tests {
         };
         let dev_str = "/dev/null";
 
-        let res = attach_swap_with(&ep, "export", &dev_str, None, |cmd, _| {
+        let res = attach_swap_with(&ep, "export", dev_str, None, |cmd, _| {
             if cmd == "mkswap" {
                 Err(Error::other("mock error"))
             } else {
@@ -337,7 +337,7 @@ mod tests {
         };
         let dev_str = "/dev/null";
 
-        let res = attach_swap_with(&ep, "export", &dev_str, None, |cmd, _| {
+        let res = attach_swap_with(&ep, "export", dev_str, None, |cmd, _| {
             if cmd == "swapon" {
                 Err(Error::other("mock error"))
             } else {
@@ -354,7 +354,7 @@ mod tests {
         };
         let dev_str = "/dev/null";
 
-        let res = attach_swap_with(&ep, "export", &dev_str, None, |_, _| Ok(()));
+        let res = attach_swap_with(&ep, "export", dev_str, None, |_, _| Ok(()));
         assert_eq!(res, Ok(()));
     }
 
@@ -365,7 +365,7 @@ mod tests {
         };
         let dev_str = "/dev/non_existent_device_test_123";
 
-        let res = attach_swap_with(&ep, "export", &dev_str, None, |_, _| Ok(()));
+        let res = attach_swap_with(&ep, "export", dev_str, None, |_, _| Ok(()));
         assert_eq!(res, Err(SwapError::DeviceMissing));
     }
 
@@ -419,7 +419,7 @@ mod tests {
         let res = attach_swap_internal(
             &ep,
             "export",
-            &dev_str,
+            dev_str,
             None,
             |_, _| Ok(()),
             &mock_swaps_path,
