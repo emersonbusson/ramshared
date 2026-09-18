@@ -183,6 +183,25 @@ fi
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
 
+# Clamp timestamps in ar archive to SOURCE_DATE_EPOCH
+if command -v python3 >/dev/null 2>&1; then
+  python3 -c '
+import sys, os
+epoch = str(os.environ.get("SOURCE_DATE_EPOCH", "0")).encode("ascii").ljust(12, b" ")
+with open(sys.argv[1], "r+b") as f:
+    if f.read(8) != b"!<arch>\n":
+        raise RuntimeError("Invalid ar archive")
+    while True:
+        hdr = f.read(60)
+        if len(hdr) < 60:
+            break
+        size = int(hdr[48:58].strip())
+        f.seek(-44, 1)
+        f.write(epoch)
+        f.seek(32 + size + (size % 2), 1)
+' "$DEB_FILE"
+fi
+
 # Compute SHA-256
 (cd "$OUT_DIR" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
 
