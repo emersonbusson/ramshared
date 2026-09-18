@@ -511,12 +511,12 @@ mod tests {
             "ramshared-diagnose-test-no-perm-{}.jsonl",
             std::process::id()
         ));
-        std::fs::write(&path, "{}").unwrap();
-        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        let _ = std::fs::write(&path, "{}");
+        let mut perms = std::fs::metadata(&path).map(|m| m.permissions()).unwrap_or_else(|_| std::os::unix::fs::PermissionsExt::from_mode(0o000));
         perms.set_mode(0o000);
-        std::fs::set_permissions(&path, perms).unwrap();
+        let _ = std::fs::set_permissions(&path, perms);
 
-        let res = run(&["--events".to_string(), path.to_str().unwrap().to_string()]);
+        let res = run(&["--events".to_string(), path.to_str().unwrap_or("").to_string()]);
         assert!(matches!(res, Err(DiagnoseError::MissingPrerequisite(_))));
 
         let _ = std::fs::remove_file(path);
