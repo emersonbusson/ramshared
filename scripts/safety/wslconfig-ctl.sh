@@ -119,6 +119,12 @@ cmd_selftest() {
 		echo "FAIL did not detect C:\\wsl as unsafe"
 		fail=1
 	fi
+	if wslconfig_path_is_unsafe 'C:\-dir' && wslconfig_path_is_unsafe 'C:\ folder'; then
+		echo "OK detect non-alphanumeric single-backslash bypasses as unsafe"
+	else
+		echo "FAIL did not detect non-alphanumeric single-backslash paths as unsafe"
+		fail=1
+	fi
 	if wslconfig_path_is_unsafe 'R:/wsl_swap/swap.vhdx'; then
 		echo "FAIL false positive on forward slash"
 		fail=1
