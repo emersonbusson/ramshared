@@ -4,11 +4,23 @@
 use crate::protocol::{Command, NBD_CMD_FLAG_FUA, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
 
 // errno in simple reply (re-exported from protocol for backward compatibility).
-pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE, NBD_OK};
+pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_ENOSPC, NBD_EPERM, NBD_ERANGE, NBD_OK};
 
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
-pub struct IoError(pub String);
+pub enum IoError {
+    Fatal(String),
+    Retryable(String),
+}
+
+impl std::fmt::Display for IoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IoError::Fatal(s) => write!(f, "{}", s),
+            IoError::Retryable(s) => write!(f, "{}", s),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WriteOptions {
@@ -54,7 +66,8 @@ pub struct ServeOutcome {
 fn errno_of(r: Result<(), IoError>) -> u32 {
     match r {
         Ok(()) => NBD_OK,
-        Err(_) => NBD_EIO,
+        Err(IoError::Retryable(_)) => NBD_ENOSPC,
+        Err(IoError::Fatal(_)) => NBD_EIO,
     }
 }
 

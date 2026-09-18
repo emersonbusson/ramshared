@@ -46,7 +46,7 @@ impl<B: BlockBackend> BlockBackend for SliceView<'_, B> {
         let abs = self
             .base
             .checked_add(off)
-            .ok_or_else(|| IoError("SliceView read offset overflow".into()))?;
+            .ok_or_else(|| IoError::Fatal("SliceView read offset overflow".into()))?;
         self.inner.read_at(abs, buf)
     }
 
@@ -54,7 +54,7 @@ impl<B: BlockBackend> BlockBackend for SliceView<'_, B> {
         let abs = self
             .base
             .checked_add(off)
-            .ok_or_else(|| IoError("SliceView write offset overflow".into()))?;
+            .ok_or_else(|| IoError::Fatal("SliceView write offset overflow".into()))?;
         self.inner.write_at(abs, data)
     }
 
@@ -67,7 +67,7 @@ impl<B: BlockBackend> BlockBackend for SliceView<'_, B> {
         let abs = self
             .base
             .checked_add(off)
-            .ok_or_else(|| IoError("SliceView write offset overflow".into()))?;
+            .ok_or_else(|| IoError::Fatal("SliceView write offset overflow".into()))?;
         self.inner.write_at_with_options(abs, data, options)
     }
 
@@ -111,7 +111,7 @@ impl BlockBackend for RamBackend {
     fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         let (start, end) = self
             .range(off, buf.len())
-            .ok_or_else(|| IoError("RamBackend read out of range".into()))?;
+            .ok_or_else(|| IoError::Fatal("RamBackend read out of range".into()))?;
         buf.copy_from_slice(&self.data[start..end]);
         Ok(())
     }
@@ -119,7 +119,7 @@ impl BlockBackend for RamBackend {
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
         let (start, end) = self
             .range(off, data.len())
-            .ok_or_else(|| IoError("RamBackend write out of range".into()))?;
+            .ok_or_else(|| IoError::Fatal("RamBackend write out of range".into()))?;
         self.data[start..end].copy_from_slice(data);
         Ok(())
     }

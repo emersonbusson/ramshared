@@ -235,7 +235,7 @@ pub struct AuthoritativeOriginBackend<O, C> {
 impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
     pub fn new(origin: O, cache: C, size: u64, block: u32) -> Result<Self, IoError> {
         if size == 0 || block == 0 || !size.is_multiple_of(block as u64) {
-            return Err(IoError("invalid authoritative origin geometry".into()));
+            return Err(IoError::Fatal("invalid authoritative origin geometry".into()));
         }
         Ok(Self {
             origin,
@@ -275,7 +275,7 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
                 self.telemetry.releases = self.telemetry.releases.saturating_add(1);
                 Ok(0)
             }
-            CacheMutation::Failed => Err(IoError(
+            CacheMutation::Failed => Err(IoError::Fatal(
                 "cache release acknowledgement was unavailable".into(),
             )),
         }
@@ -313,14 +313,14 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
             .checked_add(len as u64)
             .filter(|end| *end <= self.size)
             .map(|_| ())
-            .ok_or_else(|| IoError("authoritative origin I/O is out of range".into()))
+            .ok_or_else(|| IoError::Fatal("authoritative origin I/O is out of range".into()))
     }
 
     fn require_ready_origin(&self) -> Result<(), IoError> {
         if self.origin_state == OriginState::Ready {
             Ok(())
         } else {
-            Err(IoError(
+            Err(IoError::Fatal(
                 "origin authority is unavailable pending three read+sync probes".into(),
             ))
         }
@@ -618,7 +618,7 @@ mod tests {
     impl OriginStorage for FaultOrigin {
         fn read_at(&mut self, offset: u64, destination: &mut [u8]) -> Result<usize, IoError> {
             if self.0.fail_read.get() {
-                return Err(IoError("fixture origin read failure".into()));
+                return Err(IoError::Fatal("fixture origin read failure".into()));
             }
             let start = offset as usize;
             destination.copy_from_slice(&self.0.bytes.borrow()[start..start + destination.len()]);
@@ -627,7 +627,7 @@ mod tests {
 
         fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<usize, IoError> {
             if self.0.fail_write.get() {
-                return Err(IoError("fixture origin write failure".into()));
+                return Err(IoError::Fatal("fixture origin write failure".into()));
             }
             let start = offset as usize;
             self.0.bytes.borrow_mut()[start..start + data.len()].copy_from_slice(data);
@@ -636,7 +636,7 @@ mod tests {
 
         fn sync_data(&mut self) -> Result<(), IoError> {
             if self.0.fail_sync.get() {
-                return Err(IoError("fixture origin sync failure".into()));
+                return Err(IoError::Fatal("fixture origin sync failure".into()));
             }
             self.0.syncs.set(self.0.syncs.get().saturating_add(1));
             Ok(())

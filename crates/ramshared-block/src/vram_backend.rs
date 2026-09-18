@@ -53,13 +53,13 @@ impl<M: VramMemory> BlockBackend for VramBackend<M> {
     fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         self.mem
             .read_at(off, buf)
-            .map_err(|e| IoError(e.to_string()))
+            .map_err(|e| IoError::Fatal(e.to_string()))
     }
 
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
         self.mem
             .write_at(off, data)
-            .map_err(|e| IoError(e.to_string()))
+            .map_err(|e| IoError::Fatal(e.to_string()))
     }
 
     fn flush(&mut self) -> Result<(), IoError> {

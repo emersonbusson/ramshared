@@ -29,14 +29,14 @@ pub trait OriginStorage {
         while !buf.is_empty() {
             let read = self.read_at(off, buf)?;
             if read == 0 {
-                return Err(IoError("origin read made no progress".into()));
+                return Err(IoError::Fatal("origin read made no progress".into()));
             }
             if read > buf.len() {
-                return Err(IoError("origin read exceeded requested length".into()));
+                return Err(IoError::Fatal("origin read exceeded requested length".into()));
             }
             off = off
                 .checked_add(read as u64)
-                .ok_or_else(|| IoError("origin read offset overflow".into()))?;
+                .ok_or_else(|| IoError::Fatal("origin read offset overflow".into()))?;
             buf = &mut buf[read..];
         }
         Ok(())
@@ -46,14 +46,14 @@ pub trait OriginStorage {
         while !data.is_empty() {
             let written = self.write_at(off, data)?;
             if written == 0 {
-                return Err(IoError("origin write made no progress".into()));
+                return Err(IoError::Fatal("origin write made no progress".into()));
             }
             if written > data.len() {
-                return Err(IoError("origin write exceeded requested length".into()));
+                return Err(IoError::Fatal("origin write exceeded requested length".into()));
             }
             off = off
                 .checked_add(written as u64)
-                .ok_or_else(|| IoError("origin write offset overflow".into()))?;
+                .ok_or_else(|| IoError::Fatal("origin write offset overflow".into()))?;
             data = &data[written..];
         }
         Ok(())
@@ -79,18 +79,18 @@ impl OriginStorage for FileOrigin {
         {
             self.file
                 .read_at(buf, off)
-                .map_err(|error| IoError(error.to_string()))
+                .map_err(|error| IoError::Fatal(error.to_string()))
         }
         #[cfg(windows)]
         {
             self.file
                 .seek_read(buf, off)
-                .map_err(|error| IoError(error.to_string()))
+                .map_err(|error| IoError::Fatal(error.to_string()))
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = (off, buf);
-            Err(IoError("unsupported platform for FileOrigin".into()))
+            Err(IoError::Fatal("unsupported platform for FileOrigin".into()))
         }
     }
 
@@ -99,25 +99,25 @@ impl OriginStorage for FileOrigin {
         {
             self.file
                 .write_at(data, off)
-                .map_err(|error| IoError(error.to_string()))
+                .map_err(|error| IoError::Fatal(error.to_string()))
         }
         #[cfg(windows)]
         {
             self.file
                 .seek_write(data, off)
-                .map_err(|error| IoError(error.to_string()))
+                .map_err(|error| IoError::Fatal(error.to_string()))
         }
         #[cfg(not(any(unix, windows)))]
         {
             let _ = (off, data);
-            Err(IoError("unsupported platform for FileOrigin".into()))
+            Err(IoError::Fatal("unsupported platform for FileOrigin".into()))
         }
     }
 
     fn sync_data(&mut self) -> Result<(), IoError> {
         self.file
             .sync_data()
-            .map_err(|error| IoError(error.to_string()))
+            .map_err(|error| IoError::Fatal(error.to_string()))
     }
 }
 
@@ -251,7 +251,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
             || !size.is_multiple_of(block as u64)
             || !chunk_bytes.is_multiple_of(block as u64)
         {
-            return Err(IoError("invalid origin cache geometry".into()));
+            return Err(IoError::Fatal("invalid origin cache geometry".into()));
         }
         let chunk_count = size.div_ceil(chunk_bytes);
         let mut chunks = Vec::with_capacity(chunk_count as usize);
@@ -417,7 +417,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
         off.checked_add(len as u64)
             .filter(|end| *end <= self.size)
             .map(|_| ())
-            .ok_or_else(|| IoError("origin cache I/O is out of range".into()))
+            .ok_or_else(|| IoError::Fatal("origin cache I/O is out of range".into()))
     }
 
     fn valid_block_count(&self) -> u64 {
@@ -522,7 +522,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
         if self.origin_state == OriginState::Ready {
             Ok(())
         } else {
-            Err(IoError(
+            Err(IoError::Fatal(
                 "origin authority is unavailable pending three read+sync probes".into(),
             ))
         }
@@ -771,7 +771,7 @@ mod tests {
         fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<usize, IoError> {
             self.events.borrow_mut().push("origin_read");
             if self.fail_read.get() {
-                return Err(IoError("injected origin read failure".into()));
+                return Err(IoError::Fatal("injected origin read failure".into()));
             }
             let bytes = self.bytes.borrow();
             let start = off as usize;
@@ -783,11 +783,11 @@ mod tests {
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<usize, IoError> {
             self.events.borrow_mut().push("origin_write");
             if self.fail_write.get() {
-                return Err(IoError("injected origin write failure".into()));
+                return Err(IoError::Fatal("injected origin write failure".into()));
             }
             let writes_before_failure = self.writes_before_failure.get();
             if writes_before_failure == 0 {
-                return Err(IoError("injected partial origin write failure".into()));
+                return Err(IoError::Fatal("injected partial origin write failure".into()));
             }
             if self.zero_write.get() {
                 return Ok(0);
@@ -803,7 +803,7 @@ mod tests {
         fn sync_data(&mut self) -> Result<(), IoError> {
             self.events.borrow_mut().push("origin_sync");
             if self.fail_sync.get() {
-                Err(IoError("injected origin sync failure".into()))
+                Err(IoError::Fatal("injected origin sync failure".into()))
             } else {
                 Ok(())
             }
@@ -1111,7 +1111,7 @@ mod tests {
 
         let error = backend.write_at(0, b"stop").unwrap_err();
 
-        assert!(error.0.contains("no progress"));
+        assert!(error.to_string().contains("no progress"));
         assert_eq!(backend.telemetry().origin_written_bytes, 0);
         assert_eq!(backend.telemetry().valid_blocks, 0);
     }

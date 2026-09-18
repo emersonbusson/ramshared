@@ -56,3 +56,6 @@ mod tests {
         assert_eq!(DEFAULT_CHUNK_MIB, 128);
     }
 }
+
+#[cfg(test)]
+mod red_test;

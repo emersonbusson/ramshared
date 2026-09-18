@@ -122,21 +122,21 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
 
     pub fn new_with_config(provider: &'p P, config: SparseVramConfig<'p>) -> Result<Self, IoError> {
         if config.capacity == 0 {
-            return Err(IoError("sparse: capacity 0".into()));
+            return Err(IoError::Fatal("sparse: capacity 0".into()));
         }
         if config.chunk_bytes == 0
             || !config
                 .chunk_bytes
                 .is_multiple_of(u64::from(config.block_size))
         {
-            return Err(IoError(format!(
+            return Err(IoError::Fatal(format!(
                 "sparse: chunk_bytes={} must be >0 and multiple of block_size={}",
                 config.chunk_bytes, config.block_size
             )));
         }
         let n = config.capacity.div_ceil(config.chunk_bytes);
         if n > 1_000_000 {
-            return Err(IoError(format!("sparse: too many chunks ({n})")));
+            return Err(IoError::Fatal(format!("sparse: too many chunks ({n})")));
         }
         // Cap commit to capacity; optional env can lower further.
         let commit_cap = config
@@ -239,7 +239,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
 
     fn ensure_live(&mut self, idx: usize) -> Result<(), IoError> {
         let Some(chunk) = self.chunks.get(idx) else {
-            return Err(IoError(format!(
+            return Err(IoError::Fatal(format!(
                 "sparse page table oob idx={idx} len={}",
                 self.chunks.len()
             )));
@@ -253,13 +253,13 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             && let Err(message) = gate.allow_commit(self.committed_bytes(), self.chunk_bytes)
         {
             self.budget_refuses = self.budget_refuses.saturating_add(1);
-            return Err(IoError(format!(
+            return Err(IoError::Fatal(format!(
                 "sparse host budget constrained before allocation: {message}"
             )));
         }
         if next_commit > self.commit_cap_bytes {
             self.floor_refuses = self.floor_refuses.saturating_add(1);
-            return Err(IoError(format!(
+            return Err(IoError::Fatal(format!(
                 "sparse commit_cap: committed would be {} MiB > cap {} MiB (capacity {} MiB); \
                  refusing the write because swap fallback is not guaranteed",
                 next_commit >> 20,
@@ -273,7 +273,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
                 let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
                 if free < need {
                     self.floor_refuses = self.floor_refuses.saturating_add(1);
-                    return Err(IoError(format!(
+                    return Err(IoError::Fatal(format!(
                         "sparse free-floor: free {} MiB < reserve+chunk {} MiB — refuse alloc \
                          (protect GPU)",
                         free >> 20,
@@ -283,7 +283,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             }
             Err(e) => {
                 self.alloc_fails = self.alloc_fails.saturating_add(1);
-                return Err(IoError(format!("sparse mem_info: {e}")));
+                return Err(IoError::Fatal(format!("sparse mem_info: {e}")));
             }
         }
         let len = self.chunk_bytes as usize;
@@ -292,12 +292,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             Ok(m) => m,
             Err(e) => {
                 self.alloc_fails = self.alloc_fails.saturating_add(1);
-                return Err(IoError(format!("sparse alloc chunk {idx}: {e}")));
+                return Err(IoError::Fatal(format!("sparse alloc chunk {idx}: {e}")));
             }
         };
-        m.zero().map_err(|e| IoError(e.to_string()))?;
+        m.zero().map_err(|e| IoError::Fatal(e.to_string()))?;
         let Some(chunk) = self.chunks.get_mut(idx) else {
-            return Err(IoError(format!(
+            return Err(IoError::Fatal(format!(
                 "sparse page table oob idx={idx} len={}",
                 self.chunks.len()
             )));
@@ -308,7 +308,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
 
     fn chunk_index(&self, off: u64) -> Result<usize, IoError> {
         if off >= self.capacity {
-            return Err(IoError(format!(
+            return Err(IoError::Fatal(format!(
                 "sparse oob off={off} capacity={}",
                 self.capacity
             )));
@@ -334,7 +334,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             .checked_add(buf.len() as u64)
             .filter(|&e| e <= self.capacity)
             .ok_or_else(|| {
-                IoError(format!(
+                IoError::Fatal(format!(
                     "sparse read oob off={off} len={} cap={}",
                     buf.len(),
                     self.capacity
@@ -350,14 +350,14 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
             let n = (buf.len() - done).min(room);
             let Some(chunk) = self.chunks.get(idx) else {
-                return Err(IoError(format!(
+                return Err(IoError::Fatal(format!(
                     "sparse page table oob idx={idx} len={}",
                     self.chunks.len()
                 )));
             };
             if let Some(m) = &chunk.mem {
                 m.read_at(rel as u64, &mut buf[done..done + n])
-                    .map_err(|e: VramError| IoError(e.to_string()))?;
+                    .map_err(|e: VramError| IoError::Fatal(e.to_string()))?;
             } else {
                 buf[done..done + n].fill(0);
             }
@@ -374,7 +374,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             .checked_add(data.len() as u64)
             .filter(|&e| e <= self.capacity)
             .ok_or_else(|| {
-                IoError(format!(
+                IoError::Fatal(format!(
                     "sparse write oob off={off} len={} cap={}",
                     data.len(),
                     self.capacity
@@ -392,7 +392,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
             let n = (data.len() - done).min(room);
             let Some(chunk) = self.chunks.get_mut(idx) else {
-                return Err(IoError(format!(
+                return Err(IoError::Fatal(format!(
                     "sparse page table oob idx={idx} len={}",
                     self.chunks.len()
                 )));
@@ -400,9 +400,9 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let m = chunk
                 .mem
                 .as_mut()
-                .ok_or_else(|| IoError("sparse: mem missing after ensure".into()))?;
+                .ok_or_else(|| IoError::Fatal("sparse: mem missing after ensure".into()))?;
             m.write_at(rel as u64, &data[done..done + n])
-                .map_err(|e: VramError| IoError(e.to_string()))?;
+                .map_err(|e: VramError| IoError::Fatal(e.to_string()))?;
 
             chunk.written = true;
             chunk.last_write = Some(now);
@@ -550,10 +550,10 @@ mod tests {
         be.chunks.pop();
         let off = 3 * 256 * 1024;
         let err_read = be.read_at(off, &mut [0u8; 4096]).unwrap_err();
-        assert!(err_read.0.contains("sparse page table oob idx="));
+        assert!(err_read.to_string().contains("sparse page table oob idx="));
 
         let err_write = be.write_at(off, &[0u8; 4096]).unwrap_err();
-        assert!(err_write.0.contains("sparse page table oob idx="));
+        assert!(err_write.to_string().contains("sparse page table oob idx="));
     }
 
     #[test]
@@ -632,7 +632,7 @@ mod tests {
         p.fail_next.set(true);
         let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(err.0.contains("alloc") || err.0.contains("fail"));
+        assert!(err.to_string().contains("alloc") || err.to_string().contains("fail"));
         assert_eq!(be.alloc_fails, 1);
     }
 
@@ -652,7 +652,7 @@ mod tests {
         .unwrap();
         be.write_at(0, &[1u8; 4096]).unwrap();
         let err = be.write_at(chunk, &[2u8; 4096]).unwrap_err();
-        assert!(err.0.contains("commit_cap"), "{err:?}");
+        assert!(err.to_string().contains("commit_cap"), "{err:?}");
         assert_eq!(be.chunks_live(), 1);
         assert!(be.floor_refuses >= 1);
     }
@@ -677,7 +677,7 @@ mod tests {
         )
         .unwrap();
         let error = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(error.0.contains("WDDM constrained"), "{error:?}");
+        assert!(error.to_string().contains("WDDM constrained"), "{error:?}");
         assert_eq!(p.allocs.get(), 0);
         assert_eq!(be.budget_refuses, 1);
     }
@@ -704,8 +704,8 @@ mod tests {
         let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
         let err = be.ensure_live(9999).expect_err("should return IoError");
         assert!(
-            err.0.contains("sparse page table oob idx=9999")
-                || err.0.contains("exceeds physical map len")
+            err.to_string().contains("sparse page table oob idx=9999")
+                || err.to_string().contains("exceeds physical map len")
         );
     }
 
@@ -767,7 +767,7 @@ mod tests {
         .unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
         assert!(
-            err.0.contains("free-floor") || err.0.contains("floor"),
+            err.to_string().contains("free-floor") || err.to_string().contains("floor"),
             "{err:?}"
         );
     }
@@ -792,7 +792,7 @@ mod tests {
             SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None).unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
         assert!(
-            err.0.contains("mem_info") || err.0.contains("no gpu"),
+            err.to_string().contains("mem_info") || err.to_string().contains("no gpu"),
             "{err:?}"
         );
         assert_eq!(be.alloc_fails, 1);

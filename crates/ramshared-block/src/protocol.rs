@@ -35,6 +35,7 @@ pub const NBD_EIO: u32 = 5;
 pub const NBD_EACCES: u32 = 13;
 pub const NBD_EINVAL: u32 = 22;
 pub const NBD_ERANGE: u32 = 34;
+pub const NBD_ENOSPC: u32 = 28;
 
 /// NBD commands (`type` field).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -2928,7 +2928,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
 
     let mut backend: Be<'_, P> = if let Some(origin) = origin {
         let cache = AuthoritativeOriginBackend::new(origin, DisabledCache, size, BLOCK_SIZE)
-            .map_err(|error| error.0)?;
+            .map_err(|error| error.to_string())?;
         eprintln!(
             "[ramsharedd] mode=authoritative-origin logical={} MiB cache=UNAVAILABLE \
              isolation=bounded-worker-required",
@@ -2952,7 +2952,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                 budget_gate,
             },
         )
-        .map_err(|e| e.0)?;
+        .map_err(|e| e.to_string())?;
         eprintln!(
             "[ramsharedd] VRAM mode=sparse capacity={} MiB chunk={} MiB \
              commit_cap={} MiB reserve_floor={} MiB committed=0 (ondemand+safety)",
@@ -3268,7 +3268,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     n >> 20,
                     sp.chunks_live()
                 ),
-                Err(e) => eprintln!("[ramsharedd] sparse reclaim err: {}", e.0),
+                Err(e) => eprintln!("[ramsharedd] sparse reclaim err: {}", e),
             }
         }
 
@@ -3299,7 +3299,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                 Some(Err(error)) => {
                     eprintln!(
                         "[ramsharedd] control cache release was not acknowledged: {}",
-                        error.0
+                        error
                     );
                 }
                 None => {}
@@ -3501,7 +3501,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         }
         Be::Origin(b) => {
             let released = b.release_cache().map_err(|error| {
-                format!("origin cache release was not acknowledged: {}", error.0)
+                format!("origin cache release was not acknowledged: {}", error)
             })?;
             eprintln!(
                 "[ramsharedd] stopped (released {} MiB clean origin cache)",
@@ -5402,7 +5402,7 @@ mod tests {
     impl ramshared_block::OriginStorage for TestOrigin {
         fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<usize, ramshared_block::IoError> {
             if self.fail.get() {
-                return Err(ramshared_block::IoError("injected origin failure".into()));
+                return Err(ramshared_block::IoError::Fatal("injected origin failure".into()));
             }
             let start = off as usize;
             let count = buf.len().min(self.bytes.len().saturating_sub(start));
@@ -5412,7 +5412,7 @@ mod tests {
 
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<usize, ramshared_block::IoError> {
             if self.fail.get() {
-                return Err(ramshared_block::IoError("injected origin failure".into()));
+                return Err(ramshared_block::IoError::Fatal("injected origin failure".into()));
             }
             let start = off as usize;
             let count = data.len().min(self.bytes.len().saturating_sub(start));
@@ -5422,7 +5422,7 @@ mod tests {
 
         fn sync_data(&mut self) -> Result<(), ramshared_block::IoError> {
             if self.fail.get() {
-                Err(ramshared_block::IoError("injected origin failure".into()))
+                Err(ramshared_block::IoError::Fatal("injected origin failure".into()))
             } else {
                 Ok(())
             }
@@ -9371,14 +9371,14 @@ mod tests {
         }
         fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
             if self.fail_io.load(Ordering::SeqCst) {
-                Err(ramshared_block::IoError("simulated I/O failure".into()))
+                Err(ramshared_block::IoError::Fatal("simulated I/O failure".into()))
             } else {
                 Ok(())
             }
         }
         fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), ramshared_block::IoError> {
             if self.fail_io.load(Ordering::SeqCst) {
-                Err(ramshared_block::IoError("simulated I/O failure".into()))
+                Err(ramshared_block::IoError::Fatal("simulated I/O failure".into()))
             } else {
                 Ok(())
             }
