@@ -1131,7 +1131,8 @@ mod tests {
             &FixedFree(2 << 30),
             &mut disk,
             &mut tenant,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(state.disk_created);
         assert!(state.registered_queue);
         assert!(state.online);
@@ -1153,7 +1154,8 @@ mod tests {
             &mut wipe,
             &mut gates,
             &mut phases,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(!state.disk_created);
         assert!(!state.registered_queue);
@@ -1186,7 +1188,11 @@ mod tests {
             &mut wipe,
             &mut gates,
             &mut phases,
-        ).unwrap();
-        assert!(phases.is_empty(), "Teardown from stopped should execute 0 phases");
+        )
+        .unwrap();
+        assert!(
+            phases.is_empty(),
+            "Teardown from stopped should execute 0 phases"
+        );
     }
 }
