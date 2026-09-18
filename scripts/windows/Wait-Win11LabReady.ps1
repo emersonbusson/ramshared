@@ -55,6 +55,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isElevated) {
+    throw [System.UnauthorizedAccessException]::new("This script requires Administrator elevation to interact with Hyper-V.")
+}
+
+if (-not (Get-Module -ListAvailable -Name "Hyper-V")) {
+    throw [System.Management.Automation.ItemNotFoundException]::new("The Hyper-V PowerShell module is not available on this system.")
+}
+
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
 function Normalize-Win11LabReadyThumbprint {
