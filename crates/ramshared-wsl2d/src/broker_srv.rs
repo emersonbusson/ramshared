@@ -1956,6 +1956,32 @@ mod tests {
 
     /// SPEC windows-swap-driver DT-7: WinDrive can acquire a lease (revokes swap if needed).
     #[test]
+    fn abrupt_client_crash_during_write_cleans_up_socket_and_leases() {
+        let ttl = Duration::from_secs(3);
+        let started = Instant::now();
+        let mut c = core_with_lease_ttl(1, 1, ttl);
+        register_at(&mut c, 10, "holder", started);
+        heartbeat_at(&mut c, 10, started);
+        c.handle(
+            CoreEvent::Msg(10, Msg::LeaseRequest { bytes: SLICE }),
+            started,
+        );
+        c.handle(CoreEvent::Tick, started);
+        assert_eq!(n_leased(&c), 1);
+
+        // Simulating SIGKILL or broken pipe during an active write:
+        // Client unexpectedly disconnects without releasing the lease.
+        c.handle(CoreEvent::Disconnected(10), started + Duration::from_secs(1));
+
+        // Ensure state is frozen temporarily per Fail-Safe Defaults and lease TTL.
+        assert_eq!(n_leased(&c), 1, "disconnect must not prematurely reclaim lease");
+
+        // Fast-forward past lease deadline: resources must be cleanly released.
+        c.handle(CoreEvent::Tick, started + ttl);
+        assert_eq!(n_leased(&c), 0, "lease must be cleanly released upon expiration");
+    }
+
+    #[test]
     fn windrive_can_lease() {
         let mut c = core(1);
         reg_transport(&mut c, 10, "swap", TransportKind::NbdUnix);
