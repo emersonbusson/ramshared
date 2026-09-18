@@ -7,6 +7,7 @@
 
 use crate::protocol::{IHAVEOPT, NBD_FLAG_FIXED_NEWSTYLE, NBD_FLAG_NO_ZEROES, NBDMAGIC};
 use core::fmt;
+use std::time::{Duration, Instant};
 use std::io::{self, Read, Write};
 
 pub const NBD_OPT_EXPORT_NAME: u32 = 1;
@@ -30,11 +31,16 @@ pub enum HandshakeError {
     IncompatibleVersion,
     UnsupportedFeature,
     InvalidFormat,
+    Timeout,
 }
 
 impl From<io::Error> for HandshakeError {
     fn from(e: io::Error) -> Self {
-        HandshakeError::Io(e)
+        if e.kind() == io::ErrorKind::TimedOut || e.kind() == io::ErrorKind::WouldBlock {
+            HandshakeError::Timeout
+        } else {
+            HandshakeError::Io(e)
+        }
     }
 }
 
@@ -46,6 +52,7 @@ impl fmt::Display for HandshakeError {
             HandshakeError::IncompatibleVersion => f.write_str("incompatible protocol version"),
             HandshakeError::UnsupportedFeature => f.write_str("unsupported negotiation feature"),
             HandshakeError::InvalidFormat => f.write_str("invalid protocol format"),
+            HandshakeError::Timeout => f.write_str("handshake timed out"),
         }
     }
 }
@@ -127,6 +134,7 @@ pub fn server_handshake<R: Read, W: Write>(
     exports: &[Export],
     tx_flags: u16,
 ) -> Result<usize, HandshakeError> {
+    let deadline = Instant::now() + Duration::from_secs(5);
     // Greeting: NBDMAGIC + IHAVEOPT + handshake flags.
     w.write_all(&NBDMAGIC.to_be_bytes())?;
     w.write_all(&IHAVEOPT.to_be_bytes())?;
@@ -134,10 +142,16 @@ pub fn server_handshake<R: Read, W: Write>(
     w.flush()?;
 
     let client_flags = read_u32(r)?;
+    if Instant::now() > deadline {
+        return Err(HandshakeError::Timeout);
+    }
     let no_zeroes = client_flags & NBD_FLAG_C_NO_ZEROES != 0;
 
     loop {
         let opt_magic = read_u64(r)?;
+        if Instant::now() > deadline {
+            return Err(HandshakeError::Timeout);
+        }
         if opt_magic != IHAVEOPT {
             return Err(HandshakeError::IncompatibleVersion);
         }
@@ -409,5 +423,40 @@ mod tests {
         let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+    use std::io::{self, Cursor};
+    use std::time::Duration;
+
+    struct SlowReader {
+        data: Cursor<Vec<u8>>,
+        delay: Duration,
+        reads: usize,
+    }
+
+    impl Read for SlowReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.reads > 0 {
+                std::thread::sleep(self.delay);
+            }
+            self.reads += 1;
+            self.data.read(buf)
+        }
+    }
+
+    #[test]
+    fn server_handshake_times_out() {
+        let mut r = SlowReader {
+            data: Cursor::new(vec![0; 100]),
+            delay: Duration::from_secs(6),
+            reads: 0,
+        };
+        let mut w = Vec::new();
+        let res = server_handshake(&mut r, &mut w, &[], 0);
+        assert!(matches!(res, Err(HandshakeError::Timeout)), "{:?}", res);
     }
 }
