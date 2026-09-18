@@ -450,7 +450,7 @@
         "-p",
         "ramshared-agent,ramshared-tier",
         "--files",
-        "crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs,crates/ramshared-agent/src/swap.rs,crates/ramshared-agent/src/watchdog.rs,crates/ramshared-tier/src/priority.rs",
+        "crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs,crates/ramshared-agent/src/swap.rs,crates/ramshared-agent/src/watchdog.rs,crates/ramshared-tier/src/priority.rs,crates/ramshared-agent/src/psi.rs",
         "--min",
         "80",
         "--report-json",
@@ -467,7 +467,8 @@
         "crates/ramshared-tier/src/cascade.rs",
         "crates/ramshared-agent/src/swap.rs",
         "crates/ramshared-agent/src/watchdog.rs",
-        "crates/ramshared-tier/src/priority.rs"
+        "crates/ramshared-tier/src/priority.rs",
+        "crates/ramshared-agent/src/psi.rs"
       ],
       "min": 80
     },
