@@ -103,6 +103,47 @@ impl CampaignVerdict {
     }
 }
 
+
+/// Abstract provider for system information.
+pub trait SysInfoProvider {
+    fn available_memory(&self) -> u64;
+    fn available_disk_space(&self, path: &str) -> Result<u64, String>;
+    fn cpu_load_percent(&self) -> f32;
+}
+
+/// Validates that available system memory meets the required threshold.
+pub fn memory_threshold_guard(sysinfo: &impl SysInfoProvider, required_bytes: u64) -> Result<(), String> {
+    let available = sysinfo.available_memory();
+    if available < required_bytes {
+        return Err(format!("insufficient memory: {} < {}", available, required_bytes));
+    }
+    Ok(())
+}
+
+/// Validates that available disk space on the specified path meets the required threshold.
+pub fn disk_space_guard(sysinfo: &impl SysInfoProvider, path: &str, required_bytes: u64) -> Result<(), String> {
+    let available = sysinfo.available_disk_space(path)?;
+    if available < required_bytes {
+        return Err(format!("insufficient disk space: {} < {}", available, required_bytes));
+    }
+    Ok(())
+}
+
+/// Validates that the current CPU load does not exceed the maximum allowed percentage.
+pub fn cpu_load_guard(sysinfo: &impl SysInfoProvider, max_load_percent: f32) -> Result<(), String> {
+    let current_load = sysinfo.cpu_load_percent();
+    if current_load.is_nan() || current_load < 0.0 || current_load > 100.0 {
+        return Err(format!("invalid cpu load: {}", current_load));
+    }
+    if max_load_percent.is_nan() || max_load_percent < 0.0 || max_load_percent > 100.0 {
+        return Err(format!("invalid max cpu load: {}", max_load_percent));
+    }
+    if current_load > max_load_percent {
+        return Err(format!("cpu load exceeds maximum: {} > {}", current_load, max_load_percent));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -207,5 +248,116 @@ mod tests {
         let mut slow = pass;
         slow.teardown_ms = Some(30_001);
         assert!(!slow.is_pass(Duration::from_secs(30)));
+    }
+
+    struct MockSysInfo {
+        mem: u64,
+        disk: Result<u64, String>,
+        cpu: f32,
+    }
+
+    impl MockSysInfo {
+        fn new(mem: u64, disk: Result<u64, String>, cpu: f32) -> Self {
+            Self { mem, disk, cpu }
+        }
+    }
+
+    impl SysInfoProvider for MockSysInfo {
+        fn available_memory(&self) -> u64 {
+            self.mem
+        }
+
+        fn available_disk_space(&self, _path: &str) -> Result<u64, String> {
+            self.disk.clone()
+        }
+
+        fn cpu_load_percent(&self) -> f32 {
+            self.cpu
+        }
+    }
+
+    #[test]
+    fn test_host_safety_memory_threshold_guard_success() {
+        let sysinfo = MockSysInfo::new(1024, Ok(0), 0.0);
+        assert!(memory_threshold_guard(&sysinfo, 512).is_ok());
+        assert!(memory_threshold_guard(&sysinfo, 1024).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_memory_threshold_guard_failure() {
+        let sysinfo = MockSysInfo::new(512, Ok(0), 0.0);
+        assert!(memory_threshold_guard(&sysinfo, 1024).is_err());
+    }
+
+    #[test]
+    fn test_host_safety_memory_threshold_guard_zero_and_max() {
+        let sysinfo_zero = MockSysInfo::new(0, Ok(0), 0.0);
+        assert!(memory_threshold_guard(&sysinfo_zero, 0).is_ok());
+        assert!(memory_threshold_guard(&sysinfo_zero, 1).is_err());
+
+        let sysinfo_max = MockSysInfo::new(u64::MAX, Ok(0), 0.0);
+        assert!(memory_threshold_guard(&sysinfo_max, u64::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_disk_space_guard_success() {
+        let sysinfo = MockSysInfo::new(0, Ok(2048), 0.0);
+        assert!(disk_space_guard(&sysinfo, "C:\\\\\\\\", 1024).is_ok());
+        assert!(disk_space_guard(&sysinfo, "C:\\\\\\\\", 2048).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_disk_space_guard_failure() {
+        let sysinfo = MockSysInfo::new(0, Ok(1024), 0.0);
+        assert!(disk_space_guard(&sysinfo, "C:\\\\\\\\", 2048).is_err());
+    }
+
+    #[test]
+    fn test_host_safety_disk_space_guard_sysinfo_error() {
+        let sysinfo = MockSysInfo::new(0, Err(String::from("access denied")), 0.0);
+        assert!(disk_space_guard(&sysinfo, "C:\\\\\\\\", 1024).is_err());
+    }
+
+    #[test]
+    fn test_host_safety_disk_space_guard_zero_and_max() {
+        let sysinfo_zero = MockSysInfo::new(0, Ok(0), 0.0);
+        assert!(disk_space_guard(&sysinfo_zero, "C:\\\\\\\\", 0).is_ok());
+        assert!(disk_space_guard(&sysinfo_zero, "C:\\\\\\\\", 1).is_err());
+
+        let sysinfo_max = MockSysInfo::new(0, Ok(u64::MAX), 0.0);
+        assert!(disk_space_guard(&sysinfo_max, "C:\\\\\\\\", u64::MAX).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_cpu_load_guard_success() {
+        let sysinfo = MockSysInfo::new(0, Ok(0), 50.0);
+        assert!(cpu_load_guard(&sysinfo, 80.0).is_ok());
+        assert!(cpu_load_guard(&sysinfo, 50.0).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_cpu_load_guard_failure() {
+        let sysinfo = MockSysInfo::new(0, Ok(0), 90.0);
+        assert!(cpu_load_guard(&sysinfo, 80.0).is_err());
+    }
+
+    #[test]
+    fn test_host_safety_cpu_load_guard_invalid_current_load() {
+        let sysinfo_neg = MockSysInfo::new(0, Ok(0), -1.0);
+        assert!(cpu_load_guard(&sysinfo_neg, 80.0).is_err());
+
+        let sysinfo_over = MockSysInfo::new(0, Ok(0), 101.0);
+        assert!(cpu_load_guard(&sysinfo_over, 80.0).is_err());
+
+        let sysinfo_nan = MockSysInfo::new(0, Ok(0), f32::NAN);
+        assert!(cpu_load_guard(&sysinfo_nan, 80.0).is_err());
+    }
+
+    #[test]
+    fn test_host_safety_cpu_load_guard_invalid_max_load() {
+        let sysinfo = MockSysInfo::new(0, Ok(0), 50.0);
+        assert!(cpu_load_guard(&sysinfo, -1.0).is_err());
+        assert!(cpu_load_guard(&sysinfo, 101.0).is_err());
+        assert!(cpu_load_guard(&sysinfo, f32::NAN).is_err());
     }
 }
