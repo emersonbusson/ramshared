@@ -132,7 +132,9 @@ pub fn spawn_writer<S: Write + Send + 'static>(
                         eprintln!("[ramsharedd] conn: write failed after retries: {}", e);
                         break;
                     }
-                    if e.kind() != std::io::ErrorKind::WouldBlock && e.kind() != std::io::ErrorKind::BrokenPipe {
+                    if e.kind() != std::io::ErrorKind::WouldBlock
+                        && e.kind() != std::io::ErrorKind::BrokenPipe
+                    {
                         eprintln!("[ramsharedd] conn: fatal write error: {}", e);
                         break;
                     }
@@ -622,7 +624,6 @@ mod tests {
             "writer should have backed off"
         );
     }
-
 
     #[test]
     fn writer_retries_on_broken_pipe() {
