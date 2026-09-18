@@ -110,21 +110,16 @@ pub fn spawn_writer<S: Write + Send + 'static>(
             let max_backoff = std::time::Duration::from_millis(500);
 
             loop {
-                let err = match w.write_all(&r.reply) {
-                    Ok(_) => {
+                let err = w.write_all(&r.reply)
+                    .and_then(|_| {
                         if !r.data.is_empty() {
-                            w.write_all(&r.data).err()
+                            w.write_all(&r.data)
                         } else {
-                            None
+                            Ok(())
                         }
-                    }
-                    Err(e) => Some(e),
-                };
-
-                let err = match err {
-                    None => w.flush().err(),
-                    Some(e) => Some(e),
-                };
+                    })
+                    .and_then(|_| w.flush())
+                    .err();
 
                 if let Some(e) = err {
                     attempt += 1;
@@ -171,13 +166,13 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
-        let Ok(idx) = server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags)
-            .inspect_err(|e| {
+        let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
+            Ok(idx) => idx,
+            Err(e) => {
                 eprintln!("[ramsharedd] conn: handshake failed: {e}");
                 let _ = jobs.send(WMsg::Closed);
-            })
-        else {
-            return;
+                return;
+            }
         };
 
         drop(hs_writer); // handshake completed; from here on only the writer thread writes replies.
@@ -188,12 +183,9 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
             if reader.read_exact(&mut hdr).is_err() {
                 break; // EOF or socket error
             }
-            let req = match parse_request(&hdr) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[ramsharedd] conn: malformed request: {e}; disconnecting");
-                    break;
-                }
+            let Ok(req) = parse_request(&hdr) else {
+                eprintln!("[ramsharedd] conn: malformed request; disconnecting");
+                break;
             };
             // Anti-DoS: physical upper bound for IPC buffers (16 MiB) to prevent memory exhaustion.
             if req.len > 16 * 1024 * 1024 {
