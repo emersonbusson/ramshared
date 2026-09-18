@@ -1,6 +1,7 @@
 //! Block hashing (FNV-1a 64) + pre-allocated checksum table (SPEC §8.1).
 //! **Not cryptographic** — meant for detecting memory corruption and torn reads, not security.
 
+use subtle::ConstantTimeEq;
 use std::error::Error;
 use std::fmt;
 
@@ -97,7 +98,7 @@ impl ChecksumTable {
         let Some(expected) = slot else {
             return None;
         };
-        Some(*expected == block_hash(data))
+        Some(expected.ct_eq(&block_hash(data)).into())
     }
 }
 
