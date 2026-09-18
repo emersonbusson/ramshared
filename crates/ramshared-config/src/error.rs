@@ -27,12 +27,12 @@ impl fmt::Display for ConfigError {
                 key_path,
             } => {
                 if key_path.is_empty() {
-                    write!(f, "parse error at line {}, col {}: {}", l, c, message)
+                    write!(f, "parse error at line {}, col {}: {}", l, c, crate::redact::redact(message))
                 } else {
                     write!(
                         f,
                         "parse error at line {}, col {} for key '{}': {}",
-                        l, c, key_path, message
+                        l, c, crate::redact::redact(key_path), crate::redact::redact(message)
                     )
                 }
             }
@@ -40,17 +40,17 @@ impl fmt::Display for ConfigError {
                 message, key_path, ..
             } => {
                 if key_path.is_empty() {
-                    write!(f, "parse error: {}", message)
+                    write!(f, "parse error: {}", crate::redact::redact(message))
                 } else {
-                    write!(f, "parse error for key '{}': {}", key_path, message)
+                    write!(f, "parse error for key '{}': {}", crate::redact::redact(key_path), crate::redact::redact(message))
                 }
             }
             Self::Invalid { key_path, reason } => {
-                write!(f, "invalid configuration at '{}': {}", key_path, reason)
+                write!(f, "invalid configuration at '{}': {}", crate::redact::redact(key_path), crate::redact::redact(reason))
             }
-            Self::InvalidInput(msg) => write!(f, "invalid input: {msg}"),
-            Self::OutOfRange(msg) => write!(f, "out of range: {msg}"),
-            Self::UnsupportedBackend(msg) => write!(f, "unsupported backend: {msg}"),
+            Self::InvalidInput(msg) => write!(f, "invalid input: {}", crate::redact::redact(msg)),
+            Self::OutOfRange(msg) => write!(f, "out of range: {}", crate::redact::redact(msg)),
+            Self::UnsupportedBackend(msg) => write!(f, "unsupported backend: {}", crate::redact::redact(msg)),
         }
     }
 }
@@ -99,5 +99,20 @@ mod tests {
 
         let e6 = ConfigError::UnsupportedBackend("directx".into());
         assert_eq!(e6.to_string(), "unsupported backend: directx");
+    }
+
+    #[test]
+    fn display_redacts_sensitive_data() {
+        let e1 = ConfigError::InvalidInput("file /etc/shadow not found".into());
+        assert_eq!(e1.to_string(), "invalid input: file <REDACTED> not found");
+
+        let e2 = ConfigError::OutOfRange("address 0xdeadbeef too high".into());
+        assert_eq!(e2.to_string(), "out of range: address <REDACTED> too high");
+
+        let e3 = ConfigError::Invalid {
+            key_path: "broker.device".into(),
+            reason: "nvme0n1 is full".into(),
+        };
+        assert_eq!(e3.to_string(), "invalid configuration at 'broker.device': <REDACTED> is full");
     }
 }

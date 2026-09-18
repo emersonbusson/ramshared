@@ -3,6 +3,7 @@
 //! Parsing is deliberately separate from process startup so CLI overrides and
 //! validation can be tested without sockets, root, or a GPU.
 #![forbid(unsafe_code)]
+pub mod redact;
 
 pub mod error;
 pub use error::ConfigError;
