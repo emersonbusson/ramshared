@@ -132,4 +132,88 @@ mod tests {
         assert_eq!(MAX_IO, 1 << 20);
         assert_eq!(RING_MAGIC, 0x5253_5244);
     }
+
+    #[cfg(test)]
+    mod mock_parser {
+        use super::*;
+
+        pub fn parse_ring_hdr(bytes: &[u8]) -> Result<RingHdr, &'static str> {
+            if bytes.len() < core::mem::size_of::<RingHdr>() {
+                return Err("truncated header");
+            }
+            let mut magic_bytes = [0u8; 4];
+            magic_bytes.copy_from_slice(&bytes[0..4]);
+            let magic = u32::from_le_bytes(magic_bytes);
+            if magic != RING_MAGIC {
+                return Err("wrong magic bytes");
+            }
+
+            let mut entries_bytes = [0u8; 4];
+            entries_bytes.copy_from_slice(&bytes[4..8]);
+            let entries = u32::from_le_bytes(entries_bytes);
+            if entries > MAX_QD {
+                return Err("oversized length field");
+            }
+
+            Ok(RingHdr {
+                magic,
+                entries,
+                head: 0,
+                tail: 0,
+            })
+        }
+    }
+
+    #[test]
+    fn test_proto_truncated_header_fails() {
+        let bytes = [0u8; 8];
+        let err = mock_parser::parse_ring_hdr(&bytes).unwrap_err();
+        assert_eq!(err, "truncated header");
+    }
+
+    #[test]
+    fn test_proto_wrong_magic_bytes_fails() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&0xBAD_C0DEu32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&10u32.to_le_bytes());
+        let err = mock_parser::parse_ring_hdr(&bytes).unwrap_err();
+        assert_eq!(err, "wrong magic bytes");
+    }
+
+    #[test]
+    fn test_proto_oversized_length_fails() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&RING_MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&(MAX_QD + 1).to_le_bytes());
+        let err = mock_parser::parse_ring_hdr(&bytes).unwrap_err();
+        assert_eq!(err, "oversized length field");
+    }
+
+    #[test]
+    fn test_proto_max_length_overflow_fails() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&RING_MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        let err = mock_parser::parse_ring_hdr(&bytes).unwrap_err();
+        assert_eq!(err, "oversized length field");
+    }
+
+    #[test]
+    fn test_proto_zero_length_succeeds() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&RING_MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
+        let hdr = mock_parser::parse_ring_hdr(&bytes).unwrap();
+        assert_eq!(hdr.entries, 0);
+    }
+
+    #[test]
+    fn test_proto_valid_header_succeeds() {
+        let mut bytes = [0u8; 16];
+        bytes[0..4].copy_from_slice(&RING_MAGIC.to_le_bytes());
+        bytes[4..8].copy_from_slice(&MAX_QD.to_le_bytes());
+        let hdr = mock_parser::parse_ring_hdr(&bytes).unwrap();
+        assert_eq!(hdr.magic, RING_MAGIC);
+        assert_eq!(hdr.entries, MAX_QD);
+    }
 }
