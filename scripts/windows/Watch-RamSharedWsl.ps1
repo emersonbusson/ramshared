@@ -833,6 +833,13 @@ function Invoke-GuardianWatch {
     $eventPath = Join-Path $runDirectory "guardian-events.jsonl"
     $telemetryPath = Join-Path $ArtifactRoot "windows-telemetry.jsonl"
     Write-GuardianEvent -Path $eventPath -Event "guardian_started" -Data @{ heartbeat = $HeartbeatPath; stale_after_seconds = $StaleAfterSec }
+    [Console]::add_CancelKeyPress({
+        param($sender, $e)
+        $e.Cancel = $true
+        Write-HostTelemetryRing -Path $telemetryPath
+        Write-GuardianEvent -Path $eventPath -Event "guardian_stopped" -Data @{ reason = "cancel_key_press" }
+        [Environment]::Exit(0)
+    })
     while ($true) {
         # A current heartbeat must be observed before any HEALTHY proof can be
         # published. Never let a boot probe race ahead of stale-heartbeat
