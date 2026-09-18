@@ -1906,19 +1906,20 @@ impl AppArgs {
             }
             i += 1;
         }
-        if origin.is_some() && !size_explicit {
-            size = DEFAULT_ORIGIN_SIZE;
-        }
-        size -= size % BLOCK_SIZE as u64; // align to the block size
-        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size)
-        {
-            return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
-        }
-        if origin.as_deref().is_some_and(|p| p != ORIGIN_MANIFEST_PATH) {
-            return Err(format!(
-                "--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path"
-            )
-            .into());
+
+        if origin.is_some() {
+            if !size_explicit {
+                size = DEFAULT_ORIGIN_SIZE;
+            }
+            size -= size % BLOCK_SIZE as u64; // align to the block size
+            if !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size) {
+                return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
+            }
+            if origin.as_deref() != Some(ORIGIN_MANIFEST_PATH) {
+                return Err(format!("--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path").into());
+            }
+        } else {
+            size -= size % BLOCK_SIZE as u64; // align to the block size
         }
 
         validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))?;
@@ -1952,13 +1953,10 @@ impl AppArgs {
             .map(|a| (a.ip().to_string(), a.port()));
         let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
 
-        let slice_bytes = if slices > 0 {
-            slice_mb
-                .checked_mul(1024 * 1024)
-                .ok_or("--slice-mb: MiB value overflow")?
-        } else {
-            0
-        };
+        let mut slice_bytes = 0;
+        if slices > 0 {
+            slice_bytes = slice_mb.checked_mul(1024 * 1024).ok_or("--slice-mb: MiB value overflow")?;
+        }
 
         Ok(Self {
             size,
