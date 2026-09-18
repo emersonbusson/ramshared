@@ -142,7 +142,7 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
 mod tests {
 
     use std::cell::Cell;
-    thread_local! { pub static MOCK_NO_DEVICE: Cell<bool> = Cell::new(false); }
+    thread_local! { pub static MOCK_NO_DEVICE: Cell<bool> = const { Cell::new(false) }; }
 
     #[test]
     fn test_probe_cuda_no_device_returns_cuda_error() {
