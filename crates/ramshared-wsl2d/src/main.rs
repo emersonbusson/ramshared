@@ -5091,10 +5091,11 @@ fn run_ublk_with_runtime(
         };
     if let Err(error) = runtime.start_device(device) {
         prove_ublk_swap_absent(runtime, &block_path)?;
-        runtime.stop_device(device)?;
-        let _ = server.join();
+        let stop_res = runtime.stop_device(device);
+        let join_res = server.join();
         prove_ublk_swap_absent(runtime, &block_path)?;
-        runtime.delete_device(device)?;
+        let del_res = runtime.delete_device(device);
+        let _ = (stop_res, join_res, del_res);
         return Err(error);
     }
 
@@ -5114,10 +5115,13 @@ fn run_ublk_with_runtime(
     })?;
     deactivate_ublk_swap(runtime, &block_path)?;
     prove_ublk_swap_absent(runtime, &block_path)?;
-    runtime.stop_device(device)?;
-    server.join()?;
+    let stop_res = runtime.stop_device(device);
+    let join_res = server.join();
     prove_ublk_swap_absent(runtime, &block_path)?;
-    runtime.delete_device(device)?;
+    let del_res = runtime.delete_device(device);
+    stop_res?;
+    join_res?;
+    del_res?;
     eprintln!("[ramsharedd] ublk device removed");
     Ok(())
 }
@@ -8901,6 +8905,158 @@ mod tests {
         let mut expected = prefix;
         expected.push("swap-state");
         assert_eq!(unreadable.calls(), expected);
+    }
+
+    #[test]
+    fn daemon_ublk_teardown_joins_server_when_stop_fails() {
+        struct Server(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+        impl UblkServer for Server {
+            fn join(self: Box<Self>) -> std::io::Result<()> {
+                self.0.lock().expect("test call log").push("join");
+                Ok(())
+            }
+        }
+
+        struct StopFailingRuntime {
+            calls: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        }
+
+        impl StopFailingRuntime {
+            fn new() -> Self {
+                Self {
+                    calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                }
+            }
+
+            fn mark(&self, call: &'static str) {
+                self.calls.lock().expect("test call log").push(call);
+            }
+
+            fn calls(&self) -> Vec<&'static str> {
+                self.calls.lock().expect("test call log").clone()
+            }
+        }
+
+        impl UblkRuntime for StopFailingRuntime {
+            fn guard_not_wsl2(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("guard");
+                Ok(())
+            }
+
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("lock");
+                Ok(())
+            }
+
+            fn install_shutdown_handler(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("signal");
+                Ok(())
+            }
+
+            fn add_device(
+                &mut self,
+                queue_depth: u16,
+            ) -> Result<UblkDevice, Box<dyn std::error::Error>> {
+                self.mark("add");
+                Ok(UblkDevice { id: 7, queue_depth })
+            }
+
+            fn set_params(
+                &mut self,
+                _device: UblkDevice,
+                _sectors: u64,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("params");
+                Ok(())
+            }
+
+            fn start_server(
+                &mut self,
+                _backend: BackendKind,
+                _char_path: &str,
+                _block_path: &str,
+                _queue_depth: u16,
+                _size: u64,
+            ) -> Result<Box<dyn UblkServer>, Box<dyn std::error::Error>> {
+                self.mark("server");
+                Ok(Box::new(Server(std::sync::Arc::clone(&self.calls))))
+            }
+
+            fn start_device(
+                &mut self,
+                _device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("start");
+                Ok(())
+            }
+
+            fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("wait");
+                Ok(())
+            }
+
+            fn swap_state(
+                &mut self,
+                _block_path: &str,
+            ) -> Result<ExactSwapState, Box<dyn std::error::Error>> {
+                self.mark("swap-state");
+                Ok(ExactSwapState::Absent)
+            }
+
+            fn swapoff(&mut self, _block_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("swapoff");
+                Ok(())
+            }
+
+            fn stop_device(
+                &mut self,
+                _device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("stop");
+                Err(std::io::Error::other("injected stop_device failure").into())
+            }
+
+            fn delete_device(
+                &mut self,
+                _device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("delete");
+                Ok(())
+            }
+        }
+
+        let mut runtime = StopFailingRuntime::new();
+        let res = run_ublk_with_runtime(4096, false, 1, BackendKind::Ram, &mut runtime);
+        assert!(
+            res.is_err(),
+            "teardown error must be propagated when stop_device fails"
+        );
+        let expected = vec![
+            "guard",
+            "lock",
+            "signal",
+            "add",
+            "params",
+            "server",
+            "start",
+            "wait",
+            "swap-state",
+            "swap-state",
+            "stop",
+            "join",
+            "swap-state",
+            "delete",
+        ];
+        assert_eq!(
+            runtime.calls(),
+            expected,
+            "server join and delete_device must run even if stop_device fails"
+        );
     }
 
     #[test]
