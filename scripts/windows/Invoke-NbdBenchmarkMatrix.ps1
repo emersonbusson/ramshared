@@ -344,6 +344,40 @@ function Assert-LiveConfiguration {
     }
 }
 
+function Assert-SystemPrerequisites {
+    $wslExe = Get-WslExecutable
+    $distroCheck = Invoke-BoundedProcess -FilePath $wslExe -ArgumentValues @("-d", $Distro, "--", "true") -TimeoutSec 30
+    if ($distroCheck.timed_out -or -not $distroCheck.completed -or $distroCheck.exit_code -ne 0) {
+        throw ("wsl_distro_unavailable:" + $Distro)
+    }
+
+    foreach ($bin in @("fio", "nbd-client")) {
+        $binCheck = Invoke-BoundedProcess -FilePath $wslExe -ArgumentValues @("-d", $Distro, "--", "which", $bin) -TimeoutSec 10
+        if ($binCheck.timed_out -or -not $binCheck.completed -or $binCheck.exit_code -ne 0) {
+            throw ("wsl_dependency_missing:" + $bin)
+        }
+    }
+
+    $drive = [System.IO.Path]::GetPathRoot($ArtifactRoot)
+    if ([string]::IsNullOrWhiteSpace($drive) -or -not (Test-Path -LiteralPath $drive)) {
+        throw "artifact_root_drive_missing"
+    }
+
+    $maxRequiredDiskSpaceBytes = 0L
+    foreach ($tier in $script:tiers) {
+        if ($tier -gt $maxRequiredDiskSpaceBytes) {
+            $maxRequiredDiskSpaceBytes = $tier
+        }
+    }
+    $maxRequiredDiskSpaceBytes = $maxRequiredDiskSpaceBytes * 1024L * 1024L
+    $requiredBytes = $maxRequiredDiskSpaceBytes * 3L
+
+    $freeSpace = (Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$($drive.TrimEnd('\'))'").FreeSpace
+    if ($freeSpace -lt $requiredBytes) {
+        throw "insufficient_disk_space_required"
+    }
+}
+
 function Get-CellTimeoutBudget {
     param([Parameter(Mandatory = $true)][int]$TierMiB)
     $sampleTimeoutSec = switch ($TierMiB) {
@@ -3921,6 +3955,7 @@ if ($PlanOnly) {
 if (-not $ApproveSharedDailyHost) { throw "missing_ApproveSharedDailyHost" }
 
 Assert-LiveConfiguration
+Assert-SystemPrerequisites
 $campaignRoot = Join-Path $ArtifactRoot ("nbd-benchmark-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 New-Item -ItemType Directory -Path $campaignRoot | Out-Null
 $selectedRelease = $null
