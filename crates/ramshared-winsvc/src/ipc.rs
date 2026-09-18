@@ -620,11 +620,26 @@ mod tests {
     fn test_ipc_deserialize_error_display() {
         let err = IpcDeserializeError::Io(std::io::ErrorKind::PermissionDenied);
         assert_eq!(err.to_string(), "IO error: PermissionDenied");
-        assert_eq!(IpcDeserializeError::InvalidMagic(42).to_string(), "Invalid magic bytes: 0x2A");
-        assert_eq!(IpcDeserializeError::UnsupportedVersion(3).to_string(), "Unsupported IPC version: 3");
-        assert_eq!(IpcDeserializeError::PayloadTooLarge(100).to_string(), "Payload too large: 100 bytes");
-        assert_eq!(IpcDeserializeError::IncompleteMessage.to_string(), "Incomplete message header");
-        assert_eq!(IpcDeserializeError::Disconnect.to_string(), "Client disconnected gracefully");
+        assert_eq!(
+            IpcDeserializeError::InvalidMagic(42).to_string(),
+            "Invalid magic bytes: 0x2A"
+        );
+        assert_eq!(
+            IpcDeserializeError::UnsupportedVersion(3).to_string(),
+            "Unsupported IPC version: 3"
+        );
+        assert_eq!(
+            IpcDeserializeError::PayloadTooLarge(100).to_string(),
+            "Payload too large: 100 bytes"
+        );
+        assert_eq!(
+            IpcDeserializeError::IncompleteMessage.to_string(),
+            "Incomplete message header"
+        );
+        assert_eq!(
+            IpcDeserializeError::Disconnect.to_string(),
+            "Client disconnected gracefully"
+        );
     }
 
     #[test]
@@ -678,7 +693,10 @@ mod tests {
 
         let mut reader = &buffer[..];
         let err = IpcMessageHeader::read_from(&mut reader).unwrap_err();
-        assert_eq!(err, IpcDeserializeError::PayloadTooLarge(MAX_PAYLOAD_LEN + 1));
+        assert_eq!(
+            err,
+            IpcDeserializeError::PayloadTooLarge(MAX_PAYLOAD_LEN + 1)
+        );
     }
 
     #[test]
