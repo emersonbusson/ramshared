@@ -7,8 +7,8 @@
 
 use crate::protocol::{IHAVEOPT, NBD_FLAG_FIXED_NEWSTYLE, NBD_FLAG_NO_ZEROES, NBDMAGIC};
 use core::fmt;
-use std::time::{Duration, Instant};
 use std::io::{self, Read, Write};
+use std::time::{Duration, Instant};
 
 pub const NBD_OPT_EXPORT_NAME: u32 = 1;
 pub const NBD_OPT_ABORT: u32 = 2;
