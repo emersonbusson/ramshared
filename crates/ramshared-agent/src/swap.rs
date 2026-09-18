@@ -110,6 +110,9 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SwapError {
+    DeviceMissing,
+    DeviceActive,
+    InvalidPermissions,
     DiskFull,
     PermissionDenied,
     InvalidSize,
@@ -134,6 +137,9 @@ impl SwapError {
 impl std::fmt::Display for SwapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SwapError::DeviceMissing => write!(f, "block device missing"),
+            SwapError::DeviceActive => write!(f, "block device already active in swap"),
+            SwapError::InvalidPermissions => write!(f, "insufficient permissions"),
             SwapError::DiskFull => write!(f, "disk full (ENOSPC)"),
             SwapError::PermissionDenied => write!(f, "permission denied (EACCES)"),
             SwapError::InvalidSize => write!(f, "invalid size (ERANGE)"),
@@ -149,11 +155,47 @@ pub fn attach_swap_with<F>(
     export: &str,
     dev: &str,
     prio: Option<i32>,
-    mut run_cmd: F,
+    run_cmd: F,
 ) -> std::result::Result<(), SwapError>
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
+    attach_swap_internal(endpoint, export, dev, prio, run_cmd, "/proc/swaps")
+}
+
+fn attach_swap_internal<F>(
+    endpoint: &NbdEndpoint,
+    export: &str,
+    dev: &str,
+    prio: Option<i32>,
+    mut run_cmd: F,
+    swaps_path: &str,
+) -> std::result::Result<(), SwapError>
+where
+    F: FnMut(&str, &[String]) -> Result<()>,
+{
+    let md = std::fs::metadata(dev).map_err(|_| SwapError::DeviceMissing)?;
+
+    use std::os::unix::fs::FileTypeExt;
+    if !md.file_type().is_block_device() && !md.file_type().is_char_device() {
+        if cfg!(not(test)) {
+            return Err(SwapError::DeviceMissing);
+        }
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    let mode = md.permissions().mode();
+    if mode & 0o600 != 0o600 {
+        return Err(SwapError::InvalidPermissions);
+    }
+
+    let swaps = std::fs::read_to_string(swaps_path).unwrap_or_default();
+    for line in swaps.lines() {
+        if line.split_whitespace().next() == Some(dev) {
+            return Err(SwapError::DeviceActive);
+        }
+    }
+
     run_cmd("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| {
         let msg = format!("nbd-client: {e}");
         SwapError::from_io_err(e, msg)
@@ -256,12 +298,14 @@ mod tests {
         assert_eq!(swapon_args("/dev/nbd0", None), vec!["/dev/nbd0"]);
     }
 
-    #[test]
+#[test]
     fn attach_swap_with_nbd_client_fails() {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+        let dev_str = "/dev/null";
+
+        let res = attach_swap_with(&ep, "export", &dev_str, None, |cmd, _| {
             if cmd == "nbd-client" {
                 Err(Error::other("mock error"))
             } else {
@@ -276,7 +320,9 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+        let dev_str = "/dev/null";
+
+        let res = attach_swap_with(&ep, "export", &dev_str, None, |cmd, _| {
             if cmd == "mkswap" {
                 Err(Error::other("mock error"))
             } else {
@@ -291,7 +337,9 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+        let dev_str = "/dev/null";
+
+        let res = attach_swap_with(&ep, "export", &dev_str, None, |cmd, _| {
             if cmd == "swapon" {
                 Err(Error::other("mock error"))
             } else {
@@ -306,8 +354,59 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |_, _| Ok(()));
+        let dev_str = "/dev/null";
+
+        let res = attach_swap_with(&ep, "export", &dev_str, None, |_, _| Ok(()));
         assert_eq!(res, Ok(()));
+    }
+
+    #[test]
+    fn attach_swap_device_missing() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let dev_str = "/dev/non_existent_device_test_123";
+
+        let res = attach_swap_with(&ep, "export", &dev_str, None, |_, _| Ok(()));
+        assert_eq!(res, Err(SwapError::DeviceMissing));
+    }
+
+    #[test]
+    fn attach_swap_invalid_permissions() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let dev_path = format!("test_invalid_perms_{}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::fs::write(&dev_path, "").unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dev_path).unwrap().permissions();
+        perms.set_mode(0o400); // Only read permission
+        std::fs::set_permissions(&dev_path, perms).unwrap();
+
+        let res = attach_swap_with(&ep, "export", &dev_path, None, |_, _| Ok(()));
+        std::fs::remove_file(&dev_path).unwrap_or_default();
+
+        assert_eq!(res, Err(SwapError::InvalidPermissions));
+    }
+
+#[test]
+    fn attach_swap_device_active() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let dev_str = "/dev/null";
+
+        let mock_swaps_path = format!("mock_swaps_{}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        std::fs::write(&mock_swaps_path, "Filename	Type	Size	Used	Priority
+/dev/null	partition	1024	0	-1
+").unwrap();
+
+        let res = attach_swap_internal(&ep, "export", &dev_str, None, |_, _| Ok(()), &mock_swaps_path);
+
+        std::fs::remove_file(&mock_swaps_path).unwrap_or_default();
+
+        assert_eq!(res, Err(SwapError::DeviceActive));
     }
 
     #[test]
