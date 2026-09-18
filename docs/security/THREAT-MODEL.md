@@ -20,6 +20,8 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
 | Campaign and benchmark evidence | Custody, bounded retention, and reproducibility | A claimed observation cannot be tied to an exact run and input state. |
 | Sanitized logs and artifacts | Confidentiality and safe sharing | Credentials, private paths, or kernel-sensitive data leave the intended boundary. |
 | Host and guest safety controls | Fail-closed authority | A documentation or test action is mistaken for permission to operate privileged hardware paths. |
+| IPC message channels (UDS, Named Pipes) | Authenticity, integrity, and replay-resistance | An attacker can spoof broker commands or replay valid daemon requests to bypass state checks. |
+| IPC message channels (UDS, Named Pipes) | Authenticity, integrity, and replay-resistance | An attacker can spoof broker commands or replay valid daemon requests to bypass state checks. |
 
 ## Trust boundaries
 
@@ -47,6 +49,8 @@ swap, driver, VM, service, reboot, disk-reclaim, network, or privilege action.
 | A stale environmental result is treated as current capability | Time → capability claim | Explicit lifecycle, freshness/review fields, `PARTIAL` for blocked or stale proof | Live hardware availability still limits revalidation. |
 | A cleanup note is interpreted as permission for host mutation | Documentation → privileged host | Read-only runbook/checkers, explicit operator authority, no automatic reclaim action | An authorized operator can still make a human error; command-level safeguards remain necessary. |
 | A checker passes while its own policy has drifted | Policy → CI outcome | Deterministic fixtures, negative tests, reviewable policy files, no network dependency | A checker cannot independently establish the truth of a physical measurement. |
+| Malicious process connects to IPC channel | Untrusted process â Broker/Daemon | Strict endpoint authentication, framing boundaries, monotonic message counters | The host OS kernel might contain unknown local privilege escalation vulnerabilities. |
+| Malicious process connects to IPC channel | Untrusted process → Broker/Daemon | Strict endpoint authentication, framing boundaries, monotonic message counters | The host OS kernel might contain unknown local privilege escalation vulnerabilities. |
 
 ## Required handling rules
 
