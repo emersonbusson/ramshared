@@ -137,6 +137,20 @@ impl SliceMap {
         Ok(())
     }
 
+
+    /// Atomically reclaims all slices assigned to a disconnected tenant.
+    pub fn disconnect(&mut self, tenant: TenantId) -> Vec<SliceId> {
+        let mut reclaimed = Vec::new();
+        for s in &mut self.slices {
+            if s.tenant == Some(tenant) {
+                s.state = SliceState::Free;
+                s.tenant = None;
+                reclaimed.push(s.id);
+            }
+        }
+        reclaimed
+    }
+
     /// `Free → Leased` (reservation for lease, DT-19). Err if non-`Free`.
     pub fn lease(&mut self, id: SliceId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
@@ -273,4 +287,30 @@ mod tests {
         assert_eq!(m.drain(9), Err(SliceError::UnknownSlice));
         assert!(m.get(9).is_none());
     }
+
+    #[test]
+    fn disconnect_reclaims_tenant_slices_atomically() {
+        let mut m = SliceMap::new(3, 64, 192).unwrap();
+        m.assign(0, 7).unwrap();
+        m.assign(1, 7).unwrap();
+        m.assign(2, 8).unwrap();
+        m.drain(1).unwrap();
+
+        let reclaimed = m.disconnect(7);
+        assert_eq!(reclaimed, vec![0, 1]);
+
+        assert_eq!(m.get(0).unwrap().state, SliceState::Free);
+        assert_eq!(m.get(0).unwrap().tenant, None);
+        assert_eq!(m.get(1).unwrap().state, SliceState::Free);
+        assert_eq!(m.get(1).unwrap().tenant, None);
+
+        // Tenant 8's slice remains unaffected
+        assert_eq!(m.get(2).unwrap().state, SliceState::Active);
+        assert_eq!(m.get(2).unwrap().tenant, Some(8));
+
+        // Disconnecting again is idempotent
+        let reclaimed_again = m.disconnect(7);
+        assert!(reclaimed_again.is_empty());
+    }
+
 }
