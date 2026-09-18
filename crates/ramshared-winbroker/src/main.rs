@@ -72,8 +72,8 @@ fn main() {
             }
         }
         Ok(Command::Console { config }) => {
-            let bytes = match std::fs::read(&config) {
-                Ok(bytes) => bytes,
+            let bytes = match ramshared_config::loader::read_secure(std::path::Path::new(&config)) {
+                Ok(string) => string.into_bytes(),
                 Err(error) => {
                     eprintln!("config read failed: {error}");
                     std::process::exit(2);

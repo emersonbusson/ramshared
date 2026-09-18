@@ -59,7 +59,7 @@ fn run_service_from_config() -> Result<(), Box<dyn std::error::Error>> {
     let path = SERVICE_CONFIG
         .get()
         .ok_or("SCM ImagePath must pass --config <absolute>")?;
-    let bytes = std::fs::read(path)?;
+    let bytes = ramshared_config::loader::read_secure(path).map_err(|e| std::io::Error::other(e.to_string()))?.into_bytes();
     verify_active_config(path, &bytes)?;
     let config = BrokerConfigV1::from_toml(&bytes).map_err(io::Error::other)?;
     run_service(config)
