@@ -71,6 +71,43 @@ pub fn lock_wait_decision(
     }
 }
 
+/// Structured error for safety check failures.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SafetyCheckFailure {
+    pub check_name: String,
+    pub threshold: u64,
+    pub actual_value: u64,
+}
+
+impl std::fmt::Display for SafetyCheckFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "safety check '{}' failed: actual {} exceeds threshold {}",
+            self.check_name, self.actual_value, self.threshold
+        )
+    }
+}
+
+impl std::error::Error for SafetyCheckFailure {}
+
+/// Validates that an actual value does not exceed the safety threshold.
+pub fn validate_safety_threshold(
+    check_name: &str,
+    threshold: u64,
+    actual_value: u64,
+) -> Result<(), SafetyCheckFailure> {
+    if actual_value > threshold {
+        Err(SafetyCheckFailure {
+            check_name: check_name.to_string(),
+            threshold,
+            actual_value,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 /// Complete isolated-campaign promotion conjunction (SPEC DT-13).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CampaignVerdict {
@@ -178,6 +215,41 @@ mod tests {
             lock_wait_decision(Duration::from_secs(31), Duration::from_secs(30), false),
             LockWaitDecision::ResumeOnline
         );
+    }
+
+    #[test]
+    fn test_host_safety_threshold_pass() {
+        assert!(validate_safety_threshold("vram_limit", 4096, 2048).is_ok());
+        assert!(validate_safety_threshold("vram_limit", 4096, 4096).is_ok());
+        assert!(validate_safety_threshold("zero_limit", 0, 0).is_ok());
+    }
+
+    #[test]
+    fn test_host_safety_threshold_exceeded_returns_structured_error() {
+        let err = validate_safety_threshold("vram_limit", 4096, 5000).unwrap_err();
+        assert_eq!(err.check_name, "vram_limit");
+        assert_eq!(err.threshold, 4096);
+        assert_eq!(err.actual_value, 5000);
+        assert_eq!(
+            err.to_string(),
+            "safety check 'vram_limit' failed: actual 5000 exceeds threshold 4096"
+        );
+    }
+
+    #[test]
+    fn test_host_safety_zero_threshold_returns_structured_error() {
+        let err = validate_safety_threshold("zero_tolerance", 0, 1).unwrap_err();
+        assert_eq!(err.check_name, "zero_tolerance");
+        assert_eq!(err.threshold, 0);
+        assert_eq!(err.actual_value, 1);
+    }
+
+    #[test]
+    fn test_host_safety_max_threshold_overflow_returns_structured_error() {
+        let err = validate_safety_threshold("max_limit", u64::MAX - 1, u64::MAX).unwrap_err();
+        assert_eq!(err.check_name, "max_limit");
+        assert_eq!(err.threshold, u64::MAX - 1);
+        assert_eq!(err.actual_value, u64::MAX);
     }
 
     #[test]
