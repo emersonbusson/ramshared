@@ -132,7 +132,7 @@ pub fn spawn_writer<S: Write + Send + 'static>(
                         eprintln!("[ramsharedd] conn: write failed after retries: {}", e);
                         break;
                     }
-                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                    if e.kind() != std::io::ErrorKind::WouldBlock && e.kind() != std::io::ErrorKind::BrokenPipe {
                         eprintln!("[ramsharedd] conn: fatal write error: {}", e);
                         break;
                     }
@@ -369,6 +369,7 @@ mod tests {
         WriteAt(usize),
         Flush,
         Transient(usize, usize), // (fail_at, fail_count)
+        TransientBrokenPipe(usize, usize),
     }
 
     struct TestWriter {
@@ -389,7 +390,7 @@ mod tests {
                 && write_index == expected
             {
                 return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
+                    io::ErrorKind::ConnectionReset,
                     "test write failure",
                 ));
             }
@@ -402,6 +403,15 @@ mod tests {
                     "test transient failure",
                 ));
             }
+            if let WriterFailure::TransientBrokenPipe(fail_at, fail_count) = self.failure
+                && write_index >= fail_at
+                && write_index < fail_at + fail_count
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "test transient broken pipe",
+                ));
+            }
             self.state.bytes.lock().unwrap().extend_from_slice(bytes);
             Ok(bytes.len())
         }
@@ -410,7 +420,7 @@ mod tests {
             self.state.flushes.fetch_add(1, Ordering::SeqCst);
             if matches!(self.failure, WriterFailure::Flush) {
                 return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
+                    io::ErrorKind::ConnectionReset,
                     "test flush failure",
                 ));
             }
@@ -594,6 +604,33 @@ mod tests {
         let (tx, rx) = channel();
         let writer = spawn_writer(
             TestWriter::new(Arc::clone(&state), WriterFailure::Transient(0, 2)), // Fail twice, then succeed
+            rx,
+        );
+        let start = std::time::Instant::now();
+        tx.send(reply(0xBB, &[0xCC, 0xDD], false)).unwrap();
+        drop(tx);
+        join_with_deadline(writer);
+        let elapsed = start.elapsed();
+
+        let mut expected = vec![0xBB; SIMPLE_REPLY_LEN];
+        expected.extend_from_slice(&[0xCC, 0xDD]);
+        assert_eq!(*state.bytes.lock().unwrap(), expected);
+        assert_eq!(state.flushes.load(Ordering::SeqCst), 1);
+
+        assert!(
+            elapsed >= Duration::from_millis(30),
+            "writer should have backed off"
+        );
+    }
+
+
+    #[test]
+    fn writer_retries_on_broken_pipe() {
+        let state = Arc::new(WriterState::default());
+        let (tx, rx) = channel();
+        // Return BrokenPipe (WriteAt) twice, then succeed
+        let writer = spawn_writer(
+            TestWriter::new(Arc::clone(&state), WriterFailure::TransientBrokenPipe(0, 2)),
             rx,
         );
         let start = std::time::Instant::now();
