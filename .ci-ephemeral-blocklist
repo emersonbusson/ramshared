@@ -1,0 +1,18 @@
+# .ci-ephemeral-blocklist — RamShared
+#
+# Glob patterns for files that MUST NOT persist in the production tree.
+# The CI gate (tools/ci/check-ephemeral-blocklist.mjs) scans all tracked
+# files and blocks merge if any match. One pattern per line; lines starting
+# with '#' are comments.
+#
+# Add patterns here BEFORE creating ephemeral utilities, so CI catches
+# them if they are accidentally committed.
+
+# Upstream dispatch / submission helpers (one-shot scripts, not production)
+scripts/upstream/*.sh
+**/submit-*.sh
+**/dispatch-*.sh
+
+# Ad-hoc / scratch utilities that should never be shipped
+scripts/ad-hoc/**
+scripts/scratch/**

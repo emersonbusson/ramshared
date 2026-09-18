@@ -131,6 +131,17 @@ jobs:
           --test-coverage-functions=80
           tools/ci/check-campaign-evidence-lifecycle.test.mjs
 
+      - name: Ephemeral file blocklist gate
+        run: node tools/ci/check-ephemeral-blocklist.mjs
+
+      - name: Ephemeral blocklist coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/check-ephemeral-blocklist.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/check-ephemeral-blocklist.test.mjs
+
   ci-summary:
     name: ci-summary
     if: always()
