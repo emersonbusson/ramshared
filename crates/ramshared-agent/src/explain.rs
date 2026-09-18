@@ -99,6 +99,7 @@ mod tests {
         assert!(!text.contains("fell below the floor"));
         assert!(text.contains("process not attributed"));
     }
+
     #[test]
     fn explanation_reports_tier_and_capacity() {
         let text = explain_demote(&DemoteEvidence {
