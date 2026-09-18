@@ -450,7 +450,7 @@ mod windows_svc {
         if !manifest_path.is_absolute() {
             return Err("manifest path must be absolute".into());
         }
-        let bytes = ramshared_config::loader::read_secure(manifest_path).map_err(|e| ServiceError::Internal(e.to_string()))?.into_bytes();
+        let bytes = ramshared_config::loader::read_secure(&manifest_path).map_err(|e| std::io::Error::other(e.to_string()))?.into_bytes();
         let candidate = ramshared_winsvc::package::parse_manifest(&bytes)?;
         let source_root = manifest_path
             .parent()
@@ -546,8 +546,8 @@ mod windows_svc {
         use ramshared_winsvc::package::{ArtifactRole, validate_cross_config};
         let broker_path = root.join(&manifest.artifact(ArtifactRole::BrokerConfig)?.relative_path);
         let winsvc_path = root.join(&manifest.artifact(ArtifactRole::WinsvcConfig)?.relative_path);
-        let broker = ramshared_winbroker::BrokerConfigV1::from_toml(&ramshared_config::loader::read_secure(broker_path).map_err(|e| ServiceError::Internal(e.to_string()))?.into_bytes())?;
-        let winsvc = WinDriveConfig::from_reader(&ramshared_config::loader::read_secure(winsvc_path).map_err(|e| ServiceError::Internal(e.to_string()))?.into_bytes())?;
+        let broker = ramshared_winbroker::BrokerConfigV1::from_toml(&ramshared_config::loader::read_secure(&broker_path).map_err(|e| std::io::Error::other(e.to_string()))?.into_bytes())?;
+        let winsvc = WinDriveConfig::from_reader(&ramshared_config::loader::read_secure(&winsvc_path).map_err(|e| std::io::Error::other(e.to_string()))?.into_bytes())?;
         validate_cross_config(&broker, &winsvc)?;
         Ok(())
     }
@@ -811,7 +811,7 @@ mod windows_svc {
 
     fn read_active_manifest()
     -> Result<ramshared_winsvc::package::ProductManifestV1, Box<dyn std::error::Error>> {
-        let bytes = ramshared_config::loader::read_secure(active_manifest_path()).map_err(|e| ServiceError::Internal(e.to_string()))?.into_bytes();
+        let bytes = ramshared_config::loader::read_secure(&active_manifest_path()).map_err(|e| std::io::Error::other(e.to_string()))?.into_bytes();
         Ok(ramshared_winsvc::package::parse_manifest(&bytes)?)
     }
 

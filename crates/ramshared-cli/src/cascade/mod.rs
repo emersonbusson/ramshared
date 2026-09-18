@@ -998,7 +998,7 @@ fn read_sealed_origin_config() -> Result<SealedOriginConfig, CascadeError> {
                 "sealed origin manifest is not a bounded root-owned regular file".into(),
             ));
         }
-        let text = ramshared_config::loader::read_secure(std::path::Path::new(ORIGIN_CONFIG_FILE))
+        let text = fs::read_to_string(ORIGIN_CONFIG_FILE)
             .map_err(|error| CascadeError::Io(format!("read sealed origin manifest: {error}")))?;
         parse_sealed_origin_config(&text)
     }

@@ -78,7 +78,7 @@ fn validate_permissions(path: &Path) -> Result<(), ConfigError> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows::Win32::Security::{OWNER_SECURITY_INFORMATION, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
-    use windows::Win32::Foundation::{ERROR_SUCCESS, PSID};
+    use windows::Win32::Foundation::ERROR_SUCCESS;
     use std::ffi::c_void;
 
     let mut wide_path: Vec<u16> = path.as_os_str().encode_wide().collect();
@@ -96,7 +96,7 @@ fn validate_permissions(path: &Path) -> Result<(), ConfigError> {
             None,
             None,
             None,
-            Some(&mut sd),
+            &mut sd as *mut _ as _,
         )
     };
 
