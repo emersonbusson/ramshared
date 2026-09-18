@@ -44,6 +44,11 @@ run_gate gap-register-tests node --experimental-test-coverage \
   --test-reporter=dot tools/ci/check-gap-register.test.mjs
 run_gate public-hygiene node tools/ci/check-public-hygiene.mjs --candidate
 run_gate public-hygiene-tests node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs
+run_gate ephemeral-blocklist node tools/ci/check-ephemeral-blocklist.mjs
+run_gate ephemeral-blocklist-tests node --experimental-test-coverage \
+  --test-coverage-include=tools/ci/check-ephemeral-blocklist.mjs \
+  --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
+  --test-reporter=dot tools/ci/check-ephemeral-blocklist.test.mjs
 run_gate legacy-preallocation-removal node tools/ci/check-legacy-preallocation-removal.mjs --candidate
 run_gate legacy-preallocation-removal-tests node --experimental-test-coverage \
   --test-coverage-include=tools/ci/check-legacy-preallocation-removal.mjs \

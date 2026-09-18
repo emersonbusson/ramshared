@@ -41,6 +41,9 @@ The root `README.md` and its localized counterpart `README.pt-BR.md` are public-
 2. **Anti-Jargon & Internal Agent Shielding**:
    - The public READMEs must NEVER contain internal development tool/bot names (e.g. "Jules", "Codex", "Aider"), automated PR batch censuses (e.g. "162 Jules PRs", "383 PRs"), or methodology buzzwords.
    - All internal audit records and PR census tallies live exclusively in canonical documentation under `docs/reliability/` (e.g. `docs/reliability/JULES-PR-AUDIT-20260905.md`).
+3. **Ephemeral Tooling & Maintainer Scripts**:
+   - One-off dispatch scripts, temporary helpers, and maintenance utilities must NEVER be committed to the production tree. They belong exclusively in local scratch spaces (`scratch/` or agent data directories).
+   - Enforced by CI via `.ci-ephemeral-blocklist` and `tools/ci/check-ephemeral-blocklist.mjs`.
 
 ## Commit visibility rule
 
