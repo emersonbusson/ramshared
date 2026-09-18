@@ -45,8 +45,8 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	rs_dev->dma.pci_addr = bar_start;
 	rs_dev->dma.size = (size_t)rs_dev->capacity_bytes;
 
-	if (!IS_ALIGNED(rs_dev->dma.pci_addr, PAGE_SIZE)) {
-		dev_err(&pdev->dev, "PCIe BAR0 address not %lu-byte aligned\n", PAGE_SIZE);
+	if (!IS_ALIGNED(rs_dev->dma.pci_addr, 4096) || !IS_ALIGNED(rs_dev->dma.pci_addr, PAGE_SIZE)) {
+		dev_err(&pdev->dev, "PCIe BAR0 address not 4096-byte and %lu-byte aligned\n", PAGE_SIZE);
 		return -EINVAL;
 	}
 
