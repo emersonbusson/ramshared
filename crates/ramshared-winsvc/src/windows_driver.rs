@@ -561,3 +561,172 @@ fn struct_bytes<T>(v: &T) -> Vec<u8> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn ioctl_error_display_formatting() {
+        assert_eq!(IoctlError::Open("test".into()).to_string(), "open: test");
+        assert_eq!(IoctlError::Ioctl("err".into()).to_string(), "ioctl: err");
+        assert_eq!(IoctlError::Map("mem".into()).to_string(), "map: mem");
+        assert_eq!(IoctlError::Timeout.to_string(), "timeout");
+        assert_eq!(IoctlError::Cancelled.to_string(), "cancelled");
+        assert_eq!(
+            IoctlError::Invalid("bad".into()).to_string(),
+            "invalid: bad"
+        );
+    }
+
+    #[test]
+    fn ioctl_code_values() {
+        assert_eq!(IOCTL_REGISTER, ioctl_code(0));
+        assert_eq!(IOCTL_UNREGISTER, ioctl_code(1));
+        assert_eq!(IOCTL_COMMIT, ioctl_code(2));
+        assert_eq!(IOCTL_CREATE, ioctl_code(3));
+        assert_eq!(IOCTL_DESTROY, ioctl_code(4));
+    }
+
+    #[test]
+    fn struct_bytes_helper() {
+        let params = DiskParams {
+            size_bytes: 1024,
+            block_size: 512,
+            reserved: 0,
+            serial: [0u8; 16],
+        };
+        let bytes = struct_bytes(&params);
+        assert_eq!(bytes.len(), size_of::<DiskParams>());
+    }
+
+    #[test]
+    fn mapped_queue_parameter_validation() {
+        assert!(matches!(
+            WindowsMappedQueue::try_new(0, 4096, 512),
+            Err(IoctlError::Invalid(msg)) if msg == "queue_depth"
+        ));
+        assert!(matches!(
+            WindowsMappedQueue::try_new(MAX_QD + 1, 4096, 512),
+            Err(IoctlError::Invalid(msg)) if msg == "queue_depth"
+        ));
+        assert!(matches!(
+            WindowsMappedQueue::try_new(3, 4096, 512),
+            Err(IoctlError::Invalid(msg)) if msg == "queue_depth"
+        ));
+        assert!(matches!(
+            WindowsMappedQueue::try_new(16, 0, 512),
+            Err(IoctlError::Invalid(msg)) if msg == "max_io_bytes"
+        ));
+        assert!(matches!(
+            WindowsMappedQueue::try_new(16, MAX_IO + 1, 512),
+            Err(IoctlError::Invalid(msg)) if msg == "max_io_bytes"
+        ));
+        assert!(matches!(
+            WindowsMappedQueue::try_new(16, 4096, 1024),
+            Err(IoctlError::Invalid(msg)) if msg == "block_size"
+        ));
+    }
+
+    #[test]
+    fn driver_link_validation() {
+        let mut link = WindowsDriverLink {
+            handle: INVALID_HANDLE_VALUE,
+            event: ptr::null_mut(),
+            pending: false,
+        };
+
+        let bad_disk = DiskParams {
+            size_bytes: 1024,
+            block_size: 512,
+            reserved: 1,
+            serial: [0u8; 16],
+        };
+        assert!(matches!(
+            link.create_disk(&bad_disk),
+            Err(IoctlError::Invalid(msg)) if msg.contains("disk reserved non-zero")
+        ));
+
+        let bad_reg = Register {
+            abi_version: ABI_VERSION,
+            disk_id: 0,
+            queue_depth: 16,
+            block_size: 512,
+            max_io_bytes: 4096,
+            reserved: 1,
+            sq_ring_va: 0,
+            cq_ring_va: 0,
+            data_area_va: 0,
+            data_area_len: 0,
+            sq_event_handle: 0,
+            cq_event_handle: 0,
+        };
+        assert!(matches!(
+            link.register_queue(&bad_reg),
+            Err(IoctlError::Invalid(msg)) if msg.contains("register reserved non-zero")
+        ));
+
+        let bad_reg_disk = Register {
+            reserved: 0,
+            disk_id: 1,
+            ..bad_reg
+        };
+        assert!(matches!(
+            link.register_queue(&bad_reg_disk),
+            Err(IoctlError::Invalid(msg)) if msg.contains("disk_id must be 0")
+        ));
+
+        assert!(link.cancel_fetch().is_ok());
+
+        link.pending = true;
+        assert!(matches!(
+            link.commit_and_fetch(Duration::from_millis(10)),
+            Err(IoctlError::Invalid(msg)) if msg.contains("commit already pending")
+        ));
+
+        assert!(matches!(
+            link.cancel_fetch(),
+            Err(IoctlError::Invalid(msg)) if msg.contains("pending fetch cannot be cancelled")
+        ));
+
+        link.pending = false;
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn mapped_queue_lifecycle_and_access() {
+        let mut queue = WindowsMappedQueue::try_new(16, 4096, 512).expect("try_new should succeed");
+        assert_eq!(queue.queue_depth(), 16);
+        assert_eq!(queue.max_io_bytes(), 4096);
+        assert_eq!(queue.block_size(), 512);
+
+        let reg = queue.registration(0);
+        assert_eq!(reg.abi_version, ABI_VERSION);
+        assert_eq!(reg.disk_id, 0);
+        assert_eq!(reg.queue_depth, 16);
+        assert_eq!(reg.block_size, 512);
+        assert_eq!(reg.max_io_bytes, 4096);
+        assert_eq!(reg.reserved, 0);
+
+        assert_eq!(queue.sq_pending(), 0);
+        assert!(queue.pop_sqe_snapshot().is_none());
+
+        assert!(queue.read_slot_owned(16, 512).is_err());
+        assert!(queue.read_slot_owned(0, 4097).is_err());
+        assert!(queue.write_slot_from(16, &[0u8; 512]).is_err());
+        assert!(queue.write_slot_from(0, &[0u8; 4097]).is_err());
+
+        let data = vec![0xABu8; 512];
+        assert!(queue.write_slot_from(0, &data).is_ok());
+        let read = queue.read_slot_owned(0, 512).expect("read slot 0");
+        assert_eq!(read, data);
+
+        let cqe = Cqe {
+            tag: 42,
+            status: 0,
+            reserved: 0,
+        };
+        assert!(queue.push_cqe(cqe).is_ok());
+    }
+}
