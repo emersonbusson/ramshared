@@ -62,6 +62,13 @@ impl From<std::io::Error> for WinBrokerError {
     }
 }
 
+
+impl WinBrokerError {
+    pub fn is_disconnect(&self) -> bool {
+        matches!(self, Self::NoData | Self::BrokenPipe)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerConfigV1 {
@@ -309,6 +316,16 @@ impl BrokerSessionCore {
         effects
     }
 
+
+    pub fn on_io_error(&mut self, session_id: usize, error: &std::io::Error) -> Vec<BrokerEffect> {
+        let broker_error = WinBrokerError::from(std::io::Error::from_raw_os_error(error.raw_os_error().unwrap_or(0)));
+        if broker_error.is_disconnect() {
+            self.on_disconnect(session_id)
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Expires an orphaned lease. The pipe loop owns when this is called; the
     /// core stays deterministic and never creates a timer thread.
     pub fn on_tick(&mut self, now: Instant) -> Vec<BrokerEffect> {
@@ -383,6 +400,24 @@ mod tests {
 
         let e = io::Error::from_raw_os_error(5); // Access denied
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::Other(_)));
+    }
+
+
+    #[test]
+    fn winbrokererror_is_disconnect() {
+        assert!(super::WinBrokerError::BrokenPipe.is_disconnect());
+        assert!(super::WinBrokerError::NoData.is_disconnect());
+        assert!(!super::WinBrokerError::PipeBusy.is_disconnect());
+    }
+
+    #[test]
+    fn on_io_error_flushes_state_on_disconnect() {
+        let mut core = BrokerSessionCore::new(1024, "winsvc", "01");
+        core.on_authenticated_msg(1, register("winsvc"));
+        let effects = core.on_io_error(1, &std::io::Error::from_raw_os_error(109));
+        assert!(effects.contains(&BrokerEffect::Audit("session_disconnected".into())));
+        assert!(core.status().active_lease.is_none());
+        assert!(!core.status().registered);
     }
 
     #[test]

@@ -333,6 +333,11 @@ fn serve_session(
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) if matches!(error.raw_os_error(), Some(109) | Some(232) | Some(233)) => {
+                let effects = core
+                    .lock()
+                    .map_err(|_| io::Error::other("broker core mutex poisoned"))?
+                    .on_io_error(session_id, &error);
+                let _ = deliver_session_effects(pipe, effects, evidence_path, instance_id, session_id);
                 break;
             }
             Err(error) => return Err(error),
