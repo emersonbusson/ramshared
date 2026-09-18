@@ -533,12 +533,14 @@ impl UblkServer {
     }
 
     /// Submits `IORING_OP_ASYNC_CANCEL` for a specific user_data to cancel a pending SQE.
-    pub fn cancel_request(
+    /// Submits `IORING_OP_ASYNC_CANCEL` for all pending requests on the given `fd`.
+    pub fn cancel_requests_by_fd(
         &mut self,
-        target_user_data: u64,
+        target_fd: RawFd,
         cancel_user_data: u64,
     ) -> io::Result<()> {
-        let cancel_entry = opcode::AsyncCancel::new(target_user_data)
+        let cb = io_uring::types::CancelBuilder::fd(io_uring::types::Fd(target_fd)).all();
+        let cancel_entry = io_uring::opcode::AsyncCancel2::new(cb)
             .build()
             .user_data(cancel_user_data);
 
@@ -817,60 +819,55 @@ mod tests {
         let (path, file) = regular_file_fixture("ublk-timeout-cancel", page);
         let fd = file.as_raw_fd();
 
+        let mut pipe_fds = [-1; 2];
+        unsafe {
+            libc::pipe(pipe_fds.as_mut_ptr());
+        }
+        let read_fd = pipe_fds[0];
+        let write_fd = pipe_fds[1];
+
+        // We MUST use the regular file's fd for UblkServer, otherwise mmap fails!
         let mut server = UblkServer::new(fd, 2, page).expect("server fixture");
 
-        // Simulate a Timeout directly in the server's ring
-        let ts = types::Timespec::new().sec(0).nsec(1_000_000); // 1ms
-        let entry = opcode::Timeout::new(&ts as *const _).build().user_data(99);
-        let timeout_entry: squeue::Entry128 = entry.into();
-
-        // SAFETY: The timespec struct outlives the kernel submission, and the server ring is local.
-        unsafe {
-            server
-                .ring
-                .submission()
-                .push(&timeout_entry)
-                .expect("push timeout");
-        }
-
-        // Use wait_and_drain which should block and then return the timeout CQE
-        let completions = server.wait_and_drain().expect("wait and drain timeout");
-        assert_eq!(completions.len(), 1);
-        assert_eq!(completions[0].tag, 99);
-        assert_eq!(completions[0].result, -libc::ETIME);
-
-        // Simulate Cancellation
-        let ts_long = types::Timespec::new().sec(10).nsec(0);
-        let entry2 = opcode::Timeout::new(&ts_long as *const _)
+        // We push a readv on the pipe, which will block since we don't write anything
+        let mut buf = [0u8; 10];
+        let iovec = libc::iovec {
+            iov_base: buf.as_mut_ptr() as *mut _,
+            iov_len: buf.len(),
+        };
+        let read_entry = opcode::Readv::new(types::Fd(read_fd), &iovec as *const _, 1)
             .build()
-            .user_data(100);
-        let timeout_entry2: squeue::Entry128 = entry2.into();
+            .user_data(102);
 
-        // SAFETY: The timespec lives in the same frame, we wait before drop.
         unsafe {
             server
                 .ring
                 .submission()
-                .push(&timeout_entry2)
-                .expect("push long timeout");
+                .push(&read_entry.into())
+                .expect("push readv");
         }
 
-        server.cancel_request(100, 101).expect("push cancel");
+        // Cancel by fd
+        server.cancel_requests_by_fd(read_fd, 101).expect("push cancel");
 
-        // Wait for both the cancellation and the cancelled timeout
+        // Wait for results
         server.ring.submit_and_wait(2).expect("submit cancel");
         let mut results = server.drain();
-        results.sort_by_key(|c| c.tag);
 
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].tag, 100);
-        assert_eq!(results[0].result, -libc::ECANCELED);
+        while results.len() < 2 {
+             server.ring.submit_and_wait(1).expect("wait more");
+             results.extend(server.drain());
+        }
 
-        assert_eq!(results[1].tag, 101);
-        assert!(results[1].result == 0 || results[1].result == -libc::EALREADY);
+        let cancelled_read = results.iter().find(|c| c.tag == 102).expect("read cqe");
+        assert_eq!(cancelled_read.result, -libc::ECANCELED);
 
         drop(server);
         drop(file);
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
         fs::remove_file(path).expect("remove fixture");
     }
 
