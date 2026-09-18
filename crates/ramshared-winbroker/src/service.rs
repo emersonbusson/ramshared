@@ -337,7 +337,8 @@ fn serve_session(
                     .lock()
                     .map_err(|_| io::Error::other("broker core mutex poisoned"))?
                     .on_io_error(session_id, &error);
-                let _ = deliver_session_effects(pipe, effects, evidence_path, instance_id, session_id);
+                let _ =
+                    deliver_session_effects(pipe, effects, evidence_path, instance_id, session_id);
                 break;
             }
             Err(error) => return Err(error),

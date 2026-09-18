@@ -62,7 +62,6 @@ impl From<std::io::Error> for WinBrokerError {
     }
 }
 
-
 impl WinBrokerError {
     pub fn is_disconnect(&self) -> bool {
         matches!(self, Self::NoData | Self::BrokenPipe)
@@ -316,9 +315,10 @@ impl BrokerSessionCore {
         effects
     }
 
-
     pub fn on_io_error(&mut self, session_id: usize, error: &std::io::Error) -> Vec<BrokerEffect> {
-        let broker_error = WinBrokerError::from(std::io::Error::from_raw_os_error(error.raw_os_error().unwrap_or(0)));
+        let broker_error = WinBrokerError::from(std::io::Error::from_raw_os_error(
+            error.raw_os_error().unwrap_or(0),
+        ));
         if broker_error.is_disconnect() {
             self.on_disconnect(session_id)
         } else {
@@ -401,7 +401,6 @@ mod tests {
         let e = io::Error::from_raw_os_error(5); // Access denied
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::Other(_)));
     }
-
 
     #[test]
     fn winbrokererror_is_disconnect() {
