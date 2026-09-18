@@ -503,3 +503,72 @@ fn overlapped_io(
     }
     Ok(transferred as usize)
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn test_pipe_constants() {
+        assert_eq!(PRODUCT_PIPE, r"\\.\pipe\RamSharedBroker.v1");
+        assert_eq!(STATUS_PIPE, r"\\.\pipe\RamSharedBrokerStatus.v1");
+        assert_eq!(PIPE_BUFFER_BYTES, 64 * 1024);
+        assert_eq!(STATUS_BUFFER_BYTES, 4 * 1024);
+        assert_eq!(MAX_PIPE_INSTANCES, 4);
+        assert_eq!(PIPE_OPERATION_TIMEOUT, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_pipe_auth_error_from_io() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "pipe not found");
+        let auth_err: PipeAuthError = io_err.into();
+        match auth_err {
+            PipeAuthError::Io(e) => assert_eq!(e.kind(), io::ErrorKind::NotFound),
+            _ => panic!("Expected PipeAuthError::Io"),
+        }
+    }
+
+    #[test]
+    fn test_pipe_auth_error_debug() {
+        let errs = [
+            PipeAuthError::Refused,
+            PipeAuthError::Deadline,
+            PipeAuthError::Stopping,
+            PipeAuthError::Io(io::Error::from_raw_os_error(2)),
+        ];
+        for err in &errs {
+            let debug_str = format!("{err:?}");
+            assert!(!debug_str.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_resolve_service_sid_invalid_account() {
+        let result = resolve_service_sid("NonExistentAccount_XYZ987123_RamShared");
+        assert!(result.is_err());
+        if let Err(PipeAuthError::Io(err)) = result {
+            assert!(err.raw_os_error().is_some());
+        } else {
+            panic!("Expected PipeAuthError::Io for invalid account");
+        }
+    }
+
+    #[test]
+    fn test_security_descriptor_generation() {
+        if let Ok(owner_sid) = resolve_service_sid("SYSTEM") {
+            if let Ok(expected_sid) = resolve_service_sid("EVERYONE") {
+                let desc_status = security_descriptor(&owner_sid, &expected_sid, true);
+                assert!(desc_status.is_ok());
+
+                let desc_product = security_descriptor(&owner_sid, &expected_sid, false);
+                assert!(desc_product.is_ok());
+
+                let owner_str = sid_string(&owner_sid);
+                assert!(owner_str.is_ok());
+                let expected_str = sid_string(&expected_sid);
+                assert!(expected_str.is_ok());
+            }
+        }
+    }
+}
