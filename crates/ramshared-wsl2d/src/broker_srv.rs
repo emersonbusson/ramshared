@@ -1307,7 +1307,11 @@ mod tests {
             .filter(|x| matches!(x, Outbound::ToSession(_, Msg::SwapOn { .. })))
             .collect();
         assert_eq!(swapons.len(), 2);
-        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Active);
+        if let Some(slice) = c.slice_map.get(0) {
+            assert_eq!(slice.state, SliceState::Active);
+        } else {
+            panic!("slice 0 not found");
+        }
         assert_eq!(c.slice_map.get(1).unwrap().state, SliceState::Active);
     }
 
