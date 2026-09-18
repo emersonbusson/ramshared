@@ -8,6 +8,10 @@ use crate::model::TenantId;
 /// expose a deployment-specific policy surface.
 pub const DEFAULT_LEASE_TTL: Duration = Duration::from_secs(30);
 
+/// Default grace period allowed after a lease expires before hard reclamation.
+pub const DEFAULT_GRACE_PERIOD: Duration = Duration::from_secs(15);
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingLease {
     pub holder: TenantId,
@@ -52,11 +56,14 @@ impl LeaseDisconnect {
     }
 }
 
+
 #[derive(Clone, Debug)]
 struct ActiveLease {
     lease: LogicalLease,
     deadline: Instant,
+    grace_period: Duration,
 }
+
 
 #[derive(Clone, Debug)]
 pub struct LeaseBook {
@@ -148,6 +155,7 @@ impl LeaseBook {
         self.active = Some(ActiveLease {
             lease: lease.clone(),
             deadline,
+            grace_period: DEFAULT_GRACE_PERIOD,
         });
         Ok(lease)
     }
@@ -168,6 +176,12 @@ impl LeaseBook {
         if active.lease.holder != holder {
             return false;
         }
+
+        let hard_expiry = active.deadline.checked_add(active.grace_period).unwrap_or(active.deadline);
+        if now > hard_expiry {
+            return false;
+        }
+
         active.deadline = deadline;
         true
     }
@@ -178,7 +192,10 @@ impl LeaseBook {
         if self
             .active
             .as_ref()
-            .is_some_and(|active| now >= active.deadline)
+            .is_some_and(|active| {
+                let hard_expiry = active.deadline.checked_add(active.grace_period).unwrap_or(active.deadline);
+                now >= hard_expiry
+            })
         {
             self.active.take().map(|active| active.lease)
         } else {
@@ -331,6 +348,7 @@ mod tests {
 
     #[test]
     fn active_lease_renews_only_for_holder() {
+        use super::DEFAULT_GRACE_PERIOD;
         let mut book = LeaseBook::new(1024);
         let started = Instant::now();
         let ttl = Duration::from_secs(10);
@@ -340,11 +358,14 @@ mod tests {
         assert!(!book.renew_active(8, started + Duration::from_secs(5), ttl));
         assert!(book.renew_active(7, started + Duration::from_secs(5), ttl));
         assert_eq!(book.expire(started + ttl), None);
-        assert_eq!(book.expire(started + Duration::from_secs(15)), Some(lease));
+        // The lease was renewed at +5 secs with a TTL of 10 secs, so it expires at +15 secs
+        // plus the DEFAULT_GRACE_PERIOD
+        assert_eq!(book.expire(started + Duration::from_secs(15) + DEFAULT_GRACE_PERIOD), Some(lease));
     }
 
     #[test]
     fn active_lease_expires_at_its_monotonic_deadline() {
+        use super::DEFAULT_GRACE_PERIOD;
         let mut book = LeaseBook::new(1024);
         let started = Instant::now();
         let ttl = Duration::from_secs(10);
@@ -356,8 +377,8 @@ mod tests {
             None,
             "a lease must remain active before its deadline"
         );
-        assert_eq!(book.expire(started + ttl), Some(lease));
-        assert_eq!(book.expire(started + Duration::from_secs(20)), None);
+        assert_eq!(book.expire(started + ttl + DEFAULT_GRACE_PERIOD), Some(lease));
+        assert_eq!(book.expire(started + Duration::from_secs(30)), None);
     }
 
     #[test]
@@ -375,6 +396,40 @@ mod tests {
 
         assert_eq!(disconnected.retained_active, Some(lease.clone()));
         assert_eq!(book.active(), Some(&lease));
+    }
+
+    #[test]
+    fn active_lease_grace_period_prevents_reclamation() {
+        use super::DEFAULT_GRACE_PERIOD;
+        let mut book = LeaseBook::new(1024);
+        let started = Instant::now();
+        let ttl = Duration::from_secs(10);
+        let _ = book.begin_request(7, 512);
+        let lease = book.grant_pending(512, started, ttl).unwrap();
+
+        assert_eq!(
+            book.expire(started + ttl + DEFAULT_GRACE_PERIOD - Duration::from_secs(1)),
+            None,
+            "a lease must not expire within its grace period"
+        );
+        assert_eq!(book.expire(started + ttl + DEFAULT_GRACE_PERIOD + Duration::from_secs(1)), Some(lease));
+    }
+
+    #[test]
+    fn active_lease_can_renew_during_grace_period() {
+        use super::DEFAULT_GRACE_PERIOD;
+        let mut book = LeaseBook::new(1024);
+        let started = Instant::now();
+        let ttl = Duration::from_secs(10);
+        let _ = book.begin_request(7, 512);
+        let _lease = book.grant_pending(512, started, ttl).unwrap();
+
+        assert!(book.renew_active(7, started + ttl + DEFAULT_GRACE_PERIOD - Duration::from_secs(1), ttl), "can renew within grace");
+
+        let mut book2 = LeaseBook::new(1024);
+        let _ = book2.begin_request(7, 512);
+        let _lease2 = book2.grant_pending(512, started, ttl).unwrap();
+        assert!(!book2.renew_active(7, started + ttl + DEFAULT_GRACE_PERIOD + Duration::from_secs(1), ttl), "cannot renew after hard expiry");
     }
 
     #[test]
