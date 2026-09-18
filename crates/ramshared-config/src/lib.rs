@@ -2,8 +2,10 @@
 //!
 //! Parsing is deliberately separate from process startup so CLI overrides and
 //! validation can be tested without sockets, root, or a GPU.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
+pub mod loader;
+pub use loader::load_file;
 pub mod error;
 pub use error::ConfigError;
 

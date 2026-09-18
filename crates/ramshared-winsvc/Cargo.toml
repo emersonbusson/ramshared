@@ -17,6 +17,7 @@ name = "ramshared_winsvc"
 path = "src/lib.rs"
 
 [dependencies]
+ramshared-config = { path = "../ramshared-config" }
 ramshared-block = { path = "../ramshared-block" }
 ramshared-broker = { path = "../ramshared-broker" }
 ramshared-winbroker = { path = "../ramshared-winbroker" }
