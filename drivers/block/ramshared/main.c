@@ -34,7 +34,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	int ret;
 
 	if (!pdev || !id)
-		return -EINVAL;
+		return -ENODEV;
 
 	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
 		 capacity_mb);
@@ -86,7 +86,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable PCIe memory device: %d\n",
 			ret);
-		return ret;
+		return -ENODEV;
 	}
 
 	pci_set_master(pdev);
