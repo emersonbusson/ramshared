@@ -4,18 +4,40 @@
 # Usage: scripts/package/build-deb-package.sh [version]
 set -euo pipefail
 
+# Guard clauses for required commands
+for cmd in dpkg-deb fakeroot; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not installed." >&2
+    exit 1
+  fi
+done
+
+# Sanitize input arguments
+if [[ "$#" -gt 1 ]]; then
+  echo "ERROR: Too many arguments." >&2
+  echo "Usage: $0 [version]" >&2
+  exit 1
+fi
+
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Enforce reproducible builds
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || date +%s)}"
 
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
+
+if [[ ! "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+  echo "ERROR: Invalid version format '$VERSION'." >&2
+  exit 1
+fi
 VERSION_CLEAN="${VERSION#v}"
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
 ARCH="amd64"
 
 OUT_DIR="$ROOT/artifacts/packages"
-STAGE_DIR="$OUT_DIR/deb-stage/ramshared_${DEB_VERSION}_${ARCH}"
+STAGE_DIR="$(mktemp -d -t ramshared-deb-stage-XXXXXX)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
 DEB_FILE="$OUT_DIR/ramshared_${DEB_VERSION}_${ARCH}.deb"
 
 echo "==> Building Debian package for RamShared ${VERSION} (${ARCH})..."
@@ -37,7 +59,7 @@ if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
 fi
 
 # Clean previous staging
-rm -rf "$STAGE_DIR" "$DEB_FILE"
+rm -f "$DEB_FILE"
 mkdir -p "$STAGE_DIR/DEBIAN" \
          "$STAGE_DIR/usr/bin" \
          "$STAGE_DIR/usr/share/ramshared/scripts" \
@@ -180,8 +202,7 @@ if command -v find >/dev/null 2>&1 && command -v xargs >/dev/null 2>&1; then
   find "$STAGE_DIR" -print0 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH}"
 fi
 
-dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
-rm -rf "$STAGE_DIR"
+fakeroot dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 
 # Compute SHA-256
 (cd "$OUT_DIR" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
