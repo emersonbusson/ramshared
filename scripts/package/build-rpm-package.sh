@@ -44,6 +44,11 @@ Release:        1%{?dist}
 Summary:        Hardware-accelerated VRAM memory tiering & low-level kernel drivers
 License:        GPL-2.0-only
 URL:            https://github.com/emersonbusson/ramshared
+Requires:       ublk >= 1.0
+Requires:       dkms >= 2.8
+Requires:       systemd
+Requires:       libudev1 >= 240
+
 
 %description
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
