@@ -195,10 +195,23 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                     break;
                 }
             };
-            // Anti-DoS: physical upper bound for IPC buffers (16 MiB) to prevent memory exhaustion.
-            if req.len > 16 * 1024 * 1024 {
+
+            // Safe deserialization guard: strict length-prefix validation against a practical limit.
+            if req.cmd != Command::Write && req.len > 16 * 1024 * 1024 {
                 eprintln!(
-                    "[ramsharedd] conn: request len {} exceeds physical IPC buffer bound (16 MiB); disconnecting",
+                    "[ramsharedd] conn: non-write request len {} exceeds physical IPC buffer bound (16 MiB); disconnecting",
+                    req.len
+                );
+                break;
+            }
+
+            // Anti-DoS: maximum message size enforcement for all IPC paths.
+            // A physical upper bound for IPC buffers (max 4 GiB VRAM allocation) prevents memory exhaustion.
+            // req.len is a u32, so we check using u64 to safely perform the 4 GiB bounds check.
+            let physical_max: u64 = 4 * 1024 * 1024 * 1024;
+            if (req.len as u64) > physical_max {
+                eprintln!(
+                    "[ramsharedd] conn: request len {} exceeds physical bounds (max 4 GiB VRAM allocation); disconnecting",
                     req.len
                 );
                 break;
