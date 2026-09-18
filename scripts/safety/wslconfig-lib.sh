@@ -46,16 +46,15 @@ wslconfig_encode_path() {
 
 # True if a path *value* (right-hand side of key=) is unsafe for .wslconfig.
 # Unsafe: any single-backslash that is not part of a doubled \\ pair.
-# Heuristic used by WSL: backslash starts escape; letter after single \ fails.
+# Unsafe: single \ before any non-backslash character or at string end fails.
 wslconfig_path_is_unsafe() {
-	local v="$1"
-	# Has a backslash followed by a non-backslash non-empty char that is not
-	# a known TOML/simple escape we allow as doubled only — fail on single \.
-	# Match: odd backslash run before a path-ish char (letter, digit, .)
-	[[ "$v" =~ (^|[^\\])\\[A-Za-z0-9._] ]] && return 0
-	# trailing lone backslash
-	[[ "$v" =~ [^\\]\\$ ]] && return 0
-	[[ "$v" == '\' ]] && return 0
+	local v="$1" temp="$1"
+	# Strip all doubled backslashes (\\)
+	while [[ "$temp" == *\\\\* ]]; do
+		temp="${temp//\\\\/}"
+	done
+	# Any remaining backslash is an unescaped single backslash
+	[[ "$temp" == *'\'* ]] && return 0
 	return 1
 }
 

@@ -119,6 +119,16 @@ cmd_selftest() {
 		echo "FAIL did not detect C:\\wsl as unsafe"
 		fail=1
 	fi
+	if wslconfig_path_is_unsafe 'C:\dir\-file' \
+		&& wslconfig_path_is_unsafe 'C:\dir\ (1)' \
+		&& wslconfig_path_is_unsafe 'C:\dir\~1' \
+		&& wslconfig_path_is_unsafe 'C:\dir@spec' \
+		&& wslconfig_path_is_unsafe 'C:\dir\'; then
+		echo "OK detect special char single backslash unsafe"
+	else
+		echo "FAIL did not detect special char single backslash as unsafe"
+		fail=1
+	fi
 	if wslconfig_path_is_unsafe 'R:/wsl_swap/swap.vhdx'; then
 		echo "FAIL false positive on forward slash"
 		fail=1
