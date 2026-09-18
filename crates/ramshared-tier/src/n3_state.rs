@@ -1317,25 +1317,25 @@ impl LeaseMachine {
     /// Receives a host `GRANT`.  Validation enters `NEGOTIATING`; only a later
     /// host acceptance of the returned `GRANT_ACK` enters `GRANTED`.
     pub fn receive_grant(&mut self, grant: Grant, now: u64) -> ProtocolDecision {
-        match self.register_event(EventFingerprint::Grant(grant.clone())) {
-            EventRegistration::Duplicate => return ProtocolDecision::Noop,
-            EventRegistration::Conflict => {
-                return self.fail_for_event(
-                    Some(grant.lease_id),
-                    Some(grant.generation),
-                    Some(grant.event_id),
-                    FailureReason::ConflictingDuplicate,
-                );
-            }
-            EventRegistration::Overflow => {
-                return self.fail_for_event(
-                    Some(grant.lease_id),
-                    Some(grant.generation),
-                    Some(grant.event_id),
-                    FailureReason::MalformedRecord,
-                );
-            }
-            EventRegistration::New => {}
+        let registration = self.register_event(EventFingerprint::Grant(grant.clone()));
+        if registration == EventRegistration::Duplicate {
+            return ProtocolDecision::Noop;
+        }
+        if registration == EventRegistration::Conflict {
+            return self.fail_for_event(
+                Some(grant.lease_id),
+                Some(grant.generation),
+                Some(grant.event_id),
+                FailureReason::ConflictingDuplicate,
+            );
+        }
+        if registration == EventRegistration::Overflow {
+            return self.fail_for_event(
+                Some(grant.lease_id),
+                Some(grant.generation),
+                Some(grant.event_id),
+                FailureReason::MalformedRecord,
+            );
         }
 
         if self.lease_state != LeaseState::Absent {
@@ -1426,16 +1426,13 @@ impl LeaseMachine {
                 FailureReason::InvalidCapacity,
             );
         }
-        match self.validate_generation(&grant.lease_id, grant.generation) {
-            Ok(()) => {}
-            Err(reason) => {
-                return self.fail_for_event(
-                    Some(grant.lease_id),
-                    Some(grant.generation),
-                    Some(grant.event_id),
-                    reason,
-                );
-            }
+        if let Err(reason) = self.validate_generation(&grant.lease_id, grant.generation) {
+            return self.fail_for_event(
+                Some(grant.lease_id),
+                Some(grant.generation),
+                Some(grant.event_id),
+                reason,
+            );
         }
         self.remember_generation(grant.lease_id.clone(), grant.generation);
         let ack = GrantAck {
@@ -1501,25 +1498,25 @@ impl LeaseMachine {
 
     /// Receives a matching host `REVOKE`, blocks new I/O, and begins drain.
     pub fn receive_revoke(&mut self, revoke: Revoke) -> ProtocolDecision {
-        match self.register_event(EventFingerprint::Revoke(revoke.clone())) {
-            EventRegistration::Duplicate => return ProtocolDecision::Noop,
-            EventRegistration::Conflict => {
-                return self.fail_for_event(
-                    Some(revoke.lease_id),
-                    Some(revoke.generation),
-                    Some(revoke.event_id),
-                    FailureReason::ConflictingDuplicate,
-                );
-            }
-            EventRegistration::Overflow => {
-                return self.fail_for_event(
-                    Some(revoke.lease_id),
-                    Some(revoke.generation),
-                    Some(revoke.event_id),
-                    FailureReason::MalformedRecord,
-                );
-            }
-            EventRegistration::New => {}
+        let registration = self.register_event(EventFingerprint::Revoke(revoke.clone()));
+        if registration == EventRegistration::Duplicate {
+            return ProtocolDecision::Noop;
+        }
+        if registration == EventRegistration::Conflict {
+            return self.fail_for_event(
+                Some(revoke.lease_id),
+                Some(revoke.generation),
+                Some(revoke.event_id),
+                FailureReason::ConflictingDuplicate,
+            );
+        }
+        if registration == EventRegistration::Overflow {
+            return self.fail_for_event(
+                Some(revoke.lease_id),
+                Some(revoke.generation),
+                Some(revoke.event_id),
+                FailureReason::MalformedRecord,
+            );
         }
         let Some(active) = self.active_lease.as_mut() else {
             return self.fail_for_event(
@@ -1661,10 +1658,11 @@ impl LeaseMachine {
         if self.callbacks_pending != 0 {
             return self.fail_for_active(FailureReason::CallbackNotDrained);
         }
-        match self.scrub_state {
-            ScrubState::Pending => return ProtocolDecision::Blocked(FailureReason::ScrubPending),
-            ScrubState::Failed => return self.fail_for_active(FailureReason::ScrubFailed),
-            ScrubState::Succeeded => {}
+        if self.scrub_state == ScrubState::Pending {
+            return ProtocolDecision::Blocked(FailureReason::ScrubPending);
+        }
+        if self.scrub_state == ScrubState::Failed {
+            return self.fail_for_active(FailureReason::ScrubFailed);
         }
         let ack = DrainAck {
             lease_id: active.lease_id.clone(),
@@ -1844,26 +1842,26 @@ impl LeaseMachine {
         lease_id: &LeaseId,
         generation: u64,
     ) -> Result<(), FailureReason> {
-        if let Some((_, previous)) = self
+        let Some((_, previous)) = self
             .generation_history
             .iter()
             .find(|(known_lease, _)| known_lease == lease_id)
-        {
-            if generation <= *previous {
-                return Err(FailureReason::StateTransition(
-                    StateTransitionError::StaleGeneration {
-                        provided: generation,
-                        expected: *previous,
-                    },
-                ));
-            }
-            if generation != previous.saturating_add(1) {
-                return Err(FailureReason::GenerationGap);
+        else {
+            if self.generation_history.len() >= MAX_GENERATION_HISTORY {
+                return Err(FailureReason::MalformedRecord);
             }
             return Ok(());
+        };
+        if generation <= *previous {
+            return Err(FailureReason::StateTransition(
+                StateTransitionError::StaleGeneration {
+                    provided: generation,
+                    expected: *previous,
+                },
+            ));
         }
-        if self.generation_history.len() >= MAX_GENERATION_HISTORY {
-            return Err(FailureReason::MalformedRecord);
+        if generation != previous.saturating_add(1) {
+            return Err(FailureReason::GenerationGap);
         }
         Ok(())
     }
