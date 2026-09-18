@@ -1,9 +1,9 @@
 //! Block hashing (FNV-1a 64) + pre-allocated checksum table (SPEC §8.1).
 //! **Not cryptographic** — meant for detecting memory corruption and torn reads, not security.
 
-use subtle::ConstantTimeEq;
 use std::error::Error;
 use std::fmt;
+use subtle::ConstantTimeEq;
 
 pub const DEFAULT_BLOCK_SIZE: usize = 4096;
 
