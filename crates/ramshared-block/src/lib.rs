@@ -23,6 +23,7 @@ pub use elastic_cache::{
     ELASTIC_CHUNK_BYTES, ElasticCacheConfig, ElasticExtentTable, ElasticVramCache,
 };
 pub use handshake::{HandshakeError, server_handshake};
+pub use handshake::auth::{AuthContext, HandshakeAuth, HandshakeAuthError};
 pub use inflight::Inflight;
 pub use isolated_origin::{
     AuthoritativeOriginBackend, BestEffortCache, BoundedCacheClient, CacheMutation, CacheRead,
