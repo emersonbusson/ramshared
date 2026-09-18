@@ -574,7 +574,10 @@ mod tests {
         assert_eq!(IoctlError::Map("mem".into()).to_string(), "map: mem");
         assert_eq!(IoctlError::Timeout.to_string(), "timeout");
         assert_eq!(IoctlError::Cancelled.to_string(), "cancelled");
-        assert_eq!(IoctlError::Invalid("bad".into()).to_string(), "invalid: bad");
+        assert_eq!(
+            IoctlError::Invalid("bad".into()).to_string(),
+            "invalid: bad"
+        );
     }
 
     #[test]
@@ -589,8 +592,10 @@ mod tests {
     #[test]
     fn struct_bytes_helper() {
         let params = DiskParams {
-            capacity_bytes: 1024,
+            size_bytes: 1024,
+            block_size: 512,
             reserved: 0,
+            serial: [0u8; 16],
         };
         let bytes = struct_bytes(&params);
         assert_eq!(bytes.len(), size_of::<DiskParams>());
@@ -633,8 +638,10 @@ mod tests {
         };
 
         let bad_disk = DiskParams {
-            capacity_bytes: 1024,
+            size_bytes: 1024,
+            block_size: 512,
             reserved: 1,
+            serial: [0u8; 16],
         };
         assert!(matches!(
             link.create_disk(&bad_disk),
@@ -716,9 +723,9 @@ mod tests {
         assert_eq!(read, data);
 
         let cqe = Cqe {
-            user_data: 42,
-            res: 512,
-            flags: 0,
+            tag: 42,
+            status: 0,
+            reserved: 0,
         };
         assert!(queue.push_cqe(cqe).is_ok());
     }
