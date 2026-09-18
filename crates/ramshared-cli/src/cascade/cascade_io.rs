@@ -3320,19 +3320,19 @@ fn plan_nbd_lifecycle(
             actions.push(NbdLifecycleAction::Swapoff(device.clone()));
         }
     }
-    for kind in [ManagedDeviceKind::Zram, ManagedDeviceKind::Nbd] {
-        for device in binding.devices.iter().filter(|device| device.kind == kind) {
-            match kind {
-                ManagedDeviceKind::Zram => {
-                    actions.push(NbdLifecycleAction::ResetZram(device.clone()))
-                }
-                ManagedDeviceKind::Nbd => {
-                    actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()))
-                }
-                ManagedDeviceKind::Ublk => unreachable!("validated NBD binding excludes ublk"),
+    let mut nbd_actions = Vec::new();
+    for device in &binding.devices {
+        match device.kind {
+            ManagedDeviceKind::Zram => {
+                actions.push(NbdLifecycleAction::ResetZram(device.clone()));
             }
+            ManagedDeviceKind::Nbd => {
+                nbd_actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()));
+            }
+            ManagedDeviceKind::Ublk => unreachable!("validated NBD binding excludes ublk"),
         }
     }
+    actions.extend(nbd_actions);
     actions.push(NbdLifecycleAction::StopDaemon);
     Ok(NbdLifecyclePlan { actions })
 }
