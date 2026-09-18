@@ -48,6 +48,7 @@ struct ramshared_device {
 	struct ramshared_dma_region	dma;
 	u64				capacity_bytes;
 	struct device			*dev;
+	/* Mutex serializing device registration and teardown */
 	struct mutex			lock;
 	atomic64_t			dma_transfers_total;
 	atomic64_t			read_bytes;
@@ -59,7 +60,6 @@ void ramshared_dma_cleanup(struct ramshared_device *rs_dev);
 int ramshared_queue_init(struct ramshared_device *rs_dev,
 			 struct device *parent_dev, unsigned int q_depth);
 void ramshared_queue_cleanup(struct ramshared_device *rs_dev);
-
 
 struct ramshared_info {
 	u64 capacity_bytes;

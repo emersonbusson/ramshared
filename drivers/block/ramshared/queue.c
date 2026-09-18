@@ -21,7 +21,6 @@ static blk_status_t ramshared_errno_to_blk_status(int err)
 	case -ENOMEM:
 		return BLK_STS_RESOURCE;
 	case -EOPNOTSUPP:
-	case -ENOTSUPP:
 		return BLK_STS_NOTSUPP;
 	default:
 		return BLK_STS_IOERR;
