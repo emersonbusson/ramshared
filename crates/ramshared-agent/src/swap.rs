@@ -177,11 +177,10 @@ where
     let md = std::fs::metadata(dev).map_err(|_| SwapError::DeviceMissing)?;
 
     use std::os::unix::fs::FileTypeExt;
-    if !md.file_type().is_block_device() && !md.file_type().is_char_device() {
-        if cfg!(not(test)) {
+    if !md.file_type().is_block_device() && !md.file_type().is_char_device()
+        && cfg!(not(test)) {
             return Err(SwapError::DeviceMissing);
         }
-    }
 
     use std::os::unix::fs::PermissionsExt;
     let mode = md.permissions().mode();
@@ -298,7 +297,7 @@ mod tests {
         assert_eq!(swapon_args("/dev/nbd0", None), vec!["/dev/nbd0"]);
     }
 
-#[test]
+    #[test]
     fn attach_swap_with_nbd_client_fails() {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
@@ -376,7 +375,13 @@ mod tests {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
-        let dev_path = format!("test_invalid_perms_{}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let dev_path = format!(
+            "test_invalid_perms_{}.tmp",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
         std::fs::write(&dev_path, "").unwrap();
 
         use std::os::unix::fs::PermissionsExt;
@@ -390,19 +395,36 @@ mod tests {
         assert_eq!(res, Err(SwapError::InvalidPermissions));
     }
 
-#[test]
+    #[test]
     fn attach_swap_device_active() {
         let ep = NbdEndpoint::Unix {
             path: "/sock".into(),
         };
         let dev_str = "/dev/null";
 
-        let mock_swaps_path = format!("mock_swaps_{}.tmp", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
-        std::fs::write(&mock_swaps_path, "Filename	Type	Size	Used	Priority
+        let mock_swaps_path = format!(
+            "mock_swaps_{}.tmp",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        std::fs::write(
+            &mock_swaps_path,
+            "Filename	Type	Size	Used	Priority
 /dev/null	partition	1024	0	-1
-").unwrap();
+",
+        )
+        .unwrap();
 
-        let res = attach_swap_internal(&ep, "export", &dev_str, None, |_, _| Ok(()), &mock_swaps_path);
+        let res = attach_swap_internal(
+            &ep,
+            "export",
+            &dev_str,
+            None,
+            |_, _| Ok(()),
+            &mock_swaps_path,
+        );
 
         std::fs::remove_file(&mock_swaps_path).unwrap_or_default();
 
