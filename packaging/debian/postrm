@@ -1,0 +1,16 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ "${1:-}" = "purge" ]; then
+    # Purge /var/run/ramshared cleanly
+    if [ -d "/run/ramshared" ]; then
+        echo "Purging transient runtime state: /run/ramshared"
+        rm -rf "/run/ramshared"
+    fi
+
+    # Purge /var/log/ramshared cleanly
+    if [ -d "/var/log/ramshared" ]; then
+        echo "Purging log files: /var/log/ramshared"
+        rm -rf "/var/log/ramshared"
+    fi
+fi
