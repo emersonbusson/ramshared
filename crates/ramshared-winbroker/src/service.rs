@@ -1,30 +1,45 @@
 use std::ffi::OsString;
 use std::io;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
 
+#[cfg(windows)]
+use std::sync::Mutex;
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
+#[cfg(windows)]
+use std::time::Duration;
+#[cfg(windows)]
+use std::time::Instant;
+
+#[cfg(windows)]
 use ramshared_broker::protocol::{MAX_LINE_BYTES, Msg};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+#[cfg(windows)]
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };
+#[cfg(windows)]
 use windows_service::service_control_handler::{
     self, ServiceControlHandlerResult, ServiceStatusHandle,
 };
 
+#[cfg(windows)]
 use crate::pipe::{AuthenticatedPipe, PIPE_OPERATION_TIMEOUT, PipeAuthError, PipeServer};
+#[cfg(windows)]
 use crate::{
-    BrokerConfigV1, BrokerEffect, BrokerSessionCore, BrokerStatusRequestV1, BrokerStatusV1,
+    BrokerEffect, BrokerSessionCore, BrokerStatusRequestV1, BrokerStatusV1,
 };
+use crate::BrokerConfigV1;
 
 pub const SERVICE_NAME: &str = "RamSharedBroker";
 pub const CONSUMER_SERVICE_ACCOUNT: &str = r"NT SERVICE\RamSharedWinSvc";
 pub const BROKER_SERVICE_ACCOUNT: &str = r"NT SERVICE\RamSharedBroker";
 
+#[cfg(windows)]
 windows_service::define_windows_service!(ffi_service_main, service_main);
 static SERVICE_CONFIG: OnceLock<std::path::PathBuf> = OnceLock::new();
 
@@ -37,8 +52,14 @@ pub fn set_service_config(path: std::path::PathBuf) -> Result<(), String> {
         .map_err(|_| "broker service config already set".into())
 }
 
+#[cfg(windows)]
 pub fn dispatch() -> Result<(), windows_service::Error> {
     windows_service::service_dispatcher::start(SERVICE_NAME, ffi_service_main)
+}
+
+#[cfg(not(windows))]
+pub fn dispatch() -> Result<(), String> {
+    Err("dispatch is only supported on Windows".into())
 }
 
 pub fn service_main(_args: Vec<OsString>) {
@@ -48,6 +69,7 @@ pub fn service_main(_args: Vec<OsString>) {
     }
 }
 
+#[cfg(windows)]
 fn report_deterministic_start_failure(code: u32) -> Result<(), windows_service::Error> {
     let status = service_control_handler::register(SERVICE_NAME, |_| {
         ServiceControlHandlerResult::NotImplemented
@@ -55,7 +77,12 @@ fn report_deterministic_start_failure(code: u32) -> Result<(), windows_service::
     set_status(&status, ServiceState::Stopped, 0, Duration::ZERO, code)
 }
 
-fn run_service_from_config() -> Result<(), Box<dyn std::error::Error>> {
+#[cfg(not(windows))]
+fn report_deterministic_start_failure(_code: u32) -> Result<(), String> {
+    Err("SCM service status reporting is only supported on Windows".into())
+}
+
+pub fn run_service_from_config() -> Result<(), Box<dyn std::error::Error>> {
     let path = SERVICE_CONFIG
         .get()
         .ok_or("SCM ImagePath must pass --config <absolute>")?;
@@ -83,13 +110,25 @@ fn verify_active_config(
     path: &std::path::Path,
     bytes: &[u8],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let active: ActiveManifest = serde_json::from_slice(&std::fs::read(
-        r"C:\ProgramData\RamShared\active-manifest.json",
-    )?)?;
+    verify_active_config_with_paths(
+        std::path::Path::new(r"C:\ProgramData\RamShared\active-manifest.json"),
+        std::path::Path::new(r"C:\Program Files\RamShared\versions"),
+        path,
+        bytes,
+    )
+}
+
+fn verify_active_config_with_paths(
+    manifest_path: &std::path::Path,
+    version_root: &std::path::Path,
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let active: ActiveManifest = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
     if active.commit.len() < 12 {
         return Err("active manifest commit is too short".into());
     }
-    let root = std::path::Path::new(r"C:\Program Files\RamShared\versions").join(format!(
+    let root = version_root.join(format!(
         "{}-{}",
         active.version,
         &active.commit[..12]
@@ -113,6 +152,7 @@ fn verify_active_config(
     Ok(())
 }
 
+#[cfg(windows)]
 pub fn run_service(config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Error>> {
     let stop = Arc::new(AtomicBool::new(false));
     let handler_stop = Arc::clone(&stop);
@@ -138,6 +178,12 @@ pub fn run_service(config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Err
     result.map_err(Into::into)
 }
 
+#[cfg(not(windows))]
+pub fn run_service(_config: BrokerConfigV1) -> Result<(), Box<dyn std::error::Error>> {
+    Err("run_service is only supported on Windows".into())
+}
+
+#[cfg(windows)]
 fn set_status(
     handle: &ServiceStatusHandle,
     state: ServiceState,
@@ -164,6 +210,7 @@ fn set_status(
     })
 }
 
+#[cfg(windows)]
 pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<()> {
     let instance_id = broker_instance_id()?;
     let evidence_path = config.evidence_path.clone();
@@ -285,6 +332,12 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
     Ok(())
 }
 
+#[cfg(not(windows))]
+pub fn run_console(_config: BrokerConfigV1, _stop: Arc<AtomicBool>) -> io::Result<()> {
+    Err(io::Error::other("run_console is only supported on Windows"))
+}
+
+#[cfg(windows)]
 fn serve_session(
     core: &Arc<Mutex<BrokerSessionCore>>,
     session_id: usize,
@@ -342,6 +395,7 @@ fn serve_session(
     Ok(())
 }
 
+#[cfg(windows)]
 fn deliver_session_effects(
     pipe: &AuthenticatedPipe,
     effects: Vec<BrokerEffect>,
@@ -364,6 +418,7 @@ fn deliver_session_effects(
     Ok(close)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn append_evidence(
     path: &std::path::Path,
     instance_id: &str,
@@ -382,7 +437,7 @@ fn append_evidence(
         "schema": 1,
         "service": SERVICE_NAME,
         "broker_instance_id": instance_id,
-        "pipe": crate::pipe::PRODUCT_PIPE,
+        "pipe": r"\\.\pipe\RamSharedBroker.v1",
         "protocol": 1,
         "transition": transition,
         "session_id": session_id,
@@ -406,6 +461,7 @@ fn append_evidence(
     Ok(())
 }
 
+#[cfg(windows)]
 fn emit_event(transition: &str, instance_id: &str) {
     use std::ptr;
     use windows_sys::Win32::System::EventLog::{
@@ -446,6 +502,10 @@ fn emit_event(transition: &str, instance_id: &str) {
     }
 }
 
+#[cfg(not(windows))]
+fn emit_event(_transition: &str, _instance_id: &str) {}
+
+#[cfg(windows)]
 fn serve_status(core: Arc<Mutex<BrokerSessionCore>>, stop: Arc<AtomicBool>) -> io::Result<()> {
     while !stop.load(Ordering::Acquire) {
         let server = match PipeServer::bind_status(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT)
@@ -495,6 +555,7 @@ fn serve_status(core: Arc<Mutex<BrokerSessionCore>>, stop: Arc<AtomicBool>) -> i
     Ok(())
 }
 
+#[cfg(windows)]
 fn write_message(pipe: &AuthenticatedPipe, message: &Msg) -> io::Result<()> {
     let mut line = serde_json::to_vec(message)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -512,6 +573,7 @@ fn write_message(pipe: &AuthenticatedPipe, message: &Msg) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn broker_instance_id() -> io::Result<String> {
     use windows_sys::Win32::Security::Cryptography::{
         BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
@@ -531,4 +593,219 @@ fn broker_instance_id() -> io::Result<String> {
         )));
     }
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(not(windows))]
+#[cfg_attr(not(windows), allow(dead_code))]
+fn broker_instance_id() -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_nanos();
+    let hash = Sha256::digest(time.to_le_bytes());
+    Ok(hash[..16].iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn constants_match_spec() {
+        assert_eq!(SERVICE_NAME, "RamSharedBroker");
+        assert_eq!(CONSUMER_SERVICE_ACCOUNT, r"NT SERVICE\RamSharedWinSvc");
+        assert_eq!(BROKER_SERVICE_ACCOUNT, r"NT SERVICE\RamSharedBroker");
+    }
+
+    #[test]
+    fn service_config_path_validation() {
+        let relative = PathBuf::from("relative/config.toml");
+        assert_eq!(
+            set_service_config(relative).unwrap_err(),
+            "broker config path must be absolute"
+        );
+    }
+
+    #[test]
+    fn run_service_from_config_fails_when_unset() {
+        let err = run_service_from_config().unwrap_err();
+        assert!(err.to_string().contains("SCM ImagePath must pass --config <absolute>"));
+    }
+
+    #[test]
+    fn verify_active_config_rejects_short_commit() {
+        let temp_dir = std::env::temp_dir().join("winbroker_test_short_commit");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let manifest_path = temp_dir.join("active-manifest.json");
+        let manifest_json = serde_json::json!({
+            "version": "1.0.0",
+            "commit": "12345678901", // 11 chars
+            "artifacts": [{
+                "role": "broker_config",
+                "relative_path": "broker.toml",
+                "sha256": "ABCD"
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest_json).unwrap()).unwrap();
+
+        let config_path = temp_dir.join("broker.toml");
+        let err = verify_active_config_with_paths(
+            &manifest_path,
+            &temp_dir,
+            &config_path,
+            b"test config",
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "active manifest commit is too short");
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn verify_active_config_rejects_missing_broker_config_artifact() {
+        let temp_dir = std::env::temp_dir().join("winbroker_test_missing_artifact");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let manifest_path = temp_dir.join("active-manifest.json");
+        let manifest_json = serde_json::json!({
+            "version": "1.0.0",
+            "commit": "123456789012", // 12 chars
+            "artifacts": [{
+                "role": "other_artifact",
+                "relative_path": "other.toml",
+                "sha256": "ABCD"
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest_json).unwrap()).unwrap();
+
+        let config_path = temp_dir.join("broker.toml");
+        let err = verify_active_config_with_paths(
+            &manifest_path,
+            &temp_dir,
+            &config_path,
+            b"test config",
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "active manifest has no broker_config");
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn verify_active_config_rejects_mismatched_hash() {
+        let temp_dir = std::env::temp_dir().join("winbroker_test_mismatched_hash");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let version_root = temp_dir.join("versions");
+        let version_dir = version_root.join("1.0.0-123456789012");
+        fs::create_dir_all(&version_dir).unwrap();
+
+        let config_path = version_dir.join("broker.toml");
+        let config_bytes = b"test config content";
+        fs::write(&config_path, config_bytes).unwrap();
+
+        let manifest_path = temp_dir.join("active-manifest.json");
+        let manifest_json = serde_json::json!({
+            "version": "1.0.0",
+            "commit": "123456789012",
+            "artifacts": [{
+                "role": "broker_config",
+                "relative_path": "broker.toml",
+                "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest_json).unwrap()).unwrap();
+
+        let err = verify_active_config_with_paths(
+            &manifest_path,
+            &version_root,
+            &config_path,
+            config_bytes,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "broker config does not match active manifest hash");
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn verify_active_config_succeeds_matching() {
+        let temp_dir = std::env::temp_dir().join("winbroker_test_matching");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let version_root = temp_dir.join("versions");
+        let version_dir = version_root.join("1.0.0-123456789012");
+        fs::create_dir_all(&version_dir).unwrap();
+
+        let config_path = version_dir.join("broker.toml");
+        let config_bytes = b"test config content";
+        fs::write(&config_path, config_bytes).unwrap();
+
+        let hash_hex: String = Sha256::digest(config_bytes)
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect();
+
+        let manifest_path = temp_dir.join("active-manifest.json");
+        let manifest_json = serde_json::json!({
+            "version": "1.0.0",
+            "commit": "123456789012",
+            "artifacts": [{
+                "role": "broker_config",
+                "relative_path": "broker.toml",
+                "sha256": hash_hex
+            }]
+        });
+        fs::write(&manifest_path, serde_json::to_vec(&manifest_json).unwrap()).unwrap();
+
+        assert!(
+            verify_active_config_with_paths(
+                &manifest_path,
+                &version_root,
+                &config_path,
+                config_bytes,
+            )
+            .is_ok()
+        );
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn append_evidence_writes_valid_json_line() {
+        let temp_dir = std::env::temp_dir().join("winbroker_test_evidence");
+        let _ = fs::remove_dir_all(&temp_dir);
+        let evidence_file = temp_dir.join("evidence.log");
+
+        append_evidence(&evidence_file, "0123456789abcdef", "process_ready", Some(1)).unwrap();
+
+        let content = fs::read_to_string(&evidence_file).unwrap();
+        assert!(content.ends_with('\n'));
+
+        let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(parsed["schema"], 1);
+        assert_eq!(parsed["service"], SERVICE_NAME);
+        assert_eq!(parsed["broker_instance_id"], "0123456789abcdef");
+        assert_eq!(parsed["transition"], "process_ready");
+        assert_eq!(parsed["session_id"], 1);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn broker_instance_id_generates_hex_string() {
+        let instance_id = broker_instance_id().unwrap();
+        assert_eq!(instance_id.len(), 32);
+        assert!(instance_id.chars().all(|c| c.is_ascii_hexdigit()));
+    }
 }
