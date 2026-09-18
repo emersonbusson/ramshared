@@ -1,4 +1,4 @@
-use ramshared_block::{Command, Request};
+use ramshared_block::{BlockBackend, Command, IoError, Request};
 use ramshared_wsl2d::{RamBackend, ublk_server};
 
 fn req(cmd: Command, offset: u64, len: u32) -> Request {
@@ -91,8 +91,6 @@ fn serve_request_guards_against_out_of_bounds_upfront() {
     );
 }
 
-use ramshared_block::{BlockBackend, IoError};
-
 struct FailingBackend {
     fail_read: bool,
     fail_write: bool,
@@ -169,4 +167,202 @@ fn serve_request_propagates_backend_errors() {
         ublk_server::serve_request(&req(Command::Flush, 0, 0), &mut flush_failing, &mut buf),
         -5
     );
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BackendCall {
+    ReadAt { offset: u64, len: usize },
+    WriteAt { offset: u64, len: usize, data_sample: Vec<u8> },
+    Flush,
+}
+
+struct MockBackend {
+    size_bytes: u64,
+    block_size: u32,
+    fail_read: bool,
+    fail_write: bool,
+    fail_flush: bool,
+    calls: Vec<BackendCall>,
+}
+
+impl MockBackend {
+    fn new(size_bytes: u64, block_size: u32) -> Self {
+        Self {
+            size_bytes,
+            block_size,
+            fail_read: false,
+            fail_write: false,
+            fail_flush: false,
+            calls: Vec::new(),
+        }
+    }
+}
+
+impl BlockBackend for MockBackend {
+    fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+        self.calls.push(BackendCall::ReadAt {
+            offset: off,
+            len: buf.len(),
+        });
+        if self.fail_read {
+            Err(IoError("mock read failure".into()))
+        } else {
+            buf.fill(0xaa);
+            Ok(())
+        }
+    }
+
+    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
+        self.calls.push(BackendCall::WriteAt {
+            offset: off,
+            len: data.len(),
+            data_sample: data.to_vec(),
+        });
+        if self.fail_write {
+            Err(IoError("mock write failure".into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), IoError> {
+        self.calls.push(BackendCall::Flush);
+        if self.fail_flush {
+            Err(IoError("mock flush failure".into()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn serve_request_block_alignment_and_zero_block_size() {
+    // 1. Block size = 512
+    let mut backend = MockBackend::new(4096, 512);
+    let mut buf = vec![0u8; 1024];
+
+    // Offset unaligned (256) -> -EINVAL (-22)
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 256, 512), &mut backend, &mut buf),
+        -22
+    );
+    assert!(backend.calls.is_empty());
+
+    // Len unaligned (256) -> -EINVAL (-22)
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 512, 256), &mut backend, &mut buf),
+        -22
+    );
+    assert!(backend.calls.is_empty());
+
+    // Both aligned -> success (512 bytes)
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 512, 512), &mut backend, &mut buf),
+        512
+    );
+    assert_eq!(
+        backend.calls,
+        vec![BackendCall::ReadAt {
+            offset: 512,
+            len: 512
+        }]
+    );
+
+    // 2. Zero block size allows arbitrary non-zero offset and len alignment
+    let mut zero_bs_backend = MockBackend::new(4096, 0);
+    assert_eq!(
+        ublk_server::serve_request(
+            &req(Command::Read, 3, 7),
+            &mut zero_bs_backend,
+            &mut buf
+        ),
+        7
+    );
+    assert_eq!(
+        zero_bs_backend.calls,
+        vec![BackendCall::ReadAt { offset: 3, len: 7 }]
+    );
+}
+
+#[test]
+fn serve_request_mock_backend_interaction_and_trim() {
+    let mut backend = MockBackend::new(4096, 512);
+    let mut buf = vec![0u8; 1024];
+    buf[..512].fill(0x55);
+
+    // Write: records WriteAt with exact payload and offset
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 1024, 512), &mut backend, &mut buf),
+        512
+    );
+    assert_eq!(
+        backend.calls,
+        vec![BackendCall::WriteAt {
+            offset: 1024,
+            len: 512,
+            data_sample: vec![0x55; 512],
+        }]
+    );
+
+    // Flush: records Flush
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Flush, 0, 0), &mut backend, &mut buf),
+        0
+    );
+
+    // Trim: no-op discard, returns 0 without touching backend methods
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Trim, 2048, 512), &mut backend, &mut buf),
+        0
+    );
+
+    assert_eq!(
+        backend.calls,
+        vec![
+            BackendCall::WriteAt {
+                offset: 1024,
+                len: 512,
+                data_sample: vec![0x55; 512],
+            },
+            BackendCall::Flush,
+        ]
+    );
+}
+
+#[test]
+fn serve_request_unsupported_commands_and_overflow() {
+    let mut backend = MockBackend::new(4096, 512);
+    let mut buf = vec![0u8; 1024];
+
+    // Command::Disc => -EINVAL (-22)
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Disc, 0, 512), &mut backend, &mut buf),
+        -22
+    );
+
+    // Command::Unknown(99) => -EINVAL (-22)
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Unknown(99), 0, 512), &mut backend, &mut buf),
+        -22
+    );
+
+    // Offset + length arithmetic overflow => -ERANGE (-34)
+    assert_eq!(
+        ublk_server::serve_request(
+            &req(Command::Read, u64::MAX - 511, 1024),
+            &mut backend,
+            &mut buf
+        ),
+        -34
+    );
+
+    assert!(backend.calls.is_empty());
 }
