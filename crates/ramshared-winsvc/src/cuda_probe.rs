@@ -56,19 +56,16 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
     cfg.validate()
         .map_err(|e| ProbeCudaError::Config(e.to_string()))?;
 
-
     #[cfg(test)]
     if tests::MOCK_NO_DEVICE.with(|c| c.get()) {
         return Err(ProbeCudaError::NoDevice);
     }
     let cuda = Cuda::load().map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
 
-    let count = cuda
-        .device_count()
-        .map_err(|e| match e {
-            ramshared_cuda::CudaError::NoDevice => ProbeCudaError::NoDevice,
-            _ => ProbeCudaError::Cuda(e.to_string()),
-        })?;
+    let count = cuda.device_count().map_err(|e| match e {
+        ramshared_cuda::CudaError::NoDevice => ProbeCudaError::NoDevice,
+        _ => ProbeCudaError::Cuda(e.to_string()),
+    })?;
     if cfg.cuda_device as i32 >= count {
         return Err(ProbeCudaError::Cuda(format!(
             "cuda_device {} >= count {count}",
@@ -156,7 +153,6 @@ mod tests {
         MOCK_NO_DEVICE.with(|c| c.set(false));
         assert!(matches!(result, Err(ProbeCudaError::NoDevice)));
     }
-
 
     use super::*;
     use std::path::PathBuf;

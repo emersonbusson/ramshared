@@ -29,7 +29,11 @@ pub enum CudaError {
         msg: String,
     },
     /// VRAM memory region access out of bounds (offset + len > size).
-    OutOfRange { off: usize, len: usize, size: usize },
+    OutOfRange {
+        off: usize,
+        len: usize,
+        size: usize,
+    },
     /// Invalid argument supplied to driver wrapper.
     InvalidValue(String),
     /// The requested feature is unsupported by the loaded driver version.
