@@ -2800,21 +2800,27 @@ fn legacy_regular_daemon_proof(
         })
 }
 
+struct DigestWriter<'a, D>(&'a mut D);
+
+impl<D: Digest> Write for DigestWriter<'_, D> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn sha256_file(path: &Path) -> Result<[u8; 32], CascadeError> {
     let mut file = fs::File::open(path).map_err(|error| {
         CascadeError::Precondition(format!("open daemon binary for hash: {error}"))
     })?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(|error| {
-            CascadeError::Precondition(format!("read daemon binary for hash: {error}"))
-        })?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
+    std::io::copy(&mut file, &mut DigestWriter(&mut hasher)).map_err(|error| {
+        CascadeError::Precondition(format!("read daemon binary for hash: {error}"))
+    })?;
     Ok(hasher.finalize().into())
 }
 
