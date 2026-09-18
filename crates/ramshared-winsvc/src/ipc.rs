@@ -615,4 +615,67 @@ mod tests {
         let err = std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
+
+    #[test]
+    fn test_ipc_payload_exactly_max_success() {
+        let header = IpcMessageHeader::new(IPC_VERSION_2, MAX_PAYLOAD_LEN);
+        let payload = vec![0xAA; MAX_PAYLOAD_LEN as usize];
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(&payload);
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        assert_eq!(read_header.payload_len, MAX_PAYLOAD_LEN);
+
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_eq!(&read_payload[..], &payload[..]);
+    }
+
+    #[test]
+    fn test_ipc_payload_max_plus_one_rejected() {
+        let invalid_len = MAX_PAYLOAD_LEN + 1;
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&IPC_MAGIC.to_le_bytes());
+        buffer.extend_from_slice(&IPC_VERSION_2.to_le_bytes());
+        buffer.extend_from_slice(&invalid_len.to_le_bytes());
+        buffer.extend_from_slice(&0u32.to_le_bytes());
+
+        let mut reader = &buffer[..];
+        let err = IpcMessageHeader::read_from(&mut reader).unwrap_err();
+        assert_eq!(err, IpcDeserializeError::PayloadTooLarge(invalid_len));
+    }
+
+    #[test]
+    fn test_ipc_payload_zero_length_success() {
+        let header = IpcMessageHeader::new(IPC_VERSION_2, 0);
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        assert_eq!(read_header.payload_len, 0);
+
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert!(read_payload.is_empty());
+    }
+
+    #[test]
+    fn test_ipc_payload_embedded_null_bytes_success() {
+        let payload = b"foo bar baz";
+        let header = IpcMessageHeader::new(IPC_VERSION_2, payload.len() as u32);
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(payload);
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        assert_eq!(read_header.payload_len, payload.len() as u32);
+
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_eq!(&read_payload[..], payload);
+    }
 }
