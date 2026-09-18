@@ -91,13 +91,28 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
 	if (ret) {
 		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
-		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+		ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
 		if (ret) {
 			dev_err(&pdev->dev, "no usable DMA configuration\n");
 			goto err_clear_master;
+		}
+		ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+		if (ret) {
+			dev_err(&pdev->dev, "32-bit DMA coherent mask failed\n");
+			goto err_clear_master;
+		}
+	} else {
+		ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
+		if (ret) {
+			dev_warn(&pdev->dev, "64-bit DMA coherent mask failed, falling back to 32-bit coherent\n");
+			ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+			if (ret) {
+				dev_err(&pdev->dev, "32-bit DMA coherent mask failed\n");
+				goto err_clear_master;
+			}
 		}
 	}
 
