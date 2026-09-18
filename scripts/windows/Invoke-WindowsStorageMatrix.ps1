@@ -2190,6 +2190,28 @@ if ($PreparePackages) {
 if (-not $Run) { Write-Host "PLAN_ONLY=1 OUT_DIR=$OutDir"; exit 0 }
 if (-not $ApprovePhysicalHost) { throw "-ApprovePhysicalHost is required" }
 Assert-Admin
+
+function Assert-VolumeCapacity {
+    param (
+        [string]$Path,
+        [long]$MinFreeGB = 1
+    )
+    if (-not (Test-Path $Path)) {
+        throw "Volume at $Path not found"
+    }
+    $drive = (Get-Item -Path $Path).PSDrive
+    if ($null -eq $drive) {
+        throw "Could not determine PSDrive for $Path"
+    }
+    $freeGB = [math]::Round($drive.Free / 1GB, 2)
+    if ($freeGB -lt $MinFreeGB) {
+        throw "Volume at $Path has $freeGB GB free, minimum required is $MinFreeGB GB"
+    }
+}
+
+Assert-VolumeCapacity -Path $OutDir -MinFreeGB 1
+Assert-VolumeCapacity -Path $PackageRoot -MinFreeGB 1
+
 if (-not (Test-Path $RollbackManifest -PathType Leaf)) { throw "rollback manifest missing" }
 if (-not (Test-Path $Controller -PathType Leaf)) { throw "controller missing" }
 if (-not (Test-Path $CounterProbeScript -PathType Leaf)) {
