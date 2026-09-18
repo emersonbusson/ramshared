@@ -2,15 +2,19 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use ramshared_block::{Command, Request, serve};
-use ramshared_cuda::Cuda;
+use ramshared_cuda::{Context, Cuda};
 use ramshared_wsl2d::VramBackend;
+
+fn setup_cuda_context<'a>(cuda: &'a Cuda) -> Context<'a> {
+    let dev = cuda.device(0).unwrap();
+    cuda.create_context(&dev).unwrap()
+}
 
 #[test]
 #[ignore = "requires a functional CUDA GPU (WSL2/GPU-PV)"]
 fn vram_backend_serves_nbd_write_then_read() {
     let cuda = Cuda::load().expect("libcuda");
-    let dev = cuda.device(0).unwrap();
-    let ctx = cuda.create_context(&dev).unwrap();
+    let ctx = setup_cuda_context(&cuda);
     let mut mem = ctx.alloc(1 << 20).unwrap();
     mem.zero().unwrap();
     let mut be = VramBackend::new(mem, 4096);
@@ -54,8 +58,7 @@ fn vram_gauge_outros_captures_real_graphics_usage() {
     use std::sync::atomic::Ordering;
 
     let cuda = Cuda::load().expect("libcuda");
-    let dev = cuda.device(0).unwrap();
-    let ctx = cuda.create_context(&dev).unwrap();
+    let ctx = setup_cuda_context(&cuda);
     let chunk = 64 * 1024 * 1024usize;
     let _mem = ctx.alloc(chunk).unwrap();
     let (free, total) = ctx.mem_info().unwrap();
