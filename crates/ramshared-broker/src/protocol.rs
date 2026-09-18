@@ -181,6 +181,28 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
     }
     let had_newline = buf.last() == Some(&b'\n');
     if !had_newline && buf.len() > MAX_LINE_BYTES {
+        // Discard the remainder of the truncated/corrupted line up to the next newline
+        // to avoid corrupting subsequent messages on the same stream without allocating.
+        loop {
+            let (done, used) = {
+                let available = match r.fill_buf() {
+                    Ok(b) => b,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(ProtocolError::ConnectionClosed(e)),
+                };
+                if available.is_empty() {
+                    (true, 0)
+                } else if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+                    (true, pos + 1)
+                } else {
+                    (false, available.len())
+                }
+            };
+            r.consume(used);
+            if done {
+                break;
+            }
+        }
         return Err(ProtocolError::PayloadTooLarge);
     }
     let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
@@ -465,5 +487,21 @@ mod tests {
         assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Ack);
         assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::DemoteAll);
         assert!(read_msg(&mut cur).unwrap().is_none());
+    }
+
+    #[test]
+    fn read_recovers_after_oversize_line() {
+        let mut data = vec![b'x'; MAX_LINE_BYTES + 10]; // Oversize line
+        data.push(b'\n'); // Proper termination for the first oversized line
+        // The next valid message in the stream
+        write_msg(&mut data, &Msg::Ack).unwrap();
+
+        let mut cur = Cursor::new(data);
+        // First read should fail with PayloadTooLarge, but successfully discard the rest of the giant line
+        assert!(matches!(read_msg(&mut cur), Err(ProtocolError::PayloadTooLarge)));
+
+        // Second read should cleanly hit the Ack message and not hang/corrupt
+        let next = read_msg(&mut cur).unwrap().unwrap();
+        assert_eq!(next, Msg::Ack);
     }
 }
