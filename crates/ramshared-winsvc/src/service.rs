@@ -656,13 +656,20 @@ mod tests {
         let e = provision_after_lease(
             &c,
             &mut state,
-            LeaseState { lease: 2, bytes: c.size_bytes },
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
             &free_mem,
             &mut disk,
             &mut tenant,
-        ).unwrap_err();
+        )
+        .unwrap_err();
 
-        assert!(matches!(e, ProvisionError::Broker(BrokerTenantError::CoresidenceFailClosed { .. })));
+        assert!(matches!(
+            e,
+            ProvisionError::Broker(BrokerTenantError::CoresidenceFailClosed { .. })
+        ));
         assert!(!disk.created);
         assert!(state.lease.is_none());
     }
@@ -677,19 +684,29 @@ mod tests {
             fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
                 Err("invalid block size configuration".into())
             }
-            fn destroy_disk(&mut self) -> Result<(), String> { Ok(()) }
-            fn register_queue(&mut self) -> Result<(), String> { Ok(()) }
-            fn unregister_queue(&mut self) -> Result<(), String> { Ok(()) }
+            fn destroy_disk(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn register_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn unregister_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
         }
 
         let e = provision_after_lease(
             &c,
             &mut state,
-            LeaseState { lease: 1, bytes: c.size_bytes },
+            LeaseState {
+                lease: 1,
+                bytes: c.size_bytes,
+            },
             &FixedFree(2 << 30),
             &mut InvalidConfigDisk,
             &mut BrokerTenant::new("wd", Duration::from_secs(5)),
-        ).unwrap_err();
+        )
+        .unwrap_err();
 
         assert!(matches!(e, ProvisionError::Disk(ref s) if s.contains("invalid block size")));
         assert!(!state.disk_created);
@@ -706,9 +723,15 @@ mod tests {
                 // If disk creation fails simulating ports occupied / disk device already exists
                 Err("Occupied ports/device".into())
             }
-            fn destroy_disk(&mut self) -> Result<(), String> { Ok(()) }
-            fn register_queue(&mut self) -> Result<(), String> { Ok(()) }
-            fn unregister_queue(&mut self) -> Result<(), String> { Ok(()) }
+            fn destroy_disk(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn register_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
+            fn unregister_queue(&mut self) -> Result<(), String> {
+                Ok(())
+            }
         }
 
         let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
@@ -717,11 +740,15 @@ mod tests {
         let e = provision_after_lease(
             &c,
             &mut state,
-            LeaseState { lease: 1, bytes: c.size_bytes },
+            LeaseState {
+                lease: 1,
+                bytes: c.size_bytes,
+            },
             &FixedFree(2 << 30), // Sufficient VRAM
             &mut MockDisk,
             &mut tenant,
-        ).unwrap_err();
+        )
+        .unwrap_err();
 
         assert!(matches!(e, ProvisionError::Disk(ref s) if s.contains("Occupied ports/device")));
         assert!(!state.disk_created);
