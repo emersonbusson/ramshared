@@ -11,6 +11,8 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet("win11-drill")]
+    [ValidateNotNullOrEmpty()]
     [string]$VMName = "win11-drill",
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -63,6 +65,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
+    throw "Hyper-V module is not available on this system."
+}
+if (-not (Get-VM -Name $VMName -ErrorAction SilentlyContinue)) {
+    throw "VM '$VMName' does not exist."
+}
 
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
