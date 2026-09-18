@@ -110,7 +110,8 @@ pub fn spawn_writer<S: Write + Send + 'static>(
             let max_backoff = std::time::Duration::from_millis(500);
 
             loop {
-                let err = w.write_all(&r.reply)
+                let err = w
+                    .write_all(&r.reply)
                     .and_then(|_| {
                         if !r.data.is_empty() {
                             w.write_all(&r.data)
