@@ -14,7 +14,15 @@ OUT_DIR="$ROOT/artifacts/packages"
 RPM_ROOT="$OUT_DIR/rpmbuild"
 SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
 
+
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
+
+for cmd in rpmbuild spectool createrepo; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not installed." >&2
+    exit 1
+  fi
+done
 
 # Ensure release binaries exist
 CLI_BIN="$ROOT/target/release/ramshared"
@@ -30,6 +38,19 @@ fi
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
   exit 1
+fi
+
+req_space=$(stat -c %s "$CLI_BIN" 2>/dev/null || echo 0)
+req_space=$((req_space + $(stat -c %s "$DAEMON_BIN" 2>/dev/null || echo 0)))
+if [[ "$req_space" -gt 0 ]]; then
+  req_space_kb=$((req_space / 1024))
+  min_kb=$((req_space_kb * 5))
+  mkdir -p "$OUT_DIR"
+  available_kb=$(df -Pk -- "$OUT_DIR" | awk 'NR == 2 { print $4 }')
+  if [[ "$available_kb" -lt "$min_kb" ]]; then
+      echo "ERROR: Low disk space in $OUT_DIR (need ${min_kb}KB, have ${available_kb}KB)." >&2
+      exit 1
+  fi
 fi
 
 # Clean previous build root
@@ -79,11 +100,7 @@ fi
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
-if command -v rpmbuild >/dev/null 2>&1; then
-  echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
-  echo "✓ RPM package built under $OUT_DIR/"
-else
-  echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
-fi
+echo "==> Executing rpmbuild..."
+rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
+cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+echo "✓ RPM package built under $OUT_DIR/"
