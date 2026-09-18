@@ -1082,4 +1082,83 @@ volume_mount_path = "C:\\ProgramData\\RamShared\\mounts\\..\\secret""#,
             })
         ));
     }
+    #[test]
+    fn validate_boundary_zero_capacity_fails() {
+        let mut c = valid_config();
+        c.size_bytes = 0;
+        let e = c.validate().unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_boundary_zero_capacity_fails() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = 0");
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn validate_boundary_u64_max_capacity_fails() {
+        let mut c = valid_config();
+        c.size_bytes = u64::MAX;
+        let e = c.validate().unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_boundary_u64_max_capacity_fails() {
+        let bad = GOOD.replace(
+            "size_bytes = 536870912",
+            &format!("size_bytes = {}", u64::MAX),
+        );
+        let err = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_boundary_negative_capacity_fails() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = -536870912");
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn test_from_toml_boundary_negative_queue_depth_fails() {
+        let bad = GOOD.replace("queue_depth = 4", "queue_depth = -4");
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn test_from_reader_boundary_non_utf8_fails() {
+        let e = WinDriveConfig::from_reader(&[0xff, 0xfe, 0xfd]).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
 }
