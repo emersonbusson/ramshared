@@ -7,6 +7,8 @@
 
 use crate::protocol::{IHAVEOPT, NBD_FLAG_FIXED_NEWSTYLE, NBD_FLAG_NO_ZEROES, NBDMAGIC};
 use core::fmt;
+pub mod auth;
+use auth::{AuthContext, HandshakeAuth, HandshakeAuthError};
 use std::io::{self, Read, Write};
 
 pub const NBD_OPT_EXPORT_NAME: u32 = 1;
@@ -30,6 +32,7 @@ pub enum HandshakeError {
     IncompatibleVersion,
     UnsupportedFeature,
     InvalidFormat,
+    AuthError(HandshakeAuthError),
 }
 
 impl From<io::Error> for HandshakeError {
@@ -46,6 +49,7 @@ impl fmt::Display for HandshakeError {
             HandshakeError::IncompatibleVersion => f.write_str("incompatible protocol version"),
             HandshakeError::UnsupportedFeature => f.write_str("unsupported negotiation feature"),
             HandshakeError::InvalidFormat => f.write_str("invalid protocol format"),
+            HandshakeError::AuthError(e) => write!(f, "authentication error: {e}"),
         }
     }
 }
@@ -126,7 +130,11 @@ pub fn server_handshake<R: Read, W: Write>(
     w: &mut W,
     exports: &[Export],
     tx_flags: u16,
+    auth_ctx: Option<&AuthContext>,
 ) -> Result<usize, HandshakeError> {
+    if let Some(ctx) = auth_ctx {
+        HandshakeAuth::verify(r, ctx).map_err(HandshakeError::AuthError)?;
+    }
     // Greeting: NBDMAGIC + IHAVEOPT + handshake flags.
     w.write_all(&NBDMAGIC.to_be_bytes())?;
     w.write_all(&IHAVEOPT.to_be_bytes())?;
@@ -249,7 +257,7 @@ mod tests {
     fn greeting_then_export_name_no_zeroes() {
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_EXPORT_NAME, b"");
         let mut out = Vec::new();
-        server_handshake(&mut r, &mut out, &one(1 << 20), 1).unwrap();
+        server_handshake(&mut r, &mut out, &one(1 << 20), 1, None).unwrap();
         // greeting: NBDMAGIC + IHAVEOPT + flags(u16)
         assert_eq!(&out[0..8], &NBDMAGIC.to_be_bytes());
         assert_eq!(&out[8..16], &IHAVEOPT.to_be_bytes());
@@ -267,7 +275,7 @@ mod tests {
     fn export_name_with_zeroes_pads_124() {
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, b"");
         let mut out = Vec::new();
-        server_handshake(&mut r, &mut out, &one(4096), 1).unwrap();
+        server_handshake(&mut r, &mut out, &one(4096), 1, None).unwrap();
         assert_eq!(out.len(), 18 + 8 + 2 + 124);
     }
 
@@ -283,7 +291,7 @@ mod tests {
             &[(NBD_OPT_INFO, go_data(b"s1")), (NBD_OPT_ABORT, vec![])],
         );
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &exports, 1);
+        let res = server_handshake(&mut r, &mut out, &exports, 1, None);
 
         assert!(matches!(res, Err(HandshakeError::Aborted)));
         assert!(has_rep(&out, NBD_REP_INFO));
@@ -301,7 +309,7 @@ mod tests {
     fn go_replies_info_then_ack_and_transitions() {
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &go_data(b""));
         let mut out = Vec::new();
-        server_handshake(&mut r, &mut out, &one(4096), 1).unwrap();
+        server_handshake(&mut r, &mut out, &one(4096), 1, None).unwrap();
         // after greeting (18B), 1st reply is NBD_REP_MAGIC
         assert_eq!(
             u64::from_be_bytes(out[18..26].try_into().unwrap()),
@@ -313,7 +321,7 @@ mod tests {
     fn abort_returns_err() {
         let mut r = client_stream(0, NBD_OPT_ABORT, b"");
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1, None);
         assert!(matches!(res, Err(HandshakeError::Aborted)));
     }
 
@@ -324,7 +332,7 @@ mod tests {
         v.extend_from_slice(&0xbad_u64.to_be_bytes()); // bad magic
         let mut r = Cursor::new(v);
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1, None);
         assert!(matches!(res, Err(HandshakeError::IncompatibleVersion)));
     }
 
@@ -338,7 +346,7 @@ mod tests {
         v.extend_from_slice(&u32::MAX.to_be_bytes()); // absurd length
         let mut r = Cursor::new(v);
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1, None);
         assert!(matches!(res, Err(HandshakeError::UnsupportedFeature)));
     }
 
@@ -356,7 +364,7 @@ mod tests {
         ];
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &go_data(b"s1"));
         let mut out = Vec::new();
-        let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
+        let idx = server_handshake(&mut r, &mut out, &exports, 1, None).unwrap();
         assert_eq!(idx, 1);
         // INFO export: size(u64) at offset 40 (greeting 18 + rep header 16 + INFO_EXPORT u16)
         assert_eq!(u64::from_be_bytes(out[40..48].try_into().unwrap()), 8192);
@@ -370,7 +378,7 @@ mod tests {
             &[(NBD_OPT_GO, go_data(b"nope")), (NBD_OPT_ABORT, vec![])],
         );
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1, None);
         assert!(matches!(res, Err(HandshakeError::Aborted)));
         assert!(has_rep(&out, NBD_REP_ERR_UNKNOWN));
     }
@@ -380,7 +388,7 @@ mod tests {
         // EXPORT_NAME has no error reply: unknown name ⇒ closes (Io).
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, b"nope");
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1, None);
         assert!(matches!(res, Err(HandshakeError::UnsupportedFeature)));
     }
 
@@ -388,7 +396,7 @@ mod tests {
     fn export_name_non_utf8_errors() {
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, &[0xff, 0xfe]);
         let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1, None);
         assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
     }
 
@@ -406,7 +414,7 @@ mod tests {
         ];
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_EXPORT_NAME, b"");
         let mut out = Vec::new();
-        let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
+        let idx = server_handshake(&mut r, &mut out, &exports, 1, None).unwrap();
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
     }
