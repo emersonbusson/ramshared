@@ -102,6 +102,8 @@ pub enum Action {
         holder: TenantId,
         slices: Vec<SliceId>,
     },
+    /// Release orphaned leases whose holder disconnected.
+    RevokeOrphanedLease { slice: SliceId },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -238,6 +240,16 @@ impl Arbiter {
                 slices: grant,
             });
             return Ok(actions);
+        }
+
+        // (1.5) ORPHAN CLEANUP: if a Leased slice is held by a tenant NOT in the `tenants` present list,
+        // it means the tenant disconnected and the core signaled dead peer.
+        for s in slices.iter().filter(|s| s.state == SliceState::Leased) {
+            if let Some(owner) = s.tenant
+                && !tenants.iter().any(|t| t.id == owner)
+            {
+                actions.push(Action::RevokeOrphanedLease { slice: s.id });
+            }
         }
 
         // (2) COUNTERFACTUAL (safety; before cooldown). There is no counterfactual of a revert.
@@ -612,5 +624,24 @@ mod tests {
             count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()),
             0
         );
+    }
+
+    #[test]
+    fn orphan_cleanup_on_dead_peer_disconnect() {
+        let c = cfg();
+        let mut arb = Arbiter::new(c);
+        let t0 = Instant::now();
+
+        // Tenant 1 is not in the present tenants list (disconnected)
+        let tenants = [];
+
+        // But has a leased slice
+        let slices = [
+            slice(0, Some(1), SliceState::Leased),
+        ];
+
+        let actions = arb.tick(t0, &tenants, &slices, None).unwrap();
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::RevokeOrphanedLease { slice: 0 }));
     }
 }
