@@ -277,12 +277,26 @@ mod tests {
 
     #[test]
     fn backend_release_requires_zero_used_and_confirmed_swapoff() {
-        assert!(!super::backend_release_allowed(false, false, 0, false));
-        assert!(super::backend_release_allowed(true, true, 0, false));
-        assert!(super::backend_release_allowed(false, false, 0, true));
-        assert!(!super::backend_release_allowed(true, false, 0, false));
-        assert!(!super::backend_release_allowed(true, true, 1, false));
-        assert!(!super::backend_release_allowed(false, false, 1, true));
+        for swapoff_attempted in [false, true] {
+            for swapoff_confirmed in [false, true] {
+                for used_kb in [0u64, 1u64] {
+                    for explicitly_absent in [false, true] {
+                        let expected = used_kb == 0
+                            && (explicitly_absent || (swapoff_attempted && swapoff_confirmed));
+                        assert_eq!(
+                            super::backend_release_allowed(
+                                swapoff_attempted,
+                                swapoff_confirmed,
+                                used_kb,
+                                explicitly_absent,
+                            ),
+                            expected,
+                            "failed for swapoff_attempted={swapoff_attempted}, swapoff_confirmed={swapoff_confirmed}, used_kb={used_kb}, explicitly_absent={explicitly_absent}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
