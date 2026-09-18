@@ -13,6 +13,8 @@ pub struct DemoteEvidence {
     pub swapoff_ms: Option<u64>,
     pub pages_moved: Option<u64>,
     pub process_attribution: Option<String>,
+    pub tier: Option<String>,
+    pub capacity_bytes: Option<u64>,
 }
 
 pub fn explain_demote(e: &DemoteEvidence) -> String {
@@ -35,7 +37,13 @@ pub fn explain_demote(e: &DemoteEvidence) -> String {
         || "duration not observed".into(),
         |ms| format!("swapoff took {ms} ms"),
     );
-    format!("{trigger}; {duration}; process: {attribution}.")
+    let tier_info = match (&e.tier, e.capacity_bytes) {
+        (Some(t), Some(c)) => format!(" (tier: {}, capacity: {} bytes)", t, c),
+        (Some(t), None) => format!(" (tier: {})", t),
+        (None, Some(c)) => format!(" (capacity: {} bytes)", c),
+        (None, None) => String::new(),
+    };
+    format!("{trigger}{tier_info}; {duration}; process: {attribution}.")
 }
 
 #[cfg(test)]
@@ -51,6 +59,8 @@ mod tests {
             swapoff_ms: Some(20),
             pages_moved: Some(4),
             process_attribution: None,
+            tier: None,
+            capacity_bytes: None,
         });
         assert!(text.contains("128 < 512"));
         assert!(text.contains("process not attributed"));
@@ -66,6 +76,8 @@ mod tests {
             swapoff_ms: None,
             pages_moved: None,
             process_attribution: Some("GpuApp.exe".into()),
+            tier: None,
+            capacity_bytes: None,
         });
         assert!(text.contains("GpuApp.exe"));
         assert!(text.contains("not observed"));
@@ -80,9 +92,26 @@ mod tests {
             swapoff_ms: Some(15),
             pages_moved: Some(2),
             process_attribution: None,
+            tier: None,
+            capacity_bytes: None,
         });
         assert!(text.contains("DEMOTE requested by AppRequest with 1024 free bytes"));
         assert!(!text.contains("fell below the floor"));
         assert!(text.contains("process not attributed"));
+    }
+
+    #[test]
+    fn explanation_reports_tier_and_capacity() {
+        let text = explain_demote(&DemoteEvidence {
+            reason: "AppRequest".into(),
+            vram_free_bytes: Some(1024),
+            free_floor_bytes: 512,
+            swapoff_ms: Some(15),
+            pages_moved: Some(2),
+            process_attribution: None,
+            tier: Some("Tier 1".into()),
+            capacity_bytes: Some(4096),
+        });
+        assert!(text.contains("(tier: Tier 1, capacity: 4096 bytes)"));
     }
 }
