@@ -4,7 +4,6 @@ pub fn redact(msg: &str) -> String {
     let chars: Vec<char> = msg.chars().collect();
 
     while i < chars.len() {
-        // Redact Hex Addresses (0x...)
         if i + 1 < chars.len() && chars[i] == '0' && (chars[i+1] == 'x' || chars[i+1] == 'X') {
             result.push_str("<REDACTED>");
             i += 2;
@@ -14,21 +13,21 @@ pub fn redact(msg: &str) -> String {
             continue;
         }
 
-        // Paths starting with '/' (Linux absolute paths, devices, etc.)
         if chars[i] == '/' {
-            let mut j = i;
-            while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '/' || chars[j] == '.' || chars[j] == '-' || chars[j] == '_') {
-                j += 1;
-            }
-            // Require at least 2 chars length to be considered a path to avoid redacting standalone slashes
-            if j - i > 1 {
-                result.push_str("<REDACTED>");
-                i = j;
-                continue;
+            let is_mid_word_slash = i > 0 && chars[i-1].is_alphanumeric();
+            if !is_mid_word_slash {
+                let mut j = i;
+                while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '/' || chars[j] == '.' || chars[j] == '-' || chars[j] == '_') {
+                    j += 1;
+                }
+                if j - i > 1 {
+                    result.push_str("<REDACTED>");
+                    i = j;
+                    continue;
+                }
             }
         }
 
-        // Paths starting with 'C:\' or similar
         if chars[i].is_ascii_alphabetic() && i + 2 < chars.len() && chars[i+1] == ':' && (chars[i+2] == '\\' || chars[i+2] == '/') {
             let mut j = i + 2;
             while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '\\' || chars[j] == '/' || chars[j] == '.' || chars[j] == '-' || chars[j] == '_') {
@@ -39,7 +38,6 @@ pub fn redact(msg: &str) -> String {
             continue;
         }
 
-        // Device identifiers: nvme, sd, vd, hd, xvd followed by alphanumeric characters
         let is_device = chars[i..].starts_with(&['n','v','m','e'])
             || chars[i..].starts_with(&['s','d'])
             || chars[i..].starts_with(&['v','d'])
@@ -52,12 +50,13 @@ pub fn redact(msg: &str) -> String {
                 j += 1;
             }
             let word: String = chars[i..j].iter().collect();
-            // check: starts with device prefix and contains a letter following the prefix, or a number
-            // Wait, hdc is h+d+c. So just length > prefix_len?
-            // "sd" is length 2. "sda" is length 3.
-            if word.len() >= 3 || (word.starts_with("hd") && word.len() >= 3) {
-                // Actually, "sd", "hd", "vd", "xvd", "nvme"
-                // Let's just redact it.
+            let has_digit = word.chars().any(|c| c.is_ascii_digit());
+            let is_short_dev = word.len() == 3 && (word.starts_with("sd") || word.starts_with("vd") || word.starts_with("hd"))
+                && (word.ends_with('a') || word.ends_with('b') || word.ends_with('c') || word.ends_with('d') || word.ends_with('e') || word.ends_with('f'));
+            let is_xvd = word.len() == 4 && word.starts_with("xvd")
+                && (word.ends_with('a') || word.ends_with('b') || word.ends_with('c') || word.ends_with('d') || word.ends_with('e') || word.ends_with('f'));
+
+            if has_digit || is_short_dev || is_xvd {
                 result.push_str("<REDACTED>");
                 i = j;
                 continue;
@@ -85,6 +84,8 @@ mod tests {
         assert_eq!(redact("Error opening /proc/meminfo: permission denied"), "Error opening <REDACTED>: permission denied");
         assert_eq!(redact("File /var/log/syslog not found"), "File <REDACTED> not found");
         assert_eq!(redact("Standalone / should not be redacted"), "Standalone / should not be redacted");
+        assert_eq!(redact("n/a"), "n/a");
+        assert_eq!(redact("and/or"), "and/or");
     }
 
     #[test]
@@ -100,7 +101,8 @@ mod tests {
         assert_eq!(redact("Volume vdb1 attached"), "Volume <REDACTED> attached");
         assert_eq!(redact("Checking hdc"), "Checking <REDACTED>");
         assert_eq!(redact("Drive xvda1 formatted"), "Drive <REDACTED> formatted");
-        // Should not redact normal words
         assert_eq!(redact("The standard is good"), "The standard is good");
+        assert_eq!(redact("sdk is a kit"), "sdk is a kit");
+        assert_eq!(redact("hdr display"), "hdr display");
     }
 }
