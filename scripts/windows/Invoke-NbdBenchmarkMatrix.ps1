@@ -366,6 +366,7 @@ function Get-CellTimeoutBudget {
     $sampleTimeoutMaxSec = 600
     $derivedOuterTimeoutSec = 3 * ($sampleTimeoutSec + $integrityFinalizationTimeoutSec) + $setupCleanupTimeoutSec
     $cellOuterTimeoutSec = [Math]::Max($cellOuterTimeoutMinSec, $derivedOuterTimeoutSec)
+    $cellOuterTimeoutSec = [Math]::Min($cellOuterTimeoutMaxSec, $cellOuterTimeoutSec)
     if ($sampleTimeoutSec -lt 1 -or $sampleTimeoutSec -gt $sampleTimeoutMaxSec -or
         $cellOuterTimeoutSec -lt $cellOuterTimeoutMinSec -or $cellOuterTimeoutSec -gt $cellOuterTimeoutMaxSec) {
         throw "cell_timeout_budget_invalid"
@@ -463,7 +464,7 @@ function New-Plan {
                     pattern = "shake256-v1"
                     measurement = "allocation_to_hold_ms"
                     allocation_chunk_bytes = 67108864
-                    worker_threads = 1
+                    worker_threads = [Environment]::ProcessorCount
                     workload = "anonymous_memory_sequential_write"
                     allocated_mib = $tier + 2560
                     memory_high_mib = 1200
@@ -3218,8 +3219,8 @@ Write-Output "[cuda-vram-workload] released"
             New-Item -ItemType Directory -Path $temp | Out-Null
             $savedBaseline = $script:BaselineFile
             try {
-                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
-                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount }
+                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount }
                 $sourceCommit = ("a" * 40) -join ""
                 $manifestSha256 = ("b" * 64) -join ""
                 $scriptHash = ("c" * 64) -join ""
@@ -3260,7 +3261,7 @@ Write-Output "[cuda-vram-workload] released"
                             "--expected-manifest-sha256", $manifestSha256, "--pair-id", "1024-idle", "--runs", "3", "--sample-timeout-sec", "240"
                         )
                         script_sha256 = [pscustomobject]$scriptHashes
-                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount }
                     }
                     if ($Mode -eq "nbd") {
                         $record["nbd"] = [pscustomobject]@{
@@ -3652,7 +3653,7 @@ Write-Output "[cuda-vram-workload] released"
                             sink_type = "directory"; sink_identity_sha256 = ("d" * 64) -join ""
                         }
                         workload = [pscustomobject]@{
-                            pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = 1; allocated_mib = 3584
+                            pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = [Environment]::ProcessorCount; allocated_mib = 3584
                         }
                     }
                     if ($Mode -eq "nbd") {
