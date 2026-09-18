@@ -10,6 +10,8 @@
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
+use metrics::{counter, gauge};
+
 use crate::model::{PsiSample, Slice, SliceId, SliceState, TenantId};
 
 /// Arbiter parameters. Defaults calibrated by P0 (P0-RESULTS §5).
@@ -29,6 +31,8 @@ pub struct ArbiterConfig {
     pub cf_factor: f32,
     /// Long cooldown post-revert.
     pub cf_cooldown: Duration,
+    /// Maximum ticks a tenant can be starved before triggering aging.
+    pub aging_threshold: u32,
 }
 
 impl Default for ArbiterConfig {
@@ -41,6 +45,7 @@ impl Default for ArbiterConfig {
             cf_window: Duration::from_secs(60),    // PRD §14
             cf_factor: 2.0,                        // PRD §14 (>2× em 60s)
             cf_cooldown: Duration::from_secs(300), // PRD §14
+            aging_threshold: 15,                   // 30 seconds before age bonus
         }
     }
 }
@@ -117,6 +122,8 @@ struct MoveRecord {
 pub struct Arbiter {
     cfg: ArbiterConfig,
     streak: u32,
+    /// Tracks starved ticks per tenant.
+    tenant_age: std::collections::HashMap<TenantId, u32>,
     last_move: Option<MoveRecord>,
     cooldown_until: Option<Instant>,
     rr_cursor: usize,
@@ -145,6 +152,7 @@ impl Arbiter {
             last_move: None,
             cooldown_until: None,
             rr_cursor: 0,
+            tenant_age: std::collections::HashMap::new(),
         }
     }
 
@@ -159,12 +167,42 @@ impl Arbiter {
     ) -> Option<(&'a TenantView, &'a TenantView, f32)> {
         let receiver = tenants
             .iter()
-            .max_by(|a, b| by_psi(a.psi.avg10, b.psi.avg10))?;
+            .max_by(|a, b| {
+                let mut a_psi = a.psi.avg10;
+                let mut b_psi = b.psi.avg10;
+                if self.tenant_age.get(&a.id).copied().unwrap_or(0) > self.cfg.aging_threshold {
+                    a_psi += 10.0; // Age bonus
+                }
+                if self.tenant_age.get(&b.id).copied().unwrap_or(0) > self.cfg.aging_threshold {
+                    b_psi += 10.0; // Age bonus
+                }
+                by_psi(a_psi, b_psi)
+            })?;
         let donor = tenants
             .iter()
             .filter(|t| t.slices >= 1 && t.id != receiver.id)
-            .min_by(|a, b| by_psi(a.psi.avg10, b.psi.avg10))?;
-        Some((receiver, donor, receiver.psi.avg10 - donor.psi.avg10))
+            .min_by(|a, b| {
+                let mut a_psi = a.psi.avg10;
+                let mut b_psi = b.psi.avg10;
+                if self.tenant_age.get(&a.id).copied().unwrap_or(0) > self.cfg.aging_threshold {
+                    a_psi += 10.0; // Age bonus
+                }
+                if self.tenant_age.get(&b.id).copied().unwrap_or(0) > self.cfg.aging_threshold {
+                    b_psi += 10.0; // Age bonus
+                }
+                by_psi(a_psi, b_psi)
+            })?;
+        let mut r_psi = receiver.psi.avg10;
+        let mut d_psi = donor.psi.avg10;
+        let r_age = self.tenant_age.get(&receiver.id).copied().unwrap_or(0);
+        let d_age = self.tenant_age.get(&donor.id).copied().unwrap_or(0);
+        if r_age > self.cfg.aging_threshold {
+            r_psi += 10.0;
+        }
+        if d_age > self.cfg.aging_threshold {
+            d_psi += 10.0;
+        }
+        Some((receiver, donor, r_psi - d_psi))
     }
 
     /// One decision per tick. `now` injected (testable). Contract (DT-20): `tenants` only the
@@ -178,6 +216,20 @@ impl Arbiter {
     ) -> Result<Vec<Action>, ArbiterError> {
         let mut actions = Vec::new();
         let slice_len = slices.first().map_or(0, |s| s.len);
+
+        // Aging tracking
+        let active_ids: std::collections::HashSet<_> = tenants.iter().map(|t| t.id).collect();
+        self.tenant_age.retain(|id, _| active_ids.contains(id));
+
+        for t in tenants {
+            if t.psi.avg10 > self.cfg.psi_floor && t.slices == 0 {
+                *self.tenant_age.entry(t.id).or_insert(0) += 1;
+            } else {
+                self.tenant_age.remove(&t.id);
+            }
+            let age = self.tenant_age.get(&t.id).copied().unwrap_or(0);
+            gauge!("arbiter_tenant_age_ticks", "tenant" => t.id.to_string()).set(age as f64);
+        }
 
         // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
         if let Some((holder, bytes)) = pending_lease {
@@ -218,12 +270,15 @@ impl Arbiter {
                     })
                     .collect();
                 active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
-                actions.extend(
-                    active
-                        .into_iter()
-                        .take(deficit)
-                        .map(|(slice, from, _)| Action::RevokeForLease { slice, from }),
-                );
+                let revoked: Vec<_> = active
+                    .into_iter()
+                    .take(deficit)
+                    .map(|(slice, from, _)| {
+                        counter!("arbiter_revoke_lease_total", "from" => from.to_string()).increment(1);
+                        Action::RevokeForLease { slice, from }
+                    })
+                    .collect();
+                actions.extend(revoked);
                 return Ok(actions);
             }
 
@@ -237,6 +292,7 @@ impl Arbiter {
                 holder,
                 slices: grant,
             });
+            counter!("arbiter_grant_lease_total", "holder" => holder.to_string()).increment(1);
             return Ok(actions);
         }
 
@@ -254,6 +310,7 @@ impl Arbiter {
                     from: rec.to,
                     to: rec.from,
                 });
+                counter!("arbiter_revert_move_total", "from" => rec.to.to_string(), "to" => rec.from.to_string()).increment(1);
                 self.last_move = None;
                 self.cooldown_until = Some(now + self.cfg.cf_cooldown);
                 self.streak = 0;
@@ -288,6 +345,7 @@ impl Arbiter {
                     from: donor.id,
                     to: receiver.id,
                 });
+                counter!("arbiter_move_slice_total", "from" => donor.id.to_string(), "to" => receiver.id.to_string()).increment(1);
                 self.last_move = Some(MoveRecord {
                     slice,
                     from: donor.id,
@@ -309,6 +367,7 @@ impl Arbiter {
             let to = tenants[self.rr_cursor % tenants.len()].id;
             self.rr_cursor = self.rr_cursor.wrapping_add(1);
             actions.push(Action::AssignFree { slice: s.id, to });
+            counter!("arbiter_assign_free_total", "tenant" => to.to_string()).increment(1);
         }
 
         Ok(actions)
@@ -612,5 +671,42 @@ mod tests {
             count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()),
             0
         );
+    }
+
+    #[test]
+    fn aging_bonus_overcomes_hysteresis() {
+        let mut c = cfg();
+        c.streak = 1;
+        c.aging_threshold = 2; // threshold for test
+        let mut arb = Arbiter::new(c);
+        let t0 = Instant::now();
+
+        // Tenant 1 is pressured but has 0 slices. It will start aging.
+        // Tenant 2 has 1 slice, but lower PSI.
+
+        let t_starve = [tv(1, 6.0, 0), tv(2, 2.0, 2)];
+        let slices = [
+            slice(0, Some(2), SliceState::Active),
+            slice(1, Some(2), SliceState::Active),
+        ];
+
+        // Tick 1: t1 is pressured and has 0 slices. age = 1.
+        let a = arb.tick(t0, &t_starve, &slices, None).unwrap();
+        assert_eq!(count_moves(&a), 0);
+
+        // Tick 2: t1 age = 2.
+        let a = arb.tick(t0 + Duration::from_secs(2), &t_starve, &slices, None).unwrap();
+        assert_eq!(count_moves(&a), 0);
+
+        // Keep ticking until it moves (or we reach a timeout).
+        let mut moved = false;
+        for i in 3..10 {
+            let a = arb.tick(t0 + Duration::from_secs(i * 2), &t_starve, &slices, None).unwrap();
+            if count_moves(&a) > 0 {
+                moved = true;
+                break;
+            }
+        }
+        assert!(moved, "Arbiter should have moved a slice due to age bonus");
     }
 }
