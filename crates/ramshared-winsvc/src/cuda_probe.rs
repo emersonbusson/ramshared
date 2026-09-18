@@ -4,10 +4,7 @@
 //! hardware path is E2E evidence; pure offset planning lives in `ramshared_cuda::probe`.
 
 use crate::config::WinDriveConfig;
-#[cfg(not(test))]
 use ramshared_cuda::Cuda;
-#[cfg(test)]
-use tests::mock_cuda::Cuda;
 use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
 
 /// Result of a successful probe-cuda run.
@@ -59,7 +56,13 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
     cfg.validate()
         .map_err(|e| ProbeCudaError::Config(e.to_string()))?;
 
+
+    #[cfg(test)]
+    if tests::MOCK_NO_DEVICE.with(|c| c.get()) {
+        return Err(ProbeCudaError::NoDevice);
+    }
     let cuda = Cuda::load().map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
+
     let count = cuda
         .device_count()
         .map_err(|e| match e {
@@ -138,43 +141,25 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
-    use super::*;
-    use std::path::PathBuf;
 
-
-    pub mod mock_cuda {
-        use ramshared_cuda::CudaError;
-        use ramshared_cuda::{Device, Context};
-
-        pub struct Cuda {}
-
-        impl Cuda {
-            pub fn load() -> Result<Self, CudaError> {
-                Ok(Self {})
-            }
-
-            pub fn device_count(&self) -> Result<i32, CudaError> {
-                Err(CudaError::NoDevice)
-            }
-
-            pub fn device(&self, _ordinal: i32) -> Result<Device, CudaError> {
-                unimplemented!()
-            }
-
-            pub fn create_context(&self, _dev: &Device) -> Result<Context<'_>, CudaError> {
-                unimplemented!()
-            }
-        }
-    }
+    use std::cell::Cell;
+    thread_local! { pub static MOCK_NO_DEVICE: Cell<bool> = Cell::new(false); }
 
     #[test]
     fn test_probe_cuda_no_device_returns_cuda_error() {
+        MOCK_NO_DEVICE.with(|c| c.set(true));
+        // We need a dummy valid config. We can just use the one they have `cfg_64m` which is already in tests module.
         let cfg = cfg_64m();
         let result = super::probe_cuda_allocates_roundtrips_and_restores(&cfg);
+        MOCK_NO_DEVICE.with(|c| c.set(false));
         assert!(matches!(result, Err(ProbeCudaError::NoDevice)));
     }
+
+
+    use super::*;
+    use std::path::PathBuf;
 
     fn cfg_64m() -> WinDriveConfig {
         WinDriveConfig {
