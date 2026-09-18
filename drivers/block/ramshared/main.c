@@ -148,14 +148,19 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 		return;
 
 	rs_dev = pci_get_drvdata(pdev);
-	if (!rs_dev)
+	if (!rs_dev) {
+		dev_err(&pdev->dev, "driver private data missing during remove\n");
 		return;
+	}
+
+	pci_set_drvdata(pdev, NULL);
 
 	ramshared_queue_cleanup(rs_dev);
 	ramshared_dma_cleanup(rs_dev);
-	pci_release_mem_regions(pdev);
 	pci_clear_master(pdev);
+	pci_release_mem_regions(pdev);
 	pci_disable_device(pdev);
+	mutex_destroy(&rs_dev->lock);
 
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
 }
