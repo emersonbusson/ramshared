@@ -1930,7 +1930,7 @@ mod tests {
     }
 
     #[test]
-    fn test_request_demotion() {
+    fn test_request_demotion() -> Result<(), FailureReason> {
         let mut model = PreflightModel::new();
         // Requesting demotion when not constrained should be an invalid transition
         let decision = model.request_demotion();
@@ -1958,8 +1958,7 @@ mod tests {
         );
 
         // Let's create a constrained state by observing an empty budget
-        let event_id =
-            EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
+        let event_id = EventId::new(b"event-1")?;
         let adapter_id = AdapterId::new(b"adapter-1").unwrap();
 
         let observation = HostObservation::new(
@@ -1983,6 +1982,7 @@ mod tests {
         let decision = model.request_demotion();
         assert_eq!(decision.state, PreflightState::DemotionRequested);
         assert_eq!(decision.action, PreflightAction::DemotionRequested);
+        Ok(())
     }
 
     #[test]
@@ -2006,12 +2006,10 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_revoke_transition() {
+    fn test_invalid_revoke_transition() -> Result<(), FailureReason> {
         let mut machine = LeaseMachine::new();
-        let lease_id =
-            LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
-        let event_id =
-            EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
+        let lease_id = LeaseId::new(b"lease-1")?;
+        let event_id = EventId::new(b"event-1")?;
 
         let revoke = Revoke::host(lease_id, 1, event_id, 200);
 
@@ -2040,6 +2038,7 @@ mod tests {
                 }
             ))
         );
+        Ok(())
     }
 }
 
@@ -2048,10 +2047,9 @@ mod additional_tests {
     use super::*;
 
     #[test]
-    fn test_guard_clauses_generation_validation() {
+    fn test_guard_clauses_generation_validation() -> Result<(), FailureReason> {
         let mut machine = LeaseMachine::new();
-        let lease_id =
-            LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
+        let lease_id = LeaseId::new(b"lease-1")?;
         machine.remember_generation(lease_id.clone(), 10);
 
         assert_eq!(
@@ -2077,6 +2075,7 @@ mod additional_tests {
             Err(FailureReason::GenerationGap)
         );
         assert_eq!(machine.validate_generation(&lease_id, 11), Ok(()));
+        Ok(())
     }
 
     #[test]
@@ -2253,15 +2252,15 @@ mod additional_tests {
 
         // Observation events validation
         let mut too_many_events = valid_obs.clone();
-        too_many_events.events = (0..=MAX_OBSERVATION_EVENTS)
-            .map(|i| {
-                let id_bytes = [b'e', i as u8];
-                ObservationEvent::new(
-                    EventId::new(id_bytes).unwrap_or_else(|_| panic!("failed to create event_id")),
-                    ObservationEventKind::Healthy,
-                )
-            })
-            .collect();
+        let mut events = Vec::new();
+        for i in 0..=MAX_OBSERVATION_EVENTS {
+            let id_bytes = [b'e', i as u8];
+            events.push(ObservationEvent::new(
+                EventId::new(id_bytes)?,
+                ObservationEventKind::Healthy,
+            ));
+        }
+        too_many_events.events = events;
         assert_eq!(
             too_many_events.validate(100),
             Err(FailureReason::MalformedRecord)
