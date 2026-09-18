@@ -22,6 +22,7 @@ pub struct ProbeCudaReport {
 /// Errors from probe-cuda (stable classes, no pointers).
 #[derive(Debug)]
 pub enum ProbeCudaError {
+    NoDevice,
     Config(String),
     Cuda(String),
     Mismatch { offset: usize },
@@ -32,6 +33,7 @@ pub enum ProbeCudaError {
 impl std::fmt::Display for ProbeCudaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ProbeCudaError::NoDevice => write!(f, "no CUDA device available"),
             ProbeCudaError::Config(s) => write!(f, "config: {s}"),
             ProbeCudaError::Cuda(s) => write!(f, "cuda: {s}"),
             ProbeCudaError::Mismatch { offset } => write!(f, "pattern mismatch at {offset}"),
@@ -54,10 +56,16 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
     cfg.validate()
         .map_err(|e| ProbeCudaError::Config(e.to_string()))?;
 
+    #[cfg(test)]
+    if tests::MOCK_NO_DEVICE.with(|c| c.get()) {
+        return Err(ProbeCudaError::NoDevice);
+    }
     let cuda = Cuda::load().map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
-    let count = cuda
-        .device_count()
-        .map_err(|e| ProbeCudaError::Cuda(e.to_string()))?;
+
+    let count = cuda.device_count().map_err(|e| match e {
+        ramshared_cuda::CudaError::NoDevice => ProbeCudaError::NoDevice,
+        _ => ProbeCudaError::Cuda(e.to_string()),
+    })?;
     if cfg.cuda_device as i32 >= count {
         return Err(ProbeCudaError::Cuda(format!(
             "cuda_device {} >= count {count}",
@@ -130,8 +138,22 @@ pub fn probe_cuda_allocates_roundtrips_and_restores(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::cell::Cell;
+    thread_local! { pub static MOCK_NO_DEVICE: Cell<bool> = const { Cell::new(false) }; }
+
+    #[test]
+    fn test_probe_cuda_no_device_returns_cuda_error() {
+        MOCK_NO_DEVICE.with(|c| c.set(true));
+        // We need a dummy valid config. We can just use the one they have `cfg_64m` which is already in tests module.
+        let cfg = cfg_64m();
+        let result = super::probe_cuda_allocates_roundtrips_and_restores(&cfg);
+        MOCK_NO_DEVICE.with(|c| c.set(false));
+        assert!(matches!(result, Err(ProbeCudaError::NoDevice)));
+    }
+
     use super::*;
     use std::path::PathBuf;
 

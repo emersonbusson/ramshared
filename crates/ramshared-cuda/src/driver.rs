@@ -17,6 +17,7 @@ use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms}
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
 #[derive(Debug)]
 pub enum CudaError {
+    NoDevice,
     /// Dynamic library loading failed to find a candidate library.
     Load(String),
     /// Symbol resolution failed for a required symbol.
@@ -28,7 +29,11 @@ pub enum CudaError {
         msg: String,
     },
     /// VRAM memory region access out of bounds (offset + len > size).
-    OutOfRange { off: usize, len: usize, size: usize },
+    OutOfRange {
+        off: usize,
+        len: usize,
+        size: usize,
+    },
     /// Invalid argument supplied to driver wrapper.
     InvalidValue(String),
     /// The requested feature is unsupported by the loaded driver version.
@@ -38,6 +43,7 @@ pub enum CudaError {
 impl fmt::Display for CudaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            CudaError::NoDevice => write!(f, "no CUDA-capable device found"),
             CudaError::Load(s) => write!(f, "failed to load CUDA library: {s}"),
             CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
             CudaError::Driver { op, code, msg } => {
