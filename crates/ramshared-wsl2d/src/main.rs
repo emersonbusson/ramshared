@@ -9032,7 +9032,10 @@ mod tests {
 
         let mut runtime = StopFailingRuntime::new();
         let res = run_ublk_with_runtime(4096, false, 1, BackendKind::Ram, &mut runtime);
-        assert!(res.is_err(), "teardown error must be propagated when stop_device fails");
+        assert!(
+            res.is_err(),
+            "teardown error must be propagated when stop_device fails"
+        );
         let expected = vec![
             "guard",
             "lock",
@@ -9049,7 +9052,11 @@ mod tests {
             "swap-state",
             "delete",
         ];
-        assert_eq!(runtime.calls(), expected, "server join and delete_device must run even if stop_device fails");
+        assert_eq!(
+            runtime.calls(),
+            expected,
+            "server join and delete_device must run even if stop_device fails"
+        );
     }
 
     #[test]
