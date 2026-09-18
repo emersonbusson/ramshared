@@ -3,6 +3,7 @@
 
 use std::error::Error;
 use std::fmt;
+use subtle::ConstantTimeEq;
 
 pub const DEFAULT_BLOCK_SIZE: usize = 4096;
 
@@ -97,7 +98,7 @@ impl ChecksumTable {
         let Some(expected) = slot else {
             return None;
         };
-        Some(*expected == block_hash(data))
+        Some(expected.ct_eq(&block_hash(data)).into())
     }
 }
 
