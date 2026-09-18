@@ -45,9 +45,26 @@ Summary:        Hardware-accelerated VRAM memory tiering & low-level kernel driv
 License:        GPL-2.0-only
 URL:            https://github.com/emersonbusson/ramshared
 
+BuildRequires:  systemd-rpm-macros
+
 %description
 RamShared accelerates system memory by creating zero-copy direct PCIe DMA
 memory tiers backed by discrete GPU VRAM with fail-safe SSD origin fallback.
+
+%post
+%systemd_post ramshared-vram.service
+# Set SELinux file contexts on binaries
+if command -v semanage >/dev/null 2>&1; then
+    semanage fcontext -a -t bin_t '/usr/bin/ramshared(d)?' 2>/dev/null || true
+    restorecon -v /usr/bin/ramshared /usr/bin/ramsharedd || true
+fi
+
+%preun
+%systemd_preun ramshared-vram.service
+
+%postun
+%systemd_postun_with_restart ramshared-vram.service
+
 
 %install
 mkdir -p %{buildroot}/usr/bin
@@ -59,6 +76,10 @@ mkdir -p %{buildroot}/etc/ramshared
 install -m 0755 ${CLI_BIN} %{buildroot}/usr/bin/ramshared
 install -m 0755 ${DAEMON_BIN} %{buildroot}/usr/bin/ramsharedd
 
+if [ -f ${ROOT}/packaging/systemd/ramshared-vram.service ]; then
+  install -m 0644 ${ROOT}/packaging/systemd/ramshared-vram.service %{buildroot}/usr/lib/systemd/system/ramshared-vram.service
+fi
+
 if [ -f ${ROOT}/packaging/systemd/60-ramshared.rules ]; then
   install -m 0644 ${ROOT}/packaging/systemd/60-ramshared.rules %{buildroot}/lib/udev/rules.d/60-ramshared.rules
 fi
@@ -69,6 +90,7 @@ fi
 %files
 /usr/bin/ramshared
 /usr/bin/ramsharedd
+/usr/lib/systemd/system/ramshared-vram.service
 /usr/share/ramshared
 /etc/ramshared
 /lib/udev/rules.d/60-ramshared.rules
