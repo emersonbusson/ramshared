@@ -93,7 +93,11 @@ impl SliceMap {
 
     /// Gets the fragmentation ratio of the slices.
     pub fn fragmentation_ratio(&self) -> f64 {
-        let free = self.slices.iter().filter(|s| s.state == SliceState::Free).count() as f64;
+        let free = self
+            .slices
+            .iter()
+            .filter(|s| s.state == SliceState::Free)
+            .count() as f64;
         let total = self.slices.len() as f64;
         if total == 0.0 {
             return 0.0;
