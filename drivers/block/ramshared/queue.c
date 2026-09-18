@@ -15,17 +15,6 @@
 #include "ramshared.h"
 #include "compat.h"
 
-static blk_status_t ramshared_errno_to_blk_status(int err)
-{
-	switch (err) {
-	case -ENOMEM:
-		return BLK_STS_RESOURCE;
-	case -EOPNOTSUPP:
-		return BLK_STS_NOTSUPP;
-	default:
-		return BLK_STS_IOERR;
-	}
-}
 
 static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 					  struct bio *bio, loff_t pos)
@@ -40,7 +29,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 		dev_err_ratelimited(rs_dev->dev,
 				    "Unaligned bio: pos=%lld, len=%u\n",
 				    pos, bio->bi_iter.bi_size);
-		return ramshared_errno_to_blk_status(-EINVAL);
+		return BLK_STS_IOERR;
 	}
 
 	if (unlikely(pos > rs_dev->dma.size ||
@@ -50,7 +39,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 				    "Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
 				    pos, bio->bi_iter.bi_size,
 				    rs_dev->capacity_bytes);
-		return ramshared_errno_to_blk_status(-ERANGE);
+		return BLK_STS_IOERR;
 	}
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
@@ -88,17 +77,17 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	struct bio *bio;
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return ramshared_errno_to_blk_status(-EIO);
+		return BLK_STS_IOERR;
 
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
-		return ramshared_errno_to_blk_status(-ERANGE);
+		return BLK_STS_IOERR;
 
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
 		     !IS_ALIGNED(len, RAMSHARED_SECTOR_SIZE))) {
 		dev_err_ratelimited(rs_dev->dev,
 				    "Unaligned I/O request: pos=%lld, len=%zu\n",
 				    pos, len);
-		return ramshared_errno_to_blk_status(-EINVAL);
+		return BLK_STS_IOERR;
 	}
 
 	if (unlikely(pos > rs_dev->dma.size ||
@@ -108,7 +97,7 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 				    "I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
 				    pos, len, rs_dev->capacity_bytes,
 				    rs_dev->dma.size);
-		return ramshared_errno_to_blk_status(-ERANGE);
+		return BLK_STS_IOERR;
 	}
 
 	blk_mq_start_request(rq);
