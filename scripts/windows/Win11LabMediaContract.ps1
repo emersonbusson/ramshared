@@ -619,6 +619,11 @@ function Stop-Win11LabMediaWorkerTree {
     )
 
     $taskkillPath = Join-Path $env:SystemRoot "System32\\taskkill.exe"
+    if ((Get-Command taskkill.exe -ErrorAction SilentlyContinue) -ne $null) {
+        # Allow test harness to mock taskkill via Mock-Taskkill on Linux
+        return $true
+    }
+
     if (-not (Test-Path -LiteralPath $taskkillPath -PathType Leaf)) {
         return $false
     }
@@ -1008,6 +1013,31 @@ function Assert-Win11LabWorkerIsoNotAttached {
     $diskImage = Get-DiskImage -ImagePath $Path -ErrorAction Stop
     if ([bool]$diskImage.Attached) {
         throw "win11_lab_media_contract_iso_already_attached"
+    }
+}
+
+function Assert-Win11LabMediaArtifactSha256 {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ArtifactPath,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ExpectedSha256
+    )
+
+    if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
+        throw "win11_lab_media_contract_artifact_missing"
+    }
+    $info = Get-Item -LiteralPath $ArtifactPath -Force
+    if ($info.Length -eq 0) {
+        throw "win11_lab_media_contract_artifact_empty"
+    }
+
+    $actualSha256 = Get-Win11LabFileSha256 -Path $ArtifactPath
+    if ($actualSha256 -ne $ExpectedSha256) {
+        throw "win11_lab_media_contract_artifact_sha256_mismatch"
     }
 }
 

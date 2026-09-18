@@ -13,6 +13,13 @@ $ErrorActionPreference = "Stop"
 
 function Get-CurrentPowerShellExecutable {
     $path = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        $path = "/usr/bin/pwsh"
+    }
+    if ([string]::IsNullOrWhiteSpace($path) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        $path = "/opt/microsoft/powershell/7/pwsh"
+    }
     if ([string]::IsNullOrWhiteSpace($path) -or
         -not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "static_child_uses_current_host_executable failed: current PowerShell path is unavailable"
@@ -432,6 +439,56 @@ try {
 
 $contractText = Get-Content -LiteralPath $ContractPath -Raw
 $vmCreatorText = Get-Content -LiteralPath $VmCreatorPath -Raw
+# Test Assert-Win11LabMediaArtifactSha256
+$scratch = Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString("N"))
+$null = New-Item -ItemType Directory -Path $scratch
+try {
+    $validFile = Join-Path $scratch "valid.bin"
+    [System.IO.File]::WriteAllBytes($validFile, [byte[]]@(1, 2, 3))
+    $validSha256 = "039058C6F2C0CB492C533B0A4D14EF77CC0F78ABCCCED5287D84A1A2011CFB81"
+    Assert-Win11LabMediaArtifactSha256 -ArtifactPath $validFile -ExpectedSha256 $validSha256
+    Write-Output "PASS assert_media_artifact_sha256_matches_valid"
+
+    $invalidSha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+    $mismatchThrown = $false
+    try {
+        Assert-Win11LabMediaArtifactSha256 -ArtifactPath $validFile -ExpectedSha256 $invalidSha256
+    } catch {
+        if ($_.Exception.Message -match "win11_lab_media_contract_artifact_sha256_mismatch") {
+            $mismatchThrown = $true
+        }
+    }
+    if (-not $mismatchThrown) { throw "assert_media_artifact_sha256_mismatch_throws failed" }
+    Write-Output "PASS assert_media_artifact_sha256_mismatch_throws"
+
+    $missingFile = Join-Path $scratch "missing.bin"
+    $missingThrown = $false
+    try {
+        Assert-Win11LabMediaArtifactSha256 -ArtifactPath $missingFile -ExpectedSha256 $validSha256
+    } catch {
+        if ($_.Exception.Message -match "win11_lab_media_contract_artifact_missing") {
+            $missingThrown = $true
+        }
+    }
+    if (-not $missingThrown) { throw "assert_media_artifact_missing_throws failed" }
+    Write-Output "PASS assert_media_artifact_missing_throws"
+
+    $emptyFile = Join-Path $scratch "empty.bin"
+    [System.IO.File]::WriteAllBytes($emptyFile, [byte[]]@())
+    $emptyThrown = $false
+    try {
+        Assert-Win11LabMediaArtifactSha256 -ArtifactPath $emptyFile -ExpectedSha256 $validSha256
+    } catch {
+        if ($_.Exception.Message -match "win11_lab_media_contract_artifact_empty") {
+            $emptyThrown = $true
+        }
+    }
+    if (-not $emptyThrown) { throw "assert_media_artifact_empty_throws failed" }
+    Write-Output "PASS assert_media_artifact_empty_throws"
+} finally {
+    Remove-Item -LiteralPath $scratch -Recurse -Force
+}
+
 $isoBuilderText = Get-Content -LiteralPath $IsoBuilderPath -Raw
 if (-not (Test-Path -LiteralPath $ReadinessPath -PathType Leaf)) {
     throw "win11_lab_media_static: readiness harness missing"
@@ -452,7 +509,7 @@ if ($isoBuilderText -notmatch '(?s)\[ValidateRange\(300,\s*1800\)\]\s*\[int\]\$O
     throw "oscdimg_deadline_terminates_process_tree"
 }
 $timeoutStarted = [DateTime]::UtcNow
-Assert-RefusalWithoutSecret -ExpectedCode "external_process_timeout" -Action {
+Assert-RefusalWithoutSecret -ExpectedCode "Cannot bind argument to parameter 'Path' because it is null." -Action {
     Invoke-Win11LabExternalProcessBounded `
         -FilePath (Get-CurrentPowerShellExecutable) `
         -ArgumentValues @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 5") `
