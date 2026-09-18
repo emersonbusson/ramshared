@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 pub mod pipe;
-#[cfg(windows)]
 pub mod service;
 
 const MAX_CONFIG_BYTES: usize = 64 * 1024;
