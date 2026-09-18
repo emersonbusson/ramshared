@@ -52,6 +52,11 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	}
 
 	bar_len = pci_resource_len(pdev, 0);
+
+	if (bar_len > (1ULL << 40)) {
+		bar_len = (1ULL << 40);
+	}
+
 	/* SPEC: kernel-pci-bar-capacity-contract §RF-1. */
 	if (bar_len == 0 || (u64)bar_len < capacity_bytes) {
 		dev_err(&pdev->dev,
