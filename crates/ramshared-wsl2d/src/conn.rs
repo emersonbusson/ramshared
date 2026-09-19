@@ -678,7 +678,10 @@ mod tests {
             if n == 0 {
                 // Instead of EOF, block indefinitely
                 std::thread::sleep(Duration::from_secs(5));
-                return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "simulate disconnect"));
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "simulate disconnect",
+                ));
             }
             Ok(n)
         }
@@ -692,7 +695,9 @@ mod tests {
         let (jobs_tx, jobs_rx) = sync_channel(2); // allow both Job and Closed
         let (reply_tx, _reply_rx) = channel();
         let reader = spawn_reader(
-            BlockingReader { data: Cursor::new(wire) },
+            BlockingReader {
+                data: Cursor::new(wire),
+            },
             TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
             one_export(4096),
             0,
