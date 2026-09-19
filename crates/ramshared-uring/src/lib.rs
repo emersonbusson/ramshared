@@ -326,18 +326,17 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
         .build()
         .user_data(1);
 
-    {
-        let mut sq = ring.submission();
-        if sq.is_full() {
-            return Err(io::Error::from_raw_os_error(libc::EBUSY));
-        }
-        // SAFETY: `cmd` is copied into the SQE before submission. Public wrappers
-        // in this module pass null pointers, local stack pointers, or borrowed mutable
-        // buffers, and this function awaits the CQE before returning.
-        unsafe {
-            let _ = sq.push(&entry);
-        }
+    let mut sq = ring.submission();
+    if sq.is_full() {
+        return Err(io::Error::from_raw_os_error(libc::EBUSY));
     }
+    // SAFETY: `cmd` is copied into the SQE before submission. Public wrappers
+    // in this module pass null pointers, local stack pointers, or borrowed mutable
+    // buffers, and this function awaits the CQE before returning.
+    unsafe {
+        let _ = sq.push(&entry);
+    }
+    drop(sq);
 
     ring.submit_and_wait(1)?;
 
