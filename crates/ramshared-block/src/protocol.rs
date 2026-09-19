@@ -205,7 +205,10 @@ mod tests {
     fn test_protocol_invalid_checksum_mismatch() {
         // The current parse_request does not return ChecksumMismatch,
         // but we test the formatting as requested by the error structure test.
-        assert_eq!(ProtocolError::ChecksumMismatch.to_string(), "checksum mismatch");
+        assert_eq!(
+            ProtocolError::ChecksumMismatch.to_string(),
+            "checksum mismatch"
+        );
     }
 
     #[test]
