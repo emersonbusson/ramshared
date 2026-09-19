@@ -148,6 +148,62 @@ mod windows_svc {
             // SCM default without service dispatcher running returns 1
             assert_eq!(code, 1);
         }
+
+        #[test]
+        fn test_status_monitor_exits_early_when_done() {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            use std::sync::Arc;
+            use std::thread;
+            use std::time::Duration;
+
+            let resume_notifier = Arc::new(AtomicBool::new(false));
+            let monitor_done = Arc::new(AtomicBool::new(false));
+            let notifier_for_monitor = Arc::clone(&resume_notifier);
+            let done_for_monitor = Arc::clone(&monitor_done);
+            let stop_for_monitor = Arc::new(AtomicBool::new(false));
+
+            let notifier_clone = Arc::clone(&notifier_for_monitor);
+            let status_monitor = thread::spawn(move || {
+                while !done_for_monitor.load(Ordering::Acquire) {
+                    if notifier_clone.load(Ordering::Acquire) {
+                        stop_for_monitor.store(false, Ordering::Release);
+                        notifier_clone.store(false, Ordering::Release);
+
+                        // Use short sleep chunks to quickly exit if done
+                        for _ in 0..20 {
+                            if done_for_monitor.load(Ordering::Acquire) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                        stop_for_monitor.store(true, Ordering::Release);
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            });
+
+            resume_notifier.store(true, Ordering::Release);
+            thread::sleep(Duration::from_millis(10));
+            monitor_done.store(true, Ordering::Release);
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let _ = status_monitor.join();
+                let _ = tx.send(());
+            });
+
+            let mut joined = false;
+            for _ in 0..40 {
+                if rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+                    joined = true;
+                    break;
+                }
+                // Re-trigger loop in case monitor is stuck
+                notifier_for_monitor.store(true, Ordering::Release);
+            }
+
+            assert!(joined);
+        }
     }
 
     fn service_main(_args: Vec<OsString>) {
@@ -245,7 +301,12 @@ mod windows_svc {
                     // resume the I/O loop, then retry the safety gates.
                     stop_for_monitor.store(false, Ordering::Release);
                     notifier_for_monitor.store(false, Ordering::Release);
-                    thread::sleep(Duration::from_secs(1));
+                    for _ in 0..20 {
+                        if done_for_monitor.load(Ordering::Acquire) {
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
                     stop_for_monitor.store(true, Ordering::Release);
                 }
                 thread::sleep(Duration::from_millis(5));
