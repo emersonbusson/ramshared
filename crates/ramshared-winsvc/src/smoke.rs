@@ -49,7 +49,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_good() {
+    fn test_smoke_all_good_ok() {
         assert_eq!(
             post_boot_smoke(&SmokeInputs {
                 disk_enumerated: true,
@@ -61,18 +61,79 @@ mod tests {
     }
 
     #[test]
-    fn missing_pagefile_degrades() {
+    fn test_smoke_missing_pagefile_degrades() {
         let r = post_boot_smoke(&SmokeInputs {
             disk_enumerated: true,
             pagefile_active_on_vram: false,
             vram_volume_present: true,
         });
-        assert!(matches!(
+        assert_eq!(
             r,
             SmokeResult::Degrade {
                 check: "pagefile",
-                ..
+                detail: "pagefile.sys not active on VRAM volume".into(),
             }
-        ));
+        );
+    }
+
+    #[test]
+    fn test_smoke_missing_disk_degrades() {
+        let r = post_boot_smoke(&SmokeInputs {
+            disk_enumerated: false,
+            pagefile_active_on_vram: true,
+            vram_volume_present: true,
+        });
+        assert_eq!(
+            r,
+            SmokeResult::Degrade {
+                check: "disk",
+                detail: "virtual disk not enumerated".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_smoke_missing_volume_degrades() {
+        let r = post_boot_smoke(&SmokeInputs {
+            disk_enumerated: true,
+            pagefile_active_on_vram: true,
+            vram_volume_present: false,
+        });
+        assert_eq!(
+            r,
+            SmokeResult::Degrade {
+                check: "volume",
+                detail: "VRAM volume not present after boot".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_smoke_timeout_scenario_degrades() {
+        // Simulating a timeout scenario where inputs failed to be observed (all default to false).
+        let r = post_boot_smoke(&SmokeInputs::default());
+        assert_eq!(
+            r,
+            SmokeResult::Degrade {
+                check: "volume",
+                detail: "VRAM volume not present after boot".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_smoke_partial_failure_degrades() {
+        let r = post_boot_smoke(&SmokeInputs {
+            disk_enumerated: false,
+            pagefile_active_on_vram: false,
+            vram_volume_present: true,
+        });
+        assert_eq!(
+            r,
+            SmokeResult::Degrade {
+                check: "disk",
+                detail: "virtual disk not enumerated".into(),
+            }
+        );
     }
 }
