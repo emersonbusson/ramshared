@@ -14,7 +14,13 @@ use ramshared_broker::protocol::SwapEntry;
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
     let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    
+    // Some older kernels or partial reads might return incomplete files
+    if raw.is_empty() {
+        return Err(Error::new(ErrorKind::UnexpectedEof, "Empty PSI file"));
+    }
+    
+    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "Unreadable PSI"))
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -26,16 +32,30 @@ pub fn read_psi() -> Result<PsiSample> {
 /// the relevant pressure signal for swap. `None` if the line/fields do not match.
 ///
 /// Format: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
+#[allow(clippy::collapsible_if)]
 pub fn parse_psi(content: &str) -> Option<PsiSample> {
     let line = content.lines().find(|l| l.starts_with("some "))?;
     let (mut avg10, mut avg60, mut total) = (None, None, None);
     for tok in line.split_whitespace() {
+        // If we hit another type of line on the same line (unlikely but robust), break or handle
+        // We only care about the values, but if we see "full" after "some" (e.g. malformed output without newlines),
+        // we should probably stop processing to avoid overwriting values from "full"
+        if tok == "full" {
+            break;
+        }
+        
         if let Some(v) = tok.strip_prefix("avg10=") {
-            avg10 = v.parse::<f32>().ok();
+            if avg10.is_none() {
+                avg10 = v.parse::<f32>().ok();
+            }
         } else if let Some(v) = tok.strip_prefix("avg60=") {
-            avg60 = v.parse::<f32>().ok();
+            if avg60.is_none() {
+                avg60 = v.parse::<f32>().ok();
+            }
         } else if let Some(v) = tok.strip_prefix("total=") {
-            total = v.parse::<u64>().ok();
+            if total.is_none() {
+                total = v.parse::<u64>().ok();
+            }
         }
     }
     Some(PsiSample {
@@ -278,6 +298,25 @@ mod tests {
             .unwrap();
         file.write_all(content.as_bytes()).unwrap();
         path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn parse_psi_ignores_subsequent_some_or_full() {
+        let s = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999 some other=1\n";
+        let p = parse_psi(s).unwrap();
+        assert_eq!(p.avg10, 1.23);
+        
+        let s2 = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999 full avg10=0 total=0\n";
+        let p2 = parse_psi(s2).unwrap();
+        assert_eq!(p2.avg10, 1.23);
+    }
+    
+    #[test]
+    fn parse_psi_mixed_order() {
+        let s = "some total=999 avg10=1.23 avg60=4.56 avg300=7.89\n";
+        let p = parse_psi(s).unwrap();
+        assert_eq!(p.avg10, 1.23);
+        assert_eq!(p.stall_us, 999);
     }
 
     #[test]
