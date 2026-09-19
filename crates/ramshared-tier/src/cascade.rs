@@ -9,6 +9,16 @@
 use crate::nbd_readiness::ProductTransport;
 
 /// Tiers of the swap cascade, ordered from hottest to coldest.
+///
+/// # State Diagram
+///
+/// ```mermaid
+/// stateDiagram-v2
+///     direction TB
+///     [*] --> Zram: Memory Pressure
+///     Zram --> Vram: Capacity Limits
+///     Vram --> Vhdx: DEMOTE / Capacity Limits
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tier {
     /// zram — Compressed RAM, low latency (HOT).

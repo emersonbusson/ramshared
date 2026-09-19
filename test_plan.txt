@@ -1,0 +1,3 @@
+1. Modify `crates/ramshared-tier/src/cascade.rs` to include a comprehensive rustdoc on the `Tier` enum.
+2. The rustdoc will include a Mermaid state diagram showing tier transitions (Zram -> Vram -> Vhdx) and triggers like memory pressure, capacity limits, and DEMOTE.
+3. Check for any required `docs/governance/rust-slice-coverage.json` updates or run tests.
