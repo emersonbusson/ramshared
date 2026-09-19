@@ -5,7 +5,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
+FALLBACK_VERSION=$(grep -m1 '^version = ' "$ROOT/Cargo.toml" | sed -E 's/version = "(.*)".*/\1/')
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v${FALLBACK_VERSION}}}"
 VERSION_CLEAN="${VERSION#v}"
 RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
 ARCH="x86_64"
@@ -75,9 +76,15 @@ fi
 /lib/udev/rules.d/65-ramshared-observability.rules
 
 %changelog
-* Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
-- Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
+* $(LC_ALL=C date "+%a %b %e %Y") Emerson Busson <emersonbusson at example dot com> - ${RPM_VERSION}-1
+- Official v${RPM_VERSION} Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
+
+# Validate changelog syntax
+if ! grep -qE '^\* (Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 1-3]?[0-9] [0-9]{4} .*(<.*>|at example dot com) - .*' "$SPEC_FILE"; then
+  echo "ERROR: Invalid RPM changelog syntax in $SPEC_FILE" >&2
+  exit 1
+fi
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
