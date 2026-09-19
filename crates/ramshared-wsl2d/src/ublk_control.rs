@@ -57,6 +57,18 @@ pub fn get_features(path: impl AsRef<Path>) -> io::Result<FeatureReport> {
 }
 
 pub fn add_device(path: impl AsRef<Path>, spec: DeviceSpec) -> io::Result<DeviceReport> {
+    if !caps::has_cap(
+        None,
+        caps::CapSet::Effective,
+        caps::Capability::CAP_SYS_ADMIN,
+    )
+    .unwrap_or(false)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "missing CAP_SYS_ADMIN",
+        ));
+    }
     let control = OpenOptions::new().read(true).write(true).open(path)?;
     let ublksrv_pid =
         i32::try_from(process::id()).map_err(|_| io::Error::other("process id exceeds i32"))?;
@@ -264,7 +276,7 @@ mod tests {
             add_device(&path, DeviceSpec::smoke_auto())
                 .unwrap_err()
                 .kind(),
-            io::ErrorKind::NotFound
+            io::ErrorKind::PermissionDenied
         );
         assert_eq!(
             delete_device(&path, 0).unwrap_err().kind(),

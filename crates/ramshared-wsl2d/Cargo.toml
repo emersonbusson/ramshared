@@ -29,6 +29,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 rustix = { version = "1.1.4", features = ["fs", "process", "net"] }
+caps = "0.5.6"
 
 [lints.clippy]
 unwrap_used = "deny"
