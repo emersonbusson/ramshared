@@ -365,6 +365,20 @@ try {
         }
 
         if ($selectedCase -in @("All", "PeerMatrix")) {
+            $pipesReady = $false
+            for ($pipeAttempt = 0; $pipeAttempt -lt 60; $pipeAttempt++) {
+                $pipeNames = @([IO.Directory]::GetFiles("\\.\pipe\") | ForEach-Object {
+                        $_.Substring($_.LastIndexOf("\") + 1)
+                    })
+                if ($pipeNames -contains $brokerPipe -and $pipeNames -contains $statusPipe) {
+                    $pipesReady = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 100
+            }
+            if (-not $pipesReady) {
+                throw [System.TimeoutException]::new("required named pipes did not become ready before client dispatch")
+            }
             try { Start-Service $consumerService -ErrorAction Stop } catch {}
             $admitted = $false
             $observedLease = $false
