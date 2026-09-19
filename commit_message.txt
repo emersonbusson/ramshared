@@ -1,0 +1,7 @@
+test: verify ublk device destroy and recreate recovery
+
+Implemented an integration test device_creation_is_idempotent_after_deletion
+in crates/ramshared-wsl2d/tests/ublk_control_smoke.rs.
+It ensures that after a ublk device is created and deleted, recreating a device with the same
+spec works and creates a valid char device.
+This simulates the recovery phase without a system reboot.

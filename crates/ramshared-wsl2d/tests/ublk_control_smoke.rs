@@ -21,6 +21,37 @@ fn get_features_from_ublk_control_without_creating_device() {
 }
 
 #[test]
+#[ignore = "requires root and /dev/ublk-control; recreates the device after deletion"]
+fn device_creation_is_idempotent_after_deletion() {
+    let before = ublk_nodes();
+    let spec = ublk_control::DeviceSpec::smoke_auto();
+
+    // First creation
+    let report1 = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV 1");
+    let mut guard = DeviceGuard::new(report1.dev_id);
+    let dev_id1 = report1.dev_id;
+    let char_path1 = format!("/dev/ublkc{}", dev_id1);
+
+    assert!(fs::metadata(&char_path1).is_ok(), "{char_path1} absent");
+    ublk_control::delete_device(UBLK_CONTROL, dev_id1).expect("ublk DEL_DEV 1");
+    guard.disarm();
+    wait_until_missing(&char_path1);
+
+    // Second creation (recreate)
+    let report2 = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV 2");
+    let mut guard2 = DeviceGuard::new(report2.dev_id);
+    let dev_id2 = report2.dev_id;
+    let char_path2 = format!("/dev/ublkc{}", dev_id2);
+
+    assert!(fs::metadata(&char_path2).is_ok(), "{char_path2} absent");
+    ublk_control::delete_device(UBLK_CONTROL, dev_id2).expect("ublk DEL_DEV 2");
+    guard2.disarm();
+    wait_until_missing(&char_path2);
+
+    assert_eq!(ublk_nodes(), before);
+}
+
+#[test]
 #[ignore = "requires root and /dev/ublk-control; creates then removes /dev/ublkcN only"]
 fn add_then_delete_char_device_without_starting_block_device() {
     let before = ublk_nodes();
