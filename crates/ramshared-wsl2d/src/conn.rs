@@ -278,7 +278,12 @@ pub fn spawn_acceptor(
     std::thread::spawn(move || {
         loop {
             let stream = match listener.accept() {
-                Ok((s, _)) => s,
+                Ok((s, _)) => {
+                    if let Err(e) = rustix::net::sockopt::set_socket_keepalive(&s, true) {
+                        eprintln!("[ramsharedd] Unix keepalive failed: {e}");
+                    }
+                    s
+                }
                 Err(e) => {
                     eprintln!("[ramsharedd] accept failed: {e}");
                     break;
@@ -321,6 +326,21 @@ pub fn spawn_acceptor_tcp(
             };
 
             let _ = stream.set_nodelay(true); // TCP_NODELAY: swap latency
+
+            // Keepalive to detect unannounced host crashes within 15 seconds.
+            if let Err(e) = rustix::net::sockopt::set_socket_keepalive(&stream, true) {
+                eprintln!("[ramsharedd] TCP keepalive failed: {e}");
+            } else {
+                let _ = rustix::net::sockopt::set_tcp_keepidle(
+                    &stream,
+                    std::time::Duration::from_secs(5),
+                );
+                let _ = rustix::net::sockopt::set_tcp_keepintvl(
+                    &stream,
+                    std::time::Duration::from_secs(2),
+                );
+                let _ = rustix::net::sockopt::set_tcp_keepcnt(&stream, 5);
+            }
 
             let Ok(wstream) = stream.try_clone() else {
                 eprintln!("[ramsharedd] try_clone (tcp) wstream failed; skipping connection");
