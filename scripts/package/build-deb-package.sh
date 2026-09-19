@@ -107,9 +107,34 @@ if [[ -f "$ROOT/packaging/debian/conffiles" ]]; then
   install -m 0644 "$ROOT/packaging/debian/conffiles" "$STAGE_DIR/DEBIAN/conffiles"
 fi
 
+if [[ ! -f "$STAGE_DIR/DEBIAN/conffiles" ]]; then
+  touch "$STAGE_DIR/DEBIAN/conffiles"
+fi
+if [[ -f "$STAGE_DIR/etc/ramshared/cascade.conf.example" ]] && ! grep -q "/etc/ramshared/cascade.conf.example" "$STAGE_DIR/DEBIAN/conffiles"; then
+  echo "/etc/ramshared/cascade.conf.example" >> "$STAGE_DIR/DEBIAN/conffiles"
+fi
+if [[ -f "$STAGE_DIR/etc/ramshared/config.toml" ]] && ! grep -q "/etc/ramshared/config.toml" "$STAGE_DIR/DEBIAN/conffiles"; then
+  echo "/etc/ramshared/config.toml" >> "$STAGE_DIR/DEBIAN/conffiles"
+fi
+
 # Install documentation & licenses
 install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
 install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
+
+# Generate changelog
+CHANGELOG_DATE=$(LC_ALL=C date -R)
+printf "ramshared (${DEB_VERSION}) stable; urgency=medium\n\n  * Initial release.\n\n -- Emerson Busson <%s@%s>  ${CHANGELOG_DATE}\n" "maintainer" "example.net" > "$STAGE_DIR/usr/share/doc/ramshared/changelog"
+gzip -9n "$STAGE_DIR/usr/share/doc/ramshared/changelog"
+chmod 0644 "$STAGE_DIR/usr/share/doc/ramshared/changelog.gz"
+
+# Strip binaries
+if command -v strip >/dev/null 2>&1; then
+  strip --strip-unneeded "$STAGE_DIR/usr/bin/ramshared" "$STAGE_DIR/usr/bin/ramsharedd" || true
+fi
+
+# Fix permissions
+find "$STAGE_DIR" -type d -exec chmod 0755 {} +
+find "$STAGE_DIR/usr/share/ramshared/scripts" -type f -exec chmod 0755 {} +
 
 # Generate DEBIAN/control file
 printf "Package: ramshared\n" > "$STAGE_DIR/DEBIAN/control"
@@ -117,8 +142,8 @@ printf "Version: %s\n" "${DEB_VERSION}" >> "$STAGE_DIR/DEBIAN/control"
 printf "Section: admin\n" >> "$STAGE_DIR/DEBIAN/control"
 printf "Priority: optional\n" >> "$STAGE_DIR/DEBIAN/control"
 printf "Architecture: %s\n" "${ARCH}" >> "$STAGE_DIR/DEBIAN/control"
-printf "Depends: libc6 (>= 2.31)\n" >> "$STAGE_DIR/DEBIAN/control"
-printf "Maintainer: Emerson Busson\n" >> "$STAGE_DIR/DEBIAN/control"
+printf "Depends: libc6 (>= 2.31), python3\n" >> "$STAGE_DIR/DEBIAN/control"
+printf "Maintainer: Emerson Busson <%s@%s>\n" "maintainer" "example.net" >> "$STAGE_DIR/DEBIAN/control"
 printf "Description: High-Performance VRAM memory tier for Linux and WSL2\n" >> "$STAGE_DIR/DEBIAN/control"
 printf " RamShared is an R&D system that utilizes idle GPU Video RAM (VRAM)\n" >> "$STAGE_DIR/DEBIAN/control"
 printf " over PCIe as an accelerated, high-throughput memory tier for Linux and WSL2.\n" >> "$STAGE_DIR/DEBIAN/control"
@@ -188,3 +213,12 @@ rm -rf "$STAGE_DIR"
 
 echo "==> Package built: $DEB_FILE"
 echo "==> SHA-256: $(cat "${DEB_FILE}.sha256")"
+
+if command -v lintian >/dev/null 2>&1; then
+  echo "==> Running lintian checks..."
+  lintian --suppress-tags hardening-no-pie "$DEB_FILE" || {
+    echo "ERROR: lintian checks failed." >&2
+    kill -s TERM $$
+  }
+  echo "==> lintian checks passed successfully."
+fi
