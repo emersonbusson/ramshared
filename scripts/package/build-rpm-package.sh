@@ -84,6 +84,26 @@ if command -v rpmbuild >/dev/null 2>&1; then
   rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
   cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
   echo "✓ RPM package built under $OUT_DIR/"
+
+  if command -v rpmlint >/dev/null 2>&1; then
+    echo "==> Running rpmlint on generated RPM packages..."
+
+    RPMLINT_CONF="$RPM_ROOT/rpmlint.toml"
+    cat << 'LINT_EOF' > "$RPMLINT_CONF"
+Filters = [
+    "spelling-error .*tiering.*",
+    "no-signature",
+    "no-packager-tag",
+    "no-group-tag",
+    "invalid-license .*GPL-2.0-only"
+]
+LINT_EOF
+
+    if ! rpmlint -c "$RPMLINT_CONF" "$OUT_DIR"/*.rpm; then
+      echo "ERROR: rpmlint found issues in the generated RPM package(s)." >&2
+      kill -s TERM $$
+    fi
+  fi
 else
   echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
 fi
