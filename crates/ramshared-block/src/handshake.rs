@@ -413,10 +413,7 @@ mod tests {
 
     #[test]
     fn test_handshake_capability_conflict_unsupported_opt() {
-        let mut r = stream_opts(
-            0,
-            &[(999, vec![]), (NBD_OPT_ABORT, vec![])],
-        );
+        let mut r = stream_opts(0, &[(999, vec![]), (NBD_OPT_ABORT, vec![])]);
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
         assert!(matches!(res, Err(HandshakeError::Aborted)));
