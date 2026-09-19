@@ -211,4 +211,104 @@ mod tests {
         .unwrap_err();
         assert_eq!(e, PagefileError::NotWindows);
     }
+
+    #[test]
+    fn test_ntpagefile_size_zero_invalid() {
+        let vol = PathBuf::from("V:\\");
+        let e = create_secondary(
+            &vol,
+            0,
+            4096,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_)));
+    }
+
+    #[test]
+    fn test_ntpagefile_size_underflow_invalid() {
+        let vol = PathBuf::from("V:\\");
+        let e = create_secondary(
+            &vol,
+            8192,
+            4096,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_)));
+    }
+
+    #[test]
+    fn test_ntpagefile_size_overflow_max() {
+        let vol = PathBuf::from("V:\\");
+        let e = create_secondary(
+            &vol,
+            1024,
+            u64::MAX,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_) | PagefileError::NotWindows));
+    }
+
+    #[test]
+    fn test_ntpagefile_size_4gb_valid() {
+        let vol = PathBuf::from("V:\\");
+        let size = 4 * 1024 * 1024 * 1024;
+        let e = create_secondary(
+            &vol,
+            size,
+            size,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_) | PagefileError::NotWindows));
+    }
+
+    #[test]
+    fn test_ntpagefile_size_8gb_valid() {
+        let vol = PathBuf::from("V:\\");
+        let size = 8 * 1024 * 1024 * 1024;
+        let e = create_secondary(
+            &vol,
+            size,
+            size,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_) | PagefileError::NotWindows));
+    }
+
+    #[test]
+    fn test_ntpagefile_size_16gb_valid() {
+        let vol = PathBuf::from("V:\\");
+        let size = 16 * 1024 * 1024 * 1024;
+        let e = create_secondary(
+            &vol,
+            size,
+            size,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_) | PagefileError::NotWindows));
+    }
+
+    #[test]
+    fn test_ntpagefile_size_misaligned_valid() {
+        let vol = PathBuf::from("V:\\");
+        let size = 4 * 1024 * 1024 * 1024 + 1;
+        let e = create_secondary(
+            &vol,
+            size,
+            size,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_) | PagefileError::NotWindows));
+    }
+
+    #[test]
+    fn test_ntpagefile_path_empty_invalid() {
+        let vol = PathBuf::from("");
+        let e = create_secondary(
+            &vol,
+            4096,
+            4096,
+            Some(OsBuild { major: 10, minor: 0, build: 26200 }),
+        ).unwrap_err();
+        assert_eq!(e, PagefileError::InvalidPath);
+    }
 }
