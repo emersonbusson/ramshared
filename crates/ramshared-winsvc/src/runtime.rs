@@ -641,13 +641,21 @@ mod tests {
         }
         fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> {
             if self.fail_at == Some("pagefile_error") {
-                return Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "pagefile error"));
+                return Err(RuntimeError::new(
+                    RuntimeErrorClass::Internal,
+                    99,
+                    "pagefile error",
+                ));
             }
             Ok(self.pagefile_clear)
         }
         fn drain_io(&mut self) -> Result<(), RuntimeError> {
             if self.fail_at == Some("drain_io") {
-                return Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "drain_io error"));
+                return Err(RuntimeError::new(
+                    RuntimeErrorClass::Internal,
+                    99,
+                    "drain_io error",
+                ));
             }
             Ok(())
         }
