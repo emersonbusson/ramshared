@@ -288,7 +288,10 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 					    RAMSHARED_SECTOR_SIZE, 2048);
 	if (IS_ERR(rs_dev->disk)) {
 		ret = PTR_ERR(rs_dev->disk);
-		blk_mq_free_tag_set(&rs_dev->tag_set);
+		if (rs_dev->tag_set.ops) {
+			blk_mq_free_tag_set(&rs_dev->tag_set);
+			memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
+		}
 		return ret;
 	}
 
@@ -314,11 +317,11 @@ void ramshared_queue_cleanup(struct ramshared_device *rs_dev)
 
 	if (rs_dev->disk) {
 		del_gendisk(rs_dev->disk);
-		put_disk(rs_dev->disk);
+		blk_cleanup_disk(rs_dev->disk);
 		rs_dev->disk = NULL;
 	}
 
-	if (rs_dev->tag_set.tags) {
+	if (rs_dev->tag_set.ops) {
 		blk_mq_free_tag_set(&rs_dev->tag_set);
 		memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
 	}

@@ -119,9 +119,12 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = device_add_disk(&pdev->dev, rs_dev->disk, ramshared_attr_groups);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
-		put_disk(rs_dev->disk);
+		blk_cleanup_disk(rs_dev->disk);
 		rs_dev->disk = NULL;
-		blk_mq_free_tag_set(&rs_dev->tag_set);
+		if (rs_dev->tag_set.ops) {
+			blk_mq_free_tag_set(&rs_dev->tag_set);
+			memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
+		}
 		goto err_dma_cleanup;
 	}
 
