@@ -470,15 +470,12 @@ fn observe_bound_device_with_nbd_owner_policy(
             ));
         }
         let kernel_owner_instance_id = if expected_kind == ManagedDeviceKind::Nbd {
-            let pid = fs::read_to_string(sysfs.join("pid"))
-                .map_err(|error| {
-                    CascadeError::Precondition(format!("read NBD kernel owner PID: {error}"))
-                })?
-                .trim()
-                .parse::<u32>()
-                .map_err(|_| {
-                    CascadeError::Precondition("NBD kernel owner PID is invalid".into())
-                })?;
+            let pid_content = fs::read_to_string(sysfs.join("pid")).map_err(|error| {
+                CascadeError::Precondition(format!("read NBD kernel owner PID: {error}"))
+            })?;
+            let pid = pid_content.trim().parse::<u32>().map_err(|_| {
+                CascadeError::Precondition("NBD kernel owner PID is invalid".into())
+            })?;
             if pid == 0 {
                 return Err(CascadeError::Precondition(
                     "NBD kernel owner is absent".into(),
@@ -533,20 +530,25 @@ fn detect_live_managed_devices() -> Result<Vec<BoundDeviceIdentity>, CascadeErro
                 continue;
             };
             let live = match kind {
-                ManagedDeviceKind::Nbd => match fs::read_to_string(entry.path().join("pid")) {
-                    Ok(value) if value.trim().is_empty() => false,
-                    Ok(value) => {
-                        value.trim().parse::<u32>().map_err(|_| {
+                ManagedDeviceKind::Nbd => {
+                    let pid_content = match fs::read_to_string(entry.path().join("pid")) {
+                        Ok(value) => value,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => {
+                            return Err(CascadeError::Precondition(format!(
+                                "read {name} owner PID: {error}"
+                            )));
+                        }
+                    };
+                    let value = pid_content.trim();
+                    if value.is_empty() {
+                        false
+                    } else {
+                        value.parse::<u32>().map_err(|_| {
                             CascadeError::Precondition(format!("{name} owner PID is malformed"))
                         })? > 0
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(error) => {
-                        return Err(CascadeError::Precondition(format!(
-                            "read {name} owner PID: {error}"
-                        )));
-                    }
-                },
+                }
                 ManagedDeviceKind::Zram => {
                     fs::read_to_string(entry.path().join("disksize"))
                         .map_err(|error| {
@@ -675,25 +677,24 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
                 "detached NBD node and sysfs dev_t disagree".into(),
             ));
         }
-        match fs::read_to_string(sysfs.join("pid")) {
-            Ok(value) => {
-                let value = value.trim();
-                if !value.is_empty()
-                    && value.parse::<u32>().map_err(|_| {
-                        CascadeError::Precondition("detached NBD owner PID is malformed".into())
-                    })? != 0
-                {
-                    return Err(CascadeError::UnsafeContainment(format!(
-                        "NBD target {path} still has a kernel owner PID"
-                    )));
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        let pid_content = match fs::read_to_string(sysfs.join("pid")) {
+            Ok(value) => value,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => {
                 return Err(CascadeError::Precondition(format!(
                     "read detached NBD owner PID: {error}"
                 )));
             }
+        };
+        let value = pid_content.trim();
+        if !value.is_empty()
+            && value.parse::<u32>().map_err(|_| {
+                CascadeError::Precondition("detached NBD owner PID is malformed".into())
+            })? != 0
+        {
+            return Err(CascadeError::UnsafeContainment(format!(
+                "NBD target {path} still has a kernel owner PID"
+            )));
         }
         let size = fs::read_to_string(sysfs.join("size"))
             .map_err(|error| {
