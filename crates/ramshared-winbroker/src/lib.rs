@@ -257,7 +257,12 @@ impl BrokerSessionCore {
                 BrokerEffect::Close,
             ];
         };
-        if self.live_session.is_some() {
+
+        if self.live_session.is_some()
+            || proto != PROTO_VERSION
+            || tenant != self.allowed_tenant
+            || transport != TransportKind::WinDrive
+        {
             return vec![
                 BrokerEffect::Reply(Msg::Error {
                     reason: "registration_refused".into(),
@@ -265,30 +270,7 @@ impl BrokerSessionCore {
                 BrokerEffect::Close,
             ];
         }
-        if proto != PROTO_VERSION {
-            return vec![
-                BrokerEffect::Reply(Msg::Error {
-                    reason: "registration_refused".into(),
-                }),
-                BrokerEffect::Close,
-            ];
-        }
-        if tenant != self.allowed_tenant {
-            return vec![
-                BrokerEffect::Reply(Msg::Error {
-                    reason: "registration_refused".into(),
-                }),
-                BrokerEffect::Close,
-            ];
-        }
-        if transport != TransportKind::WinDrive {
-            return vec![
-                BrokerEffect::Reply(Msg::Error {
-                    reason: "registration_refused".into(),
-                }),
-                BrokerEffect::Close,
-            ];
-        }
+
         self.live_session = Some(session_id);
         vec![
             BrokerEffect::Audit("registered_ready".into()),
@@ -407,6 +389,29 @@ mod tests {
             core.on_authenticated_msg(1, register("other"))
                 .contains(&BrokerEffect::Close)
         );
+    }
+
+    #[test]
+    fn invalid_registration_guards_are_enforced() {
+        let mut core = BrokerSessionCore::new(1024, "winsvc", "01");
+
+        let mut bad_proto = register("winsvc");
+        if let Msg::Register { ref mut proto, .. } = bad_proto {
+            *proto = PROTO_VERSION + 1;
+        }
+        assert!(core.on_authenticated_msg(1, bad_proto).contains(&BrokerEffect::Close));
+
+        let mut bad_tenant = register("winsvc");
+        if let Msg::Register { ref mut tenant, .. } = bad_tenant {
+            *tenant = "bad".into();
+        }
+        assert!(core.on_authenticated_msg(1, bad_tenant).contains(&BrokerEffect::Close));
+
+        let mut bad_transport = register("winsvc");
+        if let Msg::Register { ref mut transport, .. } = bad_transport {
+            *transport = ramshared_broker::model::TransportKind::NbdUnix;
+        }
+        assert!(core.on_authenticated_msg(1, bad_transport).contains(&BrokerEffect::Close));
     }
 
     #[test]
