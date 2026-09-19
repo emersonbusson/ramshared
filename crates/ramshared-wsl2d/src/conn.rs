@@ -195,6 +195,9 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                     break;
                 }
             };
+
+            let is_disc = req.cmd == Command::Disc;
+
             // Anti-DoS: physical upper bound for IPC buffers (16 MiB) to prevent memory exhaustion.
             if req.len > 16 * 1024 * 1024 {
                 eprintln!(
@@ -229,6 +232,10 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
             };
             if jobs.send(WMsg::Job(job)).is_err() {
                 break; // worker terminated
+            }
+
+            if is_disc {
+                break; // Client initiated disconnect, break the loop
             }
         }
         let _ = jobs.send(WMsg::Closed);
@@ -659,6 +666,44 @@ mod tests {
             vec![0xaa; SIMPLE_REPLY_LEN]
         );
         assert_eq!(flush_error_state.flushes.load(Ordering::SeqCst), 1);
+    }
+
+    struct BlockingReader {
+        data: Cursor<Vec<u8>>,
+    }
+
+    impl Read for BlockingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let n = self.data.read(buf)?;
+            if n == 0 {
+                // Instead of EOF, block indefinitely
+                std::thread::sleep(Duration::from_secs(5));
+                return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "simulate disconnect"));
+            }
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn reader_stops_on_disconnect() {
+        let mut wire = export_name_handshake(b"");
+        // Command 2 is Command::Disc
+        wire.extend_from_slice(&request_bytes(2, 0, 0, NBD_REQUEST_MAGIC));
+        let (jobs_tx, jobs_rx) = sync_channel(2); // allow both Job and Closed
+        let (reply_tx, _reply_rx) = channel();
+        let reader = spawn_reader(
+            BlockingReader { data: Cursor::new(wire) },
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            jobs_tx,
+            reply_tx,
+        );
+        join_with_deadline(reader);
+
+        // It sends Job(Disc) and then Closed
+        assert!(matches!(recv_with_deadline(&jobs_rx), WMsg::Job(_)));
+        assert_only_closed(&jobs_rx);
     }
 
     #[test]
