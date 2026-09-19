@@ -65,12 +65,12 @@ struct ramshared_info {
 	u64 capacity_bytes;
 	u32 queue_depth;
 	u32 reserved;
-};
+} __packed __aligned(8);
 
 struct ramshared_param {
 	u32 param_id;
 	u32 value;
-};
+} __packed __aligned(8);
 
 #define RAMSHARED_IOC_MAGIC 'R'
 #define RAMSHARED_IOC_GET_INFO	_IOR(RAMSHARED_IOC_MAGIC, 1, struct ramshared_info)
