@@ -33,22 +33,23 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	unsigned int op = bio_op(bio);
+	unsigned int bio_size = bio->bi_iter.bi_size;
 	void __iomem *vram_ptr;
 
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
-		     !IS_ALIGNED(bio->bi_iter.bi_size, RAMSHARED_SECTOR_SIZE))) {
+		     !IS_ALIGNED(bio_size, RAMSHARED_SECTOR_SIZE))) {
 		dev_err_ratelimited(rs_dev->dev,
 				    "Unaligned bio: pos=%lld, len=%u\n",
-				    pos, bio->bi_iter.bi_size);
+				    pos, bio_size);
 		return ramshared_errno_to_blk_status(-EINVAL);
 	}
 
 	if (unlikely(pos > rs_dev->dma.size ||
-		     bio->bi_iter.bi_size > rs_dev->dma.size - pos ||
-		     pos + bio->bi_iter.bi_size > rs_dev->capacity_bytes)) {
+		     bio_size > rs_dev->dma.size - pos ||
+		     pos + bio_size > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 				    "Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
-				    pos, bio->bi_iter.bi_size,
+				    pos, bio_size,
 				    rs_dev->capacity_bytes);
 		return ramshared_errno_to_blk_status(-ERANGE);
 	}
@@ -63,15 +64,18 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 			dma_rmb();
 			memcpy_fromio(src_or_dst, vram_ptr, len);
 			flush_dcache_page(bvec.bv_page);
-			atomic64_add(len, &rs_dev->read_bytes);
 		} else if (op == REQ_OP_WRITE) {
 			memcpy_toio(vram_ptr, src_or_dst, len);
 			dma_wmb();
-			atomic64_add(len, &rs_dev->write_bytes);
 		}
 		kunmap_local(src_or_dst);
 		vram_ptr += len;
 	}
+
+	if (op == REQ_OP_READ)
+		atomic64_add(bio_size, &rs_dev->read_bytes);
+	else if (op == REQ_OP_WRITE)
+		atomic64_add(bio_size, &rs_dev->write_bytes);
 
 	atomic64_inc(&rs_dev->dma_transfers_total);
 	return BLK_STS_OK;
