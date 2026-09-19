@@ -13,8 +13,8 @@ CAPACITY_STATUS_FILE="/run/ramshared/capacity-guaranteed"
 LOG_FILE="/var/log/ramshared/vram-tier.log"
 ZRAM_MIB=${RAMSHARED_ZRAM_MIB:-1024}
 
-mkdir -p /run/ramshared /var/log/ramshared
-chmod 0755 /run/ramshared
+mkdir -p /var/log/ramshared
+
 
 setup_protected_cgroup() {
     mkdir -p /sys/fs/cgroup/ramshared-protected
