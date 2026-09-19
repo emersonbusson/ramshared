@@ -10,6 +10,15 @@ pub use crate::protocol::{NBD_EACCES, NBD_EINVAL, NBD_EIO, NBD_EPERM, NBD_ERANGE
 #[derive(Debug)]
 pub struct IoError(pub String);
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+pub fn allocate_request_id() -> u64 {
+    REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WriteOptions {
     pub fua: bool,
@@ -363,5 +372,34 @@ mod tests {
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_ERANGE
         );
+    }
+
+    #[test]
+    fn concurrent_request_id_allocation_is_unique() {
+        use std::sync::mpsc;
+        use std::thread;
+        use std::collections::HashSet;
+
+        let (tx, rx) = mpsc::channel();
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let tx = tx.clone();
+            handles.push(thread::spawn(move || {
+                for _ in 0..1000 {
+                    tx.send(super::allocate_request_id()).unwrap();
+                }
+            }));
+        }
+        drop(tx);
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let mut ids = HashSet::new();
+        for id in rx {
+            assert!(ids.insert(id), "duplicate id: {}", id);
+        }
     }
 }
