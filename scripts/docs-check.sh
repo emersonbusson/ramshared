@@ -82,6 +82,7 @@ run_gate doc-staleness-and-redundancy-tests node --experimental-test-coverage \
   --test-coverage-include=tools/ci/check-doc-staleness-and-redundancy.mjs \
   --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
   --test-reporter=dot tools/ci/check-doc-staleness-and-redundancy.test.mjs
+run_gate pkgbuild-namcap node tools/ci/check-pkgbuild-namcap.mjs
 run_gate release-automation node tools/ci/check-release-automation.mjs --check
 run_gate release-automation-tests node --test --test-reporter=dot tools/ci/check-release-automation.test.mjs
 
