@@ -67,9 +67,10 @@ impl Watchdog {
 
     /// Signals liveness, resetting the timer to `now`.
     pub fn touch(&mut self, now: Instant) {
-        if now >= self.last {
-            self.last = now;
+        if now < self.last {
+            return;
         }
+        self.last = now;
     }
 
     /// `true` if `deadline` has passed since the last signal.
@@ -83,10 +84,9 @@ impl Watchdog {
     /// Checks if `deadline` has passed since the last signal.
     pub fn check(&self, now: Instant) -> Result<(), WatchdogError> {
         if self.expired(now) {
-            Err(WatchdogError::HeartbeatTimeout(self.deadline))
-        } else {
-            Ok(())
+            return Err(WatchdogError::HeartbeatTimeout(self.deadline));
         }
+        Ok(())
     }
 }
 
