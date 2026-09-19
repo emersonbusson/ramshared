@@ -656,4 +656,88 @@ mod tests {
             .retain(|a| a.role != ArtifactRole::BrokerExe);
         assert!(m_missing.artifact(ArtifactRole::BrokerExe).is_err());
     }
+
+    #[test]
+    fn test_package_manifest_valid_toml_parses_successfully() {
+        let toml_content = r#"
+schema = 1
+version = "1.2.3"
+commit = "abcdef1234567890"
+architecture = "x86_64-pc-windows-msvc"
+start_policy = "demand"
+
+[services]
+broker_name = "RamSharedBroker"
+broker_account = "NT SERVICE\\RamSharedBroker"
+consumer_name = "RamSharedWinSvc"
+consumer_account = "LocalSystem"
+
+[[artifacts]]
+role = "broker_exe"
+relative_path = "artifact-0"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[[artifacts]]
+role = "broker_config"
+relative_path = "artifact-1"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[[artifacts]]
+role = "winsvc_exe"
+relative_path = "artifact-2"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[[artifacts]]
+role = "winsvc_config"
+relative_path = "artifact-3"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[[artifacts]]
+role = "driver_inf"
+relative_path = "artifact-4"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[[artifacts]]
+role = "driver_cat"
+relative_path = "artifact-5"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+[[artifacts]]
+role = "driver_sys"
+relative_path = "artifact-6"
+sha256 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+"#;
+
+        let manifest: Result<ProductManifestV1, _> = toml::from_str(toml_content);
+        assert!(manifest.is_ok());
+
+        let candidate = manifest.unwrap();
+        assert_eq!(candidate.schema, 1);
+        assert_eq!(candidate.version, "1.2.3");
+    }
+
+    #[test]
+    fn test_package_missing_multiple_required_fields_rejects() {
+        let mut value = toml::Value::try_from(manifest()).unwrap();
+        value.as_table_mut().unwrap().remove("schema");
+        assert!(parse_manifest(toml::to_string(&value).unwrap().as_bytes()).is_err());
+
+        let mut value = toml::Value::try_from(manifest()).unwrap();
+        value.as_table_mut().unwrap().remove("artifacts");
+        assert!(parse_manifest(toml::to_string(&value).unwrap().as_bytes()).is_err());
+
+        let mut value = toml::Value::try_from(manifest()).unwrap();
+        value.as_table_mut().unwrap().remove("services");
+        assert!(parse_manifest(toml::to_string(&value).unwrap().as_bytes()).is_err());
+    }
+
+    #[test]
+    fn test_package_invalid_version_format_rejects() {
+        let mut value = toml::Value::try_from(manifest()).unwrap();
+        value.as_table_mut().unwrap().insert(
+            "version".to_string(),
+            toml::Value::String("".to_string()),
+        );
+        assert!(parse_manifest(toml::to_string(&value).unwrap().as_bytes()).is_err());
+    }
 }
