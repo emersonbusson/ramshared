@@ -14,6 +14,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+trap {
+    Write-Warning "Build failed: $($_.Exception.Message)"
+    if ($null -ne (Get-Command Stop-Transcript -ErrorAction SilentlyContinue)) {
+        try { Stop-Transcript -ErrorAction SilentlyContinue } catch { Write-Verbose "Transcription stop failed" }
+    }
+    [System.Environment]::Exit(74)
+}
+
 Set-Location $RepoRoot
 $log = Join-Path $RepoRoot "artifacts\build-drivers.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
