@@ -59,6 +59,15 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 		void *src_or_dst = bvec_kmap_local(&bvec);
 		size_t len = bvec.bv_len;
 
+		/*
+		 * Zero-copy memcpy bounds validation
+		 * Verify the segment length doesn't exceed the bio size mapping bounds
+		 */
+		if (unlikely(len > bio->bi_iter.bi_size || pos >= rs_dev->dma.size || len > rs_dev->dma.size - pos)) {
+			kunmap_local(src_or_dst);
+			return ramshared_errno_to_blk_status(-ERANGE);
+		}
+
 		if (op == REQ_OP_READ) {
 			dma_rmb();
 			memcpy_fromio(src_or_dst, vram_ptr, len);
@@ -71,6 +80,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 		}
 		kunmap_local(src_or_dst);
 		vram_ptr += len;
+		pos += len;
 	}
 
 	atomic64_inc(&rs_dev->dma_transfers_total);
@@ -171,6 +181,11 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
+
+	if (unlikely(pos >= rs_dev->dma.size || len > rs_dev->dma.size - pos)) {
+		kunmap_local(mem);
+		return -ERANGE;
+	}
 
 	if (is_write) {
 		memcpy_toio(vram_ptr, mem, len);
