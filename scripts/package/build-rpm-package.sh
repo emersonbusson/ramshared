@@ -76,12 +76,12 @@ fi
 /lib/udev/rules.d/65-ramshared-observability.rules
 
 %changelog
-* $(LC_ALL=C date "+%a %b %e %Y") Emerson Busson <emersonbusson@example.com> - ${RPM_VERSION}-1
+* $(LC_ALL=C date "+%a %b %e %Y") Emerson Busson <emersonbusson at example dot com> - ${RPM_VERSION}-1
 - Official v${RPM_VERSION} Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
 # Validate changelog syntax
-if ! grep -qE '^\* (Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 1-3][0-9] [0-9]{4} .*<.*> - .*' "$SPEC_FILE"; then
+if ! grep -qE '^\* (Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 1-3]?[0-9] [0-9]{4} .*(<.*>|at example dot com) - .*' "$SPEC_FILE"; then
   echo "ERROR: Invalid RPM changelog syntax in $SPEC_FILE" >&2
   exit 1
 fi
