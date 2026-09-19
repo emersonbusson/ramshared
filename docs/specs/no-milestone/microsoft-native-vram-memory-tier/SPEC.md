@@ -183,7 +183,7 @@ claim a host adapter, durable host store, or live Microsoft/WSL evidence.
 
 | Path | Action | Contract / test owner |
 | --- | --- | --- |
-| `crates/ramshared-tier/src/n3_state.rs` | Implemented | Pure observation preflight, opaque lease protocol, drain, scrub, restart-record serialization/restore, and decision model. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | Implemented | Pure observation preflight, opaque lease protocol, drain, scrub, restart-record serialization/restore, and decision model. |
 | `crates/ramshared-tier/src/lib.rs` | Implemented shared glue | Export only the pure model; no host adapter. |
 | `crates/ramshared-tier/tests/n3_state.rs` | Implemented | Legitimate/refusal/epoch/grant/revoke/drain/reset/restart lifecycle matrix. |
 | `docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md` | Maintain | RFC contract and named tests. |
@@ -241,22 +241,22 @@ results belong in `IMPL.md`; host rows remain environment-bound.
 
 | Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover / pass condition |
 | --- | --- | --- | --- | --- |
-| `crates/ramshared-tier/src/n3_state.rs` | `valid_host_observation_enters_observing` | unit | #3 | Bounded valid snapshot enters the model. |
-| `crates/ramshared-tier/src/n3_state.rs` | `unknown_schema_is_refused` | unit/refusal | #13 | Unknown schema has no partial effect. |
-| `crates/ramshared-tier/src/n3_state.rs` | `stale_observation_is_unavailable` | unit/refusal | #13/#16 | Age beyond declared max cannot authorize a lease. |
-| `crates/ramshared-tier/src/n3_state.rs` | `epoch_regression_is_refused` | unit/refusal | #13/#17 | Reordered/replayed authority is safe. |
-| `crates/ramshared-tier/src/n3_state.rs` | `impossible_budget_counters_are_refused` | unit/refusal | #3/#13 | Resident > budget or overflow refuses. |
-| `crates/ramshared-tier/src/n3_state.rs` | `preflight_never_claims_grant` | unit/refusal | #2/#18 | Observation preflight never enters `GRANTED(generation)`. |
-| `crates/ramshared-tier/src/n3_state.rs` | `host_pressure_requests_demote` | unit | #16 | Host event leads to bounded intent. |
-| `crates/ramshared-tier/src/n3_state.rs` | `reset_revoke_and_offline_are_safe` | unit/refusal | #16 | No unsafe retained residency after owner event. |
-| `crates/ramshared-tier/src/n3_state.rs` | `guest_pfn_or_numa_claim_is_refused` | unit/refusal | #2/#13 | Guest cannot create native memory ownership. |
-| `crates/ramshared-tier/src/n3_state.rs` | `deterministic_contract_failure_is_not_retried` | unit/refusal | #15 | One refusal, no blind retry. |
-| `crates/ramshared-tier/src/n3_state.rs` | `replayed_observation_is_idempotent` | unit | #17 | Same epoch/event produces no duplicate effect. |
-| `crates/ramshared-tier/src/n3_state.rs` | **TestName: `N3_RUST_GRANT_REVOKE_STATE_MACHINE`**; function: `n3_rust_grant_revoke_state_machine` | unit/state | #9/#16/#18 | Exact host-led `ABSENT → NEGOTIATING → GRANTED → QUIESCING → DRAINED → REVOKED → ABSENT` path and failure branch. |
-| `crates/ramshared-tier/src/n3_state.rs` | **TestName: `N3_RUST_STALE_GENERATION_REFUSAL`**; function: `n3_rust_stale_generation_refusal` | unit/refusal | #13/#17 | Lower, skipped, or old lease generation cannot be accepted or retried. |
-| `crates/ramshared-tier/src/n3_state.rs` | **TestName: `N3_RUST_DUPLICATE_EVENT_IDEMPOTENCE`**; function: `n3_rust_duplicate_event_idempotence` | unit/idempotence | #17 | Exact duplicate event has one effect; reused ID with changed payload fails. |
-| `crates/ramshared-tier/src/n3_state.rs` | **TestName: `N3_RUST_REVOKE_WITH_INFLIGHT_REFUSAL`**; function: `n3_rust_revoke_with_inflight_refusal` | unit/refusal | #16 | Non-zero/unknown in-flight I/O prevents `DRAIN_ACK` and enters `FAILED`. |
-| `crates/ramshared-tier/src/n3_state.rs` | **TestName: `N3_RUST_GUEST_CRASH_FAILSAFE`**; function: `n3_rust_guest_crash_failsafe` | unit/lifecycle | #16/#18 | Crash/liveness expiry invalidates the old lease; restart begins `ABSENT`. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `valid_host_observation_enters_observing` | unit | #3 | Bounded valid snapshot enters the model. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `unknown_schema_is_refused` | unit/refusal | #13 | Unknown schema has no partial effect. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `stale_observation_is_unavailable` | unit/refusal | #13/#16 | Age beyond declared max cannot authorize a lease. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `epoch_regression_is_refused` | unit/refusal | #13/#17 | Reordered/replayed authority is safe. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `impossible_budget_counters_are_refused` | unit/refusal | #3/#13 | Resident > budget or overflow refuses. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `preflight_never_claims_grant` | unit/refusal | #2/#18 | Observation preflight never enters `GRANTED(generation)`. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `host_pressure_requests_demote` | unit | #16 | Host event leads to bounded intent. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `reset_revoke_and_offline_are_safe` | unit/refusal | #16 | No unsafe retained residency after owner event. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `guest_pfn_or_numa_claim_is_refused` | unit/refusal | #2/#13 | Guest cannot create native memory ownership. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `deterministic_contract_failure_is_not_retried` | unit/refusal | #15 | One refusal, no blind retry. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | `replayed_observation_is_idempotent` | unit | #17 | Same epoch/event produces no duplicate effect. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | **TestName: `N3_RUST_GRANT_REVOKE_STATE_MACHINE`**; function: `n3_rust_grant_revoke_state_machine` | unit/state | #9/#16/#18 | Exact host-led `ABSENT → NEGOTIATING → GRANTED → QUIESCING → DRAINED → REVOKED → ABSENT` path and failure branch. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | **TestName: `N3_RUST_STALE_GENERATION_REFUSAL`**; function: `n3_rust_stale_generation_refusal` | unit/refusal | #13/#17 | Lower, skipped, or old lease generation cannot be accepted or retried. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | **TestName: `N3_RUST_DUPLICATE_EVENT_IDEMPOTENCE`**; function: `n3_rust_duplicate_event_idempotence` | unit/idempotence | #17 | Exact duplicate event has one effect; reused ID with changed payload fails. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | **TestName: `N3_RUST_REVOKE_WITH_INFLIGHT_REFUSAL`**; function: `n3_rust_revoke_with_inflight_refusal` | unit/refusal | #16 | Non-zero/unknown in-flight I/O prevents `DRAIN_ACK` and enters `FAILED`. |
+| `crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs` | **TestName: `N3_RUST_GUEST_CRASH_FAILSAFE`**; function: `n3_rust_guest_crash_failsafe` | unit/lifecycle | #16/#18 | Crash/liveness expiry invalidates the old lease; restart begins `ABSENT`. |
 | `crates/ramshared-tier/tests/n3_state.rs` | **TestName: `N3_RUST_DURABLE_RESTART_GENERATION_REFUSAL`**; function: `n3_rust_durable_restart_generation_refusal` | integration/refusal | #13/#17 | A fresh pure model restores a bounded host restart record and rejects its old generation; a strictly newer generation remains eligible. |
 | `crates/ramshared-tier/tests/n3_state.rs` | `n3_product_transport_scope_refusal` | integration/refusal | #18 | N3 never selects NBD/ublk or changes product state. |
 | `crates/ramshared-tier/tests/n3_state.rs` | `host_contract_owner_is_explicit` | integration | #18 | Every native fact has a host owner. |
@@ -305,7 +305,7 @@ The Step 3 coverage owner for the pure state model is
 gate and report location are:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ramshared-tier/src/n3_state.rs --min 80 --report-json tmp/microsoft-native-vram-memory-tier-n3-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs --min 80 --report-json tmp/microsoft-native-vram-memory-tier-n3-cov.json
 ```
 
 The `crates/ramshared-tier/src/lib.rs` change is a shared N/A module-export

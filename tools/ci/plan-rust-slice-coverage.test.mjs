@@ -80,12 +80,17 @@ const MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-tier',
-    '--files', 'crates/ramshared-tier/src/n3_state.rs',
+    '--files', 'crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs',
     '--min', '80',
     '--report-json', 'tmp/microsoft-native-vram-memory-tier-n3-cov.json',
   ],
   packages: ['ramshared-tier'],
-  files: ['crates/ramshared-tier/src/n3_state.rs'],
+  files: [
+    'crates/ramshared-tier/src/n3_state/mod.rs',
+    'crates/ramshared-tier/src/n3_state/state_persistence.rs',
+    'crates/ramshared-tier/src/n3_state/state_validation.rs',
+    'crates/ramshared-tier/src/n3_state/state_transitions.rs',
+  ],
   min: 80,
 }
 const MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY = {

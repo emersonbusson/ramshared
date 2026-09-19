@@ -752,7 +752,7 @@
         "-p",
         "ramshared-tier",
         "--files",
-        "crates/ramshared-tier/src/n3_state.rs",
+        "crates/ramshared-tier/src/n3_state/mod.rs,crates/ramshared-tier/src/n3_state/state_persistence.rs,crates/ramshared-tier/src/n3_state/state_validation.rs,crates/ramshared-tier/src/n3_state/state_transitions.rs",
         "--min",
         "80",
         "--report-json",
@@ -762,7 +762,10 @@
         "ramshared-tier"
       ],
       "files": [
-        "crates/ramshared-tier/src/n3_state.rs"
+        "crates/ramshared-tier/src/n3_state/mod.rs",
+        "crates/ramshared-tier/src/n3_state/state_persistence.rs",
+        "crates/ramshared-tier/src/n3_state/state_validation.rs",
+        "crates/ramshared-tier/src/n3_state/state_transitions.rs"
       ],
       "min": 80
     },

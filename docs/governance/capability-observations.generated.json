@@ -716,8 +716,7 @@
       },
       "documented_surface": {
         "implementation_paths": [
-          "crates/ramshared-tier/src/lib.rs",
-          "crates/ramshared-tier/src/n3_state.rs"
+          "crates/ramshared-tier/src/lib.rs"
         ],
         "test_paths": [
           "crates/ramshared-tier/tests/n3_state.rs",
