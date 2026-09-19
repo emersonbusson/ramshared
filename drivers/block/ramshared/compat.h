@@ -123,4 +123,15 @@ typedef blk_mode_t ramshared_blk_mode_t;
 typedef fmode_t ramshared_blk_mode_t;
 #endif
 
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 1, 0)
+static inline void __iomem *
+ramshared_compat_devm_ioremap_wc(struct device *dev, resource_size_t offset,
+				 resource_size_t size)
+{
+	return devm_ioremap_nocache(dev, offset, size);
+}
+#define devm_ioremap_wc ramshared_compat_devm_ioremap_wc
+#endif
+
 #endif /* _RAMSHARED_COMPAT_H */
