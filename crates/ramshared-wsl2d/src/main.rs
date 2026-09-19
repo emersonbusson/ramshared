@@ -5001,7 +5001,7 @@ impl UblkRuntime for ProductionUblkRuntime {
 
     fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         while !SHUTDOWN.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(100));
         }
         Ok(())
     }
@@ -10806,6 +10806,20 @@ Filename Type Size Used Priority
             calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
         assert!(!clamped, "RTX 4090 with ample headroom must not be clamped");
         assert_eq!(safe_slice, requested_slice);
+    }
+
+    #[test]
+    fn daemon_ublk_wait_for_shutdown_returns_immediately_on_sigterm() {
+        let mut runtime = ProductionUblkRuntime;
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            SHUTDOWN.store(true, Ordering::SeqCst);
+        });
+        let start = std::time::Instant::now();
+        runtime.wait_for_shutdown().unwrap();
+        let elapsed = start.elapsed();
+        assert!(elapsed < std::time::Duration::from_millis(300), "wait_for_shutdown took too long: {:?}", elapsed);
+        SHUTDOWN.store(false, Ordering::SeqCst);
     }
 
     #[test]
