@@ -33,16 +33,35 @@ function Invoke-CmdBat {
     if ($LASTEXITCODE -ne 0) { throw "command failed exit=$LASTEXITCODE : $Extra" }
 }
 
+function Find-MSBuild {
+    $cands = @(
+        "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+    )
+    foreach ($c in $cands) {
+        if (Test-Path $c) { return $c }
+    }
+    throw "MSBuild.exe not found in standard VS2022 BuildTools paths"
+}
+
+$msbuild = Find-MSBuild
 $vcvars = Find-VcVars
+
 $kit = "C:\Program Files (x86)\Windows Kits\10"
+if (-not (Test-Path $kit)) { throw "Windows Kits not found at $kit" }
+
 $incKm = "$kit\Include\$KitVersion\km"
 $incShared = "$kit\Include\$KitVersion\shared"
 $incKmCrt = "$kit\Include\$KitVersion\km\crt"
+$incUm = "$kit\Include\$KitVersion\um"
 $libKm = "$kit\Lib\$KitVersion\km\x64"
 $libUcrt = "$kit\Lib\$KitVersion\ucrt\x64"
+$libUm = "$kit\Lib\$KitVersion\um\x64"
 
+# Validate WDK and target platform SDK availability
 if (-not (Test-Path "$incKm\storport.h")) { throw "storport.h missing under $incKm" }
 if (-not (Test-Path "$libKm\storport.lib")) { throw "storport.lib missing under $libKm" }
+if (-not (Test-Path "$incUm\windows.h")) { throw "windows.h missing under $incUm (Platform SDK)" }
 
 $cflags = @(
     "/nologo", "/c", "/kernel", "/GS-", "/W4", "/WX", "/wd4324", "/O2", "/Z7",
