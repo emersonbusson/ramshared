@@ -3,6 +3,7 @@
 #define _RAMSHARED_H
 
 #include <linux/types.h>
+#include <linux/ioctl.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
 #include <linux/pci.h>
@@ -75,6 +76,8 @@ struct ramshared_param {
 #define RAMSHARED_IOC_MAGIC 'R'
 #define RAMSHARED_IOC_GET_INFO	_IOR(RAMSHARED_IOC_MAGIC, 1, struct ramshared_info)
 #define RAMSHARED_IOC_SET_PARAM	_IOW(RAMSHARED_IOC_MAGIC, 2, struct ramshared_param)
+#define RAMSHARED_IOC_GET_PARAM	_IOR(RAMSHARED_IOC_MAGIC, 3, struct ramshared_param)
+#define RAMSHARED_IOC_UPDATE_PARAM	_IOWR(RAMSHARED_IOC_MAGIC, 4, struct ramshared_param)
 
 #include "compat.h"
 
