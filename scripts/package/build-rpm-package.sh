@@ -5,7 +5,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
+FALLBACK_VERSION=$(grep -m1 '^version = ' "$ROOT/Cargo.toml" | sed -E 's/version = "(.*)".*/\1/')
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v${FALLBACK_VERSION}}}"
 VERSION_CLEAN="${VERSION#v}"
 RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
 ARCH="x86_64"
@@ -75,8 +76,8 @@ fi
 /lib/udev/rules.d/65-ramshared-observability.rules
 
 %changelog
-* Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
-- Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
+* $(date "+%a %b %d %Y") Emerson Busson <emersonbusson@example.com> - ${RPM_VERSION}-1
+- Official v${RPM_VERSION} Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
 if command -v rpmbuild >/dev/null 2>&1; then
