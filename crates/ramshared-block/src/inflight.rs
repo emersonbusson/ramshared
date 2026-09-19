@@ -3,10 +3,17 @@
 //! reads or reordered write-after-write. Pure logic; the daemon queries before
 //! queueing the CUDA copy.
 
+use std::time::{Duration, Instant};
+
 /// Set of ranges `[offset, offset+len)` currently inflight.
-#[derive(Default)]
 pub struct Inflight {
-    ranges: Vec<(u64, u64)>,
+    ranges: Vec<(u64, u64, Instant)>,
+}
+
+impl Default for Inflight {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Inflight {
@@ -17,7 +24,7 @@ impl Inflight {
     /// `true` if `[off, off+len)` overlaps some inflight range.
     pub fn conflicts(&self, off: u64, len: u64) -> bool {
         let end = off.saturating_add(len);
-        self.ranges.iter().any(|&(s, e)| off < e && s < end)
+        self.ranges.iter().any(|&(s, e, _)| off < e && s < end)
     }
 
     /// Marks the range as inflight. Returns `false` if it already conflicts (caller should
@@ -26,20 +33,28 @@ impl Inflight {
         if self.conflicts(off, len) {
             return false;
         }
-        self.ranges.push((off, off.saturating_add(len)));
+        self.ranges.push((off, off.saturating_add(len), Instant::now()));
         true
     }
 
     /// Removes the range upon completing the operation.
     pub fn remove(&mut self, off: u64, len: u64) {
         let end = off.saturating_add(len);
-        if let Some(i) = self.ranges.iter().position(|&r| r == (off, end)) {
+        if let Some(i) = self.ranges.iter().position(|&(s, e, _)| s == off && e == end) {
             self.ranges.swap_remove(i);
         }
     }
 
     pub fn is_empty(&self) -> bool {
         self.ranges.is_empty()
+    }
+
+    /// Reaps inflight requests that have been outstanding longer than `timeout`.
+    /// Returns the number of requests reaped.
+    pub fn reap_expired(&mut self, timeout: Duration) -> usize {
+        let initial_len = self.ranges.len();
+        self.ranges.retain(|&(_, _, inserted_at)| inserted_at.elapsed() < timeout);
+        initial_len - self.ranges.len()
     }
 }
 
@@ -72,5 +87,22 @@ mod tests {
         assert!(f.try_insert(0, 4096));
         assert!(f.try_insert(4096, 4096));
         assert!(f.try_insert(8192, 4096));
+    }
+
+    #[test]
+    fn reap_expired_removes_old_requests() {
+        let mut f = Inflight::new();
+        assert!(f.try_insert(0, 4096));
+
+        // Wait a tiny bit so the request has a measurable age
+        std::thread::sleep(Duration::from_millis(5));
+
+        // Reaping with a large timeout shouldn't remove it
+        assert_eq!(f.reap_expired(Duration::from_secs(10)), 0);
+        assert!(!f.is_empty());
+
+        // Reaping with a very small timeout should remove it
+        assert_eq!(f.reap_expired(Duration::from_millis(1)), 1);
+        assert!(f.is_empty());
     }
 }
