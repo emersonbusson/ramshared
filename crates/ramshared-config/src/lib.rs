@@ -99,29 +99,38 @@ impl Config {
             Ok(d) => d,
             Err(err) => {
                 let message = err.message().to_string();
-                let mut line = None;
-                let mut column = None;
-                if let Some(span) = err.span() {
-                    let mut l = 1;
-                    let mut c = 1;
-                    for (i, ch) in text.chars().enumerate() {
-                        if i == span.start {
-                            line = Some(l);
-                            column = Some(c);
-                            break;
-                        }
-                        if ch == '\n' {
-                            l += 1;
-                            c = 1;
-                        } else {
-                            c += 1;
-                        }
+                let Some(span) = err.span() else {
+                    return Err(ConfigError::Parse {
+                        message,
+                        line: None,
+                        column: None,
+                        key_path: String::new(),
+                    });
+                };
+
+                let mut line = 1;
+                let mut column = 1;
+                for (i, ch) in text.chars().enumerate() {
+                    if i == span.start {
+                        return Err(ConfigError::Parse {
+                            message,
+                            line: Some(line),
+                            column: Some(column),
+                            key_path: String::new(),
+                        });
+                    }
+                    if ch == '\n' {
+                        line += 1;
+                        column = 1;
+                    } else {
+                        column += 1;
                     }
                 }
+
                 return Err(ConfigError::Parse {
                     message,
-                    line,
-                    column,
+                    line: None,
+                    column: None,
                     key_path: String::new(),
                 });
             }
@@ -130,31 +139,39 @@ impl Config {
         serde_path_to_error::deserialize(deserializer).map_err(|err| {
             let inner_err = err.inner();
             let message = inner_err.message().to_string();
-            let mut line = None;
-            let mut column = None;
-            if let Some(span) = inner_err.span() {
-                let mut l = 1;
-                let mut c = 1;
-                for (i, ch) in text.chars().enumerate() {
-                    if i == span.start {
-                        line = Some(l);
-                        column = Some(c);
-                        break;
-                    }
-                    if ch == '\n' {
-                        l += 1;
-                        c = 1;
-                    } else {
-                        c += 1;
-                    }
+            let key_path = err.path().to_string();
+            let Some(span) = inner_err.span() else {
+                return ConfigError::Parse {
+                    message,
+                    line: None,
+                    column: None,
+                    key_path,
+                };
+            };
+
+            let mut line = 1;
+            let mut column = 1;
+            for (i, ch) in text.chars().enumerate() {
+                if i == span.start {
+                    return ConfigError::Parse {
+                        message,
+                        line: Some(line),
+                        column: Some(column),
+                        key_path,
+                    };
+                }
+                if ch == '\n' {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += 1;
                 }
             }
 
-            let key_path = err.path().to_string();
             ConfigError::Parse {
                 message,
-                line,
-                column,
+                line: None,
+                column: None,
                 key_path,
             }
         })
