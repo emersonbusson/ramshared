@@ -35,6 +35,11 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	unsigned int op = bio_op(bio);
 	void __iomem *vram_ptr;
 
+	if (op == REQ_OP_FLUSH) {
+		dma_wmb();
+		return BLK_STS_OK;
+	}
+
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
 		     !IS_ALIGNED(bio->bi_iter.bi_size, RAMSHARED_SECTOR_SIZE))) {
 		dev_err_ratelimited(rs_dev->dev,
@@ -52,6 +57,15 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 				    rs_dev->capacity_bytes);
 		return ramshared_errno_to_blk_status(-ERANGE);
 	}
+
+	if (op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE) {
+		memset_io(rs_dev->dma.cpu_addr + pos, 0, bio->bi_iter.bi_size);
+		dma_wmb();
+		return BLK_STS_OK;
+	}
+
+	if (op != REQ_OP_READ && op != REQ_OP_WRITE)
+		return BLK_STS_NOTSUPP;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 
