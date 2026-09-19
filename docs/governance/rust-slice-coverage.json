@@ -793,7 +793,7 @@
         "-p",
         "ramshared-block",
         "--files",
-        "crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs",
+        "crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/isolated_origin/origin_tracker.rs,crates/ramshared-block/src/isolated_origin/origin_policy.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs",
         "--min",
         "80",
         "--report-json",
@@ -804,6 +804,8 @@
       ],
       "files": [
         "crates/ramshared-block/src/isolated_origin.rs",
+        "crates/ramshared-block/src/isolated_origin/origin_tracker.rs",
+        "crates/ramshared-block/src/isolated_origin/origin_policy.rs",
         "crates/ramshared-block/src/lib.rs",
         "crates/ramshared-block/src/origin_cache.rs",
         "crates/ramshared-block/src/request.rs",
