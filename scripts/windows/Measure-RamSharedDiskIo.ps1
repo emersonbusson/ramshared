@@ -36,6 +36,25 @@ param(
 $ErrorActionPreference = "Stop"
 function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
+function Assert-DiskPerformanceCountersAvailable {
+    $physCount = 0
+    try {
+        $physCount = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk -EA Stop).Count
+    } catch {
+        try { $physCount = @(Get-WmiObject -Class Win32_PerfFormattedData_PerfDisk_PhysicalDisk -EA Stop).Count } catch {}
+    }
+    $logCount = 0
+    try {
+        $logCount = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_LogicalDisk -EA Stop).Count
+    } catch {
+        try { $logCount = @(Get-WmiObject -Class Win32_PerfFormattedData_PerfDisk_LogicalDisk -EA Stop).Count } catch {}
+    }
+    if ($physCount -eq 0 -or $logCount -eq 0) {
+        throw "PhysicalDisk and/or LogicalDisk performance counters are not available or are zero"
+    }
+}
+Assert-DiskPerformanceCountersAvailable
+
 function Get-Sha256Hex {
     param([byte[]]$Bytes)
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
