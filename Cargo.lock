@@ -98,6 +98,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64fa3c856b712db6612c019f14756e64e4bcea13337a6b33b696333a9eaa2d06"
 
 [[package]]
+name = "caps"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd1ddba47aba30b6a889298ad0109c3b8dcb0e8fc993b459daa7067d46f865e0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -936,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-agent"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -945,14 +954,14 @@ dependencies = [
 
 [[package]]
 name = "ramshared-block"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-vram",
 ]
 
 [[package]]
 name = "ramshared-broker"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -960,7 +969,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cli"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "libc",
  "ramshared-cuda",
@@ -974,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-config"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -983,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cuda"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "cuda-async",
  "cuda-core",
@@ -993,22 +1002,22 @@ dependencies = [
 
 [[package]]
 name = "ramshared-dxg"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ramshared-integrity"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 
 [[package]]
 name = "ramshared-tier"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 
 [[package]]
 name = "ramshared-uring"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "io-uring",
  "libc",
@@ -1016,11 +1025,11 @@ dependencies = [
 
 [[package]]
 name = "ramshared-vram"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 
 [[package]]
 name = "ramshared-vulkan"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ash",
  "ramshared-vram",
@@ -1028,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winbroker"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -1041,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winsvc"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "base64",
  "ramshared-block",
@@ -1059,8 +1068,9 @@ dependencies = [
 
 [[package]]
 name = "ramshared-wsl2d"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
+ "caps",
  "ramshared-block",
  "ramshared-broker",
  "ramshared-cuda",
