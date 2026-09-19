@@ -318,17 +318,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_opt_magic() {
-        let mut v = Vec::new();
-        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
-        v.extend_from_slice(&0xbad_u64.to_be_bytes()); // bad magic
-        let mut r = Cursor::new(v);
-        let mut out = Vec::new();
-        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
-        assert!(matches!(res, Err(HandshakeError::IncompatibleVersion)));
-    }
-
-    #[test]
     fn rejects_oversized_option_len() {
         // option with giant len must fail BEFORE allocating (M4 anti-DoS).
         let mut v = Vec::new();
@@ -409,5 +398,54 @@ mod tests {
         let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
+    }
+
+    #[test]
+    fn test_handshake_version_mismatch() {
+        let mut v = Vec::new();
+        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        v.extend_from_slice(&0xbad_u64.to_be_bytes()); // bad magic
+        let mut r = Cursor::new(v);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::IncompatibleVersion)));
+    }
+
+    #[test]
+    fn test_handshake_capability_conflict_unsupported_opt() {
+        let mut r = stream_opts(
+            0,
+            &[(999, vec![]), (NBD_OPT_ABORT, vec![])],
+        );
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::Aborted)));
+        assert!(has_rep(&out, NBD_REP_ERR_UNSUP));
+    }
+
+    #[test]
+    fn test_handshake_malformed_frame_truncated_go() {
+        let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &[0, 0, 0]);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
+    }
+
+    #[test]
+    fn test_handshake_malformed_frame_missing_info() {
+        let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &[0, 0, 0, 1, b'a']);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
+    }
+
+    #[test]
+    fn test_handshake_malformed_frame_overflow_len() {
+        let mut data = vec![0xff, 0xff, 0xff, 0xff];
+        data.extend_from_slice(&[0; 10]);
+        let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &data);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
     }
 }
