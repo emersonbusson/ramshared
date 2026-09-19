@@ -1,7 +1,7 @@
+use ramshared_block::handshake::Export;
+use ramshared_wsl2d::conn::{WMsg, spawn_acceptor_tcp};
 use std::net::TcpListener;
 use std::sync::{Arc, mpsc::sync_channel};
-use ramshared_wsl2d::conn::{spawn_acceptor_tcp, WMsg};
-use ramshared_block::handshake::Export;
 
 #[test]
 fn test_keepalive_timeout() {
@@ -9,7 +9,10 @@ fn test_keepalive_timeout() {
     let addr = listener.local_addr().unwrap();
 
     // RED TEST dummy export
-    let exports = Arc::new(vec![Export { name: "test".to_string(), size: 4096 }]);
+    let exports = Arc::new(vec![Export {
+        name: "test".to_string(),
+        size: 4096,
+    }]);
     let (jobs_tx, _jobs_rx) = sync_channel::<WMsg>(1);
 
     // We expect spawn_acceptor_tcp to set keepalive parameters on the accepted stream,

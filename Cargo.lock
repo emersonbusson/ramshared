@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-agent"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -945,14 +945,14 @@ dependencies = [
 
 [[package]]
 name = "ramshared-block"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "ramshared-vram",
 ]
 
 [[package]]
 name = "ramshared-broker"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "serde",
  "serde_json",
@@ -960,7 +960,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cli"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "libc",
  "ramshared-cuda",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-config"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cuda"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "cuda-async",
  "cuda-core",
@@ -993,22 +993,22 @@ dependencies = [
 
 [[package]]
 name = "ramshared-dxg"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ramshared-integrity"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 
 [[package]]
 name = "ramshared-tier"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 
 [[package]]
 name = "ramshared-uring"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "io-uring",
  "libc",
@@ -1016,11 +1016,11 @@ dependencies = [
 
 [[package]]
 name = "ramshared-vram"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 
 [[package]]
 name = "ramshared-vulkan"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "ash",
  "ramshared-vram",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winbroker"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winsvc"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "base64",
  "ramshared-block",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-wsl2d"
-version = "0.14.1"
+version = "0.14.1" # x-release-please-version
 dependencies = [
  "ramshared-block",
  "ramshared-broker",

@@ -283,7 +283,7 @@ pub fn spawn_acceptor(
                         eprintln!("[ramsharedd] Unix keepalive failed: {e}");
                     }
                     s
-                },
+                }
                 Err(e) => {
                     eprintln!("[ramsharedd] accept failed: {e}");
                     break;
@@ -331,8 +331,14 @@ pub fn spawn_acceptor_tcp(
             if let Err(e) = rustix::net::sockopt::set_socket_keepalive(&stream, true) {
                 eprintln!("[ramsharedd] TCP keepalive failed: {e}");
             } else {
-                let _ = rustix::net::sockopt::set_tcp_keepidle(&stream, std::time::Duration::from_secs(5));
-                let _ = rustix::net::sockopt::set_tcp_keepintvl(&stream, std::time::Duration::from_secs(2));
+                let _ = rustix::net::sockopt::set_tcp_keepidle(
+                    &stream,
+                    std::time::Duration::from_secs(5),
+                );
+                let _ = rustix::net::sockopt::set_tcp_keepintvl(
+                    &stream,
+                    std::time::Duration::from_secs(2),
+                );
                 let _ = rustix::net::sockopt::set_tcp_keepcnt(&stream, 5);
             }
 
