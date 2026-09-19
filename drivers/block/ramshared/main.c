@@ -121,7 +121,6 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
 		put_disk(rs_dev->disk);
 		rs_dev->disk = NULL;
-		blk_mq_free_tag_set(&rs_dev->tag_set);
 		goto err_dma_cleanup;
 	}
 
