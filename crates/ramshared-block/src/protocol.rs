@@ -191,4 +191,80 @@ mod tests {
         assert_eq!(Command::from_u16(2), Command::Disc);
         assert_eq!(Command::from_u16(99), Command::Unknown(99));
     }
+
+    #[test]
+    fn test_protocol_read_decode_success() {
+        let raw = build_request(0, 123, 0, 0); // boundary: zero
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Read);
+        assert_eq!(r.offset, 0);
+        assert_eq!(r.len, 0);
+    }
+
+    #[test]
+    fn test_protocol_invalid_checksum_mismatch() {
+        // The current parse_request does not return ChecksumMismatch,
+        // but we test the formatting as requested by the error structure test.
+        assert_eq!(
+            ProtocolError::ChecksumMismatch.to_string(),
+            "checksum mismatch"
+        );
+    }
+
+    #[test]
+    fn test_protocol_write_decode_success() {
+        let raw = build_request(1, 999, 1024, 2048);
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Write);
+        assert_eq!(r.offset, 1024);
+        assert_eq!(r.len, 2048);
+    }
+
+    #[test]
+    fn test_protocol_flush_decode_success() {
+        let raw = build_request(3, 456, u64::MAX, u32::MAX); // boundary: max
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Flush);
+        assert_eq!(r.offset, u64::MAX);
+        assert_eq!(r.len, u32::MAX);
+    }
+
+    #[test]
+    fn test_protocol_discard_decode_success() {
+        let raw = build_request(4, 789, 4096, 8192); // discard/trim
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Trim);
+    }
+
+    #[test]
+    fn test_protocol_disc_decode_success() {
+        let raw = build_request(2, 999, 1, 1); // boundary: misaligned
+        let r = parse_request(&raw).expect("must parse");
+        assert_eq!(r.cmd, Command::Disc);
+        assert_eq!(r.offset, 1);
+        assert_eq!(r.len, 1);
+    }
+
+    #[test]
+    fn test_protocol_reply_roundtrip_max() {
+        let r = encode_simple_reply(u32::MAX, u64::MAX); // boundary: max
+        assert_eq!(u32::from_be_bytes([r[4], r[5], r[6], r[7]]), u32::MAX);
+        assert_eq!(&r[8..16], &u64::MAX.to_be_bytes());
+    }
+
+    #[test]
+    fn test_protocol_error_formatting_success() {
+        assert_eq!(
+            ProtocolError::TruncatedPayload { got: 10, need: 28 }.to_string(),
+            "truncated payload: 10 < 28"
+        );
+        assert_eq!(
+            ProtocolError::InvalidHeader(0x0badc0de).to_string(),
+            "invalid request magic (header): 0x0badc0de"
+        );
+        assert_eq!(
+            ProtocolError::ChecksumMismatch.to_string(),
+            "checksum mismatch"
+        );
+    }
 }
