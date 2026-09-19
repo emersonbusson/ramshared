@@ -123,4 +123,19 @@ typedef blk_mode_t ramshared_blk_mode_t;
 typedef fmode_t ramshared_blk_mode_t;
 #endif
 
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0) || defined(RAMSHARED_HAVE_QUEUE_LIMITS_FEATURES) || defined(RAMSHARED_HAVE_QUEUE_LIMITS_PARAM)
+static inline void blk_cleanup_disk(struct gendisk *disk)
+{
+	put_disk(disk);
+}
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)
+static inline void blk_cleanup_disk(struct gendisk *disk)
+{
+	if (disk->queue)
+		blk_cleanup_queue(disk->queue);
+	put_disk(disk);
+}
+#endif
+
 #endif /* _RAMSHARED_COMPAT_H */
