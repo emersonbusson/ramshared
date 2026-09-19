@@ -184,19 +184,25 @@ where
 {
     thread::spawn(move || {
         loop {
-            // Run the worker inside catch_unwind on the current thread
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                worker_fn();
-            }));
+            let mut panic_occurred = false;
 
-            match result {
-                Ok(_) => break, // Event loop completed successfully
-                Err(_) => {
-                    // Thread panicked. Apply backoff to prevent fast spin/OOM.
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    continue; // Restart the loop
-                }
+            thread::scope(|s| {
+                let worker_ref = &mut worker_fn;
+                let handle = s.spawn(move || {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        worker_ref();
+                    }));
+                    result.is_err()
+                });
+
+                panic_occurred = handle.join().unwrap_or(true);
+            });
+
+            if !panic_occurred {
+                break;
             }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     })
 }
