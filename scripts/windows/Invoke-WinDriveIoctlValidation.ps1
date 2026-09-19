@@ -351,7 +351,17 @@ function Open-Ctl {
     $h = [IoctlVal]::CreateFile("\\.\RamSharedCtl",
         [IoctlVal]::GENERIC_READ -bor [IoctlVal]::GENERIC_WRITE,
         $share, [IntPtr]::Zero, [IoctlVal]::OPEN_EXISTING, 0, [IntPtr]::Zero)
-    if ($h.IsInvalid) { throw "open RamSharedCtl failed err=$([IoctlVal]::LastErr())" }
+    if ($h.IsInvalid) {
+        $err = [IoctlVal]::LastErr()
+        $msg = "open RamSharedCtl failed err=$err"
+        $ex = [pscustomobject]@{
+            IoctlCode = [IoctlVal]::IOCTL_UNKNOWN # No specific IOCTL here, using 0/UNKNOWN
+            ExpectedSize = 0
+            ActualSize = 0
+            ErrorMessage = $msg
+        }
+        throw $ex
+    }
     return $h
 }
 
@@ -364,7 +374,13 @@ function New-Rings([uint32]$qd, [uint32]$maxIo) {
     $cq = [IoctlVal]::VirtualAlloc([IntPtr]::Zero, [UIntPtr]$cqBytes, [IoctlVal]::MEM_COMMIT -bor [IoctlVal]::MEM_RESERVE, [IoctlVal]::PAGE_READWRITE)
     $data = [IoctlVal]::VirtualAlloc([IntPtr]::Zero, [UIntPtr]$dataBytes, [IoctlVal]::MEM_COMMIT -bor [IoctlVal]::MEM_RESERVE, [IoctlVal]::PAGE_READWRITE)
     if ($sq -eq [IntPtr]::Zero -or $cq -eq [IntPtr]::Zero -or $data -eq [IntPtr]::Zero) {
-        throw "VirtualAlloc failed"
+        $ex = [pscustomobject]@{
+            IoctlCode = 0
+            ExpectedSize = 0
+            ActualSize = 0
+            ErrorMessage = "VirtualAlloc failed"
+        }
+        throw $ex
     }
     # zero + magic
     $zero = New-Object byte[] $sqBytes
@@ -425,7 +441,15 @@ function Ensure-RegisteredQueue($h, $rings, [uint32]$qd, [uint32]$maxIo) {
     Reset-RingHeaders $rings $qd
     $rin = New-RegisterBytes $rings $qd $maxIo
     if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
-        throw "REGISTER for concurrent probe failed err=$([IoctlVal]::LastErr())"
+        $err = [IoctlVal]::LastErr()
+        $msg = "REGISTER for concurrent probe failed err=$err"
+        $ex = [pscustomobject]@{
+            IoctlCode = [IoctlVal]::IOCTL_REGISTER
+            ExpectedSize = $rin.Length
+            ActualSize = 0
+            ErrorMessage = $msg
+        }
+        throw $ex
     }
 }
 
@@ -788,7 +812,15 @@ try {
     [Text.Encoding]::ASCII.GetBytes("ABCDEF0123456789").CopyTo($dp.serial, 0)
     $in = [IoctlVal]::ToBytes($dp)
     if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_CREATE, $in)) {
-        throw "CREATE_DISK failed err=$([IoctlVal]::LastErr())"
+        $err = [IoctlVal]::LastErr()
+        $msg = "CREATE_DISK failed err=$err"
+        $ex = [pscustomobject]@{
+            IoctlCode = [IoctlVal]::IOCTL_CREATE
+            ExpectedSize = $in.Length
+            ActualSize = 0
+            ErrorMessage = $msg
+        }
+        throw $ex
     }
     L "CREATE_DISK ok"
 
@@ -1128,9 +1160,25 @@ class P {
         $exePath = Join-Path $foreignDir "ForeignDestroy.exe"
         Set-Content -Path $csPath -Value $foreignCs -Encoding ASCII
         $csc = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-        if (-not (Test-Path $csc)) { throw "csc.exe not found" }
+        if (-not (Test-Path $csc)) {
+            $ex = [pscustomobject]@{
+                IoctlCode = 0
+                ExpectedSize = 0
+                ActualSize = 0
+                ErrorMessage = "csc.exe not found"
+            }
+            throw $ex
+        }
         $cscOut = & $csc /nologo /out:$exePath $csPath 2>&1 | Out-String
-        if (-not (Test-Path $exePath)) { throw "csc failed: $cscOut" }
+        if (-not (Test-Path $exePath)) {
+            $ex = [pscustomobject]@{
+                IoctlCode = 0
+                ExpectedSize = 0
+                ActualSize = 0
+                ErrorMessage = "csc failed: $cscOut"
+            }
+            throw $ex
+        }
         $foreignOut = Join-Path $foreignDir "out.txt"
         $p = Start-Process -FilePath $exePath -Wait -PassThru -WindowStyle Hidden `
             -RedirectStandardOutput $foreignOut -RedirectStandardError (Join-Path $foreignDir "err.txt")
