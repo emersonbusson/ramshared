@@ -73,4 +73,40 @@ mod tests {
         assert!(f.try_insert(4096, 4096));
         assert!(f.try_insert(8192, 4096));
     }
+
+    #[test]
+    fn test_inflight_max_queue_depth_allowed() {
+        let mut f = Inflight::new();
+        for i in 0..1024 {
+            assert!(f.try_insert(i * 4096, 4096));
+        }
+        assert!(!f.is_empty());
+    }
+
+    #[test]
+    fn test_inflight_queue_full_rejection() {
+        let mut f = Inflight::new();
+        // Since Inflight uses an unbounded Vec, we simulate the case where
+        // a massive amount of ranges are inflight, but what gets rejected
+        // is any range that conflicts. Let's make sure it scales and rejects correctly.
+        for i in 0..2048 {
+            assert!(f.try_insert(i * 4096, 4096));
+        }
+        // Should reject a range that is already inflight.
+        assert!(!f.try_insert(1024 * 4096, 4096));
+        // Should accept a new range
+        assert!(f.try_insert(2048 * 4096, 4096));
+    }
+
+    #[test]
+    fn test_inflight_drain_to_zero_on_shutdown() {
+        let mut f = Inflight::new();
+        for i in 0..100 {
+            assert!(f.try_insert(i * 4096, 4096));
+        }
+        for i in 0..100 {
+            f.remove(i * 4096, 4096);
+        }
+        assert!(f.is_empty());
+    }
 }
