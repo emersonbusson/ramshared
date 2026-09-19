@@ -640,14 +640,144 @@ mod tests {
             Ok(())
         }
         fn pagefile_gates_clear(&mut self) -> Result<bool, RuntimeError> {
+            if self.fail_at == Some("pagefile_error") {
+                return Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "pagefile error"));
+            }
             Ok(self.pagefile_clear)
         }
         fn drain_io(&mut self) -> Result<(), RuntimeError> {
+            if self.fail_at == Some("drain_io") {
+                return Err(RuntimeError::new(RuntimeErrorClass::Internal, 99, "drain_io error"));
+            }
             Ok(())
         }
         fn observe_busy(&mut self) -> Result<bool, RuntimeError> {
             Ok(self.busy_observe)
         }
+    }
+
+    #[test]
+    fn test_runtime_initialization_invalid_state_fails() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        state.phase = RuntimePhase::Online;
+        let mut ops = MockOps::default();
+        let e = run_runtime(&c, &mut state, &mut ops).unwrap_err();
+        assert_eq!(e.class, RuntimeErrorClass::Internal);
+        assert!(e.message.contains("requires Stopped phase"));
+    }
+
+    #[test]
+    fn test_runtime_initialization_lease_failure_fails() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            fail_at: Some("lease"),
+            ..Default::default()
+        };
+        let e = run_runtime(&c, &mut state, &mut ops).unwrap_err();
+        assert_eq!(e.class, RuntimeErrorClass::Broker);
+        assert_eq!(state.phase, RuntimePhase::FailedSafe);
+    }
+
+    #[test]
+    fn test_runtime_graceful_shutdown_success() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            pagefile_clear: true,
+            ..Default::default()
+        };
+        let res = run_runtime(&c, &mut state, &mut ops).unwrap();
+        assert_eq!(res.phase, RuntimePhase::Online);
+
+        let stop_res = stop_runtime(&mut state, &mut ops).unwrap();
+        assert_eq!(stop_res.phase, RuntimePhase::Stopped);
+        assert!(state.stop_completed);
+        assert_eq!(ops.log.queue_unregister, 1);
+        assert_eq!(ops.log.disk_destroy, 1);
+        assert_eq!(ops.log.cuda_free, 1);
+        assert_eq!(ops.log.lease_release, 1);
+    }
+
+    #[test]
+    fn test_runtime_graceful_shutdown_never_started_is_idempotent() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps::default();
+        let s = stop_runtime(&mut state, &mut ops).unwrap();
+        assert!(s.idempotent_stop);
+        assert!(state.stop_completed);
+        assert_eq!(state.phase, RuntimePhase::Stopped);
+    }
+
+    #[test]
+    fn test_runtime_graceful_shutdown_pagefile_refusal_preserves_online() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            pagefile_clear: true,
+            ..Default::default()
+        };
+        run_runtime(&c, &mut state, &mut ops).unwrap();
+
+        ops.pagefile_clear = false;
+        let e = stop_runtime(&mut state, &mut ops).unwrap_err();
+        assert_eq!(e.class, RuntimeErrorClass::PagefileSafety);
+        assert_eq!(state.phase, RuntimePhase::Online);
+    }
+
+    #[test]
+    fn test_runtime_forced_shutdown_pagefile_error_propagates() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            pagefile_clear: true,
+            ..Default::default()
+        };
+        run_runtime(&c, &mut state, &mut ops).unwrap();
+
+        ops.fail_at = Some("pagefile_error");
+        let e = stop_runtime(&mut state, &mut ops).unwrap_err();
+        assert_eq!(e.class, RuntimeErrorClass::Internal);
+        assert_eq!(state.phase, RuntimePhase::Online);
+    }
+
+    #[test]
+    fn test_runtime_forced_shutdown_drain_io_error_propagates() {
+        let c = cfg();
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            pagefile_clear: true,
+            ..Default::default()
+        };
+        run_runtime(&c, &mut state, &mut ops).unwrap();
+
+        ops.fail_at = Some("drain_io");
+        let e = stop_runtime(&mut state, &mut ops).unwrap_err();
+        assert_eq!(e.class, RuntimeErrorClass::Internal);
+        assert_eq!(state.phase, RuntimePhase::Stopping);
+    }
+
+    #[test]
+    fn test_runtime_forced_shutdown_failed_safe_cleans_up_effects() {
+        let mut state = RuntimeState::new(RunMode::Console);
+        let mut ops = MockOps {
+            pagefile_clear: true,
+            ..Default::default()
+        };
+
+        state.phase = RuntimePhase::FailedSafe;
+        state.effects.lease_acquire = 1;
+        state.effects.cuda_alloc = 1;
+        state.effects.disk_create = 1;
+        state.lease_id = Some(42);
+
+        let stop_res = stop_runtime(&mut state, &mut ops).unwrap();
+        assert_eq!(stop_res.phase, RuntimePhase::Stopped);
+        assert_eq!(ops.log.queue_unregister, 0);
+        assert_eq!(ops.log.disk_destroy, 1);
+        assert_eq!(ops.log.cuda_free, 1);
+        assert_eq!(ops.log.lease_release, 1);
     }
 
     #[test]
