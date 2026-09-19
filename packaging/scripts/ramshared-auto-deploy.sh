@@ -14,7 +14,7 @@ if [[ -z "$REPO_DIR" || ! -d "$REPO_DIR" ]]; then
 fi
 LOG_FILE="/var/log/ramshared/auto-deploy.log"
 
-mkdir -p /var/log/ramshared /run/ramshared
+mkdir -p /var/log/ramshared
 echo "=== RamShared Auto-Deploy Boot: $(date) ===" >> "$LOG_FILE"
 
 # 1. Install updated binaries if present
