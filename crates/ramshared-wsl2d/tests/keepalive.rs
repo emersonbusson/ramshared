@@ -1,3 +1,6 @@
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+
 use ramshared_block::handshake::Export;
 use ramshared_wsl2d::conn::{WMsg, spawn_acceptor_tcp};
 use std::net::TcpListener;
@@ -24,5 +27,4 @@ fn test_keepalive_timeout() {
     // It's hard to test the server side socket without a proper fd export.
     // However, if the logic fails to compile or crashes, we know it's a red test.
     let _ = stream;
-
 }
