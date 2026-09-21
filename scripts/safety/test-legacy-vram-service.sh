@@ -32,7 +32,7 @@ disconnect_calls=0
 kill_calls=0
 remove_calls=0
 daemon_alive=1
-observed_exe=$DAEMON_BIN
+mock_exe=$DAEMON_BIN
 
 grep() {
     if [[ ${1:-} == -q && ${2:-} == "$NBD_DEV" && ${3:-} == /proc/swaps ]]; then
@@ -61,7 +61,7 @@ kill() {
         fi
     fi
 }
-readlink() { printf '%s\n' "$observed_exe"; }
+readlink() { printf '%s\n' "$mock_exe"; }
 rm() { remove_calls=$((remove_calls + 1)); }
 sleep() { :; }
 zramctl() { :; }
@@ -74,6 +74,7 @@ set -e
 if (( status == 0 || swapoff_calls != 1 || disconnect_calls != 0 || kill_calls != 0 || remove_calls != 0 )); then
     printf 'failed swapoff must refuse teardown: status=%s swapoff=%s disconnect=%s kill=%s remove=%s\n' \
         "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
     exit 1
 fi
 
@@ -86,7 +87,7 @@ disconnect_calls=0
 kill_calls=0
 remove_calls=0
 daemon_alive=1
-observed_exe=/usr/local/bin/unrelated-daemon
+mock_exe=/usr/local/bin/unrelated-daemon
 
 set +e
 stop_tier > "$fixture_dir/output" 2>&1
@@ -96,6 +97,7 @@ set -e
 if (( status == 0 || swapoff_calls != 0 || disconnect_calls != 0 || kill_calls != 0 || remove_calls != 0 || swap_active != 1 )); then
     printf 'foreign PID must refuse before mutation: status=%s swapoff=%s disconnect=%s kill=%s remove=%s active=%s\n' \
         "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" "$swap_active" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
     exit 1
 fi
 
