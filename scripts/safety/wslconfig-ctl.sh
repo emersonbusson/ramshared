@@ -119,6 +119,20 @@ cmd_selftest() {
 		echo "FAIL did not detect C:\\wsl as unsafe"
 		fail=1
 	fi
+	for t in 'C:\-dir' 'C:\ folder' 'C:\~1' 'C:\@spec' 'C:\'; do
+		if ! wslconfig_path_is_unsafe "$t"; then
+			echo "FAIL did not detect odd backslash run in $t"
+			fail=1
+		fi
+	done
+	if wslconfig_path_is_unsafe 'C:\\escaped\\path'; then
+		echo "FAIL doubled backslashes should be safe"
+		fail=1
+	fi
+	if ! wslconfig_path_is_unsafe 'C:\\\odd'; then
+		echo "FAIL triple backslashes should be unsafe"
+		fail=1
+	fi
 	if wslconfig_path_is_unsafe 'R:/wsl_swap/swap.vhdx'; then
 		echo "FAIL false positive on forward slash"
 		fail=1
@@ -127,12 +141,8 @@ cmd_selftest() {
 	fi
 	# doubled backslash is escape-legal in file (represents one \)
 	if wslconfig_path_is_unsafe 'C:\\wsl\\kernel-ramshared'; then
-		# our heuristic flags single \ before letter; doubled \\ before w is \\ + w
-		# C:\\wsl → after first \\ pair we have \w?  String chars: C : \ \ w s l
-		# Pattern (^|[^\\])\\[A-Za-z] : position of \ before w has previous \ so [^\\] fails
-		# Actually \\w : the second \ is followed by w, previous char is \ so (^|[^\\]) needs non-\ before single \
-		# For C:\\wsl - chars: \ \ w - the \ before w has previous \, so pattern might not match
-		echo "OK doubled backslash treated safe (or heuristic): $(wslconfig_path_is_unsafe 'C:\\wsl\\kernel-ramshared' && echo unsafe || echo safe)"
+		echo "FAIL doubled backslash treated unsafe"
+		fail=1
 	else
 		echo "OK doubled backslash safe"
 	fi
