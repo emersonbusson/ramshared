@@ -7,6 +7,7 @@ set -euo pipefail
 NBD_DEV="/dev/nbd0"
 SOCK_PATH="/run/ramshared/wsl2d.sock"
 PID_FILE="/run/ramshared/ramsharedd.pid"
+DAEMON_BIN="/usr/local/bin/ramsharedd"
 SWAP_DEV_FILE="/run/ramshared/swap-dev"
 ZRAM_DEV_FILE="/run/ramshared/zram-dev"
 CAPACITY_STATUS_FILE="/run/ramshared/capacity-guaranteed"
@@ -177,6 +178,29 @@ start_tier() {
 
 stop_tier() {
     echo "[+] Stopping RamShared VRAM Tier Service (Swapoff-first)..."
+
+    # The PID record is an ownership claim, not proof. Never touch an active
+    # swap device when the recorded daemon is missing or belongs to another
+    # executable; a stale PID can be recycled by an unrelated process.
+    if [[ -f "$PID_FILE" ]]; then
+        local pid observed_exe
+        pid=$(<"$PID_FILE")
+        if [[ ! $pid =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+            echo "[-] Refusing teardown: daemon PID record is not live" >&2
+            return 1
+        fi
+        observed_exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null) || {
+            echo "[-] Refusing teardown: daemon executable is unreadable" >&2
+            return 1
+        }
+        if [[ $observed_exe != "$DAEMON_BIN" ]]; then
+            echo "[-] Refusing teardown: daemon executable identity differs" >&2
+            return 1
+        fi
+    elif grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+        echo "[-] Refusing teardown: active NBD swap has no daemon PID record" >&2
+        return 1
+    fi
     
     # 1. Swapoff VRAM
     if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
