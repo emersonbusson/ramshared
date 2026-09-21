@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/swap-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -264,3 +264,46 @@ if (( swap_active != 1 )) || [[ $(<"$SWAP_DEV_FILE") != "$NBD_DEV" ]] \
 fi
 
 echo 'PASS legacy VRAM service publishes capacity only after confirmed NBD swap'
+
+# Existing daemon state must be rejected before ZRAM/cgroup setup. The mocked
+# bash launcher guarantees a regression cannot start a host daemon.
+setup_calls=0
+setup_protected_cgroup() { setup_calls=$((setup_calls + 1)); }
+bash() { return 1; }
+LOG_FILE="$fixture_dir/log"
+ZRAM_MIB=0
+pgrep_running=0
+pgrep() {
+    if (( pgrep_running == 1 )); then
+        printf '4242\n'
+    else
+        return 1
+    fi
+}
+
+for existing_state in pid socket daemon; do
+    swap_active=0
+    setup_calls=0
+    remove_calls=0
+    pgrep_running=0
+    command rm -f -- "$PID_FILE" "$SOCK_PATH"
+    case "$existing_state" in
+        pid) printf '4242\n' > "$PID_FILE" ;;
+        socket) touch "$SOCK_PATH" ;;
+        daemon) pgrep_running=1 ;;
+    esac
+
+    set +e
+    start_tier > "$fixture_dir/output" 2>&1
+    status=$?
+    set -e
+
+    if (( status == 0 || setup_calls != 0 || remove_calls != 0 )); then
+        printf 'existing %s must refuse before any startup mutation: status=%s setup=%s remove=%s\n' \
+            "$existing_state" "$status" "$setup_calls" "$remove_calls" >&2
+        sed -n '1,20p' "$fixture_dir/output" >&2
+        exit 1
+    fi
+done
+
+echo 'PASS legacy VRAM service refuses startup against existing PID, socket, or daemon'
