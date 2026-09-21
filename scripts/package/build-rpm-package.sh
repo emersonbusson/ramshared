@@ -16,8 +16,8 @@ SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
 
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
 
-# This packaging step consumes previously built release binaries. The heavy
-# Cargo build is admitted and run separately by the caller.
+# This packaging step consumes previously built release binaries. Building
+# and validating those binaries is a separate caller responsibility.
 CLI_BIN="$ROOT/target/release/ramshared"
 DAEMON_BIN="$ROOT/target/release/ramsharedd"
 
