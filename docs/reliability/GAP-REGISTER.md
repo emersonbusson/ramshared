@@ -4,6 +4,18 @@ This file tracks open product claims that must stay **PARTIAL** until their
 listed proof exists. It is not a backlog for speculative features; it is a
 guardrail against false DONE status.
 
+Current release: **v0.14.1**. Next planned release: **v0.15.0**.
+
+Support and reserve boundaries used by current documentation:
+
+- Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is
+  qualified on native Linux or WSL2 with a compatible custom kernel under
+  EVD-0039; the open product-lifecycle gate below still applies.
+- EVD-0040 covers zero-copy CUDA host mapping only.
+- Broker/NBD uses `max(1536 MiB, 20%)` capacity reserve plus a separate
+  `768 MiB` runtime free buffer. Origin cache uses `max(2 GiB, 20%)`.
+  StorPort uses `max(configured reserve, 512 MiB, 10%)`.
+
 ## Current Open Gates
 
 The 2026-08-20 through 2026-08-22 investigation remains a reason to keep the

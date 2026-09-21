@@ -26,7 +26,7 @@
     {
       "id": "legacy-marketing-cascade-en",
       "path": "docs/marketing/cascade-diagram.svg",
-      "file_sha256": "b96a448127dc3b1c2206bd25f27b86c67f2262fdb2fad59a2514d59bea367e70",
+      "file_sha256": "49f63a51504add5544f4cc180361b39ca509391c1dc0d1cc404b643981961088",
       "disposition": "legacy-unqualified",
       "benchmark_id": null,
       "claims": [
@@ -34,7 +34,7 @@
         "Ultra-low latency of ~8\u2013241 \u00b5s",
         "~63\u201385 MB/s on disk"
       ],
-      "reason": "Updated architectural marketing artwork showing 3-tier memory cascade with qualified throughput metrics."
+      "reason": "Historical architectural artwork whose throughput figures remain non-promotable; revocation and integrity wording is explicitly scoped to the qualified WSL2/NBD workload."
     },
     {
       "id": "legacy-marketing-cascade-pt",

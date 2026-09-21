@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. v0.12.0)'
+        description: 'Release version tag (e.g. v0.14.1)'
         required: false
-        default: 'v0.12.0'
+        default: 'v0.14.1'
 
 permissions:
   contents: write
@@ -37,10 +37,10 @@ jobs:
         run: cargo build --release --locked
 
       - name: Build Debian/Ubuntu Package (.deb)
-        run: ./scripts/package/build-deb-package.sh "${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.12.0' }}"
+        run: ./scripts/package/build-deb-package.sh "${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.14.1' }}"
 
       - name: Build Fedora/RHEL Package (.rpm)
-        run: ./scripts/package/build-rpm-package.sh "${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.12.0' }}"
+        run: ./scripts/package/build-rpm-package.sh "${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.14.1' }}"
 
       - name: Package Arch Linux AUR Tarball
         run: |
@@ -68,5 +68,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TARGET_TAG="${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.12.0' }}"
+          TARGET_TAG="${{ (github.ref_type == 'tag' && github.ref_name) || inputs.version || 'v0.14.1' }}"
           find artifacts/packages -maxdepth 1 -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" -o -name "SHA256SUMS.txt" \) -exec gh release upload "$TARGET_TAG" --clobber {} +

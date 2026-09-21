@@ -12,10 +12,15 @@ This guide is the authoritative operations manual for installing, running, monit
 | **GPU / Acceleration** | Any NVIDIA GPU (Pascal+) or AMD/Intel with Vulkan 1.2+ support | NVIDIA RTX 30/40/50 series with CUDA 12+ |
 | **Host System RAM** | 8 GiB physical DDR4/DDR5 | 16 GiB+ DDR5 |
 | **Host Storage** | NVMe PCIe Gen3 SSD with at least 16 GiB free space | NVMe PCIe Gen4/Gen5 SSD |
-| **Kernel Subsystems** | `ublk` (`CONFIG_BLK_DEV_UBLK`), `io_uring`, or standard `nbd` | `ublk` with ZRAM enabled |
+| **Kernel Subsystems** | Standard WSL2: `nbd`; native Linux or compatible WSL2 custom kernel: `ublk`/`io_uring` | Use the transport qualified for the exact kernel surface |
 
 > [!NOTE]
-> RamShared also operates in **GPU-less / headless mode**. If no compatible GPU is detected or if GPU headroom is fully consumed by external 3D workloads, RamShared safely cascades between compressed host RAM (ZRAM) and the SSD origin store without downtime or errors.
+> In **GPU-less / headless mode**, the GPU cache target is zero. Whether the
+> remaining ZRAM and SSD-origin topology can start depends on the preflight and
+> configured transport; no uninterrupted-service guarantee is implied.
+
+Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is
+qualified on native Linux or WSL2 with a compatible custom kernel.
 
 ---
 
@@ -66,9 +71,9 @@ $ ramshared up --max-cache 4G
 ```
 
 What happens on `ramshared up`:
-1. Validates host GPU headroom, reserving `max(2 GiB, 20% total VRAM)` for host graphics.
+1. Validates the surface-specific GPU headroom policy described below.
 2. Formats or maps the authoritative SSD origin backing store.
-3. Initializes the userspace block device daemon (`ublk` or NBD) with SHA-256 block integrity checks.
+3. Initializes NBD on standard WSL2, or `ublk` only on a qualified compatible-kernel surface, with block integrity checks.
 4. Mounts the RamShared block device as intermediate priority swap in `/proc/swaps`.
 5. Establishes the 3-tier cascade: Hot (ZRAM, pri 100) ➔ Accelerated (RamShared VRAM/SSD, pri 50) ➔ Fallback (Disk, pri -2).
 
@@ -92,7 +97,19 @@ When you plan to launch a heavy GPU application (e.g., local LLM inference, 3D r
 $ ramshared demote
 ```
 
-`demote` frees all clean cached chunks across PCIe back to the GPU driver without dropping swapped pages; data remains safely persisted on the authoritative SSD origin.
+`demote` requests release of clean cached chunks while the authoritative SSD origin remains the correctness boundary. Completion time and available headroom are reported rather than guaranteed.
+
+### Reserve policies
+
+- Broker/NBD capacity reserve: `max(1536 MiB, 20% of physical VRAM)`.
+- Broker/NBD runtime free buffer: a separate `768 MiB` held back from reported
+  free VRAM before admitting new allocations.
+- Origin-cache capacity reserve: `max(2 GiB, 20%)`.
+- Windows StorPort reserve: `max(configured reserve, 512 MiB, 10%)`.
+
+The capacity reserve limits the cache target. The runtime buffer protects a
+new allocation against changing external GPU use and is not a fourth reserve
+formula.
 
 ### Stopping the Cascade (`down`)
 
@@ -229,7 +246,7 @@ If the workstation experienced a power failure or sudden reboot while the cascad
 
 If the cascade start reports `INSUFFICIENT_HEADROOM`:
 - An external 3D game, AI model, or compute task is consuming the GPU budget.
-- RamShared automatically reserves `max(2 GiB, 20% VRAM)`. Close heavy GPU tasks or run with a smaller cache:
+- For broker/NBD, RamShared applies the capacity reserve plus runtime buffer described above. Close heavy GPU tasks or run with a smaller cache:
   ```bash
   $ ramshared up --max-cache 1G
   ```
