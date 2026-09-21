@@ -16,8 +16,6 @@ The source of truth for architecture and coding rules is:
 - [`.claude/rules/coding.md`](.claude/rules/coding.md)
 - [`.claude/rules/governance.md`](.claude/rules/governance.md)
 - [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md)
-- Agent orchestration and dispatch: [`.claude/rules/agent-orchestration.md`](.claude/rules/agent-orchestration.md).
-- Its rendered policy and canonical typed records are the machine-checked source.
 
 ### Before planning, editing, or opening a patch/PR
 
@@ -76,5 +74,5 @@ PR descriptions must follow `.github/pull_request_template.md` strictly: canonic
 - No persisting secrets.
 - No undocumented dependencies.
 - **Reliability Gap Register & Release Parity**: Keep `docs/reliability/GAP-REGISTER.md`
-  semantically synchronized with active CI status and releases (`v0.14.0`). Phantom
+  semantically synchronized with active CI status and releases (`v0.14.1`). Phantom
   blockers (such as resolved Guard repairs) are strictly forbidden when CI gates pass.

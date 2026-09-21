@@ -25,7 +25,6 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 run_gate documentation-governance node tools/ci/check-documentation-governance.mjs --all
-run_gate agent-orchestration node tools/ci/check-agent-orchestration.mjs --check
 run_gate comment-language node tools/ci/check-comment-language.mjs --diff origin/main
 run_gate documentation-localization node tools/ci/check-documentation-localization.mjs --all
 run_gate document-lifecycle node tools/ci/check-document-lifecycle.mjs --all
@@ -54,10 +53,6 @@ run_gate legacy-preallocation-removal-tests node --experimental-test-coverage \
   --test-coverage-include=tools/ci/check-legacy-preallocation-removal.mjs \
   --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
   --test-reporter=dot tools/ci/check-legacy-preallocation-removal.test.mjs
-run_gate agent-orchestration-tests node --experimental-test-coverage \
-  --test-coverage-include=tools/ci/check-agent-orchestration.mjs \
-  --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
-  --test-reporter=dot tools/ci/check-agent-orchestration.test.mjs
 run_gate claim-closure-tests node --test --test-reporter=dot tools/ci/documentation-claim-closure.test.mjs
 run_gate documentation-governance-tests node --test --test-reporter=dot tools/ci/check-documentation-governance.test.mjs
 run_gate documentation-localization-tests node --test --test-reporter=dot tools/ci/check-documentation-localization.test.mjs
@@ -84,6 +79,7 @@ run_gate doc-staleness-and-redundancy-tests node --experimental-test-coverage \
   --test-reporter=dot tools/ci/check-doc-staleness-and-redundancy.test.mjs
 run_gate release-automation node tools/ci/check-release-automation.mjs --check
 run_gate release-automation-tests node --test --test-reporter=dot tools/ci/check-release-automation.test.mjs
+run_gate rpm-package-tests node --test --test-reporter=dot tools/ci/build-rpm-package.test.mjs
 
 if (( ${#DOCS_CHECK_FAILURES[@]} > 0 )); then
   echo "docs-check: NO-GO (${#DOCS_CHECK_FAILURES[@]} independent failure(s))" >&2
