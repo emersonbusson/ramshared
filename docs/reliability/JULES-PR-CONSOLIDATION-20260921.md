@@ -163,7 +163,7 @@ as a narrow, tested delta; its unrelated newline rule was not adopted.
 | #2026 | No functional delta | Pure guard-clause rewrite of config error span extraction; no new parser cases. |
 | #2024 | No functional delta | Pure watchdog guard-clause rewrite plus an ephemeral regex edit script. |
 | #2016 | Rejected | Assumes slice IDs equal array positions and changes the public `UnknownSlice` error to `IndexOutOfRange`, although lookup is by ID; it also includes a `.orig` backup file. |
-| #2004 | Deferred | Attempts malformed PSI recovery, but accepts duplicate fields by keeping the first and adds scratch Python edit scripts. The desired duplicate-field policy needs an explicit test before adoption. |
+| #2004 | Selected in part, tested locally | The proposed malformed-PSI recovery and scratch scripts were excluded. A new regression first proved that repeated `avg10`, `avg60`, or `total` fields were accepted; the parser now rejects those ambiguous samples, including a malformed-first duplicate. This is local source consolidation, not PR merge or live broker qualification. |
 | #1999 | Not integrated | “Absolute path” helper falls back to the original command and PATH lookup if no standard-directory match exists, so it does not enforce the advertised security boundary. |
 | #1997 | Not integrated | Base64-encoding a fixed PowerShell command does not authenticate or sandbox it; `-ExecutionPolicy Bypass` weakens local policy without a demonstrated need. |
 | #1990 | No runtime delta | Replaces test panics with `Result` in the N3 model tests only; not a production error path. |
@@ -182,9 +182,10 @@ as a narrow, tested delta; its unrelated newline rule was not adopted.
 | #1917 | Deferred | Adds stream resynchronization after an oversized IPC line. Product connection policy currently fails closed on protocol violation; continuing on the same peer needs an explicit threat-model decision. |
 | #1907 | No functional delta | The guard-clause rewrite moves the N3 generation-history capacity check to the “new lease identity” branch, but the current implementation already checks capacity only after the known-lease branch returns. No renewal fix is supplied. |
 
-Batch 5 validation for the selected PSI fix: `cargo test -p ramshared-agent`
-(56 library, 16 main, 7 CLI tests) passed. This is parser hardening, not a
-claim of live broker or Windows-driver qualification.
+Batch 5 validation for the selected PSI fixes: `cargo test --locked -p
+ramshared-agent` (57 library, 16 main, 7 CLI tests), strict Clippy, formatting,
+and the `psi.rs` line-coverage gate (98.2%) passed. This is parser hardening,
+not a claim of live broker or Windows-driver qualification.
 
 ## Batch 6 — Linux kernel block driver
 
