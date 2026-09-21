@@ -194,3 +194,73 @@ if (( status == 0 )) || [[ $(<"$PID_FILE") != preserve-pid ]] \
 fi
 
 echo 'PASS legacy VRAM service refuses to adopt active NBD swap'
+
+# The activation seam must not publish a capacity guarantee until the NBD
+# device is genuinely active in /proc/swaps. These commands are all mocked;
+# the fixture never connects, formats, or enables a real block device.
+activation_definition=$(sed -n '/^activate_nbd_tier() {/,/^}/p' "$service_script")
+[[ $activation_definition == 'activate_nbd_tier() {'* ]] || {
+    echo 'activate_nbd_tier definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$activation_definition")
+nbd_device_ready() { return 0; }
+mkswap() { return "$mkswap_result"; }
+swapon() {
+    if (( swapon_result == 0 && publish_swap == 1 )); then
+        swap_active=1
+    fi
+    return "$swapon_result"
+}
+nbd_result=0
+mkswap_result=0
+swapon_result=0
+publish_swap=1
+nbd-client() {
+    disconnect_calls=$((disconnect_calls + 1))
+    return "$nbd_result"
+}
+
+for failure in nbd mkswap swapon missing_swap; do
+    swap_active=0
+    nbd_result=0
+    mkswap_result=0
+    swapon_result=0
+    publish_swap=1
+    disconnect_calls=0
+    command rm -f -- "$SWAP_DEV_FILE" "$CAPACITY_STATUS_FILE"
+    case "$failure" in
+        nbd) nbd_result=1 ;;
+        mkswap) mkswap_result=1 ;;
+        swapon) swapon_result=1 ;;
+        missing_swap) publish_swap=0 ;;
+    esac
+
+    set +e
+    activate_nbd_tier 'fixture backend' 1024 > "$fixture_dir/output" 2>&1
+    status=$?
+    set -e
+
+    if (( status == 0 )) || [[ -e $SWAP_DEV_FILE || -e $CAPACITY_STATUS_FILE ]]; then
+        printf '%s activation failure must not publish capacity: status=%s swap=%s capacity=%s\n' \
+            "$failure" "$status" "$SWAP_DEV_FILE" "$CAPACITY_STATUS_FILE" >&2
+        sed -n '1,20p' "$fixture_dir/output" >&2
+        exit 1
+    fi
+done
+
+swap_active=0
+nbd_result=0
+mkswap_result=0
+swapon_result=0
+publish_swap=1
+command rm -f -- "$SWAP_DEV_FILE" "$CAPACITY_STATUS_FILE"
+activate_nbd_tier 'fixture backend' 1024 > "$fixture_dir/output" 2>&1
+if (( swap_active != 1 )) || [[ $(<"$SWAP_DEV_FILE") != "$NBD_DEV" ]] \
+    || [[ $(<"$CAPACITY_STATUS_FILE") != 1 ]]; then
+    echo 'successful activation must publish confirmed NBD capacity' >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service publishes capacity only after confirmed NBD swap'
