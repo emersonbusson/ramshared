@@ -121,6 +121,12 @@ packaged udev rules declare GPL-2.0-only. Licensing and artifact provenance
 must be reconciled before any public package qualification; this audit does
 not guess a legal expression or bless a release.
 
+Follow-up on #2068: the source auto-deploy entry point was retired after this
+snapshot because it could replace binaries and restart the tier during boot.
+That removes one direct-script counterexample to the proposed tmpfiles change,
+but the standalone VRAM service path and unproven tmpfiles user/group still
+keep #2068 deferred. The installed boot service has not been migrated.
+
 ## Batch 4 — daemon and transport
 
 All 19 PRs in this group have an initial source-level disposition. The ublk
