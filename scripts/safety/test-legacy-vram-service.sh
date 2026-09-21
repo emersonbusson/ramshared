@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -318,3 +318,70 @@ if command grep -Eq '(^|[[:space:]])(cp|rsync|install|systemctl)[[:space:]]|rams
 fi
 
 echo 'PASS legacy auto-deploy has no boot-time install or restart side effects'
+
+# Only the device recorded by this service may be reset. In particular a
+# failed swapoff must never be followed by zramctl --reset.
+zram_stop_definition=$(sed -n '/^stop_managed_zram() {/,/^}/p' "$service_script")
+[[ $zram_stop_definition == 'stop_managed_zram() {'* ]] || {
+    echo 'stop_managed_zram definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$zram_stop_definition")
+managed_zram=/dev/zram7
+zram_active=1
+zram_swapoff_result=1
+zram_swapoff_calls=0
+zram_reset_result=0
+zram_reset_calls=0
+grep() {
+    if [[ ${1:-} == -q && ${2:-} == "$managed_zram" && ${3:-} == /proc/swaps ]]; then
+        (( zram_active == 1 ))
+    else
+        return 1
+    fi
+}
+swapoff() {
+    zram_swapoff_calls=$((zram_swapoff_calls + 1))
+    if (( zram_swapoff_result == 0 )); then
+        zram_active=0
+    fi
+    return "$zram_swapoff_result"
+}
+zramctl() {
+    zram_reset_calls=$((zram_reset_calls + 1))
+    return "$zram_reset_result"
+}
+
+command rm -f -- "$ZRAM_DEV_FILE"
+set +e
+stop_managed_zram > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status != 0 || zram_swapoff_calls != 0 || zram_reset_calls != 0 )); then
+    echo 'absent ownership record must leave other ZRAM devices untouched' >&2
+    exit 1
+fi
+
+printf '%s\n' "$managed_zram" > "$ZRAM_DEV_FILE"
+set +e
+stop_managed_zram > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || zram_swapoff_calls != 1 || zram_reset_calls != 0 )) || [[ ! -f $ZRAM_DEV_FILE ]]; then
+    echo 'failed managed ZRAM swapoff must retain device and ownership record' >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+zram_swapoff_result=0
+zram_swapoff_calls=0
+zram_reset_calls=0
+remove_calls=0
+stop_managed_zram > "$fixture_dir/output" 2>&1
+if (( zram_swapoff_calls != 1 || zram_reset_calls != 1 || remove_calls != 1 )); then
+    echo 'confirmed managed ZRAM swapoff must precede reset and marker removal' >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service resets only recorded ZRAM after confirmed swapoff'
