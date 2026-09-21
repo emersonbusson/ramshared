@@ -14,7 +14,7 @@ use ramshared_broker::protocol::SwapEntry;
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
     let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "unreadable PSI sample"))
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -31,9 +31,15 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
     let (mut avg10, mut avg60, mut total) = (None, None, None);
     for tok in line.split_whitespace() {
         if let Some(v) = tok.strip_prefix("avg10=") {
-            avg10 = v.parse::<f32>().ok();
+            avg10 = v
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite() && *value >= 0.0);
         } else if let Some(v) = tok.strip_prefix("avg60=") {
-            avg60 = v.parse::<f32>().ok();
+            avg60 = v
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite() && *value >= 0.0);
         } else if let Some(v) = tok.strip_prefix("total=") {
             total = v.parse::<u64>().ok();
         }
@@ -181,6 +187,16 @@ mod tests {
     #[test]
     fn parse_psi_no_some_line_is_none() {
         assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
+    }
+
+    #[test]
+    fn parse_psi_rejects_nonfinite_or_negative_pressure() {
+        for value in ["NaN", "inf", "-inf", "-1.0"] {
+            let sample = format!("some avg10={value} avg60=2.0 total=5\n");
+            assert!(parse_psi(&sample).is_none(), "accepted avg10={value}");
+            let sample = format!("some avg10=1.0 avg60={value} total=5\n");
+            assert!(parse_psi(&sample).is_none(), "accepted avg60={value}");
+        }
     }
 
     #[test]
