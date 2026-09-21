@@ -387,3 +387,67 @@ if (( zram_swapoff_calls != 1 || zram_reset_calls != 1 || remove_calls != 1 )); 
 fi
 
 echo 'PASS legacy VRAM service resets only recorded ZRAM after confirmed swapoff'
+
+# ZRAM setup must not adopt an unrelated active device or report success when
+# its own mkswap/swapon fails. No real ZRAM command is executed in this fixture.
+zram_start_definition=$(sed -n '/^start_managed_zram() {/,/^}/p' "$service_script")
+[[ $zram_start_definition == 'start_managed_zram() {'* ]] || {
+    echo 'start_managed_zram definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$zram_start_definition")
+unmanaged_zram_active=0
+any_zram_swap_active() { (( unmanaged_zram_active == 1 )); }
+zram_device_ready() { return 0; }
+zram_allocations=0
+zramctl() {
+    if [[ ${1:-} == --find ]]; then
+        zram_allocations=$((zram_allocations + 1))
+        printf '%s\n' "$managed_zram"
+    else
+        zram_reset_calls=$((zram_reset_calls + 1))
+    fi
+}
+mkswap() { return "$zram_mkswap_result"; }
+swapon() {
+    if (( zram_swapon_result == 0 )); then
+        zram_active=1
+    fi
+    return "$zram_swapon_result"
+}
+ZRAM_MIB=1024
+command rm -f -- "$ZRAM_DEV_FILE"
+zram_allocations=0
+unmanaged_zram_active=1
+start_managed_zram > "$fixture_dir/output" 2>&1
+if (( zram_allocations != 0 )) || [[ -e $ZRAM_DEV_FILE ]]; then
+    echo 'existing unmanaged ZRAM must not be allocated or adopted' >&2
+    exit 1
+fi
+
+unmanaged_zram_active=0
+zram_mkswap_result=1
+zram_swapon_result=0
+set +e
+start_managed_zram > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 )); then
+    echo 'failed ZRAM mkswap must make startup fail' >&2
+    exit 1
+fi
+
+command rm -f -- "$ZRAM_DEV_FILE"
+zram_mkswap_result=0
+zram_swapon_result=1
+zram_active=0
+set +e
+start_managed_zram > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || zram_active != 0 )); then
+    echo 'failed ZRAM swapon must make startup fail without active claim' >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service does not adopt unmanaged or failed ZRAM setup'
