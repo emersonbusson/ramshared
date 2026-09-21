@@ -23,7 +23,7 @@ Facts verified in the repository:
 ## Upstream candidate audit (2026-09-21)
 
 The current `NVlabs/cutile-rs` README explicitly sets `sm_80` as its minimum
-and says `sm_70`/`sm_75` are out of scope. Native Tile support for the local
+and marks `sm_70`/`sm_75` unsupported. Native Tile support for the local
 RTX 2060 is therefore not a small compatibility change to propose upstream;
 an `sm_75` experiment must use a separate SIMT path and remain independent of
 any `sm_80+` Tile qualification.
