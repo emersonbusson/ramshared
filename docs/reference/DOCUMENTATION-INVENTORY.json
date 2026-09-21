@@ -2,25 +2,13 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 321,
-    "classified": 318,
+    "total": 322,
+    "classified": 319,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
   },
   "entries": [
-    {
-      "path": ".claude/rules/agent-orchestration.md",
-      "disposition": "classified",
-      "ruleId": "agent-rules",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "agent-governance",
-      "canonicalSource": ".claude/rules/documentation.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
     {
       "path": ".claude/rules/benchmarks.md",
       "disposition": "classified",
@@ -1120,6 +1108,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/reliability/JULES-PR-CONSOLIDATION-20260921.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
@@ -1826,6 +1826,18 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cuda-rust-native-tiering/validation.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-validation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
     },
     {
       "path": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/IMPL.md",
