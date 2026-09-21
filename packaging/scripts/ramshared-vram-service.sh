@@ -125,6 +125,53 @@ zram_swap_active() {
     awk -v device="$device" '$1 == device { found = 1 } END { exit !found }' /proc/swaps
 }
 
+any_zram_swap_active() {
+    awk '$1 ~ /^\/dev\/zram[0-9]+$/ { found = 1 } END { exit !found }' /proc/swaps
+}
+
+zram_device_ready() {
+    [[ -b "$1" ]]
+}
+
+start_managed_zram() {
+    if [[ ! $ZRAM_MIB =~ ^[0-9]+$ ]]; then
+        echo "[-] Refusing ZRAM setup: RAMSHARED_ZRAM_MIB must be a nonnegative integer" >&2
+        return 1
+    fi
+    (( ZRAM_MIB > 0 )) || return 0
+    if any_zram_swap_active; then
+        echo "[+] Existing ZRAM swap is unmanaged by this service; leaving it untouched"
+        return 0
+    fi
+    if ! modprobe zram 2>/dev/null; then
+        echo "[-] Refusing ZRAM setup: module load failed" >&2
+        return 1
+    fi
+    local zram_dev
+    if ! zram_dev=$(zramctl --find --size "${ZRAM_MIB}M" 2>/dev/null); then
+        echo "[-] Refusing ZRAM setup: device allocation failed" >&2
+        return 1
+    fi
+    if [[ ! $zram_dev =~ ^/dev/zram[0-9]+$ ]] || ! zram_device_ready "$zram_dev"; then
+        echo "[-] Refusing ZRAM setup: allocated device is invalid" >&2
+        return 1
+    fi
+    echo "$zram_dev" > "$ZRAM_DEV_FILE"
+    if ! mkswap "$zram_dev" >/dev/null 2>&1; then
+        echo "[-] Refusing ZRAM setup: mkswap failed; retained device record for inspection" >&2
+        return 1
+    fi
+    if ! swapon -p 100 "$zram_dev" 2>/dev/null; then
+        echo "[-] Refusing ZRAM setup: swapon failed; retained device record for inspection" >&2
+        return 1
+    fi
+    if ! zram_swap_active "$zram_dev"; then
+        echo "[-] Refusing ZRAM setup: device is absent from /proc/swaps" >&2
+        return 1
+    fi
+    echo "[+] ZRAM active at priority 100 on $zram_dev"
+}
+
 stop_managed_zram() {
     [[ -f "$ZRAM_DEV_FILE" ]] || return 0
     local zram_dev
@@ -159,8 +206,9 @@ start_tier() {
         echo "[-] Refusing start: active NBD swap must be handed off through the sealed cascade lifecycle" >&2
         return 1
     fi
-    if [[ -e "$PID_FILE" || -L "$PID_FILE" || -e "$SOCK_PATH" || -L "$SOCK_PATH" ]]; then
-        echo "[-] Refusing start: daemon PID or socket already exists; inspect ownership before cleanup" >&2
+    if [[ -e "$PID_FILE" || -L "$PID_FILE" || -e "$SOCK_PATH" || -L "$SOCK_PATH" \
+        || -e "$ZRAM_DEV_FILE" || -L "$ZRAM_DEV_FILE" ]]; then
+        echo "[-] Refusing start: daemon or ZRAM state already exists; inspect ownership before cleanup" >&2
         return 1
     fi
     if ! command -v pgrep >/dev/null 2>&1; then
@@ -178,21 +226,8 @@ start_tier() {
     fi
     setup_protected_cgroup
 
-    # 1. Setup ZRAM (Tier 0 - Priority 100)
-    if [[ $ZRAM_MIB -gt 0 ]]; then
-        modprobe zram 2>/dev/null || true
-        local zram_dev
-        zram_dev=$(zramctl --find --size "${ZRAM_MIB}M" 2>/dev/null || echo "/dev/zram0")
-        if ! grep -q zram /proc/swaps 2>/dev/null; then
-            echo "[+] Initializing ZRAM (${ZRAM_MIB} MiB)..."
-            if [[ -b "$zram_dev" ]]; then
-                mkswap "$zram_dev" >/dev/null 2>&1 || true
-                swapon -p 100 "$zram_dev" 2>/dev/null || true
-                echo "[+] ZRAM active at priority 100 on $zram_dev"
-            fi
-        fi
-        echo "$zram_dev" > "$ZRAM_DEV_FILE"
-    fi
+    # 1. Setup ZRAM (Tier 0 - Priority 100) without adopting another owner.
+    start_managed_zram || return 1
 
     # 2. Setup VRAM via GPU (Tier 1 - Priority 50)
     modprobe nbd max_part=8 2>/dev/null || true
