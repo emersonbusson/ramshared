@@ -126,6 +126,23 @@ start_tier() {
         echo "[-] Refusing start: active NBD swap must be handed off through the sealed cascade lifecycle" >&2
         return 1
     fi
+    if [[ -e "$PID_FILE" || -L "$PID_FILE" || -e "$SOCK_PATH" || -L "$SOCK_PATH" ]]; then
+        echo "[-] Refusing start: daemon PID or socket already exists; inspect ownership before cleanup" >&2
+        return 1
+    fi
+    if ! command -v pgrep >/dev/null 2>&1; then
+        echo "[-] Refusing start: pgrep is unavailable for daemon collision check" >&2
+        return 1
+    fi
+    local pgrep_status=0
+    pgrep -x ramsharedd >/dev/null 2>&1 || pgrep_status=$?
+    if (( pgrep_status == 0 )); then
+        echo "[-] Refusing start: another ramsharedd process is already running" >&2
+        return 1
+    elif (( pgrep_status != 1 )); then
+        echo "[-] Refusing start: daemon collision check failed" >&2
+        return 1
+    fi
     setup_protected_cgroup
 
     # 1. Setup ZRAM (Tier 0 - Priority 100)
@@ -162,18 +179,7 @@ start_tier() {
         echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
     fi
 
-    # Clean prior stale sockets if daemon is dead
-    if [[ -f "$PID_FILE" ]]; then
-        local old_pid
-        old_pid=$(cat "$PID_FILE" 2>/dev/null || true)
-        if [[ -n "$old_pid" ]] && ! kill -0 "$old_pid" 2>/dev/null; then
-            rm -f "$SOCK_PATH" "$PID_FILE"
-        fi
-    fi
-
     if ! grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
-        rm -f "$SOCK_PATH" "$PID_FILE"
-        
         # Launch ramsharedd inside /ramshared-protected cgroup with memory.swap.max=0 and oom_score_adj=-1000
         bash -c "echo \$\$ > /sys/fs/cgroup/ramshared-protected/cgroup.procs 2>/dev/null || true; echo -1000 > /proc/\$\$/oom_score_adj 2>/dev/null || true; exec /usr/local/bin/ramsharedd --backend '$backend_type' --slices 1 --slice-mb '$backend_mb' --listen-nbd 127.0.0.1:10809 --arbiter-listen 127.0.0.1:9090" > "$LOG_FILE" 2>&1 &
         local daemon_pid=$!
