@@ -181,7 +181,14 @@ stop_tier() {
     # 1. Swapoff VRAM
     if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
         echo "[+] Deactivating swap on $NBD_DEV..."
-        swapoff "$NBD_DEV" 2>/dev/null || true
+        if ! swapoff "$NBD_DEV" 2>/dev/null; then
+            echo "[-] Refusing NBD disconnect: swapoff failed for $NBD_DEV" >&2
+            return 1
+        fi
+        if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+            echo "[-] Refusing NBD disconnect: $NBD_DEV remains active in /proc/swaps" >&2
+            return 1
+        fi
     fi
     
     # 2. Disconnect NBD
