@@ -8,11 +8,13 @@ Authoritative SSD storage origin, revocable VRAM block cache, and NBD protocol e
 - **Authoritative SSD Origin:** Ensures all writes are persisted to an authoritative backing store before cache acknowledgement.
 - **Revocable VRAM Cache:** Provides clean, dynamically demountable 128 MiB block chunks in GPU memory.
 - **NBD Fixed-Newstyle Wire Protocol:** Safe parser and encoder for NBD protocol negotiation without root privileges.
-- **Inflight I/O Tracking:** Lock-free tracking of inflight requests to guarantee request idempotence and atomic teardown.
+- **Inflight Range Model:** A small, mutable range-conflict model for tests and
+  prospective callers. It is not lock-free, is not wired into the daemon I/O
+  path, and does not itself provide request idempotence or teardown safety.
 
 ## Workspace Dependencies
 
-- Internal crates: None (pure protocol and storage model).
+- Internal crates: `ramshared-vram` for the reusable VRAM-backed block models.
 
 ## Safety Invariants
 
