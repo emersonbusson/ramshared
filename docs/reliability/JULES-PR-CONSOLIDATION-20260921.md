@@ -104,7 +104,7 @@ version. None can be imported verbatim as a qualified release pipeline.
 | #2059 | Not integrated | Adds a Debian `dh` rules path unused by the current direct `dpkg-deb` build, and a test that terminates its own shell on failure. |
 | #2060 | Rejected | If release binaries are missing, it creates executable empty dummy files and packages them as a successful portable release. It also defaults to v0.12. |
 | #2061 | Deferred | Deriving the version from Cargo is useful, but its generated RPM changelog claims hardware DMA/ublk qualification for every build and inserts a placeholder maintainer identity. |
-| #2067 | Not integrated | Reports a consolidated package-build success even though the Arch branch only copies a PKGBUILD; it defaults to v0.12 and does not enforce one heavy build permit. |
+| #2067 | Not integrated | Reports a consolidated package-build success even though the Arch branch only copies a PKGBUILD; it defaults to v0.12 and does not verify that a package artifact was produced. |
 | #2068 | Deferred | Removes ad hoc `/run/ramshared` creation, but the auto-deploy script and direct service path may run outside packaged tmpfiles setup. `packaging/tmpfiles.d/ramshared.conf` also names a user/group that must be proven to exist. |
 | #2069 | Rejected | Suppresses `invalid-license` and missing-signature lint findings, and signals the current shell with TERM on lint failure. |
 | #2071 | Not integrated | Adds placeholder maintainer identity, strips installed binaries without qualifying symbols, and uses shell self-termination for lint failure. It also labels an evolving package an “Initial release.” |
@@ -115,7 +115,7 @@ it ignored a failed release `cargo build`, reported a spec-only result as
 without checking for an RPM. These paths now refuse packaging, with three
 regression tests in `tools/ci/build-rpm-package.test.mjs` (two RED before the
 fix, all GREEN after). The script consumes prebuilt release binaries; it does
-not launch an unpermitted heavy build. RPM/Arch metadata still says
+not launch a hidden release build. RPM/Arch metadata still says
 GPL-2.0-only/GPL2 while the root and workspace package license is MIT and
 packaged udev rules declare GPL-2.0-only. Licensing and artifact provenance
 must be reconciled before any public package qualification; this audit does

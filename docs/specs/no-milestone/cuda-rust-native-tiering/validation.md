@@ -48,7 +48,7 @@ CUDA backend file against which to run a Step 3 coverage gate.
    `sm_80+` host with a supported toolkit, workload-specific benchmarks, and
    artifact provenance.
 4. Only after controlled live before/action/after, swapoff-first recovery,
-   permit-qualified build, and installed `BINARY_MATCH` may the IMPL record be
+   a reproducible release build, and installed `BINARY_MATCH` may the IMPL record be
    considered DONE for a host surface.
 
 ## Verdict
