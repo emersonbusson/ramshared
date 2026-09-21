@@ -4,7 +4,7 @@
 //! Also hosts [`VramBackend`] (windows-swap-driver ITEM-2 / DT-6).
 //!
 //! Core **testable without root**: parse/encode of the NBD wire, the trait
-//! [`BlockBackend`] and the map of inflight blocks ([`Inflight`], §8.1). The wiring of
+//! [`BlockBackend`] and an unwired inflight range model ([`Inflight`], §8.1). The wiring of
 //! `/dev/nbdX` (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`) is a separate module (requires
 //! root + device) — this lib is only the protocol and logic.
 #![forbid(unsafe_code)]

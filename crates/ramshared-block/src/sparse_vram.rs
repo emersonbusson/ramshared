@@ -317,6 +317,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
     }
 }
 
+fn physical_range_fits(physical_len: usize, relative: usize, transfer_len: usize) -> bool {
+    relative
+        .checked_add(transfer_len)
+        .is_some_and(|end| end <= physical_len)
+}
+
 impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
     fn size_bytes(&self) -> u64 {
         self.capacity
@@ -356,6 +362,12 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                 )));
             };
             if let Some(m) = &chunk.mem {
+                if !physical_range_fits(m.len(), rel, n) {
+                    return Err(IoError(format!(
+                        "sparse physical read oob rel={rel} len={n} phys_len={}",
+                        m.len()
+                    )));
+                }
                 m.read_at(rel as u64, &mut buf[done..done + n])
                     .map_err(|e: VramError| IoError(e.to_string()))?;
             } else {
@@ -401,6 +413,12 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                 .mem
                 .as_mut()
                 .ok_or_else(|| IoError("sparse: mem missing after ensure".into()))?;
+            if !physical_range_fits(m.len(), rel, n) {
+                return Err(IoError(format!(
+                    "sparse physical write oob rel={rel} len={n} phys_len={}",
+                    m.len()
+                )));
+            }
             m.write_at(rel as u64, &data[done..done + n])
                 .map_err(|e: VramError| IoError(e.to_string()))?;
 
@@ -540,6 +558,27 @@ mod tests {
         fn mem_info(&self) -> Result<(u64, u64), VramError> {
             Ok((8 << 30, 8 << 30))
         }
+    }
+
+    #[test]
+    fn zero_block_size_is_rejected_without_panic() {
+        let provider = FakeProvider::new();
+        assert!(SparseVramBackend::new(&provider, 4096, 4096, 0).is_err());
+    }
+
+    #[test]
+    fn physical_bounds_refuse_provider_io() {
+        let provider = FakeProvider::new();
+        let mut backend = SparseVramBackend::new(&provider, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        backend.ensure_live(0).unwrap();
+        backend.chunks[0].mem.as_mut().unwrap().0.truncate(4096);
+
+        let write_error = backend.write_at(0, &[1u8; 8192]).unwrap_err();
+        assert!(write_error.0.contains("sparse physical write oob"));
+
+        let mut read_buffer = [0u8; 8192];
+        let read_error = backend.read_at(0, &mut read_buffer).unwrap_err();
+        assert!(read_error.0.contains("sparse physical read oob"));
     }
 
     #[test]

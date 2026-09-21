@@ -410,4 +410,37 @@ mod tests {
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
     }
+
+    #[test]
+    fn unsupported_option_replies_and_keeps_negotiating() {
+        let mut input = stream_opts(0, &[(999, vec![]), (NBD_OPT_ABORT, vec![])]);
+        let mut output = Vec::new();
+        let result = server_handshake(&mut input, &mut output, &one(4096), 1);
+        assert!(matches!(result, Err(HandshakeError::Aborted)));
+        assert!(has_rep(&output, NBD_REP_ERR_UNSUP));
+    }
+
+    #[test]
+    fn truncated_go_payload_is_invalid() {
+        let mut input = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &[0, 0, 0]);
+        let mut output = Vec::new();
+        let result = server_handshake(&mut input, &mut output, &one(4096), 1);
+        assert!(matches!(result, Err(HandshakeError::InvalidFormat)));
+    }
+
+    #[test]
+    fn go_payload_missing_info_count_is_invalid() {
+        let mut input = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &[0, 0, 0, 1, b'a']);
+        let mut output = Vec::new();
+        let result = server_handshake(&mut input, &mut output, &one(4096), 1);
+        assert!(matches!(result, Err(HandshakeError::InvalidFormat)));
+    }
+
+    #[test]
+    fn go_payload_name_length_exceeding_frame_is_invalid() {
+        let mut input = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &[0xff, 0xff, 0xff, 0xff]);
+        let mut output = Vec::new();
+        let result = server_handshake(&mut input, &mut output, &one(4096), 1);
+        assert!(matches!(result, Err(HandshakeError::InvalidFormat)));
+    }
 }
