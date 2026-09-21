@@ -5560,3 +5560,23 @@ Rust topology residuals remain explicit.
 **Residual blockers:** None.
 **Rollback trigger:** Any `CUDA_ERROR_OUT_OF_MEMORY` or `CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED` triggers immediate fallback to staged DMA transfer.
 **Verdict:** ✅ `PASS`. Zero-copy host registration and slice coverage gate pass.
+
+## 2026-09-21 20:15 -03 — Legacy WSL2 service safety regression (local-only)
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0041`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-21T23:04:00Z`.
+**Verified at:** `2026-09-21T23:16:46Z`.
+**Source revision:** `e03ab8c2`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only local-check record and its RED/GREEN commits; rerun the isolated fixture before promotion.
+**Freshness:** Revalidate after any legacy service change and before attended host handoff.
+**Category:** `local-check`.
+**What:** Read-only host preflight found `/dev/nbd0` active at priority 50 with 0 KiB used, a live daemon owning the NBD and arbiter listeners, a stale `/run/ramshared/ramsharedd.pid` record, missing current control-plane status files, and different hashes for the live, installed, and checkout daemon binaries. The enabled legacy boot service had failed after a listener collision. `ramshared doctor --json` reported environment readiness, but `ramshared status --json` correctly remained `Degraded`/`BLOCKED`; these are different questions.
+**How to measure:** `bash scripts/safety/test-legacy-vram-service.sh`; `bash -n packaging/scripts/ramshared-vram-service.sh scripts/safety/test-legacy-vram-service.sh`; `./scripts/docs-check.sh`.
+**Measured data:** 5 isolated cases passed after 4 RED checkpoints: failed `swapoff` refuses disconnect/kill/cleanup; foreign PID executable refuses before mutation; failed NBD detach retains daemon/state; successful detach uses TERM rather than SIGKILL; active NBD swap cannot be adopted on start. Shell syntax, documentation checks, and `git diff --check` passed. Live stop/start and pressure tests: 0.
+**Residual blockers:** The legacy ZRAM cleanup and remaining start/auto-deploy false-success paths are not qualified. The patched script has not been installed; the active daemon and swap were not altered. A supported `sm_80+` GPU and CUDA toolkit remain separate requirements for cutile Tile execution; the local `sm_75` host does not close that gate.
+**Verdict:** 🟡 `PARTIAL` — source-level fail-closed hardening only; no host migration, installed-binary match, or cutile PR qualification.
+
+**EVD-0040 scope clarification:** The 2026-09-13 entry's reference to local cutile patch branches is historical source context, not evidence that upstream cutile PRs #279 or #280 compiled or executed on this host. EVD-0040 applies only to the RamShared CUDA zero-copy host-mapping observations described there.
