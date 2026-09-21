@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output"; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/swap-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -159,3 +159,38 @@ if (( status != 0 || swapoff_calls != 1 || disconnect_calls != 1 || kill_calls !
 fi
 
 echo 'PASS legacy VRAM service stops its daemon gracefully after confirmed detach'
+
+# A boot-time legacy start may not adopt an NBD swap created by another path.
+start_definition=$(sed -n '/^start_tier() {/,/^}/p' "$service_script")
+[[ $start_definition == 'start_tier() {'* ]] || {
+    echo 'start_tier definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$start_definition")
+setup_protected_cgroup() { :; }
+modprobe() { :; }
+detect_vram_capacity() { printf '1024\n'; }
+pgrep() { printf '4242\n'; }
+chmod() { :; }
+ZRAM_MIB=0
+swap_active=1
+daemon_alive=1
+printf 'preserve-pid\n' > "$PID_FILE"
+printf 'preserve-swap\n' > "$SWAP_DEV_FILE"
+printf 'preserve-capacity\n' > "$CAPACITY_STATUS_FILE"
+
+set +e
+start_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+
+if (( status == 0 )) || [[ $(<"$PID_FILE") != preserve-pid ]] \
+    || [[ $(<"$SWAP_DEV_FILE") != preserve-swap ]] \
+    || [[ $(<"$CAPACITY_STATUS_FILE") != preserve-capacity ]]; then
+    printf 'start must refuse existing NBD swap without adopting records: status=%s pid=%s swap=%s capacity=%s\n' \
+        "$status" "$(<"$PID_FILE")" "$(<"$SWAP_DEV_FILE")" "$(<"$CAPACITY_STATUS_FILE")" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service refuses to adopt active NBD swap'
