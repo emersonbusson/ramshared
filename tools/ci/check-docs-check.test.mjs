@@ -10,13 +10,16 @@ const SOURCE = new URL('../../scripts/docs-check.sh', import.meta.url)
 test('docs_check_reports_all_independent_failures', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'ramshared-docs-check-'))
   const scripts = path.join(root, 'scripts')
+  const safety = path.join(scripts, 'safety')
   const bin = path.join(root, 'bin')
   const log = path.join(root, 'node-invocations.log')
   mkdirSync(scripts, { recursive: true })
+  mkdirSync(safety, { recursive: true })
   mkdirSync(bin, { recursive: true })
   const checker = path.join(scripts, 'docs-check.sh')
   writeFileSync(checker, readFileSync(SOURCE, 'utf8'))
   chmodSync(checker, 0o755)
+  writeFileSync(path.join(safety, 'test-legacy-vram-service.sh'), '#!/usr/bin/env bash\nexit 0\n')
 
   const fakeNode = path.join(bin, 'node')
   writeFileSync(fakeNode, [
@@ -46,8 +49,14 @@ test('docs_check_reports_all_independent_failures', () => {
   assert.match(output, /FAIL documentation-governance \(exit=11\)/)
   assert.match(output, /FAIL documentation-localization \(exit=12\)/)
   assert.match(output, /NO-GO \(2 independent failure\(s\)\)/)
+  assert.match(output, /PASS legacy-vram-service-safety/)
   assert.match(invocations, /check-spec-evidence\.mjs --check/)
   assert.match(invocations, /check-docs-check\.test\.mjs/)
+})
+
+test('docs_check_runs_legacy_vram_service_safety', () => {
+  const source = readFileSync(SOURCE, 'utf8')
+  assert.match(source, /^run_gate legacy-vram-service-safety bash scripts\/safety\/test-legacy-vram-service\.sh$/m)
 })
 
 test('docs_check_does_not_restore_fail_fast_mode', () => {
