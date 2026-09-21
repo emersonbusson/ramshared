@@ -307,3 +307,14 @@ for existing_state in pid socket daemon; do
 done
 
 echo 'PASS legacy VRAM service refuses startup against existing PID, socket, or daemon'
+
+# Boot-time self-deployment cannot qualify binary identity or perform the
+# attended swap handoff. Assert the deprecated entry point has no installer or
+# restart side effects without executing the historical host-mutating script.
+auto_deploy_script="$repo_root/packaging/scripts/ramshared-auto-deploy.sh"
+if command grep -Eq '(^|[[:space:]])(cp|rsync|install|systemctl)[[:space:]]|ramshared-vram-service[.]sh restart' "$auto_deploy_script"; then
+    echo 'legacy auto-deploy must not copy binaries or restart the tier' >&2
+    exit 1
+fi
+
+echo 'PASS legacy auto-deploy has no boot-time install or restart side effects'
