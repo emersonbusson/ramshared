@@ -88,6 +88,38 @@ detect_vram_capacity() {
     fi
 }
 
+nbd_device_ready() {
+    [[ -b "$NBD_DEV" ]]
+}
+
+activate_nbd_tier() {
+    local backend_desc=$1 backend_mb=$2
+    echo "[+] Connecting $NBD_DEV to $backend_desc daemon..."
+    if ! nbd_device_ready; then
+        echo "[-] Refusing activation: $NBD_DEV is not a block device" >&2
+        return 1
+    fi
+    if ! nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1; then
+        echo "[-] Refusing activation: NBD connection failed" >&2
+        return 1
+    fi
+    if ! mkswap -f "$NBD_DEV" >/dev/null 2>&1; then
+        echo "[-] Refusing activation: mkswap failed; NBD may remain connected" >&2
+        return 1
+    fi
+    if ! swapon -p 50 "$NBD_DEV" 2>/dev/null; then
+        echo "[-] Refusing activation: swapon failed; NBD may remain connected" >&2
+        return 1
+    fi
+    if ! grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+        echo "[-] Refusing activation: $NBD_DEV is absent from /proc/swaps" >&2
+        return 1
+    fi
+    echo "$NBD_DEV" > "$SWAP_DEV_FILE"
+    echo "1" > "$CAPACITY_STATUS_FILE"
+    echo "[+] RamShared Tier active at priority 50 on $NBD_DEV (${backend_mb} MiB) [$backend_desc]"
+}
+
 start_tier() {
     echo "[+] Starting RamShared VRAM Tier Service (Protected Architecture)..."
     if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
@@ -146,8 +178,6 @@ start_tier() {
         bash -c "echo \$\$ > /sys/fs/cgroup/ramshared-protected/cgroup.procs 2>/dev/null || true; echo -1000 > /proc/\$\$/oom_score_adj 2>/dev/null || true; exec /usr/local/bin/ramsharedd --backend '$backend_type' --slices 1 --slice-mb '$backend_mb' --listen-nbd 127.0.0.1:10809 --arbiter-listen 127.0.0.1:9090" > "$LOG_FILE" 2>&1 &
         local daemon_pid=$!
         echo "$daemon_pid" > "$PID_FILE"
-        echo "$NBD_DEV" > "$SWAP_DEV_FILE"
-        echo "1" > "$CAPACITY_STATUS_FILE"
         
         # Wait for daemon socket
         for i in {1..20}; do
@@ -158,17 +188,10 @@ start_tier() {
         done
         
         if kill -0 "$daemon_pid" 2>/dev/null && [[ -S "$SOCK_PATH" ]]; then
-            echo "[+] Connecting $NBD_DEV to $backend_desc daemon (with swap immunity & zero block-layer timeout)..."
-            nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1 || true
-            sleep 1
-            if [[ -b "$NBD_DEV" ]]; then
-                mkswap -f "$NBD_DEV" >/dev/null 2>&1 || true
-                swapon -p 50 "$NBD_DEV" 2>/dev/null || true
-                echo "[+] RamShared Tier active at priority 50 on $NBD_DEV (${backend_mb} MiB) [$backend_desc]"
-            fi
+            activate_nbd_tier "$backend_desc" "$backend_mb" || return 1
         else
             echo "[-] Daemon failed to start, check $LOG_FILE"
-            exit 1
+            return 1
         fi
     else
         echo "[!] VRAM tier is already active on $NBD_DEV"
