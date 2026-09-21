@@ -68,6 +68,7 @@ run_gate adr-index-tests node --test --test-reporter=dot tools/ci/check-adr-inde
 run_gate benchmark-evidence-tests node --test --test-reporter=dot tools/ci/check-benchmark-evidence.test.mjs
 run_gate spec-evidence-tests node --test --test-reporter=dot tools/ci/check-spec-evidence.test.mjs
 run_gate docs-check-aggregation-tests node --test --test-reporter=dot tools/ci/check-docs-check.test.mjs
+run_gate legacy-vram-service-safety bash scripts/safety/test-legacy-vram-service.sh
 run_gate benchmark-evidence node tools/ci/check-benchmark-evidence.mjs --check
 run_gate spec-evidence node tools/ci/check-spec-evidence.mjs --check
 run_gate doc-code-drift node tools/ci/check-doc-code-drift.mjs --check
