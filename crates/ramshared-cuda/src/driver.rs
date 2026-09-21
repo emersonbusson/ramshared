@@ -502,11 +502,15 @@ fn err_string(syms: &Syms, r: CuResult) -> String {
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-    use core::sync::atomic::{AtomicUsize, Ordering};
+    use core::cell::Cell;
 
     use super::*;
 
-    static UNREGISTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    // Mock CUDA callbacks execute synchronously on the calling test thread.
+    // A global counter races when the test harness runs these tests in parallel.
+    thread_local! {
+        static UNREGISTER_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
 
     unsafe extern "C" fn success_init(_: u32) -> CuResult {
         CUDA_SUCCESS
@@ -564,7 +568,7 @@ mod tests {
         CUDA_SUCCESS
     }
     unsafe extern "C" fn success_host_unregister(_: *mut c_void) -> CuResult {
-        UNREGISTER_CALLS.fetch_add(1, Ordering::SeqCst);
+        UNREGISTER_CALLS.with(|calls| calls.set(calls.get() + 1));
         CUDA_SUCCESS
     }
     unsafe extern "C" fn success_host_pointer(
@@ -617,7 +621,7 @@ mod tests {
 
     #[test]
     fn mock_driver_exercises_memory_and_mapping_raii() {
-        UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        UNREGISTER_CALLS.with(|calls| calls.set(0));
         let cuda = mock_cuda(Some(success_host_pointer));
         assert_eq!(cuda.device_count().unwrap(), 1);
         let device = cuda.device(0).unwrap();
@@ -648,7 +652,7 @@ mod tests {
         mapping.as_mut_slice()[0] = 0x5A;
         assert_eq!(mapping.as_slice()[0], 0x5A);
         drop(mapping);
-        assert_eq!(UNREGISTER_CALLS.load(Ordering::SeqCst), 1);
+        UNREGISTER_CALLS.with(|calls| assert_eq!(calls.get(), 1));
         unsafe { std::alloc::dealloc(page, layout) };
     }
 
@@ -665,7 +669,7 @@ mod tests {
         ));
         drop(context);
 
-        UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        UNREGISTER_CALLS.with(|calls| calls.set(0));
         let failed_pointer = mock_cuda(Some(failed_host_pointer));
         let device = failed_pointer.device(0).unwrap();
         let context = failed_pointer.create_context(&device).unwrap();
@@ -677,7 +681,7 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(UNREGISTER_CALLS.load(Ordering::SeqCst), 1);
+        UNREGISTER_CALLS.with(|calls| assert_eq!(calls.get(), 1));
         unsafe { std::alloc::dealloc(page, layout) };
     }
 
