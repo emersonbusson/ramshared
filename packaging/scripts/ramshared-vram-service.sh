@@ -90,6 +90,10 @@ detect_vram_capacity() {
 
 start_tier() {
     echo "[+] Starting RamShared VRAM Tier Service (Protected Architecture)..."
+    if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+        echo "[-] Refusing start: active NBD swap must be handed off through the sealed cascade lifecycle" >&2
+        return 1
+    fi
     setup_protected_cgroup
 
     # 1. Setup ZRAM (Tier 0 - Priority 100)
