@@ -20,6 +20,24 @@ Facts verified in the repository:
 - Existing CUDA unit tests pass. The live GPU integration tests are ignored by
   the default test command; their pass status cannot be inferred from it.
 
+## Upstream candidate audit (2026-09-21)
+
+The current `NVlabs/cutile-rs` README explicitly sets `sm_80` as its minimum
+and says `sm_70`/`sm_75` are out of scope. Native Tile support for the local
+RTX 2060 is therefore not a small compatibility change to propose upstream;
+an `sm_75` experiment must use a separate SIMT path and remain independent of
+any `sm_80+` Tile qualification.
+
+| Candidate | Current observation | Required before adoption |
+| :--- | :--- | :--- |
+| PR #278 | Open and conflicting after merged PR #275 changed async tensor lifetime handling. | Compare the exact surviving failure case with current `main`; do not replay its unconditional stream synchronization as a new fix without a reproducer. |
+| PR #279 | Open. Its proposed `PinnedHostMapping` exposes safe host slices and `DerefMut` while the device pointer can be used asynchronously; its zero-length test constructs a zeroed `CudaContext`, which is not a valid Rust value. | Remove the invalid test fixture, specify host/GPU aliasing and in-flight unregister ownership, then test a real context and fault/teardown paths on supported hardware. |
+| PR #280 | Open. The added tests cover lowering into Tile IR, not GPU result equivalence or operation-specific identity/axis boundaries. | Add op-specific negative and result tests, then qualify execution on `sm_80+` with the supported CUDA toolkit. |
+
+These are source-level audit findings, not claims that the PRs have been
+updated, reviewed, or merged. The local `sm_75` host cannot close the Tile
+execution gate.
+
 ## Forensic findings
 
 | Severity | Boundary | Finding | Required closure |
