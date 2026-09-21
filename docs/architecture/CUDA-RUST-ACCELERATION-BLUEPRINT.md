@@ -1,162 +1,41 @@
-# CUDA-Rust Native Acceleration Blueprint: Deep Technical Audit & RamShared Architecture
+# CUDA-Rust Acceleration Blueprint: Current State and Qualification Gates
 
-## Executive Summary
+## Status
 
-On September 8, 2026, NVIDIA announced its official embrace of native GPU kernel development in pure Rust through two complementary tracks: **`cuda-oxide`** (SIMT via custom rustc codegen) and **`cutile-rs`** (Tile-based tensor programming in stable Rust). Presented by Melih Elibol at **RustConf 2026** in Montréal under the banner *"Fearless Concurrency on the GPU"*, this marks an inflection point for systems software, heterogeneous computing, and memory virtualization.
+RamShared currently stores uncompressed pages in GPU memory through its own runtime-loaded CUDA Driver API wrapper in `crates/ramshared-cuda`. This is a working path, not a future prototype. `cuda-core` and `cuda-async` are optional entries in that crate's manifest, but no production source uses them. `cutile-rs` and `cuda-oxide` are not RamShared dependencies or installed RamShared backends. This blueprint describes possible work and must not be cited as a shipped feature or performance result.
 
-This document presents an exhaustive, senior-level technical audit of the NVIDIA CUDA-Rust ecosystem and blueprints its strategic adoption within **RamShared**—transforming RamShared from a passive DMA byte-buffer swap engine into a fully accelerated, in-GPU compressed, memory-safe hierarchical memory tier.
+## Hardware and upstream boundary
 
----
+| Surface | Local RTX 2060 (`sm_75`) | Separate `sm_80+` GPU |
+| :--- | :--- | :--- |
+| Existing RamShared CUDA Driver API | Working baseline; qualify each host binary | Working design; verify on target host |
+| `cuda-core` / `cuda-async` | Optional manifest dependencies only; runtime integration unimplemented | Same |
+| `cuda-oxide` SIMT kernels | Candidate requiring toolchain, artifact, and live tests | Candidate, not integrated |
+| `cutile-rs` Tile kernels | Unsupported by upstream Tile IR | Candidate requiring supported CUDA toolkit and GPU tests |
 
-## 1. Deep Forensic Audit: The NVIDIA CUDA-Rust Ecosystem
+The local host has an RTX 2060 (`sm_75`) and no `nvcc`. It cannot run `cutile` Tile kernels. Upstream Tile microbenchmarks do not establish swap throughput, compression ratio, or latency for RamShared. `cutile-rs` PRs [#278](https://github.com/NVlabs/cutile-rs/pull/278), [#279](https://github.com/NVlabs/cutile-rs/pull/279), and [#280](https://github.com/NVlabs/cutile-rs/pull/280) remain under review and are not dependencies or evidence of adopted functionality.
 
-### 1.1 Track 1: `NVlabs/cutile-rs` (Tile IR on Stable Rust 1.89+)
+### Upstream PR audit snapshot (2026-09-21)
 
-- **Repository**: [https://github.com/NVlabs/cutile-rs](https://github.com/NVlabs/cutile-rs)
-- **Documentation**: [https://nvlabs.github.io/cutile-rs/main/](https://nvlabs.github.io/cutile-rs/main/)
-- **Crates.io**: Published as `cutile`
-- **Paper**: *Fearless Concurrency on the GPU* (arXiv:2606.15991)
-- **Toolchain Status**: **Stable Rust 1.89+**, CUDA 13.3 recommended (supports `sm_80` to `sm_100+` Blackwell).
+| PR | Current disposition for RamShared | Required upstream evidence before reconsideration |
+| :--- | :--- | :--- |
+| [#278](https://github.com/NVlabs/cutile-rs/pull/278) | Conflicts with current `main`; its stream synchronization is already present after merged [#275](https://github.com/NVlabs/cutile-rs/pull/275). Do not integrate a duplicate fix. | Rebase and retain only a regression case if it adds coverage; reproduce the original #252 failure on supported GPU/Compute Sanitizer. |
+| [#279](https://github.com/NVlabs/cutile-rs/pull/279) | Unsafe to depend on as-is: an unowned raw host pointer is exposed through safe mutable slices and unconditional `Send`/`Sync`, while GPU access may still be in flight; drop can unregister without a completion proof. | Own or borrow the backing allocation, enforce exclusive CPU/GPU access and completion ordering, handle context-binding failure during teardown, and replace the zeroed-context test with valid mocks plus live GPU tests. |
+| [#280](https://github.com/NVlabs/cutile-rs/pull/280) | Compiler-only tests assert the generic word `reduce`; they do not prove the distinct bitwise operations or runtime results. The proposed reduction output shape also needs verification against the API's dimension semantics. | Assert op-specific IR and integer-type constraints; test identities, axes, shapes, and numerical XOR/AND/OR results on supported GPU. |
 
-#### Workspace Crate Architecture:
-```text
-cutile                 (User-facing API for authoring & launching tile kernels)
-├── cutile-macro       (#[cutile::module] and #[cutile::entry] procedural macros)
-├── cutile-compiler    (JIT-compiles captured Rust ASTs to GPU cubins via Tile IR)
-│   └── cutile-ir      (Pure Rust Tile IR builder and bytecode serializer)
-├── cuda-async         (Safe async CUDA execution via Rust Futures, sync/await)
-└── cuda-core          (Safe, idiomatic CUDA Driver API wrapper in Rust)
-    └── cuda-bindings  (Autogenerated low-level CUDA 13.x FFI bindings)
-```
+These are source-review findings, not upstream maintainer verdicts. Pure `cutile-ir` tests can run locally, but they do not validate Tile compilation or execution on this `sm_75` host.
 
-#### Core Mechanism & Ownership Discipline:
-1. **Host-to-Device Ownership Across Launches**:
-   Mutable tensors are partitioned into disjoint spatial pieces before launch (e.g., `tensor.partition([128])`).
-   Immutable tensors are shared across tiles. The Rust borrow checker enforces exclusive access across GPU thread blocks at compile time.
-2. **JIT Compilation via CUDA Tile IR**:
-   The `#[cutile::module]` macro captures the Rust Abstract Syntax Tree (AST) of the kernel at host compilation time. When invoked, `cutile-compiler` JIT-compiles that AST into a CUDA Tile IR bytecode representation, and delegates code generation to NVIDIA's Tile IR JIT compiler, targeting hardware tensor pipelines directly.
-3. **Verified Performance Benchmark**:
-   - On NVIDIA B200: reaches **7 TB/s** memory throughput for element-wise operations (91% of peak HBM3e bandwidth) and **2.07 PFlop/s** for dense f16 GEMM (92% of hardware peak), within **0.3%** of hand-written low-level Tile IR.
-   - In production: already powers Hugging Face's **Grout** (Qwen3 inference engine) and `mistral.rs`.
+## Safety model
 
----
+The current wrapper already ties device allocations to a CUDA context using Rust lifetimes and RAII. Replacing it with another wrapper requires a demonstrated improvement and must preserve context affinity, error handling, and allocation lifetime. A Rust Future can stop waiting or prevent queued work from starting; dropping it does not guarantee that an in-flight CUDA operation, `/dev/dxg` ioctl, or GPU kernel has stopped. Host and device buffers must remain owned until completion or a qualified teardown path is observed.
 
-### 1.2 Track 2: `NVlabs/cuda-oxide` (SIMT Kernels via rustc Codegen)
+GPU compression is only a hypothesis. Four-kilobyte pages incur transfer, launch, metadata, decompression, and recovery costs. Compression ratio varies with workload; already-compressed or random pages may expand. A crash-consistent raw/compressed block map, bounded allocation, checksum, and uncompressed fallback are prerequisites. No universal `2 GiB` reserve applies: the broker/NBD reserve is `max(1536 MiB, 20%)` plus a separate 768 MiB runtime-free buffer; origin cache uses `max(2 GiB, 20%)`; StorPort uses `max(configuration, 512 MiB, 10%)`.
 
-- **Repository**: [https://github.com/NVlabs/cuda-oxide](https://github.com/NVlabs/cuda-oxide)
-- **Documentation**: [https://nvlabs.github.io/cuda-oxide/](https://nvlabs.github.io/cuda-oxide/)
-- **CLI**: `cargo-oxide` (driver for build, inspect, sanitize, and debug)
-- **Toolchain Status**: Pinned nightly rustc (`nightly-2026-08-28`), Clang 21, LLVM 22.
+## Staged qualification
 
-#### Compilation Pipeline:
-$$\text{Rust Code} \xrightarrow{\text{rustc}} \text{Rust MIR} \xrightarrow{\text{Pliron}} \text{Pliron IR} \xrightarrow{\text{LLVM Dialect}} \text{LLVM IR} \xrightarrow{\text{PTX Backend}} \text{CUDA PTX}$$
+1. **Baseline**: Record hardware, transport, driver, kernel, active swap, binary identity, throughput, p50/p95/p99 latency, pressure/stalls, and integrity for the existing uncompressed CUDA path.
+2. **Optional runtime prototype**: Exercise `cuda-core` and `cuda-async` behind a reversible feature gate. Test refusal without CUDA, context affinity, failed allocations, queued cancellation, timeout while DMA is in flight, delayed completion, and buffer lifetime. Compare with the baseline before replacing any production path.
+3. **Kernel prototype**: Build reproducible `cuda-oxide` artifacts for `sm_75` or Tile kernels for `sm_80+` only. Prove round-trip and raw fallback on named compressible, incompressible, and adversarial workloads. Measure end-to-end benefit, not GPU memory bandwidth alone.
+4. **Integration and recovery**: Gate broker selection by device/toolkit capability. Test crash/restart, GPU reset, memory pressure, and swapoff-first recovery. Retain the old backend and exact installed artifact for rollback. Change host installation only after tests and a safe swap transition.
 
-#### Technical Capabilities:
-1. **Single-Source Compilation**: Host launching code and GPU device kernels coexist in the same `.rs` file, compiled with a single invocation of `cargo oxide build`.
-2. **Generic Closure Capture**:
-   ```rust
-   #[kernel]
-   pub fn map<T: Copy, F: Fn(T) -> T + Copy>(f: F, input: &[T], mut out: DisjointSlice<T>) {
-       let idx = thread::index_1d();
-       if let Some(out_elem) = out.get_mut(idx) {
-           *out_elem = f(input[idx.get()]);
-       }
-   }
-   ```
-   Closures capturing host scalars (`move |x| x * factor`) are monomorphized, scalarized, and passed automatically through GPU kernel launch parameters!
-3. **Compile-Time Aliasing Prevention**:
-   The `DisjointSlice<T>` type prevents data races between concurrent threads in the same grid.
-
----
-
-### 1.3 Architectural Comparison & Hardware Compatibility Matrix
-
-| Property | `cutile-rs` | `cuda-oxide` | Legacy `ramshared-cuda` |
-| :--- | :--- | :--- | :--- |
-| **Programming Model** | Tile-based / Tensor partitioning | SIMT (Thread / Warp / Block) | Raw Memory Buffer (Memcpy) |
-| **Rust Toolchain** | **Stable Rust 1.89+** | Pinned Nightly + custom codegen | Stable Rust (Dynamic `dlopen`) |
-| **CUDA Requirement** | CUDA 13.2 / 13.3 (Driver R580+) | CUDA 13.0+ | CUDA Driver 11.0+ |
-| **Minimum Hardware** | **`sm_80` (Ampere+)** | **`sm_70` / `sm_75` (Turing+)** | Any CUDA Device |
-| **Host Workstation (RTX 2060)** | ⚠️ *Out of scope for cutile* (`sm_75`) | ✅ **Fully Compatible** (`sm_75`) | ✅ Compatible (`sm_75`) |
-| **Modern Datacenter (A100/H100/B200)** | ✅ **Primary Target (7 TB/s)** | ✅ Supported | ⚠️ Unoptimized (PCIe bottleneck) |
-| **Async Rust Runtime** | `cuda-async` (`.await` / `.sync()?`) | `cuda-async` | Synchronous blocking ioctl |
-
----
-
-## 2. Strategic Impact on RamShared
-
-Currently, RamShared operates under a passive memory model:
-```text
-[ Current Model ]
-WSL2 RAM ──(PCIe Gen3 x16: ~12 GB/s)──> GPU VRAM (Raw Uncompressed Buffer)
-Ratio: 1:1 (2 GB swap consumes 2 GB physical VRAM)
-Failure Mode: Synchronous ioctl blocks in dxgkrnl on memory pressure -> Desktop Freeze!
-```
-
-By integrating NVIDIA's CUDA-Rust architecture, RamShared transitions to an active, accelerated tier:
-
-```text
-[ Next-Gen CUDA-Rust Model ]
-WSL2 RAM ──(High-Speed DMA)──> GPU RTX 2060 [ In-VRAM GPU Rust Kernel: LZ4/ZSTD ] ──> VRAM
-Ratio: 1:2.5 to 1:3 (2 GB physical VRAM holds 5 GB to 6 GB compressed swap)
-Processing: 336 GB/s internal VRAM bandwidth (30x faster than PCIe!)
-Failure Mode: Non-blocking async Future with cancellation token -> Graceful Demote!
-```
-
-### Key Breakthroughs:
-
-1. **In-GPU Page Compression (GPU ZRAM)**:
-   Instead of burning host CPU cycles or storing raw uncompressed pages in VRAM, a native Rust GPU kernel executes parallel page compression (LZ4 or bit-packing) directly inside VRAM at 336 GB/s. A 2,048 MB physical VRAM allocation can store **5 GB to 6 GB of compressed pages**!
-2. **Type-Safe Asynchronous Cancellation (Zero TDR Hangs)**:
-   By adopting `cuda-async` and `cuda-core`, kernel launches return composable Rust `DeviceOperation` futures. If the host displays memory pressure or the DMA watchdog trips ($>50\text{ms}$), the runtime cancels the GPU future cleanly, falling back to RAM/SSD without blocking kernel threads in `D` state.
-3. **Elimination of Raw C-FFI**:
-   Retire hand-rolled raw pointers in `crates/ramshared-cuda` in favor of NVIDIA's verified, memory-safe `cuda-core` primitives.
-
----
-
-## 3. The Dual-Track Adoption Roadmap for RamShared
-
-```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│                   RAMSHARED ACCELERATION ROADMAP                         │
-└────────────────────────────────────┬─────────────────────────────────────┘
-                                     │
-         ┌───────────────────────────┴───────────────────────────┐
-         ▼                                                       ▼
-[ PHASE 1: Immediate Safety ]                          [ PHASE 2: CUDA-Rust Core ]
-- Host-Aware Clamping (Floor=2GB)                      - Adopt `cuda-core` & `cuda-async`
-- 50ms Watchdog in ResilientBackend                    - Replace raw C dlopen FFI
-- Natural Spillover to Tier 3 SSD                      - Asynchronous cancellation tokens
-         │                                                       │
-         └───────────────────────────┬───────────────────────────┘
-                                     ▼
-                      [ PHASE 3: Dual-Track Kernels ]
-                                     │
-             ┌───────────────────────┴───────────────────────┐
-             ▼                                               ▼
-   [ Track A: cuda-oxide SIMT ]                     [ Track B: cutile-rs Tensors ]
-   - Targets `sm_75` (RTX 2060)                     - Targets `sm_80+` (Ampere/B200)
-   - In-VRAM LZ4 Page Compression                   - 7 TB/s Tile Block Deduplication
-   - Compiles via cargo-oxide                       - Native Stable Rust 1.89+ JIT
-```
-
-### Phase 1: Host-Aware Safety & Stability (Immediate Milestone)
-- Implement `calculate_safe_vram_slice` in `crates/ramshared-wsl2d`.
-- Enforce the 2,048 MB host safety cushion on the RTX 2060.
-- Add the 50ms non-blocking watchdog to prevent Windows desktop freezes.
-- Verify live Tier 3 (SSD) cascade spillover under the 6.18.40.1 kernel.
-
-### Phase 2: Modernization with `cuda-core` and `cuda-async`
-- Import `cuda-core` and `cuda-async` from `NVlabs/cutile-rs`.
-- Replace raw FFI calls in `crates/ramshared-cuda` with safe, managed context and buffer abstractions.
-- Wire native Rust cancellation tokens into the NBD dispatch loop.
-
-### Phase 3: In-GPU Pure Rust Page Compression
-- **For `sm_75` (Turing / RTX 2060)**: Implement a SIMT parallel LZ4 kernel using `cuda-oxide`, compressing 4KB memory pages directly on the GPU.
-- **For `sm_80+` (Ampere / Ada / Blackwell)**: Implement a Tile-based compression and deduplication kernel using `cutile-rs` on stable Rust, utilizing hardware asynchronous tensor copies.
-
----
-
-## 4. Conclusion
-
-NVIDIA's CUDA-Rust initiative proves that memory safety and extreme hardware performance are not mutually exclusive. By adopting `cuda-oxide` and `cutile-rs`, RamShared aligns itself with the cutting edge of GPU systems engineering, ensuring that whether running on a consumer workstation with an RTX 2060 or a datacenter cluster of B200s, memory virtualization is safe, robust, and blazingly fast.
+The detailed proposed requirements and incomplete tests are tracked in [PRD.md](../specs/no-milestone/cuda-rust-native-tiering/PRD.md), [SPEC.md](../specs/no-milestone/cuda-rust-native-tiering/SPEC.md), and [IMPL.md](../specs/no-milestone/cuda-rust-native-tiering/IMPL.md).
