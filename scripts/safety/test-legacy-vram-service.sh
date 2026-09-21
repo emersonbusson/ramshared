@@ -29,7 +29,9 @@ swap_active=1
 swapoff_result=1
 swapoff_calls=0
 disconnect_calls=0
+disconnect_result=0
 kill_calls=0
+kill_signals=()
 remove_calls=0
 daemon_alive=1
 mock_exe=$DAEMON_BIN
@@ -50,12 +52,16 @@ swapoff() {
     return "$swapoff_result"
 }
 
-nbd-client() { disconnect_calls=$((disconnect_calls + 1)); }
+nbd-client() {
+    disconnect_calls=$((disconnect_calls + 1))
+    return "$disconnect_result"
+}
 kill() {
     if [[ ${1:-} == -0 ]]; then
         (( daemon_alive == 1 ))
     else
         kill_calls=$((kill_calls + 1))
+        kill_signals+=("${1:-}")
         if [[ ${1:-} == -TERM || ${1:-} == -9 ]]; then
             daemon_alive=0
         fi
@@ -102,3 +108,54 @@ if (( status == 0 || swapoff_calls != 0 || disconnect_calls != 0 || kill_calls !
 fi
 
 echo 'PASS legacy VRAM service refuses foreign daemon identity before teardown'
+
+# A failed detach must not permit daemon termination or state deletion.
+swap_active=1
+swapoff_result=0
+swapoff_calls=0
+disconnect_calls=0
+disconnect_result=1
+kill_calls=0
+kill_signals=()
+remove_calls=0
+daemon_alive=1
+mock_exe=$DAEMON_BIN
+
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+
+if (( status == 0 || swapoff_calls != 1 || disconnect_calls != 1 || kill_calls != 0 || remove_calls != 0 )); then
+    printf 'failed NBD detach must retain daemon and state: status=%s swapoff=%s disconnect=%s kill=%s remove=%s\n' \
+        "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service retains daemon and state after failed NBD detach'
+
+# A successful stop uses one graceful signal, never SIGKILL.
+swap_active=1
+swapoff_calls=0
+disconnect_calls=0
+disconnect_result=0
+kill_calls=0
+kill_signals=()
+remove_calls=0
+daemon_alive=1
+
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+
+if (( status != 0 || swapoff_calls != 1 || disconnect_calls != 1 || kill_calls != 1 || remove_calls != 1 )) \
+    || [[ ${kill_signals[*]} != '-TERM' ]]; then
+    printf 'successful stop must use TERM only: status=%s swapoff=%s disconnect=%s kill=%s signals=%s remove=%s\n' \
+        "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "${kill_signals[*]}" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service stops its daemon gracefully after confirmed detach'
