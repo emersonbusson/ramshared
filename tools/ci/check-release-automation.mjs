@@ -34,8 +34,28 @@ const REQUIRED_PR_SECTIONS = [
   { name: 'Rollback trigger', regex: /##\s+Rollback trigger/i },
 ]
 
+function readText(root, relativePath, findings) {
+  const absolutePath = path.join(root, relativePath)
+  if (!existsSync(absolutePath)) {
+    findings.push(`${relativePath} is missing`)
+    return null
+  }
+  return readFileSync(absolutePath, 'utf8')
+}
+
+function captureVersion(content, regex) {
+  return content?.match(regex)?.[1] ?? null
+}
+
+function expectedNextMinor(version) {
+  const match = version?.match(/^(\d+)\.(\d+)\.\d+/)
+  return match ? `${match[1]}.${Number(match[2]) + 1}.0` : null
+}
+
 export function checkReleaseAutomation({ root = ROOT } = {}) {
   const findings = []
+  let cargoVersion = null
+  let manifestVersion = null
 
   // 1. Check Cargo.toml version
   const cargoPath = path.join(root, 'Cargo.toml')
@@ -47,9 +67,9 @@ export function checkReleaseAutomation({ root = ROOT } = {}) {
     if (!versionMatch) {
       findings.push('Cargo.toml missing root package version')
     } else {
-      const version = versionMatch[1]
-      if (!SEMVER_RE.test(version)) {
-        findings.push(`Cargo.toml version "${version}" violates strict SemVer`)
+      cargoVersion = versionMatch[1]
+      if (!SEMVER_RE.test(cargoVersion)) {
+        findings.push(`Cargo.toml version "${cargoVersion}" violates strict SemVer`)
       }
     }
   }
@@ -61,9 +81,9 @@ export function checkReleaseAutomation({ root = ROOT } = {}) {
   } else {
     try {
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-      const rootVersion = manifest['.']
-      if (!rootVersion || !SEMVER_RE.test(rootVersion)) {
-        findings.push(`.release-please-manifest.json root version "${rootVersion}" violates SemVer`)
+      manifestVersion = manifest['.']
+      if (!manifestVersion || !SEMVER_RE.test(manifestVersion)) {
+        findings.push(`.release-please-manifest.json root version "${manifestVersion}" violates SemVer`)
       }
     } catch (err) {
       findings.push(`.release-please-manifest.json is invalid JSON: ${err.message}`)
@@ -138,6 +158,75 @@ export function checkReleaseAutomation({ root = ROOT } = {}) {
     }
   }
 
+  // 7. Enforce one current release across every release-facing source.
+  if (cargoVersion && SEMVER_RE.test(cargoVersion)) {
+    const versionSources = [
+      ['.release-please-manifest.json', manifestVersion],
+      ['CHANGELOG.md', captureVersion(readText(root, 'CHANGELOG.md', findings), /^## \[([^\]]+)]/m)],
+      ['README.md', captureVersion(readText(root, 'README.md', findings), /\bRelease v(\d+\.\d+\.\d+)\b/i)],
+      ['README.pt-BR.md', captureVersion(readText(root, 'README.pt-BR.md', findings), /\b(?:Release|Vers[aã]o) v(\d+\.\d+\.\d+)\b/i)],
+      ['.claude/rules/governance.md', captureVersion(readText(root, '.claude/rules/governance.md', findings), /Production posture[^\n]*?v(\d+\.\d+\.\d+)/i)],
+      ['ROADMAP.md', captureVersion(readText(root, 'ROADMAP.md', findings), /Current release(?: posture)?:[^\n]*?v(\d+\.\d+\.\d+)/i)],
+    ]
+
+    for (const [source, version] of versionSources) {
+      if (!version) {
+        findings.push(`${source} does not declare the current release version`)
+      } else if (version !== cargoVersion) {
+        findings.push(`${source} declares ${version}, but Cargo.toml declares ${cargoVersion}`)
+      }
+    }
+
+    const roadmap = readText(root, 'ROADMAP.md', [])
+    const roadmapNext = captureVersion(roadmap, /^## Next \(v(\d+\.\d+\.\d+)\)/m)
+    const expectedNext = expectedNextMinor(cargoVersion)
+    if (!roadmapNext) {
+      findings.push('ROADMAP.md does not declare the next release')
+    } else if (roadmapNext !== expectedNext) {
+      findings.push(`ROADMAP.md declares next release ${roadmapNext}, expected ${expectedNext}`)
+    }
+  }
+
+  // 8. Keep public transport and evidence claims within the qualified support matrix.
+  const truthDocuments = ['README.md', 'README.pt-BR.md', 'ARCHITECTURE.md', 'docs/FAQ.md']
+  for (const relativePath of truthDocuments) {
+    const content = readText(root, relativePath, findings)
+    if (!content) continue
+    const normalized = content.replace(/[`*]/g, '')
+    const hasStandardWslNbd = /standard WSL2[\s\S]{0,120}\bNBD\b[\s\S]{0,120}\bbaseline|WSL2 padr[aã]o[\s\S]{0,120}\bNBD\b[\s\S]{0,120}\bbase/i.test(normalized)
+    const hasConditionalUblk = /ublk\s*\/\s*io_uring[\s\S]{0,240}(?:native Linux|Linux nativo)[\s\S]{0,240}(?:compatible custom kernel|kernel customizado compat[ií]vel)/i.test(normalized)
+    if (!hasStandardWslNbd) {
+      findings.push(`${relativePath} must state that standard WSL2 uses NBD as its baseline transport`)
+    }
+    if (!hasConditionalUblk) {
+      findings.push(`${relativePath} must scope ublk/io_uring to native Linux or WSL2 with a compatible custom kernel`)
+    }
+  }
+
+  const architecture = (readText(root, 'ARCHITECTURE.md', []) ?? '').replace(/[`*]/g, '')
+  if (!/EVD-0039(?:(?!EVD-0040)[\s\S]){0,160}ublk\s*\/\s*io_uring/i.test(architecture)) {
+    findings.push('ARCHITECTURE.md must associate EVD-0039 with ublk/io_uring')
+  }
+  if (!/EVD-0040(?:(?!EVD-0039)[\s\S]){0,160}zero-copy CUDA host mapping/i.test(architecture)) {
+    findings.push('ARCHITECTURE.md must associate EVD-0040 with zero-copy CUDA host mapping')
+  }
+
+  const validation = readText(root, 'validation.md', findings) ?? ''
+  const evidenceSection = (evidenceId) => {
+    const marker = validation.search(new RegExp(`Evidence ID:[^\\n]*${evidenceId}`, 'i'))
+    if (marker < 0) return ''
+    const nextHeading = validation.indexOf('\n## ', marker)
+    return validation.slice(marker, nextHeading < 0 ? validation.length : nextHeading)
+  }
+  const evd0039 = evidenceSection('EVD-0039')
+  const evd0040 = evidenceSection('EVD-0040')
+  if (!/ublk[\s\S]{0,40}io_uring/i.test(evd0039)) {
+    findings.push('validation.md EVD-0039 must contain the ublk/io_uring qualification')
+  }
+  if (!/cuMemHostRegister|PinnedHostMapping|zero-copy CUDA host mapping/i.test(evd0040)) {
+    findings.push('validation.md EVD-0040 must contain the zero-copy CUDA host mapping qualification')
+  }
+
   return {
     ok: findings.length === 0,
     findings,
@@ -150,7 +239,7 @@ function main() {
   const result = checkReleaseAutomation()
 
   if (result.ok) {
-    console.log('✓ release-automation OK (SemVer, packaging workflows, and README parity in sync)')
+    console.log('✓ release-automation OK (release versions, support matrix, evidence, packaging, and README parity in sync)')
     process.exit(0)
   } else {
     console.error(`release-automation: NO-GO (${result.findings.length} findings)`)

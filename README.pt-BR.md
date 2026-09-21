@@ -12,7 +12,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.0"><img alt="Versão v0.14.0" src="https://img.shields.io/badge/release-v0.14.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1"><img alt="Versão v0.14.1" src="https://img.shields.io/badge/release-v0.14.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-estável-2f855a?style=flat-square">
 </p>
@@ -40,7 +40,11 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 
 ## Status atual
 
-Última release publicada: **[v0.14.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.0)**. Este checkout compila a versão **0.14.0**, a manutenção estável atual.
+Última release publicada: **[v0.14.1](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1)**. Este checkout compila a versão **0.14.1**, a manutenção estável atual.
+
+O WSL2 padrão usa **NBD como transporte base**. `ublk`/`io_uring` é qualificado
+no Linux nativo ou no WSL2 com kernel customizado compatível; não é uma base
+universal para kernels WSL2 padrão.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
@@ -48,7 +52,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 | Cache de GPU | **Estável em hardware qualificado** | Os backends CUDA e Vulkan existem, mas a capacidade e o comportamento dependem do driver, GPU, desktop e pressão atual do host. |
 | Origem em disco e integridade | **Estáveis e testadas** | Há verificações de integridade e desligamento; cada instalação ainda precisa validar seu próprio antes/depois. |
 | Driver Windows StorPort | **Ainda não distribuível publicamente** | O driver permanece uma superfície de laboratório supervisionada até que exista assinatura confiável para produção e qualificação completa. |
-| Kernel customizado e transporte ublk | **Adiados** | São superfícies de desenvolvimento e laboratório, não o transporte WSL2 padrão do primeiro dia. |
+| Kernel customizado e transporte `ublk` | **Qualificados em superfície limitada; promoção de produto adiada** | EVD-0039 cobre Linux nativo e uma superfície WSL2 com kernel customizado compatível. O WSL2 padrão continua usando NBD enquanto a qualificação de ciclo de vida permanece aberta. |
 
 
 As medições históricas estão em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Entradas sem envelope público de evidência são registros históricos, não baselines atuais de release. Limites e qualificações em aberto estão em [`docs/reliability/`](docs/reliability/).
@@ -60,7 +64,7 @@ A qualificação da v0.13 alcançou **19.777 MB** entre Tier 0 (ZRAM), Tier 1 (c
 ## Operação Segura e Guia de Início Rápido
 <a id="safe-operation"></a><a id="quick-start"></a>
 
-O RamShared foi projetado com regras rígidas de segurança. Ele nunca realiza alterações não monitoradas em segundo plano sem a sua ordem explícita.
+O RamShared usa padrões rígidos de segurança e não ativa a cascata sem comando explícito do operador.
 
 Para instalar e verificar seu ambiente em menos de um minuto:
 
@@ -100,7 +104,7 @@ O perfil padrão define 4 GiB de capacidade lógica com um teto de cache físico
 
 ### Nota de Arquitetura: Alocação Dinâmica Apenas
 
-Toda a organização de memória opera através de blocos revogáveis sob demanda respaldados pelo SSD. A pré-alocação estática antiga foi removida para garantir que sua GPU nunca fique sem memória para jogos e tarefas visuais.
+Toda a organização de memória opera através de blocos revogáveis sob demanda respaldados pelo SSD. A pré-alocação estática antiga foi removida; a capacidade disponível ainda depende da GPU, do driver e da carga ativa.
 
 ## Cascata de memória
 
@@ -114,13 +118,8 @@ Toda a organização de memória opera através de blocos revogáveis sob demand
                                      │
                                      ▼
       ┌─────────────────────────────────────────────────────────────┐
-      │ Tier 1: RamShared Cache Direto na VRAM via DMA              │ (Prioridade 50 - acesso em 0,85 µs)
-      │                                                             │
-      │   ┌──────────────────────────┐   ┌───────────────────────┐  │
-      │   │ VRAM da GPU (Cache Tier) │   │ Spillway Quente       │  │
-      │   │ 4 GiB Ativos na GPU      │──►│ 15,6x - 21,5x Rápido  │  │
-      │   │ (Até 429,6 MB/s via DMA) │   │ Zero Fome no Host     │  │
-      │   └──────────────────────────┘   └───────────────────────┘  │
+      │ Tier 1: dispositivo lógico RamShared (Prioridade 50)        │
+      │   cache VRAM limpo e revogável + origem SSD autoritativa    │
       └──────────────────────────────┬──────────────────────────────┘
                                      │
                                      ▼
@@ -132,19 +131,27 @@ Toda a organização de memória opera através de blocos revogáveis sob demand
 
 Como os níveis trabalham juntos:
 
-- **Tier 0: ZRAM (Nível CPU, 1024 MiB):** Compressão ultra-rápida de memória em nível de microssegundos feita diretamente pelo processador.
-- **Tier 1: Cache em VRAM da GPU (4 GiB Ativos na GPU):** Cache de altíssima velocidade via PCIe para as páginas ativas, configurado com capacidade total de 4.096 MB preservando a estabilidade do display.
-- **Tier 3: Origem no SSD do Host:** Armazenamento seguro e permanente no disco que absorve o overflow de memória para o sistema nunca travar.
-- **Sempre Seguro (Write-Through):** Toda escrita confirmada pelo RamShared é guardada com segurança no armazenamento durável. Se a GPU for solicitada por outro aplicativo, seus dados continuam 100% salvos.
+- **Tier 0: ZRAM:** A memória comprimida do host é a primeira proteção sob pressão.
+- **Tier 1: dispositivo lógico RamShared:** Um cache VRAM limpo e revogável pode acelerar páginas cuja cópia autoritativa está na origem SSD.
+- **Tier 3: SSD do host e swap do WSL:** Os níveis inferiores recebem tráfego quando o cache não consegue admitir ou reter uma página.
+- **Contrato write-through:** Uma escrita confirmada pelo cache de origem é persistida na origem autoritativa antes da mutação do cache. Falhas operacionais continuam possíveis e são registradas no registro de gaps.
+
+A reserva varia deliberadamente por superfície. O broker/NBD mantém
+`max(1536 MiB, 20% da VRAM física)` como reserva de capacidade e preserva,
+separadamente, `768 MiB` da VRAM livre reportada como buffer de runtime. O
+cache de origem usa `max(2 GiB, 20%)`; o StorPort usa
+`max(reserva configurada, 512 MiB, 10%)`. Os valores não são intercambiáveis:
+a reserva de capacidade limita o alvo do cache, enquanto o buffer de runtime
+protege novas alocações contra mudanças no uso externo da GPU.
 
 ### Proteção Automática da GPU para Jogos e Windows
 
-Quando o Windows, jogos ou aplicativos 3D solicitam memória de vídeo, o RamShared libera espaço imediatamente:
+Quando o Windows, jogos ou aplicativos 3D solicitam memória de vídeo, o governador do RamShared tenta reduzir a pressão do cache:
 
-1. Interrompe na hora novas alocações na VRAM e libera os blocos limpos de cache em milissegundos.
-2. Continua as operações de memória suavemente direto pelo armazenamento de origem sem interromper seus programas abertos.
-3. Reserva automaticamente pelo menos `max(1,5 GiB, 20% da VRAM física)` exclusivamente para o Windows e tarefas visuais (Princípio 11 do SSDV3), assegurando estabilidade ao Gerenciador de Janelas (DWM) enquanto libera 4 GiB completos em GPUs de 6GB+.
-4. Faz o desligamento ordenado (`swapoff-first`) para que o sistema operacional nunca congele.
+1. Interrompe novas admissões no cache quando o orçamento medido cruza o limite configurado.
+2. Descarta blocos limpos e atende falhas de cache pela origem autoritativa.
+3. Aplica a reserva de capacidade do broker/NBD e o buffer de runtime descritos acima.
+4. Usa desligamento ordenado (`swapoff-first`); timeout ou estado incerto falha de modo fechado e permanece visível ao operador.
 
 ### Evidência, sem atalho de marketing
 
@@ -180,8 +187,8 @@ ramshared top
 ### Diretrizes Operacionais e Regras de Estabilidade
 
 - **Sempre use `ramshared down` para desligar:** Nunca encerre o daemon `ramsharedd` à força com o swap montado. O desmonte ordenado (`swapoff`) mantém o Linux estável e evita corrupção de sistema de arquivos.
-- **Alocação dinâmica, sem desperdício:** O RamShared só aloca memória de vídeo sob demanda. Se jogos, navegadores ou aplicativos 3D precisarem de VRAM, o RamShared devolve o espaço na hora.
-- **Proteção do Gerenciador de Janelas (DWM):** Pelo menos 1,5 GB (ou 20% da VRAM) fica sempre reservado para a interface do Windows, garantindo que suas telas, janelas e cursor continuem perfeitamente fluidos.
+- **Alocação dinâmica:** O RamShared aloca blocos de cache sob demanda e libera blocos limpos quando a pressão medida exige; a latência depende da carga e do driver.
+- **Margem para o desktop:** A capacidade do broker/NBD é limitada por `max(1536 MiB, 20%)`, com buffer livre de runtime separado de `768 MiB` quando há telemetria ao vivo.
 - **Segurança total de armazenamento:** As operações em disco vinculam-se estritamente ao identificador único do volume (UUID), nunca a letras voláteis de unidade.
 - **Transição legada assistida:** `migrate-cascade --from-legacy` é o único caminho suportado para sair de uma cascata anterior sem binding; não é recuperação automática.
 
@@ -205,7 +212,7 @@ segurança, modelos de serviços systemd, documentação e assinaturas criptogr�
 Caches de compilação, credenciais e artefatos de ambientes transitórios são estritamente excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-As versões oficiais para Linux (incluindo v0.14.0 e marcos anteriores) e
+As versões oficiais para Linux (incluindo v0.14.1 e marcos anteriores) e
 seus checksums criptográficos são qualificados pelo fluxo automatizado de promoção de releases.
 
 ## Arquitetura do Driver Windows StorPort

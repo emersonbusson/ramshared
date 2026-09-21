@@ -7,14 +7,26 @@ issues: []
 
 # PRD - Host-Aware VRAM Safety Ceiling, Dynamic Chunk Tiering, and Non-Blocking Spillover
 
+> **Current policy note (2026-09-20):** the original universal reserve proposal
+> has been superseded. Broker/NBD uses a capacity reserve of
+> `max(1536 MiB, 20%)` plus a separate `768 MiB` runtime free buffer. Origin
+> cache and StorPort have different policies and are not governed by this PRD.
+
 ## 1. Summary
 
-RamShared's WSL2 broker daemon (`ramsharedd`) currently exhibits a critical reliability defect under multi-tier cascade memory pressure: when started with a large static slice (such as `--slice-mb 4096` on a 6,144 MB NVIDIA GPU), it immediately reserves and zeroes the entire VRAM slice up-front. Because the Windows host Desktop Window Manager (`dwm.exe`) and host applications continuously require 1.3 GB to 1.8 GB of physical VRAM, this static reservation starves the host GPU memory manager (`dxgkrnl.sys`), leaving less than 650 MB of free headroom.
+This PRD originated from a historical WSL2 broker defect: a large static slice
+could reserve and zero the entire VRAM allocation up front. That legacy
+preallocation path has since been removed, but the host-safety constraints
+remain the design basis for the current sparse cache policy.
 
-During heavy memory pressure (such as `cargo build`, container workloads, or high-throughput swap drills), Linux attempts to write dirty swap pages into `/dev/nbd0`. When the physical GPU memory saturates, synchronous CUDA DMA over `/dev/dxg` locks inside the Windows kernel driver, triggering a GPU Timeout Detection and Recovery (TDR) or kernel deadlock. This freezes the Windows desktop and hangs the Linux swap subsystem in uninterruptible sleep (`D` state). Concurrently, Tier 3 (SSD swap on the backing SSD swap partition) remains 100% idle (0 MB used) because the Linux kernel strictly honors swap priorities and refuses to write to lower-priority tiers while `/dev/nbd0` reports unwritten capacity.
+The historical failure mode was an unbounded synchronous CUDA path under
+physical GPU saturation, which could block NBD progress and prevent lower-tier
+spillover. Current design requirements retain bounded admission, runtime
+headroom, ordered demotion, and explicit evidence rather than treating the old
+incident as a guarantee about every host.
 
 Applying the **SSDV3 Principle 11 (Shared Hardware & Tiering Coexistence)**, this PRD establishes the senior, host-safe architecture to eliminate this freeze vulnerability:
-1. **Host-Aware VRAM Safety Clamping**: Automatically probe physical GPU memory at daemon initialization and enforce a mathematical host reserve floor (minimum 2,048 MB or 35% of total VRAM) strictly dedicated to Windows display and host applications.
+1. **Host-Aware VRAM Safety Clamping**: Automatically probe physical GPU memory at daemon initialization and enforce the broker/NBD capacity reserve `max(1536 MiB, 20% of total VRAM)` for Windows display and host applications, plus a separate `768 MiB` runtime free buffer before admitting a new allocation.
 2. **Elastic / Dynamic Chunk Allocation**: Transition the broker backend from greedy pre-zeroed buffers to on-demand sparse chunk commitments, touching physical VRAM only as swap pages are actively dirtied.
 3. **Non-Blocking DMA Watchdog & Fast Failover**: Eliminate unbounded synchronous GPU writes in `ResilientBackend` with an explicit 50ms timeout watchdog, tripping in-process failover to RAM/SSD if DMA blocks or fails.
 4. **Active Pressure Watermark & Tier 3 Spillover**: Continuously monitor GPU free memory via `/dev/dxg` and CUDA telemetry; if host free VRAM drops below the safety watermark, trigger an orderly demote (`swapoff /dev/nbd0`), forcing the Linux kernel to spill over active swap traffic seamlessly into Tier 3 (SSD) before GPU starvation can occur.
@@ -46,10 +58,12 @@ Implement the **Unified Host-Safe Memory Tiering Architecture**:
 1. **Host-Aware Safety Clamping (Startup Gate)**:
    - At startup, `ramsharedd` queries `total_vram` and `free_vram`.
    - It calculates:
-     $$\text{HOST\_RESERVE\_FLOOR} = \max(2048\text{ MB},\, \text{total\_vram} \times 35\%)$$
-     $$\text{safe\_max\_vram} = \text{total\_vram} - \text{HOST\_RESERVE\_FLOOR}$$
+     $$\text{CAPACITY\_RESERVE} = \max(1536\text{ MiB},\, \text{total\_vram} \times 20\%)$$
+     $$\text{safe\_by\_capacity} = \text{total\_vram} - \text{CAPACITY\_RESERVE}$$
+     $$\text{safe\_by\_runtime} = \text{free\_vram} - 768\text{ MiB}$$
+     $$\text{safe\_max\_vram} = \min(\text{safe\_by\_capacity},\, \text{safe\_by\_runtime})$$
    - If `--slice-mb` requested exceeds `safe_max_vram`, the daemon logs a warning, clamps the slice to `safe_max_vram`, and configures `/dev/nbd0` with the clamped size.
-   - On a 6,144 MB GPU: $\text{safe\_max\_vram} = 6144 - 2150 = 3994\text{ MB}$. Accounting for active host usage (1,400 MB), the maximum safe slice is clamped to **2,048 MB**, strictly preserving $\ge 2,600\text{ MB}$ free on the GPU.
+   - On a 6,144 MiB GPU, the capacity reserve is 1,536 MiB. If live free VRAM is 4,096 MiB, the runtime bound is 3,328 MiB; the smaller bound wins and is aligned to the 128 MiB chunk size. The capacity reserve and runtime buffer are separate constraints, not one universal reserve value.
 
 2. **Non-Blocking DMA Watchdog in `ResilientBackend`**:
    - Wrap GPU write operations with a bounded watchdog timer. If a GPU write blocks for more than 50ms or returns an error, the circuit breaker immediately trips: `failed_over = true`.
@@ -71,7 +85,7 @@ Implement the **Unified Host-Safe Memory Tiering Architecture**:
 
 | ID | Description | Verifiable Acceptance |
 | :--- | :--- | :--- |
-| **RF-1** | **Host-Aware Startup Clamping** | When `--slice-mb` or `--slices` would leave less than `HOST_RESERVE_FLOOR` (2,048 MB on 6 GB GPU) free for the host, the daemon automatically clamps the effective slice size, logs `[ramsharedd] Host VRAM safety clamp engaged: requested=... clamped=... host_floor=...`, and provisions `/dev/nbd0` at the clamped boundary. |
+| **RF-1** | **Host-Aware Startup Clamping** | When `--slice-mb` or `--slices` exceeds either the broker/NBD capacity bound (`max(1536 MiB, 20%)`) or the separate `768 MiB` runtime free-buffer bound, the daemon clamps the effective slice, logs the requested and effective values, and provisions `/dev/nbd0` at the aligned boundary. |
 | **RF-2** | **Non-Blocking DMA Watchdog** | `ResilientBackend` must not block indefinitely on GPU DMA ioctls. If GPU write latency exceeds 50ms or ioctls fail (`-22`, `-5`), the backend hot-swaps to RAM in < 1ms, logs `[ramsharedd] VRAM DMA watchdog tripped; hot-swapping to RAM fallback`, and completes the NBD reply with `NBD_OK`. |
 | **RF-3** | **Active Watermark Demote (Tier 3 Spillover)** | When periodic GPU polling detects `global_free < WATERMARK_LOW` (800 MB) for 3 consecutive samples, the broker worker triggers `DemoteAll`. The daemon initiates `swapoff /dev/nbd0`, causing Linux to drain active swap to Tier 3 SSD without application failure. |
 | **RF-4** | **Clean Tier 3 Transition Verification** | Under cascade stress exceeding Tier 1 (1 GB ZRAM) and Tier 2 (clamped VRAM), the system must cleanly spill over into Tier 3 (the backing SSD swap partition), achieving >0 MB SSD utilization with zero hung task warnings in `dmesg` and zero Windows desktop stutter. |
@@ -93,12 +107,12 @@ Implement the **Unified Host-Safe Memory Tiering Architecture**:
 
 ### 6.1 Happy Flow: Startup with Host-Aware Clamping and Clean Tier 3 Cascade
 1. Daemon starts on WSL2 with `--backend vram --slices 1 --slice-mb 4096`.
-2. Daemon probes CUDA: detects total VRAM 6,144 MB, host reserve floor 2,048 MB.
-3. Safe ceiling is calculated: $6,144 - 2,048 = 4,096\text{ MB}$. Current host usage is 1,400 MB $\rightarrow$ available ceiling is $6,144 - 1,400 - 2,048 = 2,696\text{ MB}$. Clamped slice: 2,048 MB.
-4. Daemon allocates 2,048 MB VRAM slice. `/dev/nbd0` is provisioned as 2,048 MB swap.
+2. Daemon probes CUDA: detects total VRAM 6,144 MiB, capacity reserve 1,536 MiB, and live free VRAM 4,096 MiB.
+3. Capacity allows 4,608 MiB, while the runtime buffer allows 3,328 MiB. The runtime bound wins and is aligned to the 128 MiB chunk size.
+4. Daemon provisions the logical NBD capacity independently from the bounded physical cache target; it does not preallocate the logical capacity in VRAM.
 5. System memory pressure ramps up:
    - Level 0–1 GB: Absorbed by Tier 1 (`/dev/zram0`, 1,024 MB).
-   - Level 1–3 GB: Absorbed by Tier 2 (`/dev/nbd0`, 2,048 MB).
+   - Above the ZRAM tier: served by the logical NBD device, with physical VRAM cache bounded by the live policy.
    - Level >3 GB: Tier 2 saturates at 100% capacity; Linux kernel naturally overflows into Tier 3 (the backing SSD swap partition).
 6. Total stability maintained: host Windows desktop remains fluid at ~2.5 GB free VRAM; drill passes with `PASS_ZERO_PANIC`.
 
@@ -157,9 +171,9 @@ Implement the **Unified Host-Safe Memory Tiering Architecture**:
 
 ## 8. Interfaces
 
-- **CLI Flag (Optional override)**: `--host-reserve-mb <N>` (default: 2048). Allows explicit specification of the host VRAM cushion.
+- **Policy boundary**: Broker/NBD capacity reserve is `max(1536 MiB, 20%)`; the `768 MiB` runtime free buffer is evaluated independently and is not folded into a single override value.
 - **Telemetry Stream (`telemetry.jsonl`)**:
-  - `{"event":"vram_clamped","requested_mb":4096,"clamped_mb":2048,"host_reserve_floor_mb":2048}`
+  - `{"event":"vram_clamped","requested_mib":4096,"clamped_mib":3328,"capacity_reserve_mib":1536,"runtime_free_buffer_mib":768}`
   - `{"event":"dma_watchdog_trip","latency_us":52400,"action":"failover_to_ram"}`
   - `{"event":"watermark_demote","free_bytes":681574400,"threshold_bytes":838860800}`
 
@@ -205,7 +219,7 @@ Implement the **Unified Host-Safe Memory Tiering Architecture**:
 
 ## 13. Acceptance Criteria
 
-1. Running `ramsharedd --backend vram --slices 1 --slice-mb 4096` on a 6 GB GPU automatically clamps the allocation to a safe boundary ($\le 2,048\text{ MB}$), logging the exact reservation and leaving $\ge 2.5\text{ GB}$ free for Windows.
+1. Running `ramsharedd --backend vram --slices 1 --slice-mb 4096` on a 6 GiB GPU applies both the `max(1536 MiB, 20%)` capacity reserve and the separate `768 MiB` runtime free buffer, logs the exact limiting bound, and aligns any clamp to 128 MiB.
 2. Under memory pressure exceeding Tier 1 (1 GB) and Tier 2 (clamped VRAM), the Linux kernel begins writing dirty pages into Tier 3 (the backing SSD swap partition), reaching $>0\text{ MB}$ SSD utilization without freeze.
 3. If GPU memory drops below 800 MB, the broker initiates a clean demote without kernel panic or desktop stutter.
 4. All unit and integration tests pass with $\ge 80\%$ coverage on newly touched logic.

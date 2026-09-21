@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Enforce reproducible builds
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || date +%s)}"
 
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.14.1}}"
 VERSION_CLEAN="${VERSION#v}"
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
 ARCH="amd64"

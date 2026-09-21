@@ -166,6 +166,6 @@
     <circle cx="80" cy="1035" r="12" fill="#166534" stroke="#22c55e" stroke-width="1.8"/>
     <polyline points="75,1035 78.5,1039 85.5,1031" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
     
-    <text x="102" y="1040" fill="#cbd5e1" font-family="'Inter', sans-serif" font-size="14" font-weight="700">Instant Revocation &amp; Zero-Loss Invariant: <tspan fill="#94a3b8" font-weight="400">If host GPU memory is reclaimed, RamShared yields VRAM in milliseconds with fallback to SSD origin · 0 OOM kills · 100% SHA-256 data integrity</tspan></text>
+    <text x="102" y="1040" fill="#cbd5e1" font-family="'Inter', sans-serif" font-size="14" font-weight="700">Measured revocation and integrity result: <tspan fill="#94a3b8" font-weight="400">In the qualified WSL2/NBD workload, RamShared yielded VRAM in milliseconds with SSD-origin fallback · 0 observed OOM kills · SHA-256 integrity verified</tspan></text>
   </g>
 </svg>

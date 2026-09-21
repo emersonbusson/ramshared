@@ -7,13 +7,15 @@ RamShared models **idle GPU memory** as a clean, revocable cache for an SSD-auth
 RamShared enforces deterministic fail-closed execution boundaries and strict identity bindings:
 - **Write-Through Invariant:** Every acknowledged write is persisted to the authoritative SSD origin before cache mutation. VRAM eviction or reclamation affects performance, not data integrity.
 - **Ordered Teardown:** Swapoff-first ordering guarantees that devices are never detached while active in the kernel swap table.
-- **Dynamic Headroom Protection:** GPU memory is dynamically bounded by WDDM headroom, automatically reserving `max(2 GiB, 20% total VRAM)` for 3D and graphics workloads.
+- **Surface-Specific Headroom Protection:** Broker/NBD capacity reserves `max(1536 MiB, 20% of total VRAM)` and also retains a separate `768 MiB` runtime free buffer when live telemetry is available. The origin cache reserves `max(2 GiB, 20%)`; StorPort reserves `max(configured reserve, 512 MiB, 10%)`.
 - **Legacy Preallocation Sunset:** The legacy full-VRAM NBD source composition and `RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source and are no longer available or supported.
 
 | Track | Status | Deployment Architecture |
 | --- | --- | --- |
-| Linux / WSL2 cascade | Production Qualified (EVD-0040) | Multi-tier cascade via ublk/io_uring, page-locked DMA, and ZRAM |
-| Windows StorPort | Hardware Miniport Qualified | Isolated SCM broker/consumer services communicating over local named pipes |
+| Standard WSL2 cascade | Stable userspace path, live gates still tracked | NBD transport, ZRAM, revocable VRAM cache, and authoritative SSD origin |
+| Native Linux / compatible WSL2 custom kernel | Bounded transport qualification (EVD-0039) | `ublk`/`io_uring` plus page-locked DMA on the recorded hardware and workload |
+| CUDA host mapping | Qualified library surface (EVD-0040) | Zero-copy CUDA host mapping with `cuMemHostRegister` and `PinnedHostMapping` |
+| Windows StorPort | Experimental supervised-lab surface | Isolated SCM broker/consumer services; public distribution remains blocked |
 
 ---
 
@@ -46,9 +48,16 @@ origin failure.
 (disk swap or sufficient free RAM). The controller verifies this before any lifecycle
 transition.
 
-On WSL2, Windows WDDM/VidMm remains the memory authority. The physical target
-is the minimum of logical capacity, the sealed cache cap, and the measured
-budget after external use and `max(2 GiB, 20% total VRAM)` headroom.
+On WSL2, Windows WDDM/VidMm remains the memory authority. Standard WSL2 uses
+NBD as its baseline transport. `ublk`/`io_uring` is qualified on native Linux
+or WSL2 with a compatible custom kernel; it is not assumed on stock WSL2.
+
+The broker/NBD physical target is bounded by the logical request, measured
+capacity, `max(1536 MiB, 20% of total VRAM)` capacity reserve, and a separate
+`768 MiB` runtime free buffer. The origin cache instead applies
+`max(2 GiB, 20%)`, while StorPort applies
+`max(configured reserve, 512 MiB, 10%)`. A capacity reserve limits admitted
+cache; a runtime buffer protects new allocations as external use changes.
 
 ### Control-Plane Containment
 
@@ -68,7 +77,7 @@ The codebase is organized into 15 focused Rust crates across 6 architectural tie
 | Layer | Crates | Role & Responsibility |
 | :--- | :--- | :--- |
 | **Layer 1: Frontend & CLI** | [`ramshared-cli`](crates/ramshared-cli/README.md) | Primary operator interface (`doctor`, `stress`, `monitor`, `top`, `cascade`, `diagnose`). |
-| **Layer 2: Daemons & Agents** | [`ramshared-wsl2d`](crates/ramshared-wsl2d/README.md)<br>[`ramshared-agent`](crates/ramshared-agent/README.md)<br>[`ramshared-winsvc`](crates/ramshared-winsvc/README.md)<br>[`ramshared-winbroker`](crates/ramshared-winbroker/README.md) | In-guest block device daemon (`ublk`/NBD), local kernel swap agent, Windows StorPort worker service, and SCM broker daemon. |
+| **Layer 2: Daemons & Services** | [`ramshared-wsl2d`](crates/ramshared-wsl2d/README.md)<br>[`ramshared-agent`](crates/ramshared-agent/README.md)<br>[`ramshared-winsvc`](crates/ramshared-winsvc/README.md)<br>[`ramshared-winbroker`](crates/ramshared-winbroker/README.md) | In-guest block device daemon (NBD baseline; conditional `ublk`), local host-observation service, Windows StorPort worker service, and SCM broker daemon. |
 | **Layer 3: Broker & Policy** | [`ramshared-broker`](crates/ramshared-broker/README.md)<br>[`ramshared-config`](crates/ramshared-config/README.md)<br>[`ramshared-tier`](crates/ramshared-tier/README.md) | Logical lease arbitration, fail-closed configuration parsing, and 3-tier cascade state machine (N1/N2/N3 hysteresis). |
 | **Layer 4: Memory & I/O** | [`ramshared-vram`](crates/ramshared-vram/README.md)<br>[`ramshared-cuda`](crates/ramshared-cuda/README.md)<br>[`ramshared-vulkan`](crates/ramshared-vulkan/README.md)<br>[`ramshared-uring`](crates/ramshared-uring/README.md) | Hardware-agnostic VRAM allocator abstraction, NVIDIA CUDA DMA, cross-vendor Vulkan allocator (AMD/Intel), and Linux `io_uring` engine. |
 | **Layer 5: Storage & Origin** | [`ramshared-block`](crates/ramshared-block/README.md)<br>[`ramshared-integrity`](crates/ramshared-integrity/README.md)<br>[`ramshared-dxg`](crates/ramshared-dxg/README.md) | Authoritative SSD origin persistence, SHA-256 block corruption prevention, and `/dev/dxg` WDDM memory budget query. |
@@ -101,4 +110,3 @@ Logical lease arbitration is isolated into a dedicated least-privilege `RamShare
 ## Verification & Failure Mode Registry
 
 All architectural transitions and failure edge cases are cataloged in the [Degradation Matrix](docs/reliability/DEGRADATION-MATRIX.md). Stress testing, benchmark qualifications, and operational validation execute against controlled, isolated test harnesses with watchdog limits to prevent host resource starvation.
-
