@@ -9,14 +9,14 @@ issues: []
 
 ## 1. Summary
 
-Currently, RamShared's GPU backend (`crates/ramshared-cuda`) interacts with NVIDIA graphics hardware through raw, dynamic C Driver API bindings (`libcuda.so.1` / `nvcuda.dll`). While functional, this model limits the GPU to a passive, uncompressed DMA byte buffer and relies on synchronous blocking ioctls over `/dev/dxg` that can deadlock under memory pressure.
+RamShared's working GPU backend (`crates/ramshared-cuda`) loads the CUDA Driver API dynamically (`libcuda.so.1` / `nvcuda.dll`) and transfers uncompressed bytes. `cuda-core` and `cuda-async` are declared as optional dependencies behind the `cuda-rust` feature, but production code does not use them. Neither `cutile` nor `cuda-oxide` is a RamShared dependency. This document is a proposal, not a description of an installed acceleration path.
 
-In September 2026, NVIDIA released the **CUDA-Rust** toolchain (`NVlabs/cutile-rs` on stable Rust 1.89+ and `NVlabs/cuda-oxide` on nightly rustc), enabling type-safe GPU kernel execution in pure Rust. This PRD establishes the long-term architectural transformation of RamShared's Tier 2 engine:
-1. **Modernization of Core CUDA Bindings**: Migrate from raw C FFI to NVIDIA's idiomatic `cuda-core` and `cuda-async` crates, introducing Rust Future-based asynchronous dispatch with native cancellation tokens.
-2. **In-GPU Page Compression**: Execute pure Rust compression kernels (LZ4 / bit-packing) directly on GPU compute cores at internal VRAM bandwidth (336 GB/s), increasing effective Tier 2 capacity by $2.5\times$ to $3\times$.
+The proposed investigation has three independently gated parts:
+1. **CUDA binding evaluation**: Compare the existing lifetime-checked Driver API wrapper with `cuda-core` and `cuda-async` before replacing a proven path. A Rust Future cancellation signal does not itself interrupt an in-flight CUDA or `/dev/dxg` call.
+2. **In-GPU page compression feasibility**: Measure end-to-end transfer, launch, compression, metadata, decompression, and fallback cost. No capacity multiplier or per-page latency is currently qualified.
 3. **Dual-Track Hardware Architecture**:
-   - **Track A (`cuda-oxide` SIMT)**: Targets Turing architecture (`sm_75`, such as the workstation RTX 2060) and broader GPU generations via LLVM PTX generation.
-   - **Track B (`cutile-rs` Tile IR)**: Targets Ampere, Hopper, and Blackwell architectures (`sm_80` to `sm_100+`) on stable Rust, utilizing hardware tensor tiles to achieve up to 7 TB/s memory throughput.
+   - **Track A (`cuda-oxide` SIMT)**: Candidate for Turing (`sm_75`), subject to toolchain, kernel, and host validation.
+   - **Track B (`cutile-rs` Tile IR)**: Candidate for `sm_80+` only, subject to CUDA toolkit and GPU validation. Upstream Tile benchmarks are not RamShared swap benchmarks.
 
 ---
 
@@ -25,12 +25,12 @@ In September 2026, NVIDIA released the **CUDA-Rust** toolchain (`NVlabs/cutile-r
 ### 2.1 Hardware Topology & Compute Capabilities
 - **Local Host Workstation**: NVIDIA GeForce RTX 2060 with 6,144 MB VRAM, Compute Capability **`sm_75` (Turing)**.
 - **Modern Datacenter Targets**: NVIDIA A100 (`sm_80`), H100 (`sm_90`), and B200 (`sm_100+`).
-- **Hardware Constraint (Audit Finding)**: `cutile-rs` strictly requires compute capability `sm_80` or higher (`Architectures below sm_80 are out of scope`). Therefore, `cuda-oxide` (which compiles pure Rust SIMT to PTX via LLVM) serves as the primary acceleration path for `sm_75`, while `cutile-rs` provides state-of-the-art Tile acceleration for `sm_80+`.
+- **Hardware Constraint (Audit Finding)**: `cutile-rs` requires `sm_80+`; the local RTX 2060 is `sm_75` and cannot execute Tile kernels. `cuda-oxide` is a candidate for `sm_75`, not an implemented RamShared acceleration path. The local host also lacks `nvcc`; CUDA toolkit and compatible hardware are required for Tile validation elsewhere.
 
 ### 2.2 Codebase Anchors
 - **Confirmed in codebase (`crates/ramshared-cuda/src/lib.rs`)**: Uses manual `loader_unix` and `loader_win` to resolve `cuMemAlloc_v2`, `cuMemcpyHtoD_v2`, and `cuMemcpyDtoH_v2`.
 - **Confirmed in codebase (`crates/ramshared-vram/src/lib.rs`)**: Defines `VramProvider` and `VramMemory` traits that abstract memory allocation but lack asynchronous cancellation or compute dispatch.
-- **Inference**: By compiling a Rust LZ4 compressor into GPU PTX, RamShared can compress 4KB swap pages inside VRAM in $<2\,\mu\text{s}$, completely bypassing CPU compression overhead.
+- **Unverified hypothesis**: A GPU compressor may improve effective capacity for compressible workloads, but a 4KB transfer and kernel launch may dominate useful work. Random or already compressed pages must be measured separately and stored raw when compression is not beneficial.
 
 ---
 
@@ -39,8 +39,8 @@ In September 2026, NVIDIA released the **CUDA-Rust** toolchain (`NVlabs/cutile-r
 Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
 
 1. **Adopt `cuda-core` and `cuda-async`**:
-   - Refactor `crates/ramshared-cuda` to build on `cuda-core` (safe context and buffer management) and `cuda-async` (composable asynchronous GPU operations).
-   - Wire cancellation tokens into all DMA operations to prevent thread lockups during GPU stalls.
+   - Prototype the optional dependencies in an isolated path and compare ownership, context affinity, binary size, failures, and performance with the existing RAII wrapper.
+   - Define a bounded admission/queueing policy and test what can actually be cancelled; keep an in-flight buffer and context alive until the driver reports completion.
 
 2. **Develop In-VRAM GPU Page Compression**:
    - Author a pure Rust page-compression kernel.
@@ -48,8 +48,8 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
    - For `sm_80+` systems: author tile-based kernels using `#[cutile::module]` on stable Rust.
 
 ### Discarded Alternatives
-- **Continue with Raw C Driver API**: Rejected. Lacks memory safety, prevents in-GPU kernel compute without an external C++ `nvcc` build step, and cannot cleanly cancel stalled ioctls.
-- **Force `cutile-rs` on `sm_75`**: Impossible. NVIDIA explicitly confirmed `sm_70` and `sm_75` are permanently out of scope for CUDA Tile IR.
+- **Continue with the existing Driver API wrapper**: Retained as the working baseline and fallback. Its Rust ownership checks do not eliminate all FFI risk, but replacing it is not a prerequisite for GPU compute.
+- **Force `cutile-rs` on `sm_75`**: Rejected because current Tile support starts at `sm_80`.
 
 ---
 
@@ -57,10 +57,10 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
 
 | ID | Description | Verifiable Acceptance |
 | :--- | :--- | :--- |
-| **RF-1** | **`cuda-core` Context Migration** | `crates/ramshared-cuda` initializes GPU contexts and allocates device buffers via `cuda-core`, removing raw unsafe FFI pointers. |
-| **RF-2** | **Asynchronous Cancellation** | All GPU I/O operations return cancellable `DeviceOperation` futures. If a watchdog timeout occurs, the operation is aborted without blocking the caller thread. |
-| **RF-3** | **In-GPU Pure Rust Page Compression** | Provide an optional GPU compression pass in `ramshared-cuda` that compresses 4KB pages on the GPU, achieving a compression ratio $\ge 1.8\times$ on standard memory workloads. |
-| **RF-4** | **Architecture Detection & Fallback** | Runtime automatically detects GPU compute capability: selects `cutile-rs` on `sm_80+`, `cuda-oxide` on `sm_75`, or pure DMA if compute kernels are unavailable. |
+| **RF-1** | **`cuda-core` Evaluation** | An isolated backend passes the same allocation, transfer, lifetime, and failure tests as the existing wrapper before migration is considered. |
+| **RF-2** | **Bounded Asynchronous Work** | Queue admission, timeout reporting, in-flight ownership, and driver completion are measured separately; a cancelled Future must not free DMA memory prematurely. |
+| **RF-3** | **Optional GPU Compression** | Round-trip integrity, incompressible fallback, capacity, throughput, and tail latency are measured on named workloads and hardware before enabling it for swap. |
+| **RF-4** | **Architecture Detection & Fallback** | An unsupported GPU/toolkit or failed kernel initialization leaves the current uncompressed CUDA path available without data loss. |
 
 ---
 
@@ -68,9 +68,9 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
 
 | ID | Category | Target Metric |
 | :--- | :--- | :--- |
-| **NFR-1** | **Memory Amplification** | Effective VRAM capacity increased by $\ge 2.0\times$ under compressed swap mode. |
-| **NFR-2** | **Kernel Execution Latency** | 4KB page compression latency on GPU $\le 5\,\mu\text{s}$ per page. |
-| **NFR-3** | **Host Safety & Zero Freeze** | `PASS_ZERO_FREEZE`: Cancellable streams ensure no thread hangs in `dxgkrnl.sys` ioctls. |
+| **NFR-1** | **Capacity** | Report physical bytes, logical bytes, metadata, and ratio by workload; do not assert a universal ratio. |
+| **NFR-2** | **Latency** | Report end-to-end p50/p95/p99 and tail stalls against the current uncompressed CUDA path. |
+| **NFR-3** | **Host Safety** | Exercise pressure, timeouts, failed allocation, driver reset, and swapoff-first recovery; never equate Future cancellation with driver-level abort. |
 
 ---
 
@@ -80,9 +80,9 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
 1. Linux kernel sends 4KB dirty swap page to `ramsharedd` via NBD or in-tree driver.
 2. Daemon stages page into pinned host transfer buffer.
 3. Asynchronous DMA transfers page to GPU global memory.
-4. Pure Rust compression kernel launches on GPU, compressing 4KB into $\le 2\text{ KB}$ chunk in VRAM.
-5. Inode/block map records compressed offset and size.
-6. Operation completes with sub-microsecond latency; host receives `NBD_OK`.
+4. If a supported, qualified kernel is enabled, it attempts compression; incompressible or failed pages use the raw representation.
+5. A crash-consistent block map records representation, offset, length, and integrity metadata.
+6. The host acknowledges the write only after the selected storage path has completed according to its durability contract.
 
 ---
 
@@ -100,7 +100,7 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
              │ Launch In-GPU Rust Kernel (cuda-oxide / cutile-rs)
              ▼
 ┌─────────────────────────┐
-│ Compressed Chunk in VRAM│ (e.g. 1.5 KB to 2.0 KB)
+│ Compressed or Raw Chunk │ (size depends on page content)
 └─────────────────────────┘
 ```
 
@@ -108,9 +108,9 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
 
 ## 8. Dependencies and Risks
 
-- **Dependencies**: NVIDIA CUDA 13.x driver; `cuda-core` and `cuda-async` crates; `cargo-oxide` compiler for `sm_75` kernels.
-- **Risks**: Nightly compiler requirement for `cuda-oxide` device kernels.
-- **Mitigation**: Device kernels are pre-compiled into static PTX / cubin artifacts during release packaging; the host daemon runs on stable Rust.
+- **Dependencies for an eventual Tile path**: compatible `sm_80+` GPU and the toolkit version supported by the chosen `cutile-rs` revision; currently absent on the local `sm_75` host. Optional `cuda-core`/`cuda-async` manifest entries alone do not provide a runtime backend.
+- **Risks**: nightly compiler/build reproducibility for `cuda-oxide`, GPU memory lifetime across cancellation, crash consistency of variable-sized swap data, and shared-GPU pressure.
+- **Mitigation**: retain the current uncompressed path, keep new kernels opt-in until live and recovery gates pass, and preserve exact artifact provenance for any precompiled kernels.
 
 ---
 
@@ -125,6 +125,6 @@ Adopt an **Adaptive Dual-Track CUDA-Rust Architecture**:
 
 ## 10. Acceptance Criteria
 
-1. `crates/ramshared-cuda` compiles cleanly using `cuda-core` and `cuda-async`.
-2. Asynchronous DMA operations support clean cancellation within 50ms upon simulated GPU stalls.
-3. GPU compression test passes with verified round-trip page integrity (`original_page == decompress(compress(original_page))`).
+1. The optional backend passes equivalent CUDA lifetime and transfer tests; the current backend remains available on failure.
+2. Simulated cancellation tests prove that buffers remain alive until actual completion; live tests characterize driver behavior and bounded pressure without promising an ioctl deadline.
+3. GPU compression passes round-trip, incompressible-page, crash/restart, and swapoff-first tests with named hardware and workload evidence. Tile tests run on `sm_80+`, not on the local `sm_75` host.

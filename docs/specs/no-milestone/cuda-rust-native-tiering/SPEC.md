@@ -2,19 +2,20 @@
 
 ## 1. Closed Scope
 
-### In Now
-- Architectural integration of `cuda-core` and `cuda-async` into `crates/ramshared-cuda`.
-- Non-blocking asynchronous stream execution with Rust Future `.await` and cancellation token propagation.
-- Dual-track GPU kernel design: `cuda-oxide` SIMT PTX for `sm_75` (RTX 2060) and `cutile-rs` Tile IR for `sm_80+` (Ampere/Blackwell).
-- Verification of round-trip in-GPU page compression and decompression.
+### In Scope for Investigation (Not Implemented)
+- Evaluate the declared-but-unused optional `cuda-core` and `cuda-async` dependencies against the working Driver API wrapper.
+- Design bounded asynchronous work with explicit GPU completion and buffer lifetime, without assuming that dropping a Future cancels driver work.
+- Prototype `cuda-oxide` on `sm_75` and `cutile-rs` Tile kernels only on `sm_80+` hardware with a compatible toolkit.
+- Qualify optional page compression with end-to-end latency, integrity, incompressible fallback, and recovery evidence.
 
 ### Out Now
 - Kernel-space LKM changes (userspace daemon and GPU runtime scope).
 - Modification of Windows display driver internals.
 
-### Assumed-Ready Dependencies
-- `crates/ramshared-cuda` and `crates/ramshared-vram`.
-- NVIDIA CUDA 13.x driver stack on Linux/WSL2.
+### Available Baseline and Missing Gates
+- `crates/ramshared-cuda` and `crates/ramshared-vram` provide the existing uncompressed CUDA path.
+- `cuda-core` and `cuda-async` are optional manifest entries, not wired into runtime code; `cutile` and `cuda-oxide` are not RamShared dependencies.
+- The local RTX 2060 is `sm_75`, so it cannot execute `cutile` Tile kernels; no `nvcc` is installed locally. Tile validation requires a separate `sm_80+` host and supported CUDA toolkit.
 
 ---
 
@@ -26,9 +27,9 @@
 | **RF-2** (Async Cancellation) | `ITEM-2`, `DT-2` | `test_async_dma_cancellation_token` |
 | **RF-3** (In-GPU Compression) | `ITEM-3`, `DT-3` | `test_in_gpu_page_compression_roundtrip` |
 | **RF-4** (Architecture Detection) | `ITEM-4`, `DT-4` | `test_gpu_compute_capability_dispatch` |
-| **NFR-1** (Memory Amplification) | `ITEM-3` | Compression ratio $\ge 1.8\times$ assertion |
-| **NFR-2** (Latency) | `ITEM-3` | Microbenchmark latency $\le 5\,\mu\text{s}$ |
-| **NFR-3** (Zero Freeze) | `ITEM-2` | Watchdog timeout non-blocking abort proof |
+| **NFR-1** (Capacity) | `ITEM-3` | Physical/logical byte accounting by named workload |
+| **NFR-2** (Latency) | `ITEM-3` | End-to-end p50/p95/p99 against uncompressed baseline |
+| **NFR-3** (Host Safety) | `ITEM-2` | Pressure, timeout, completion, and swapoff-first recovery evidence |
 
 ---
 
@@ -36,20 +37,18 @@
 
 | # | Decision | Why |
 | :--- | :--- | :--- |
-| **DT-1** | **Adopt `cuda-core` over Raw FFI**: Replace manual `dlopen` wrappers in `crates/ramshared-cuda` with NVIDIA's `cuda-core`. | Guarantees safe RAII resource lifetime management, correct CUDA context scoping, and type-safe device buffers. |
-| **DT-2** | **Rust Future-Driven DMA**: Implement `DeviceOperation` with explicit cancellation tokens. | Prevents thread deadlocks when `/dev/dxg` experiences host GPU memory pressure or TDR events. |
-| **DT-3** | **Dual-Track Kernel Compilation**: Pre-compile `cuda-oxide` device kernels to static PTX for `sm_75`, while using `cutile-rs` JIT for `sm_80+`. | Accommodates the hardware reality: workstation RTX 2060 is `sm_75` (unsupported by Tile IR), while datacenter GPUs are `sm_80+`. |
-| **DT-4** | **Page-Level Chunk Layout**: Store compressed pages in a variable-sized sub-allocated slab within the VRAM slice. | Maximizes VRAM storage density without incurring page fragmentation. |
+| **DT-1** | **Compare backends before migration**: Prototype `cuda-core`/`cuda-async` behind an opt-in feature while preserving the existing Driver API path. | Manifest presence is not implementation; safe wrappers still require validated context, stream, and buffer lifetimes. |
+| **DT-2** | **Separate cancellation from completion**: A token may stop new work or report timeout; in-flight DMA retains its buffers until CUDA completion is observed. | Dropping a Future cannot guarantee abort of a foreign driver call or prevent a host stall. |
+| **DT-3** | **Hardware-gated kernel experiments**: Test `cuda-oxide` artifacts on `sm_75`; test `cutile-rs` Tile IR on `sm_80+` with a supported toolkit. | The local RTX 2060 cannot validate Tile execution. Neither compiler is integrated into RamShared today. |
+| **DT-4** | **Crash-consistent representation**: Model raw/compressed slot metadata, checksums, allocation bounds, and recovery before changing block mappings. | Variable-sized chunks add fragmentation and durability risks; no compression ratio is assumed. |
 
 ---
 
 ## 4. Atomicity and Rollback
 
-- **Atomicity Frontier**:
-  - GPU context creation and buffer allocation are transactional; any failure during device initialization cleanly releases all resources and falls back to the RAM backend.
-  - Page compression is verified via a header CRC32; corrupt or uncompressible pages fallback to uncompressed raw storage.
-- **Rollback**:
-  - Purely userspace in `crates/ramshared-cuda`; git revert cleanly restores legacy driver API wrappers.
+- **Required atomicity proof**: Define the exact point at which a block-map entry changes from raw to compressed, ensure the old representation remains readable until the new one is complete, and test interrupted writes/restart. CRC32 alone does not prove correct ordering or durability.
+- **Required lifetime proof**: On timeout, retain context, pinned host memory, and device buffers until the driver reports completion or a qualified teardown path succeeds.
+- **Rollback**: Preserve an opt-in feature and the existing uncompressed CUDA backend; no kernel-space change is proposed here. Host rollback still requires swapoff-first, artifact identity, and recovery checks.
 
 ---
 
@@ -57,35 +56,34 @@
 
 | ITEM / Stage | # | Question | Min Evidence | Abort |
 | :--- | :--- | :--- | :--- | :--- |
-| **ITEM-1** (Core) | **#13** (Refusal + Legitimate) | Does context creation fail gracefully on non-CUDA systems while succeeding on valid hardware? | `cargo test -p ramshared-cuda test_cuda_core_context` | Unhandled panic or SIGSEGV |
-| **ITEM-2** (Cancellation) | **#15** (Transient Retry / Failover) | Does a cancelled GPU operation abort within 50ms without hanging the executor thread? | `cargo test -p ramshared-cuda test_async_dma_cancellation` | Thread blocks $> 100\text{ ms}$ |
-| **ITEM-3** (Compression) | **#17** (Idempotency & Integrity) | Does decompression of compressed swap pages produce byte-for-byte identical data? | `cargo test -p ramshared-cuda test_in_gpu_compression_integrity` | Checksum mismatch or memory corruption |
+| **ITEM-1** (Core) | **#13** (Refusal + Legitimate) | Does the optional backend refuse unsupported systems and match existing transfer/lifetime behavior? | Named unit tests plus a live CUDA probe after implementation | Panic, resource leak, or fallback regression |
+| **ITEM-2** (Cancellation) | **#15** (Transient Retry / Failover) | Are queued and in-flight operations distinguished under timeout and driver stalls? | Deterministic lifetime tests plus live pressure trace | Premature free, lost completion, or unbounded queue growth |
+| **ITEM-3** (Compression) | **#17** (Idempotency & Integrity) | Do raw/compressed pages survive random writes, restart, and swapoff-first? | Named GPU tests on supported hardware and recovery evidence | Any byte mismatch or unreadable block |
 
 ---
 
-## 6. Security Checklist (Pre-Impl)
+## 6. Security Checklist (Pre-Impl; Open Until Verified)
 
-- [x] **Privilege**: Standard user/daemon permissions; no elevated Windows privileges required.
-- [x] **User/Host Copy**: Device buffers strictly bounded; no out-of-bounds DMA transfers.
-- [x] **Flags/IOCTL Codes**: Validated through `cuda-core`.
-- [x] **Info-Leak**: No GPU memory contents leaked uninitialized; buffers explicitly cleared.
-- [x] **IRQ / IRQL**: Runs in userspace async runtime; no illegal sleeping in atomic context.
-- [x] **Lifetime**: RAII device memory drops automatically unmap and free GPU memory.
-- [x] **Shared-Hardware Cushion**: Inherits the host reserve floor ($\ge 2,048\text{ MB}$) from Principle 11.
-- [x] **Bounded DMA**: All GPU streams bound to cancellation tokens and timeout watchdogs.
+- [ ] **Privilege and platform**: Validate Linux/WSL2/Windows device access independently.
+- [ ] **Copy bounds**: Fuzz offsets, lengths, alignment, and allocation failure for both backends.
+- [ ] **Driver errors**: Propagate exact CUDA errors and refuse unsupported device/toolkit combinations.
+- [ ] **Information flow**: Prove that raw/compressed buffers and metadata do not expose stale bytes.
+- [ ] **Lifetime**: Prove context affinity and in-flight DMA ownership across timeout/drop.
+- [ ] **Shared-hardware reserve**: Respect each production policy rather than one universal 2 GiB floor: broker/NBD `max(1536 MiB, 20%)` plus a separate 768 MiB runtime-free buffer; origin cache `max(2 GiB, 20%)`; StorPort `max(configuration, 512 MiB, 10%)`.
+- [ ] **Recovery**: Test interrupted writes, GPU reset, swapoff-first, and rollback before host installation.
 
 ---
 
 ## 7. Files to CREATE / MODIFY / DELETE
 
 ### CREATE
-**`crates/ramshared-cuda/src/async_backend.rs`**
-- **Purpose**: Composable async GPU I/O operations with cancellation support.
-- **Required Tests**: `test_async_dma_cancellation_token`
+**`crates/ramshared-cuda/src/async_backend.rs`** (proposed)
+- **Purpose**: Bounded GPU I/O operations with explicit completion and ownership.
+- **Required Tests**: Queue refusal, cancellation-before-submit, timeout-while-in-flight, and delayed completion.
 
 ### MODIFY
 **`crates/ramshared-cuda/Cargo.toml`**
-- **Purpose**: Add `cuda-core` and `cuda-async` dependencies.
+- **Purpose**: Keep optional dependencies isolated until a backend is implemented and validated; entries already exist.
 
 ---
 
@@ -100,10 +98,10 @@
 
 ## 9. Implementation Order
 
-- **ITEM-1**: Add `cuda-core` and `cuda-async` to `crates/ramshared-cuda/Cargo.toml` and implement safe context initialization and device discovery in `crates/ramshared-cuda/src/context.rs`.
-- **ITEM-2**: Implement `crates/ramshared-cuda/src/async_backend.rs` with `CudaAsyncStream`, non-blocking DMA execution, and `CancellationToken` support.
-- **ITEM-3**: Implement page-level compression kernel dispatch (using `cuda-oxide` PTX for `sm_75` and `cutile` tile abstractions for `sm_80+`) with CRC32 verification and uncompressed fallback.
-- **ITEM-4**: Connect async driver operations to broker worker loop with bounded 50ms timeout watchdog.
+- **ITEM-1**: Test an isolated `cuda-core`/`cuda-async` backend against the existing Driver API behavior, including negative paths; do not switch production by manifest change alone.
+- **ITEM-2**: Specify queue bounds, timeout semantics, completion observation, context affinity, and in-flight buffer ownership; then implement and test them.
+- **ITEM-3**: Prototype optional compression with raw fallback, crash-consistent mapping, and integrity tests. Validate `cuda-oxide` on `sm_75` and `cutile` only on `sm_80+`.
+- **ITEM-4**: Wire the qualified backend into the broker with telemetry and a reversible feature gate; perform live pressure, swapoff-first, and binary-match checks before any host replacement.
 
 ---
 
@@ -111,10 +109,10 @@
 
 | Production Path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
 | :--- | :--- | :--- | :--- | :--- |
-| `crates/ramshared-cuda/src/context.rs` | `context` :: `test_cuda_core_context_lifecycle` | unit | #13 | ≥80% |
-| `crates/ramshared-cuda/src/async_backend.rs` | `async_backend` :: `test_async_dma_cancellation_token` | unit | #15 | ≥80% |
-| `crates/ramshared-cuda/src/async_backend.rs` | `async_backend` :: `test_in_gpu_page_compression_roundtrip` | unit | #17 | ≥80% |
-| `crates/ramshared-cuda/src/async_backend.rs` | `async_backend` :: `test_gpu_compute_capability_dispatch` | unit | #13 | ≥80% |
+| Proposed context backend | `test_cuda_core_context_lifecycle` (to create) | unit + live | #13 | ≥80% after implementation |
+| Proposed async backend | `test_async_dma_cancellation_token` (to create) | unit + live | #15 | ≥80% after implementation |
+| Proposed GPU compression | `test_in_gpu_page_compression_roundtrip` (to create) | GPU + recovery | #17 | ≥80% after implementation |
+| Proposed architecture dispatch | `test_gpu_compute_capability_dispatch` (to create) | unit + GPU | #13 | ≥80% after implementation |
 
 ---
 
@@ -122,7 +120,6 @@
 
 - [ ] `cargo fmt` / `cargo clippy -p ramshared-cuda -- -D warnings` / `cargo test -p ramshared-cuda`
 - [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/async_backend.rs --min 80`
-- [ ] Live path for this product surface (CUDA 13 Driver API on WSL2)
-- [ ] Every matrix row has a real test name
+- [ ] Live path for each supported backend (`sm_75` existing CUDA; `sm_80+` Tile on a separate host)
+- [ ] Every matrix row has an implemented test, not only a proposed name
 - [ ] Kahneman critical rows have executable evidence
-
