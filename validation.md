@@ -5580,3 +5580,21 @@ Rust topology residuals remain explicit.
 **Verdict:** 🟡 `PARTIAL` — source-level fail-closed hardening only; no host migration, installed-binary match, or cutile PR qualification.
 
 **EVD-0040 scope clarification:** The 2026-09-13 entry's reference to local cutile patch branches is historical source context, not evidence that upstream cutile PRs #279 or #280 compiled or executed on this host. EVD-0040 applies only to the RamShared CUDA zero-copy host-mapping observations described there.
+
+## 2026-09-21 20:26 -03 — Legacy service startup, ZRAM, and auto-deploy safety (local-only)
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0042`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-21T23:26:27Z`.
+**Verified at:** `2026-09-21T23:26:27Z`.
+**Source revision:** `4e13164f`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only local-check record and its RED/GREEN commits.
+**Freshness:** Revalidate after any legacy service change and before attended host handoff.
+**Category:** `local-check`.
+**What:** Source-level safety follow-up for the legacy WSL2 NBD service. Activation now publishes capacity only after successful NBD connection, `mkswap`, `swapon`, and `/proc/swaps` confirmation. Startup refuses an existing PID, socket, or daemon before cgroup/ZRAM work. The service no longer adopts unmanaged ZRAM and never resets a recorded ZRAM device after failed `swapoff`. The boot-time auto-deploy entry point no longer copies binaries or restarts a live tier. The isolated regression suite is included in `scripts/docs-check.sh` and therefore the existing CI gate.
+**How to measure:** `bash scripts/safety/test-legacy-vram-service.sh`; `node --test tools/ci/check-docs-check.test.mjs`; `bash -n packaging/scripts/ramshared-auto-deploy.sh packaging/scripts/ramshared-vram-service.sh scripts/safety/test-legacy-vram-service.sh`; `./scripts/docs-check.sh`.
+**Measured data:** 10 local safety assertions passed, including four NBD activation failure modes, three startup collision modes, failed and successful managed-ZRAM teardown, and unmanaged/failed ZRAM setup. The CI aggregation test passed. Live stop/start, pressure, installed-binary match, and cutile Tile execution: 0.
+**Residual blockers:** The installed legacy service still differs from source, remains enabled and failed, and points at a stale PID while another daemon serves active NBD swap. Safe attended migration, exact binary identity, pressure/ghost checks, and idempotent recovery are not yet proven. The host's `sm_75` GPU cannot qualify cutile's `sm_80+` Tile path.
+**Verdict:** 🟡 `PARTIAL` — local regressions and CI wiring only; no host mutation or PR promotion.
