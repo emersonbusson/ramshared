@@ -15,6 +15,7 @@ stop_definition=$(sed -n '/^stop_tier() {/,/^}/p' "$service_script")
     exit 1
 }
 source <(printf '%s\n' "$stop_definition")
+stop_managed_zram() { :; }
 
 NBD_DEV=/dev/nbd-fixture
 DAEMON_BIN=/usr/local/bin/ramsharedd
@@ -327,6 +328,7 @@ zram_stop_definition=$(sed -n '/^stop_managed_zram() {/,/^}/p' "$service_script"
     exit 1
 }
 source <(printf '%s\n' "$zram_stop_definition")
+zram_swap_active() { (( zram_active == 1 )); }
 managed_zram=/dev/zram7
 zram_active=1
 zram_swapoff_result=1

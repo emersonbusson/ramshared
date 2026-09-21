@@ -120,6 +120,39 @@ activate_nbd_tier() {
     echo "[+] RamShared Tier active at priority 50 on $NBD_DEV (${backend_mb} MiB) [$backend_desc]"
 }
 
+zram_swap_active() {
+    local device=$1
+    awk -v device="$device" '$1 == device { found = 1 } END { exit !found }' /proc/swaps
+}
+
+stop_managed_zram() {
+    [[ -f "$ZRAM_DEV_FILE" ]] || return 0
+    local zram_dev
+    zram_dev=$(<"$ZRAM_DEV_FILE")
+    if [[ ! $zram_dev =~ ^/dev/zram[0-9]+$ ]]; then
+        echo "[-] Refusing ZRAM cleanup: invalid owned-device record" >&2
+        return 1
+    fi
+    if ! zram_swap_active "$zram_dev"; then
+        echo "[-] Refusing ZRAM cleanup: recorded device is not active; inspect ownership" >&2
+        return 1
+    fi
+    echo "[+] Deactivating managed ZRAM swap $zram_dev..."
+    if ! swapoff "$zram_dev" 2>/dev/null; then
+        echo "[-] Refusing ZRAM reset: swapoff failed for $zram_dev" >&2
+        return 1
+    fi
+    if zram_swap_active "$zram_dev"; then
+        echo "[-] Refusing ZRAM reset: $zram_dev remains active in /proc/swaps" >&2
+        return 1
+    fi
+    if ! zramctl --reset "$zram_dev" 2>/dev/null; then
+        echo "[-] Refusing ZRAM record cleanup: reset failed for $zram_dev" >&2
+        return 1
+    fi
+    rm -f "$ZRAM_DEV_FILE"
+}
+
 start_tier() {
     echo "[+] Starting RamShared VRAM Tier Service (Protected Architecture)..."
     if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
@@ -288,17 +321,11 @@ stop_tier() {
                 return 1
             fi
         fi
-        rm -f "$PID_FILE" "$SOCK_PATH" "$SWAP_DEV_FILE" "$ZRAM_DEV_FILE" "$CAPACITY_STATUS_FILE"
+        rm -f "$PID_FILE" "$SOCK_PATH" "$SWAP_DEV_FILE" "$CAPACITY_STATUS_FILE"
     fi
 
-    # 4. Swapoff ZRAM
-    if grep -q zram /proc/swaps 2>/dev/null; then
-        for z in $(grep zram /proc/swaps | awk '{print $1}'); do
-            echo "[+] Deactivating ZRAM swap $z..."
-            swapoff "$z" 2>/dev/null || true
-            zramctl --reset "$z" 2>/dev/null || true
-        done
-    fi
+    # 4. Only the ZRAM device recorded by this service may be reset.
+    stop_managed_zram || return 1
 
     echo "[+] RamShared VRAM Tier deactivated cleanly."
 }
