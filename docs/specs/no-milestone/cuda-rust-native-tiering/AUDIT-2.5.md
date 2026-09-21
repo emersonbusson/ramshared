@@ -38,6 +38,29 @@ These are source-level audit findings, not claims that the PRs have been
 updated, reviewed, or merged. The local `sm_75` host cannot close the Tile
 execution gate.
 
+## Cutile host-validation gate (2026-09-21)
+
+No cutile PR may be opened or updated on the strength of source review or
+host-only IR tests. Validate the exact candidate revision on the intended
+host first, including compiler tests and GPU-result tests on supported
+hardware, before proposing it upstream.
+
+The local `feat/tile-bitwise-reductions` revision `9a463dd` was checked on
+the WSL2 host. `nvidia-smi` reported one GeForce RTX 2060 (`sm_75`, driver
+616.92). `nvcc` was absent, and the CUDA 13.x toolkit was not found in the
+default locations checked by `cuda-bindings`. `cargo fmt --all -- --check`,
+`cargo test --locked --package cutile-ir`, and strict `cargo clippy --locked
+--package cutile-ir --all-targets -- -D warnings` passed. These IR tests do
+not exercise the branch's compiler or GPU-result behavior. `cargo test
+--locked --package cutile-compiler --lib` failed during the `cuda-bindings`
+build script, before any compiler test ran, because it could not locate a
+CUDA 13.0+ toolkit. No CUDA Tile kernel was compiled or executed.
+
+Disposition: **not ready for a cutile PR**. Installing a toolkit alone would
+not make this `sm_75` GPU satisfy upstream's `sm_80+` Tile requirement. A
+supported GPU and toolkit are needed for the Tile candidate; any separately
+designed `sm_75` SIMT implementation would need its own host qualification.
+
 ## Forensic findings
 
 | Severity | Boundary | Finding | Required closure |
