@@ -216,8 +216,13 @@ stop_tier() {
     fi
     
     # 2. Disconnect NBD
-    if command -v nbd-client >/dev/null 2>&1; then
-        nbd-client -d "$NBD_DEV" >/dev/null 2>&1 || true
+    if ! command -v nbd-client >/dev/null 2>&1; then
+        echo "[-] Refusing daemon stop: nbd-client is unavailable" >&2
+        return 1
+    fi
+    if ! nbd-client -d "$NBD_DEV" >/dev/null 2>&1; then
+        echo "[-] Refusing daemon stop: NBD disconnect failed" >&2
+        return 1
     fi
 
     # 3. Terminate Daemon
@@ -225,10 +230,30 @@ stop_tier() {
         local pid
         pid=$(cat "$PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
+            local observed_exe
+            observed_exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null) || {
+                echo "[-] Refusing daemon stop: executable identity changed" >&2
+                return 1
+            }
+            if [[ $observed_exe != "$DAEMON_BIN" ]]; then
+                echo "[-] Refusing daemon stop: executable identity changed" >&2
+                return 1
+            fi
             echo "[+] Terminating daemon PID $pid..."
-            kill "$pid" 2>/dev/null || true
-            sleep 1
-            kill -9 "$pid" 2>/dev/null || true
+            if ! kill -TERM "$pid" 2>/dev/null; then
+                echo "[-] Refusing state cleanup: daemon TERM failed" >&2
+                return 1
+            fi
+            for _ in {1..50}; do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.1
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "[-] Refusing state cleanup: daemon did not exit after TERM" >&2
+                return 1
+            fi
         fi
         rm -f "$PID_FILE" "$SOCK_PATH" "$SWAP_DEV_FILE" "$ZRAM_DEV_FILE" "$CAPACITY_STATUS_FILE"
     fi
