@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -180,4 +180,10 @@ test('candidate_path_and_cli_fail_closed', () => {
   assert.equal(scanText('fixture.rs', 'clean\n').length, 0)
   const bad = spawnSync(process.execPath, [CLI, '--wrong'], { cwd: root, encoding: 'utf8' })
   assert.equal(bad.status, 2)
+})
+
+test('deleted tracked candidates are outside the live repository scan', () => {
+  const root = repo()
+  rmSync(path.join(root, 'crates', 'fixture', 'lib.rs'))
+  assert.deepEqual(run({ root }), { ok: true, findings: [] })
 })

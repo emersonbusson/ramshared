@@ -7,6 +7,8 @@ import test from 'node:test'
 
 import {
   classifyDocument,
+  listDocumentPaths,
+  listTrackedMarkdown,
   readBasePolicy,
   run,
   validatePolicy,
@@ -85,6 +87,27 @@ test('passive inventory is deterministic and preserves unverified state', () => 
   assert.equal(inventory.entries[0].path, 'docs/a.md')
   assert.equal(inventory.entries[0].verification.state, 'unverified')
   assert.equal(renderInventory(inventory), renderInventory(inventory))
+})
+
+test('worktree document lists omit deleted tracked Markdown', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-document-worktree-'))
+  try {
+    mkdirSync(path.join(root, 'docs'), { recursive: true })
+    writeFileSync(path.join(root, 'docs', 'live.md'), '# Live\n')
+    writeFileSync(path.join(root, 'docs', 'deleted.md'), '# Deleted\n')
+    execFileSync('git', ['init', '-q'], { cwd: root })
+    execFileSync('git', ['config', 'user.email', 'fixture'], { cwd: root })
+    execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: root })
+    execFileSync('git', ['add', 'docs/live.md', 'docs/deleted.md'], { cwd: root })
+    execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: root })
+    rmSync(path.join(root, 'docs', 'deleted.md'))
+    writeFileSync(path.join(root, 'docs', 'untracked.md'), '# Untracked\n')
+
+    assert.deepEqual(listTrackedMarkdown(root), ['docs/live.md'])
+    assert.deepEqual(listDocumentPaths(root), ['docs/live.md', 'docs/untracked.md'])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('repository lifecycle policy and passive inventory are current', () => {
