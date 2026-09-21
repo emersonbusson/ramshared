@@ -200,6 +200,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_psi_rejects_duplicate_required_fields() {
+        for sample in [
+            "some avg10=1.0 avg10=2.0 avg60=3.0 total=5\n",
+            "some avg10=1.0 avg60=2.0 avg60=3.0 total=5\n",
+            "some avg10=1.0 avg60=2.0 total=5 total=6\n",
+            "some avg10=bad avg10=1.0 avg60=2.0 total=5\n",
+        ] {
+            assert!(parse_psi(sample).is_none(), "accepted duplicate: {sample}");
+        }
+    }
+
+    #[test]
     fn parse_swaps_partition_and_file() {
         let s = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
                  /dev/nbd0                               partition\t1048576\t\t2048\t\t-2\n\
