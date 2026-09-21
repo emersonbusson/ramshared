@@ -30,9 +30,9 @@ any `sm_80+` Tile qualification.
 
 | Candidate | Current observation | Required before adoption |
 | :--- | :--- | :--- |
-| PR #278 | Open and conflicting after merged PR #275 changed async tensor lifetime handling. | Compare the exact surviving failure case with current `main`; do not replay its unconditional stream synchronization as a new fix without a reproducer. |
-| PR #279 | Open. Its proposed `PinnedHostMapping` exposes safe host slices and `DerefMut` while the device pointer can be used asynchronously; its zero-length test constructs a zeroed `CudaContext`, which is not a valid Rust value. | Remove the invalid test fixture, specify host/GPU aliasing and in-flight unregister ownership, then test a real context and fault/teardown paths on supported hardware. |
-| PR #280 | Open. The added tests cover lowering into Tile IR, not GPU result equivalence or operation-specific identity/axis boundaries. | Add op-specific negative and result tests, then qualify execution on `sm_80+` with the supported CUDA toolkit. |
+| PR #278 | Open and conflicting after merged PR #275 changed async tensor lifetime handling. Current `main` synchronizes before exposing the host vector and deliberately retains its uninitialized buffer if synchronization fails; the older PR does not cover that failure path. | Compare the exact surviving failure case with current `main`; do not replay its synchronization block or overwrite the stronger error handling without a reproducer. |
+| PR #279 | Open. Its proposed `PinnedHostMapping` exposes safe host slices, `DerefMut`, and `Send`/`Sync` while the device pointer can be used asynchronously; its zero-length test constructs a zeroed `CudaContext`, which is not a valid Rust value. The proposed `Drop` records bind/unregister errors but has no demonstrated in-flight completion proof. | Remove the invalid test fixture; specify host/GPU aliasing, registration ownership, and in-flight unregister behavior before exposing a safe API. Then test a real context and fault/teardown paths on supported hardware. |
+| PR #280 | Open. The added tests only search IR text for `reduce`, so they do not distinguish XOR, AND, and OR or prove GPU results. Their `[8,16]` input reduced along axis 1 should have shape `[8]`, yet the fixtures declare output `[1,1]`. The pre-existing reduction lowering also removes `dim` without a bounds check, so invalid axes can panic instead of producing a JIT error. | Correct the fixture's result shape, assert op-specific identity/body/type and axis refusal, and compare device output to CPU bitwise reductions (including zero/all-ones and signed cases) on `sm_80+` with the supported toolkit. |
 
 These are source-level audit findings, not claims that the PRs have been
 updated, reviewed, or merged. The local `sm_75` host cannot close the Tile
@@ -60,6 +60,8 @@ Disposition: **not ready for a cutile PR**. Installing a toolkit alone would
 not make this `sm_75` GPU satisfy upstream's `sm_80+` Tile requirement. A
 supported GPU and toolkit are needed for the Tile candidate; any separately
 designed `sm_75` SIMT implementation would need its own host qualification.
+The open PRs remain untouched while this gate is red; source-only findings
+are local review notes, not upstream acceptance or execution evidence.
 
 ## Forensic findings
 
