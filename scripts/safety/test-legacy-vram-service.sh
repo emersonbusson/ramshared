@@ -481,6 +481,11 @@ if swap_device_absent "$NBD_DEV" "$fixture_dir"; then
     echo 'unreadable or non-file swap table must not count as confirmed absence' >&2
     exit 1
 fi
+printf 'unexpected header\n' > "$fixture_dir/swaps"
+if swap_device_absent "$NBD_DEV" "$fixture_dir/swaps"; then
+    echo 'malformed swap table must not count as confirmed absence' >&2
+    exit 1
+fi
 if command grep -Eq 'grep -q "\$NBD_DEV" /proc/swaps' "$service_script"; then
     echo 'NBD paths must use the exact swap-device probe' >&2
     exit 1

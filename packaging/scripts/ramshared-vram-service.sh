@@ -94,8 +94,20 @@ nbd_device_ready() {
 
 swap_device_active() {
     local device=$1 swap_table=${2:-/proc/swaps}
-    [[ -r $swap_table ]] || return 2
-    awk -v device="$device" '$1 == device { found = 1 } END { exit !found }' "$swap_table"
+    [[ -f $swap_table && -r $swap_table ]] || return 2
+    local state
+    if ! state=$(awk -v device="$device" '
+        NR == 1 { if ($1 != "Filename" || $2 != "Type") exit 3; next }
+        $1 == device { found = 1 }
+        END { if (NR == 0) exit 3; print found ? "active" : "absent" }
+    ' "$swap_table"); then
+        return 2
+    fi
+    case $state in
+        active) return 0 ;;
+        absent) return 1 ;;
+        *) return 2 ;;
+    esac
 }
 
 swap_device_absent() {
