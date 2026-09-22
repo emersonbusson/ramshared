@@ -349,6 +349,10 @@ stop_tier() {
         echo "[-] Refusing teardown: NBD swap state is unreadable" >&2
         return 1
     fi
+    if [[ -L "$PID_FILE" || ( -e "$PID_FILE" && ! -f "$PID_FILE" ) ]]; then
+        echo "[-] Refusing teardown: daemon PID record is not a regular file" >&2
+        return 1
+    fi
     if [[ ! -e "$PID_FILE" && ! -L "$PID_FILE" ]]; then
         if ! nbd_swap_absent || ! nbd_connection_absent; then
             echo "[-] Refusing teardown: NBD is active or connected without a daemon record" >&2
