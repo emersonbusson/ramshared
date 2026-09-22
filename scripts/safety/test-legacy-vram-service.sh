@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -27,6 +27,7 @@ CAPACITY_STATUS_FILE="$fixture_dir/capacity-guaranteed"
 printf '4242\n' > "$PID_FILE"
 
 swap_active=1
+nbd_swap_active() { (( swap_active == 1 )); }
 swapoff_result=1
 swapoff_calls=0
 disconnect_calls=0
@@ -451,3 +452,27 @@ if (( status == 0 || zram_active != 0 )); then
 fi
 
 echo 'PASS legacy VRAM service does not adopt unmanaged or failed ZRAM setup'
+
+# A substring probe for /dev/nbd0 must not match /dev/nbd01 in /proc/swaps.
+swap_check_definition=$(sed -n '/^swap_device_active() {/,/^}/p' "$service_script")
+[[ $swap_check_definition == 'swap_device_active() {'* ]] || {
+    echo 'swap_device_active definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$swap_check_definition")
+printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/nbd-fixture1\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
+if swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
+    echo 'exact swap probe must not accept a longer device name' >&2
+    exit 1
+fi
+printf '/dev/nbd-fixture\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
+if ! swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
+    echo 'exact swap probe must detect its own device' >&2
+    exit 1
+fi
+if command grep -Eq 'grep -q "\$NBD_DEV" /proc/swaps' "$service_script"; then
+    echo 'NBD paths must use the exact swap-device probe' >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service matches swap devices exactly'
