@@ -141,6 +141,17 @@ nbd_connection_absent() {
     [[ $sectors =~ ^[0-9]+$ ]] && (( sectors == 0 ))
 }
 
+nbd_connection_connected() {
+    local sysfs_dir=${1:-/sys/block/${NBD_DEV##*/}}
+    [[ -d $sysfs_dir && -f $sysfs_dir/size && -r $sysfs_dir/size \
+        && -f $sysfs_dir/pid && -r $sysfs_dir/pid ]] || return 1
+    local sectors kernel_pid
+    sectors=$(<"$sysfs_dir/size")
+    kernel_pid=$(<"$sysfs_dir/pid")
+    [[ $sectors =~ ^[0-9]+$ && $kernel_pid =~ ^[1-9][0-9]*$ ]] \
+        && (( sectors > 0 ))
+}
+
 activate_nbd_tier() {
     local backend_desc=$1 backend_mb=$2
     echo "[+] Connecting $NBD_DEV to $backend_desc daemon..."
@@ -408,13 +419,25 @@ stop_tier() {
         fi
     fi
     
-    # 2. Disconnect NBD
-    if ! command -v nbd-client >/dev/null 2>&1; then
-        echo "[-] Refusing daemon stop: nbd-client is unavailable" >&2
-        return 1
-    fi
-    if ! nbd-client -d "$NBD_DEV" >/dev/null 2>&1; then
-        echo "[-] Refusing daemon stop: NBD disconnect failed" >&2
+    # 2. Disconnect only a kernel-confirmed connection. A failed start may
+    # leave the owned daemon running without ever attaching NBD.
+    if nbd_connection_absent; then
+        echo "[+] NBD is already disconnected."
+    elif nbd_connection_connected; then
+        if ! command -v nbd-client >/dev/null 2>&1; then
+            echo "[-] Refusing daemon stop: nbd-client is unavailable" >&2
+            return 1
+        fi
+        if ! nbd-client -d "$NBD_DEV" >/dev/null 2>&1; then
+            echo "[-] Refusing daemon stop: NBD disconnect failed" >&2
+            return 1
+        fi
+        if ! nbd_connection_absent; then
+            echo "[-] Refusing daemon stop: kernel still reports NBD connected" >&2
+            return 1
+        fi
+    else
+        echo "[-] Refusing daemon stop: kernel NBD connection state is unknown" >&2
         return 1
     fi
 
@@ -430,6 +453,10 @@ stop_tier() {
             }
             if [[ $observed_exe != "$DAEMON_BIN" ]]; then
                 echo "[-] Refusing daemon stop: executable identity changed" >&2
+                return 1
+            fi
+            if ! nbd_swap_absent || ! nbd_connection_absent; then
+                echo "[-] Refusing daemon stop: NBD became active or reconnected" >&2
                 return 1
             fi
             echo "[+] Terminating daemon PID $pid..."

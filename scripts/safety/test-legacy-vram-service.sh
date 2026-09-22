@@ -182,6 +182,24 @@ fi
 
 echo 'PASS legacy VRAM service requires kernel NBD absence after detach'
 
+# Neither connected nor absent can be proved from an inconsistent kernel state.
+swap_active=0
+nbd_connected=2
+disconnect_calls=0
+kill_calls=0
+remove_calls=0
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || disconnect_calls != 0 || kill_calls != 0 || remove_calls != 0 )); then
+    echo 'unknown kernel NBD state must refuse before detach or TERM' >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service refuses unknown kernel NBD state'
+
 # A successful stop uses one graceful signal, never SIGKILL.
 swap_active=1
 swapoff_calls=0
@@ -711,4 +729,28 @@ if nbd_connection_absent "$fixture_dir/nbd-sysfs"; then
     exit 1
 fi
 
-echo 'PASS legacy VRAM service verifies kernel NBD disconnection before no-op stop'
+connected_definition=$(sed -n '/^nbd_connection_connected() {/,/^}/p' "$service_script")
+[[ $connected_definition == 'nbd_connection_connected() {'* ]] || {
+    echo 'nbd_connection_connected definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$connected_definition")
+printf '8\n' > "$fixture_dir/nbd-sysfs/size"
+printf '654\n' > "$fixture_dir/nbd-sysfs/pid"
+if ! nbd_connection_connected "$fixture_dir/nbd-sysfs"; then
+    echo 'positive size and kernel PID must count as connected' >&2
+    exit 1
+fi
+printf '0\n' > "$fixture_dir/nbd-sysfs/size"
+if nbd_connection_connected "$fixture_dir/nbd-sysfs"; then
+    echo 'kernel PID with zero size must not count as confirmed connected' >&2
+    exit 1
+fi
+command rm -f -- "$fixture_dir/nbd-sysfs/pid"
+printf '8\n' > "$fixture_dir/nbd-sysfs/size"
+if nbd_connection_connected "$fixture_dir/nbd-sysfs"; then
+    echo 'positive size without kernel PID must not count as confirmed connected' >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service verifies kernel NBD connection states'
