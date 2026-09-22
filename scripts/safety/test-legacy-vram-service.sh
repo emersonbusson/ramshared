@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/pid-target" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed" "$fixture_dir/nbd-sysfs/size" "$fixture_dir/nbd-sysfs/pid"; if [[ -d "$fixture_dir/nbd-sysfs" ]]; then rmdir -- "$fixture_dir/nbd-sysfs"; fi; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/pid-target" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/zram-target" "$fixture_dir/capacity-guaranteed" "$fixture_dir/nbd-sysfs/size" "$fixture_dir/nbd-sysfs/pid"; if [[ -d "$fixture_dir/nbd-sysfs" ]]; then rmdir -- "$fixture_dir/nbd-sysfs"; fi; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -483,6 +483,28 @@ if (( zram_swapoff_calls != 1 || zram_reset_calls != 1 || remove_calls != 1 )); 
 fi
 
 echo 'PASS legacy VRAM service resets only recorded ZRAM after confirmed swapoff'
+
+printf '%s\n' "$managed_zram" > "$fixture_dir/zram-target"
+ln -s "$fixture_dir/zram-target" "$ZRAM_DEV_FILE"
+zram_active=1
+zram_swapoff_result=0
+zram_swapoff_calls=0
+zram_reset_calls=0
+remove_calls=0
+set +e
+stop_managed_zram > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || zram_swapoff_calls != 0 || zram_reset_calls != 0 || remove_calls != 0 )) \
+    || [[ ! -L $ZRAM_DEV_FILE ]]; then
+    printf 'symlinked ZRAM record must refuse before mutation: status=%s swapoff=%s reset=%s remove=%s\n' \
+        "$status" "$zram_swapoff_calls" "$zram_reset_calls" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+command rm -f -- "$ZRAM_DEV_FILE" "$fixture_dir/zram-target"
+
+echo 'PASS legacy VRAM service refuses symlinked ZRAM ownership record'
 
 # ZRAM setup must not adopt an unrelated active device or report success when
 # its own mkswap/swapon fails. No real ZRAM command is executed in this fixture.
