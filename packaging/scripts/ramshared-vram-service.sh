@@ -241,6 +241,10 @@ start_managed_zram() {
 }
 
 stop_managed_zram() {
+    if [[ -L "$ZRAM_DEV_FILE" || ( -e "$ZRAM_DEV_FILE" && ! -f "$ZRAM_DEV_FILE" ) ]]; then
+        echo "[-] Refusing ZRAM cleanup: owned-device record is not a regular file" >&2
+        return 1
+    fi
     [[ -f "$ZRAM_DEV_FILE" ]] || return 0
     local zram_dev
     zram_dev=$(<"$ZRAM_DEV_FILE")
