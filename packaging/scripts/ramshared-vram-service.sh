@@ -95,10 +95,14 @@ nbd_device_ready() {
 swap_device_active() {
     local device=$1 swap_table=${2:-/proc/swaps}
     [[ -f $swap_table && -r $swap_table ]] || return 2
+    local device_alias=''
+    if [[ $device =~ ^/dev/(nbd|zram)[0-9]+$ ]]; then
+        device_alias="/${device##*/}"
+    fi
     local state
-    if ! state=$(awk -v device="$device" '
+    if ! state=$(awk -v device="$device" -v device_alias="$device_alias" '
         NR == 1 { if ($1 != "Filename" || $2 != "Type") exit 3; next }
-        $1 == device { found = 1 }
+        $1 == device || ($1 == device_alias && $2 == "partition") { found = 1 }
         END { if (NR == 0) exit 3; print found ? "active" : "absent" }
     ' "$swap_table"); then
         return 2
@@ -158,7 +162,21 @@ zram_swap_active() {
 }
 
 any_zram_swap_active() {
-    awk '$1 ~ /^\/dev\/zram[0-9]+$/ { found = 1 } END { exit !found }' /proc/swaps
+    local swap_table=${1:-/proc/swaps}
+    [[ -f $swap_table && -r $swap_table ]] || return 2
+    local state
+    if ! state=$(awk '
+        NR == 1 { if ($1 != "Filename" || $2 != "Type") exit 3; next }
+        $1 ~ /^\/(dev\/)?zram[0-9]+$/ && $2 == "partition" { found = 1 }
+        END { if (NR == 0) exit 3; print found ? "active" : "absent" }
+    ' "$swap_table"); then
+        return 2
+    fi
+    case $state in
+        active) return 0 ;;
+        absent) return 1 ;;
+        *) return 2 ;;
+    esac
 }
 
 zram_device_ready() {
@@ -171,9 +189,14 @@ start_managed_zram() {
         return 1
     fi
     (( ZRAM_MIB > 0 )) || return 0
-    if any_zram_swap_active; then
+    local existing_zram_status=0
+    any_zram_swap_active || existing_zram_status=$?
+    if (( existing_zram_status == 0 )); then
         echo "[+] Existing ZRAM swap is unmanaged by this service; leaving it untouched"
         return 0
+    elif (( existing_zram_status != 1 )); then
+        echo "[-] Refusing ZRAM setup: /proc/swaps state is unreadable" >&2
+        return 1
     fi
     if ! modprobe zram 2>/dev/null; then
         echo "[-] Refusing ZRAM setup: module load failed" >&2
