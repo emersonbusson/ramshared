@@ -5616,3 +5616,21 @@ Rust topology residuals remain explicit.
 **Measured data:** Local swap fixtures covered `/dev/nbd0`, `/dev/nbd01`, `/nbd0`, `/nbd01`, `/zram7`, non-file input, and malformed headers. Read-only live probes returned active for `/dev/nbd0` and existing ZRAM, absent for `/dev/nbd01`. No device, daemon, PID file, or swap state was modified.
 **Residual blockers:** The installed legacy script still differs from source, and the live daemon/NBD tier have not had an attended BINARY_MATCH handoff or pressure/recovery qualification. Fixture and read-only parser checks do not close the host lifecycle gate.
 **Verdict:** 🟡 `PARTIAL` — source-level alias correction only; no host migration or cutile PR qualification.
+
+## 2026-09-22 02:32 -03 — Legacy teardown replay and kernel-verified NBD detach
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0044`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-22T05:31:32Z`.
+**Verified at:** `2026-09-22T05:32:02Z`.
+**Source revision:** `225edc06`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only local-check record and its RED/GREEN commits.
+**Freshness:** Revalidate after any legacy service change and before attended host handoff.
+**Category:** `local-check`.
+**What:** The legacy source service now treats a repeated clean `stop` as a no-op only when swap and the kernel NBD connection are absent and no unowned markers remain. It rejects symlinked PID/ZRAM records, unknown NBD connection state, and a successful `nbd-client -d` exit that leaves the kernel connected. A verified daemon left after a failed NBD startup can be stopped without attempting a second detach. The top-of-file broker reserve comment was aligned with the implemented 1536 MiB/20% capacity reserve and separate 768 MiB runtime buffer.
+**How to measure:** `bash scripts/safety/test-legacy-vram-service.sh`; `bash -n packaging/scripts/ramshared-vram-service.sh scripts/safety/test-legacy-vram-service.sh`; read-only `nbd_connection_absent`/`nbd_connection_connected` queries against the active and inactive NBD sysfs devices; `./target/release/ramshared status --json`; `./scripts/docs-check.sh`.
+**Measured data:** 18 printed local PASS groups, including second-stop replay, connected-but-unowned refusal, stale-marker refusal, symlinked-record refusal, false-success detach refusal, unknown kernel state refusal, and partial-start cleanup. Read-only sysfs probes classified the active NBD as connected and an inactive NBD as absent. The current checkout CLI still returned `Degraded` and `BLOCKED`; the live daemon, installed daemon, and checkout binary had three different SHA-256 hashes, and the legacy PID record named a non-running PID. No host teardown, install, pressure test, or cutile Tile execution occurred.
+**Residual blockers:** The installed legacy source is unchanged. The attended CLI migration requires healthy guardian and exact daemon identity proof before its first effect; the observed host state does not meet those gates. Live BINARY_MATCH, no-ghost, pressure, and replay qualification remain open.
+**Verdict:** 🟡 `PARTIAL` — fixture and read-only host evidence only; no host migration or installed-release promotion.
