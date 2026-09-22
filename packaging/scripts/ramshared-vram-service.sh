@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # RamShared Boot Survival & VRAM Tier Service for Linux / WSL2
-# Follows SSDV3 GPU reserve rules: dynamically reserves max(2 GiB, 20% total VRAM)
+# Broker/NBD capacity reserve: max(1536 MiB, 20% total VRAM), plus a separate
+# 768 MiB runtime free-VRAM buffer before selecting the tier size.
 # Protected cgroup v2 policy: memory.min=512M, memory.swap.max=0.
 set -euo pipefail
 
