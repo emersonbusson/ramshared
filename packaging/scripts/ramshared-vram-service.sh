@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # RamShared Boot Survival & VRAM Tier Service for Linux / WSL2
 # Follows SSDV3 GPU reserve rules: dynamically reserves max(2 GiB, 20% total VRAM)
-# Protected Cgroup v2 Isolation: memory.min=512M, memory.swap.max=0 (Zero-Deadlock Guarantee)
+# Protected cgroup v2 policy: memory.min=512M, memory.swap.max=0.
 set -euo pipefail
 
 NBD_DEV="/dev/nbd0"
@@ -92,6 +92,26 @@ nbd_device_ready() {
     [[ -b "$NBD_DEV" ]]
 }
 
+swap_device_active() {
+    local device=$1 swap_table=${2:-/proc/swaps}
+    [[ -r $swap_table ]] || return 2
+    awk -v device="$device" '$1 == device { found = 1 } END { exit !found }' "$swap_table"
+}
+
+swap_device_absent() {
+    local result=0
+    swap_device_active "$@" || result=$?
+    (( result == 1 ))
+}
+
+nbd_swap_active() {
+    swap_device_active "$NBD_DEV"
+}
+
+nbd_swap_absent() {
+    swap_device_absent "$NBD_DEV"
+}
+
 activate_nbd_tier() {
     local backend_desc=$1 backend_mb=$2
     echo "[+] Connecting $NBD_DEV to $backend_desc daemon..."
@@ -111,7 +131,7 @@ activate_nbd_tier() {
         echo "[-] Refusing activation: swapon failed; NBD may remain connected" >&2
         return 1
     fi
-    if ! grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+    if ! nbd_swap_active; then
         echo "[-] Refusing activation: $NBD_DEV is absent from /proc/swaps" >&2
         return 1
     fi
@@ -122,7 +142,7 @@ activate_nbd_tier() {
 
 zram_swap_active() {
     local device=$1
-    awk -v device="$device" '$1 == device { found = 1 } END { exit !found }' /proc/swaps
+    swap_device_active "$device"
 }
 
 any_zram_swap_active() {
@@ -202,8 +222,8 @@ stop_managed_zram() {
 
 start_tier() {
     echo "[+] Starting RamShared VRAM Tier Service (Protected Architecture)..."
-    if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
-        echo "[-] Refusing start: active NBD swap must be handed off through the sealed cascade lifecycle" >&2
+    if ! nbd_swap_absent; then
+        echo "[-] Refusing start: NBD swap is active or /proc/swaps is unreadable; use the sealed cascade lifecycle" >&2
         return 1
     fi
     if [[ -e "$PID_FILE" || -L "$PID_FILE" || -e "$SOCK_PATH" || -L "$SOCK_PATH" \
@@ -247,7 +267,7 @@ start_tier() {
         echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
     fi
 
-    if ! grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+    if nbd_swap_absent; then
         # Launch ramsharedd inside /ramshared-protected cgroup with memory.swap.max=0 and oom_score_adj=-1000
         bash -c "echo \$\$ > /sys/fs/cgroup/ramshared-protected/cgroup.procs 2>/dev/null || true; echo -1000 > /proc/\$\$/oom_score_adj 2>/dev/null || true; exec /usr/local/bin/ramsharedd --backend '$backend_type' --slices 1 --slice-mb '$backend_mb' --listen-nbd 127.0.0.1:10809 --arbiter-listen 127.0.0.1:9090" > "$LOG_FILE" 2>&1 &
         local daemon_pid=$!
@@ -268,10 +288,8 @@ start_tier() {
             return 1
         fi
     else
-        echo "[!] VRAM tier is already active on $NBD_DEV"
-        echo "$NBD_DEV" > "$SWAP_DEV_FILE"
-        echo "1" > "$CAPACITY_STATUS_FILE"
-        pgrep -x "ramsharedd" | head -n 1 > "$PID_FILE" || true
+        echo "[-] Refusing start: NBD swap state changed before daemon launch" >&2
+        return 1
     fi
 
     chmod 0644 /run/ramshared/* 2>/dev/null || true
@@ -279,6 +297,10 @@ start_tier() {
 
 stop_tier() {
     echo "[+] Stopping RamShared VRAM Tier Service (Swapoff-first)..."
+    if ! nbd_swap_active && ! nbd_swap_absent; then
+        echo "[-] Refusing teardown: NBD swap state is unreadable" >&2
+        return 1
+    fi
 
     # The PID record is an ownership claim, not proof. Never touch an active
     # swap device when the recorded daemon is missing or belongs to another
@@ -298,20 +320,20 @@ stop_tier() {
             echo "[-] Refusing teardown: daemon executable identity differs" >&2
             return 1
         fi
-    elif grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+    elif nbd_swap_active; then
         echo "[-] Refusing teardown: active NBD swap has no daemon PID record" >&2
         return 1
     fi
     
     # 1. Swapoff VRAM
-    if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
+    if nbd_swap_active; then
         echo "[+] Deactivating swap on $NBD_DEV..."
         if ! swapoff "$NBD_DEV" 2>/dev/null; then
             echo "[-] Refusing NBD disconnect: swapoff failed for $NBD_DEV" >&2
             return 1
         fi
-        if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
-            echo "[-] Refusing NBD disconnect: $NBD_DEV remains active in /proc/swaps" >&2
+        if ! nbd_swap_absent; then
+            echo "[-] Refusing NBD disconnect: $NBD_DEV remains active or /proc/swaps is unreadable" >&2
             return 1
         fi
     fi
