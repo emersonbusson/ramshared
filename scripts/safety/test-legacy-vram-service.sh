@@ -33,8 +33,10 @@ swapoff_result=1
 swapoff_calls=0
 disconnect_calls=0
 disconnect_result=0
+disconnect_effect=1
 nbd_connected=1
 nbd_connection_absent() { (( nbd_connected == 0 )); }
+nbd_connection_connected() { (( nbd_connected == 1 )); }
 kill_calls=0
 kill_signals=()
 remove_calls=0
@@ -62,7 +64,7 @@ nbd-client() {
     if (( nbd_connected == 0 )); then
         return 1
     fi
-    if (( disconnect_result == 0 )); then
+    if (( disconnect_result == 0 && disconnect_effect == 1 )); then
         nbd_connected=0
     fi
     return "$disconnect_result"
@@ -155,11 +157,37 @@ fi
 
 echo 'PASS legacy VRAM service retains daemon and state after failed NBD detach'
 
+# A successful command exit is insufficient if the kernel still owns NBD.
+swap_active=1
+swapoff_result=0
+swapoff_calls=0
+disconnect_calls=0
+disconnect_result=0
+disconnect_effect=0
+nbd_connected=1
+kill_calls=0
+remove_calls=0
+daemon_alive=1
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || swapoff_calls != 1 || disconnect_calls != 1 || kill_calls != 0 || remove_calls != 0 )) \
+    || (( nbd_connected != 1 )); then
+    printf 'false-success detach must retain daemon: status=%s swapoff=%s disconnect=%s kill=%s remove=%s connected=%s\n' \
+        "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" "$nbd_connected" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service requires kernel NBD absence after detach'
+
 # A successful stop uses one graceful signal, never SIGKILL.
 swap_active=1
 swapoff_calls=0
 disconnect_calls=0
 disconnect_result=0
+disconnect_effect=1
 nbd_connected=1
 kill_calls=0
 kill_signals=()
@@ -256,6 +284,31 @@ fi
 command rm -f -- "$PID_FILE" "$fixture_dir/pid-target"
 
 echo 'PASS legacy VRAM service refuses symlinked daemon ownership record'
+
+# Failed startup can leave a verified daemon PID with no connected NBD swap.
+# Recovery must skip detach, then stop only that daemon and clean its records.
+printf '4242\n' > "$PID_FILE"
+swap_active=0
+nbd_connected=0
+daemon_alive=1
+mock_exe=$DAEMON_BIN
+swapoff_calls=0
+disconnect_calls=0
+kill_calls=0
+remove_calls=0
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status != 0 || swapoff_calls != 0 || disconnect_calls != 0 || kill_calls != 1 || remove_calls != 1 )) \
+    || [[ -e $PID_FILE ]]; then
+    printf 'partial startup recovery must skip disconnected NBD: status=%s swapoff=%s disconnect=%s kill=%s remove=%s\n' \
+        "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service recovers a verified daemon after disconnected startup'
 
 # A boot-time legacy start may not adopt an NBD swap created by another path.
 start_definition=$(sed -n '/^start_tier() {/,/^}/p' "$service_script")
