@@ -33,6 +33,8 @@ swapoff_result=1
 swapoff_calls=0
 disconnect_calls=0
 disconnect_result=0
+nbd_connected=1
+nbd_connection_absent() { (( nbd_connected == 0 )); }
 kill_calls=0
 kill_signals=()
 remove_calls=0
@@ -57,6 +59,12 @@ swapoff() {
 
 nbd-client() {
     disconnect_calls=$((disconnect_calls + 1))
+    if (( nbd_connected == 0 )); then
+        return 1
+    fi
+    if (( disconnect_result == 0 )); then
+        nbd_connected=0
+    fi
     return "$disconnect_result"
 }
 kill() {
@@ -71,7 +79,15 @@ kill() {
     fi
 }
 readlink() { printf '%s\n' "$mock_exe"; }
-rm() { remove_calls=$((remove_calls + 1)); }
+rm() {
+    remove_calls=$((remove_calls + 1))
+    local path
+    for path in "$@"; do
+        [[ $path == -f ]] && continue
+        [[ $path == "$fixture_dir/"* ]] || return 90
+    done
+    command rm "$@"
+}
 sleep() { :; }
 zramctl() { :; }
 
@@ -118,6 +134,7 @@ swapoff_result=0
 swapoff_calls=0
 disconnect_calls=0
 disconnect_result=1
+nbd_connected=1
 kill_calls=0
 kill_signals=()
 remove_calls=0
@@ -143,6 +160,7 @@ swap_active=1
 swapoff_calls=0
 disconnect_calls=0
 disconnect_result=0
+nbd_connected=1
 kill_calls=0
 kill_signals=()
 remove_calls=0
@@ -162,6 +180,38 @@ if (( status != 0 || swapoff_calls != 1 || disconnect_calls != 1 || kill_calls !
 fi
 
 echo 'PASS legacy VRAM service stops its daemon gracefully after confirmed detach'
+
+# stop is replayable: the second invocation may not detach or signal again.
+swapoff_calls=0
+disconnect_calls=0
+kill_calls=0
+remove_calls=0
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status != 0 || swapoff_calls != 0 || disconnect_calls != 0 || kill_calls != 0 || remove_calls != 0 )); then
+    printf 'second stop must be an owned no-op: status=%s swapoff=%s disconnect=%s kill=%s remove=%s\n' \
+        "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+# A connected NBD with no daemon record is foreign/unknown, not an idle tier.
+nbd_connected=1
+disconnect_calls=0
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || disconnect_calls != 0 || nbd_connected != 1 )); then
+    printf 'unowned connected NBD must refuse: status=%s disconnect=%s connected=%s\n' \
+        "$status" "$disconnect_calls" "$nbd_connected" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service makes clean stop replayable without detaching an unowned NBD'
 
 # A boot-time legacy start may not adopt an NBD swap created by another path.
 start_definition=$(sed -n '/^start_tier() {/,/^}/p' "$service_script")
