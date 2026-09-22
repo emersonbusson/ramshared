@@ -477,6 +477,23 @@ if ! swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'exact swap probe must detect its own device' >&2
     exit 1
 fi
+printf 'Filename\tType\tSize\tUsed\tPriority\n/nbd-fixture1\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
+if swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
+    echo 'kernel-style alias must still reject longer device names' >&2
+    exit 1
+fi
+printf '/nbd-fixture\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
+if ! swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
+    echo 'kernel-style /nbd alias must match its /dev/nbd device' >&2
+    exit 1
+fi
+any_zram_definition=$(sed -n '/^any_zram_swap_active() {/,/^}/p' "$service_script")
+source <(printf '%s\n' "$any_zram_definition")
+printf 'Filename\tType\tSize\tUsed\tPriority\n/zram7\tpartition\t1024\t0\t100\n' > "$fixture_dir/swaps"
+if ! any_zram_swap_active "$fixture_dir/swaps"; then
+    echo 'kernel-style /zram alias must count as an existing ZRAM swap' >&2
+    exit 1
+fi
 if swap_device_absent "$NBD_DEV" "$fixture_dir"; then
     echo 'unreadable or non-file swap table must not count as confirmed absence' >&2
     exit 1
@@ -491,4 +508,4 @@ if command grep -Eq 'grep -q "\$NBD_DEV" /proc/swaps' "$service_script"; then
     exit 1
 fi
 
-echo 'PASS legacy VRAM service matches swap devices exactly'
+echo 'PASS legacy VRAM service matches exact block devices and kernel-style aliases'
