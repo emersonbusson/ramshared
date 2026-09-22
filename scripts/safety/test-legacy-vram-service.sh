@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed" "$fixture_dir/nbd-sysfs/size" "$fixture_dir/nbd-sysfs/pid"; if [[ -d "$fixture_dir/nbd-sysfs" ]]; then rmdir -- "$fixture_dir/nbd-sysfs"; fi; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/pid-target" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed" "$fixture_dir/nbd-sysfs/size" "$fixture_dir/nbd-sysfs/pid"; if [[ -d "$fixture_dir/nbd-sysfs" ]]; then rmdir -- "$fixture_dir/nbd-sysfs"; fi; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -227,6 +227,35 @@ fi
 command rm -f -- "$SWAP_DEV_FILE"
 
 echo 'PASS legacy VRAM service makes clean stop replayable without detaching an unowned NBD'
+
+# A symlinked PID record can redirect ownership checks to attacker-chosen
+# content and must not authorize swapoff or daemon termination.
+printf '4242\n' > "$fixture_dir/pid-target"
+ln -s "$fixture_dir/pid-target" "$PID_FILE"
+swap_active=1
+nbd_connected=1
+daemon_alive=1
+mock_exe=$DAEMON_BIN
+swapoff_result=0
+disconnect_result=0
+swapoff_calls=0
+disconnect_calls=0
+kill_calls=0
+remove_calls=0
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || swapoff_calls != 0 || disconnect_calls != 0 || kill_calls != 0 || remove_calls != 0 )) \
+    || [[ ! -L $PID_FILE ]]; then
+    printf 'symlinked PID must refuse before mutation: status=%s swapoff=%s disconnect=%s kill=%s remove=%s\n' \
+        "$status" "$swapoff_calls" "$disconnect_calls" "$kill_calls" "$remove_calls" >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+command rm -f -- "$PID_FILE" "$fixture_dir/pid-target"
+
+echo 'PASS legacy VRAM service refuses symlinked daemon ownership record'
 
 # A boot-time legacy start may not adopt an NBD swap created by another path.
 start_definition=$(sed -n '/^start_tier() {/,/^}/p' "$service_script")
