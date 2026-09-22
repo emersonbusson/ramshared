@@ -128,6 +128,19 @@ nbd_swap_absent() {
     swap_device_absent "$NBD_DEV"
 }
 
+nbd_connection_absent() {
+    local sysfs_dir=${1:-/sys/block/${NBD_DEV##*/}}
+    if [[ ! -e $sysfs_dir ]]; then
+        [[ ! -b $NBD_DEV ]]
+        return
+    fi
+    [[ -d $sysfs_dir && -f $sysfs_dir/size && -r $sysfs_dir/size ]] || return 1
+    [[ ! -e $sysfs_dir/pid && ! -L $sysfs_dir/pid ]] || return 1
+    local sectors
+    sectors=$(<"$sysfs_dir/size")
+    [[ $sectors =~ ^[0-9]+$ ]] && (( sectors == 0 ))
+}
+
 activate_nbd_tier() {
     local backend_desc=$1 backend_mb=$2
     echo "[+] Connecting $NBD_DEV to $backend_desc daemon..."
@@ -335,6 +348,20 @@ stop_tier() {
     if ! nbd_swap_active && ! nbd_swap_absent; then
         echo "[-] Refusing teardown: NBD swap state is unreadable" >&2
         return 1
+    fi
+    if [[ ! -e "$PID_FILE" && ! -L "$PID_FILE" ]]; then
+        if ! nbd_swap_absent || ! nbd_connection_absent; then
+            echo "[-] Refusing teardown: NBD is active or connected without a daemon record" >&2
+            return 1
+        fi
+        if [[ -e "$SOCK_PATH" || -L "$SOCK_PATH" || -e "$SWAP_DEV_FILE" \
+            || -L "$SWAP_DEV_FILE" || -e "$CAPACITY_STATUS_FILE" || -L "$CAPACITY_STATUS_FILE" ]]; then
+            echo "[-] Refusing no-op stop: unowned service state remains" >&2
+            return 1
+        fi
+        stop_managed_zram || return 1
+        echo "[+] RamShared VRAM Tier is already stopped."
+        return 0
     fi
 
     # The PID record is an ownership claim, not proof. Never touch an active

@@ -5,7 +5,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 service_script="$repo_root/packaging/scripts/ramshared-vram-service.sh"
 fixture_dir=$(mktemp -d)
-trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed"; rmdir -- "$fixture_dir"' EXIT
+trap 'command rm -f -- "$fixture_dir/pid" "$fixture_dir/output" "$fixture_dir/log" "$fixture_dir/socket" "$fixture_dir/swap-dev" "$fixture_dir/swaps" "$fixture_dir/zram-dev" "$fixture_dir/capacity-guaranteed" "$fixture_dir/nbd-sysfs/size" "$fixture_dir/nbd-sysfs/pid"; if [[ -d "$fixture_dir/nbd-sysfs" ]]; then rmdir -- "$fixture_dir/nbd-sysfs"; fi; rmdir -- "$fixture_dir"' EXIT
 
 # Source only the function definition: the production script has top-level
 # host setup and dispatch that must never run inside a regression test.
@@ -210,6 +210,21 @@ if (( status == 0 || disconnect_calls != 0 || nbd_connected != 1 )); then
     sed -n '1,20p' "$fixture_dir/output" >&2
     exit 1
 fi
+
+# A leftover ownership marker is not an idempotent clean state.
+nbd_connected=0
+printf 'stale\n' > "$SWAP_DEV_FILE"
+disconnect_calls=0
+set +e
+stop_tier > "$fixture_dir/output" 2>&1
+status=$?
+set -e
+if (( status == 0 || disconnect_calls != 0 )) || [[ ! -f $SWAP_DEV_FILE ]]; then
+    echo 'stale service marker must block no-op stop without deleting evidence' >&2
+    sed -n '1,20p' "$fixture_dir/output" >&2
+    exit 1
+fi
+command rm -f -- "$SWAP_DEV_FILE"
 
 echo 'PASS legacy VRAM service makes clean stop replayable without detaching an unowned NBD'
 
@@ -560,3 +575,36 @@ if command grep -Eq 'grep -q "\$NBD_DEV" /proc/swaps' "$service_script"; then
 fi
 
 echo 'PASS legacy VRAM service matches exact block devices and kernel-style aliases'
+
+# A no-op stop requires independent kernel evidence that NBD is disconnected.
+connection_definition=$(sed -n '/^nbd_connection_absent() {/,/^}/p' "$service_script")
+[[ $connection_definition == 'nbd_connection_absent() {'* ]] || {
+    echo 'nbd_connection_absent definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$connection_definition")
+mkdir -p "$fixture_dir/nbd-sysfs"
+printf '0\n' > "$fixture_dir/nbd-sysfs/size"
+if ! nbd_connection_absent "$fixture_dir/nbd-sysfs"; then
+    echo 'zero-size NBD without kernel PID must count as disconnected' >&2
+    exit 1
+fi
+printf '8\n' > "$fixture_dir/nbd-sysfs/size"
+if nbd_connection_absent "$fixture_dir/nbd-sysfs"; then
+    echo 'positive-size NBD without kernel PID must not count as disconnected' >&2
+    exit 1
+fi
+printf '0\n' > "$fixture_dir/nbd-sysfs/size"
+printf '654\n' > "$fixture_dir/nbd-sysfs/pid"
+if nbd_connection_absent "$fixture_dir/nbd-sysfs"; then
+    echo 'kernel PID must block disconnected classification even at zero size' >&2
+    exit 1
+fi
+command rm -f -- "$fixture_dir/nbd-sysfs/pid"
+printf 'unknown\n' > "$fixture_dir/nbd-sysfs/size"
+if nbd_connection_absent "$fixture_dir/nbd-sysfs"; then
+    echo 'malformed kernel size must not count as disconnected' >&2
+    exit 1
+fi
+
+echo 'PASS legacy VRAM service verifies kernel NBD disconnection before no-op stop'
