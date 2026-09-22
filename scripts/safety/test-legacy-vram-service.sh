@@ -461,6 +461,12 @@ swap_check_definition=$(sed -n '/^swap_device_active() {/,/^}/p' "$service_scrip
     exit 1
 }
 source <(printf '%s\n' "$swap_check_definition")
+swap_absent_definition=$(sed -n '/^swap_device_absent() {/,/^}/p' "$service_script")
+[[ $swap_absent_definition == 'swap_device_absent() {'* ]] || {
+    echo 'swap_device_absent definition missing' >&2
+    exit 1
+}
+source <(printf '%s\n' "$swap_absent_definition")
 printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/nbd-fixture1\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
 if swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'exact swap probe must not accept a longer device name' >&2
@@ -469,6 +475,10 @@ fi
 printf '/dev/nbd-fixture\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
 if ! swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'exact swap probe must detect its own device' >&2
+    exit 1
+fi
+if swap_device_absent "$NBD_DEV" "$fixture_dir"; then
+    echo 'unreadable or non-file swap table must not count as confirmed absence' >&2
     exit 1
 fi
 if command grep -Eq 'grep -q "\$NBD_DEV" /proc/swaps' "$service_script"; then
