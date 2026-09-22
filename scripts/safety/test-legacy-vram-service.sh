@@ -28,6 +28,7 @@ printf '4242\n' > "$PID_FILE"
 
 swap_active=1
 nbd_swap_active() { (( swap_active == 1 )); }
+nbd_swap_absent() { (( swap_active == 0 )); }
 swapoff_result=1
 swapoff_calls=0
 disconnect_calls=0
