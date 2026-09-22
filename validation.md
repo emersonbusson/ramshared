@@ -5598,3 +5598,21 @@ Rust topology residuals remain explicit.
 **Measured data:** 10 local safety assertions passed, including four NBD activation failure modes, three startup collision modes, failed and successful managed-ZRAM teardown, and unmanaged/failed ZRAM setup. The CI aggregation test passed. Live stop/start, pressure, installed-binary match, and cutile Tile execution: 0.
 **Residual blockers:** The installed legacy service still differs from source, remains enabled and failed, and points at a stale PID while another daemon serves active NBD swap. Safe attended migration, exact binary identity, pressure/ghost checks, and idempotent recovery are not yet proven. The host's `sm_75` GPU cannot qualify cutile's `sm_80+` Tile path.
 **Verdict:** 🟡 `PARTIAL` — local regressions and CI wiring only; no host mutation or PR promotion.
+
+## 2026-09-22 02:19 -03 — Exact swap-device identity across WSL2 kernel aliases
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0043`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-22T05:19:16Z`.
+**Verified at:** `2026-09-22T05:19:16Z`.
+**Source revision:** `5749b5a3`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only local-check record and its RED/GREEN commits.
+**Freshness:** Revalidate after any swap-probe or kernel-path change and before attended host handoff.
+**Category:** `local-check`.
+**What:** Read-only host inspection found `/proc/swaps` uses `/nbd0` and `/zram1` while the corresponding block devices are `/dev/nbd0` and `/dev/zram1`. The first exact-path implementation missed both active devices. The corrected parser recognizes only exact `/dev/<managed-device>` or kernel-root `/<managed-device>` partition entries, rejects prefix collisions and malformed/unknown swap tables, and treats unknown ZRAM state as a startup refusal.
+**How to measure:** `bash scripts/safety/test-legacy-vram-service.sh`; source only `swap_device_active` and `any_zram_swap_active` for read-only queries against `/proc/swaps`; `bash -n packaging/scripts/ramshared-vram-service.sh scripts/safety/test-legacy-vram-service.sh`; `./scripts/docs-check.sh`.
+**Measured data:** Local swap fixtures covered `/dev/nbd0`, `/dev/nbd01`, `/nbd0`, `/nbd01`, `/zram7`, non-file input, and malformed headers. Read-only live probes returned active for `/dev/nbd0` and existing ZRAM, absent for `/dev/nbd01`. No device, daemon, PID file, or swap state was modified.
+**Residual blockers:** The installed legacy script still differs from source, and the live daemon/NBD tier have not had an attended BINARY_MATCH handoff or pressure/recovery qualification. Fixture and read-only parser checks do not close the host lifecycle gate.
+**Verdict:** 🟡 `PARTIAL` — source-level alias correction only; no host migration or cutile PR qualification.
