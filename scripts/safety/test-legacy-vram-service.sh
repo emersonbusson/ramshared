@@ -467,22 +467,23 @@ swap_absent_definition=$(sed -n '/^swap_device_absent() {/,/^}/p' "$service_scri
     exit 1
 }
 source <(printf '%s\n' "$swap_absent_definition")
-printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/nbd-fixture1\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
+NBD_DEV=/dev/nbd0
+printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/nbd01\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
 if swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'exact swap probe must not accept a longer device name' >&2
     exit 1
 fi
-printf '/dev/nbd-fixture\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
+printf '/dev/nbd0\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
 if ! swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'exact swap probe must detect its own device' >&2
     exit 1
 fi
-printf 'Filename\tType\tSize\tUsed\tPriority\n/nbd-fixture1\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
+printf 'Filename\tType\tSize\tUsed\tPriority\n/nbd01\tpartition\t1024\t0\t50\n' > "$fixture_dir/swaps"
 if swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'kernel-style alias must still reject longer device names' >&2
     exit 1
 fi
-printf '/nbd-fixture\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
+printf '/nbd0\tpartition\t1024\t0\t50\n' >> "$fixture_dir/swaps"
 if ! swap_device_active "$NBD_DEV" "$fixture_dir/swaps"; then
     echo 'kernel-style /nbd alias must match its /dev/nbd device' >&2
     exit 1
