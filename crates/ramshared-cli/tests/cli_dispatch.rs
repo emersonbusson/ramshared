@@ -216,7 +216,7 @@ fn cli_stress_subcommand_and_json_report() {
         serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
     assert_eq!(
         val.get("status").and_then(serde_json::Value::as_str),
-        Some("PASS_ZERO_PANIC")
+        Some("INCONCLUSIVE")
     );
     assert!(val.get("reclaim_speed_gbs").is_some());
     assert!(val.get("avg_cycle_latency_ms").is_some());

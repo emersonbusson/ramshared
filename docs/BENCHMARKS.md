@@ -314,3 +314,14 @@ WSL2 continues to use NBD as its baseline.
 EVD-0040 is separate and covers zero-copy CUDA host mapping through
 `cuMemHostRegister` / `PinnedHostMapping`. Neither evidence ID supports using a
 single throughput number as an environment-independent product description.
+
+## Interpretation scope correction — 2026-09-23 (EVD-0047)
+
+The Build #5 stress JSON retained at `docs/benchmarks/history/latest.json` is
+historical and unqualified. Its `tier2_vram_mb` counts logical NBD swap use,
+its SSD sample was tied to a fixed disk name, and its `reclaim_speed_gbs`
+measures vector release time rather than physical reclaim. The reported
+31.7% improvement and zero-panic verdict have no matched baseline or independent
+integrity/kernel-log proof. EVD-0046 remains in the append-only validation log,
+but EVD-0047 supersedes its qualification verdict. Re-run the corrected metric
+schema on a clean host with three matched rounds before publishing a new claim.

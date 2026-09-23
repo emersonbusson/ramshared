@@ -4,7 +4,7 @@
 
 Implemented autonomous WSL2 origin VHDX auto-attachment and transparent systemd scope auto-envelopment in `ramshared-cli`:
 - **Transparent Scope Envelopment (RF-1, RF-2, RF-3; DT-4):** In `crates/ramshared-cli/src/main.rs`, when `ramshared up` is invoked from an unwrapped interactive shell in a running systemd environment (where `INVOCATION_ID` is absent), the CLI automatically re-executes itself under `systemd-run --scope -q -- /proc/self/exe up "$@"` with recursion guard `_RAMSHARED_SCOPED=1`.
-- **Just-In-Time Origin Auto-Attachment (RF-4, RF-5, RF-6, RF-7, RF-8; DT-1, DT-2, DT-3):** In `crates/ramshared-cli/src/cascade/cascade_io.rs`, `ensure_origin_attached()` detects when the sealed origin partition is absent (such as post `wsl --shutdown`), derives the Windows VHDX path from `/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json` (stripping UTF-8 BOM if present), validates the path against forbidden shell characters, and executes a bounded host mount via `cmd.exe /c wsl.exe --mount --vhd <path> --bare`. It polls for the device appearance before proceeding.
+- **Just-In-Time Origin Auto-Attachment (RF-4, RF-5, RF-6, RF-7, RF-8; DT-1, DT-2, DT-3):** In `crates/ramshared-cli/src/cascade/cascade_io.rs`, `ensure_origin_attached()` detects when the sealed origin partition is absent (such as post `wsl --shutdown`), derives the Windows VHDX path from `/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json` (stripping UTF-8 BOM if present), verifies the host manifest SHA-256 and PARTUUID against the sealed origin configuration, applies an ASCII path allowlist, and executes `wsl.exe --mount --vhd <path> --bare` directly with a 10-second bound. It polls for the device appearance before proceeding.
 
 ## 2. Modified Files
 
@@ -36,7 +36,8 @@ Implemented autonomous WSL2 origin VHDX auto-attachment and transparent systemd 
     - Tier 3: WSL fallback disk swap (4194304 KiB, prio -2, 0 used)
 - **Kernel Health:** `PASS_ZERO_PANIC`, zero D-state stalls or ring buffer warnings.
 
-## 5. Governance
+## 5. Current qualification
 
-- All 29 governance checks in `./scripts/docs-check.sh` pass 100% green.
-- Verdict: **✅ DONE**
+Earlier test counts and live activation in this file predate the sealed-hash and direct-interop correction. Current targeted unit tests and static checks pass, but a new binary has not completed a clean before→action→after host attachment, cascade, and teardown run. The current host reports pending recovery with active managed swaps and unavailable cache telemetry.
+
+- Verdict: **🟡 PARTIAL** until a clean controlled host E2E, binary match, and fresh coverage evidence.

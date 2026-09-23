@@ -52,7 +52,7 @@ bounded and every daemon cleanup target is an exact child or a verified PID.
 
 ### DT-T1 — Direct child command boundary
 
-`cascade_io` uses the shared direct-argv bounded runner for short-lived commands
+`cascade_io` uses the shared direct-argv bounded runner for child commands
 (`modprobe`, `zramctl`, `swapon`, `swapoff`, `nbd-client`, and identity probes).
 Production does not invoke a shell or select a process by name. Each child is
 the leader of a new invocation-private process group. The runner concurrently
@@ -60,7 +60,9 @@ captures at most 64 KiB from each output stream, returns trimmed stdout on
 success, and returns the command identity plus its exit/timeout reason on
 failure.
 
-The production timeout is 5 seconds per short-lived command. Timeout, wait
+The production timeout is 5 seconds for ordinary short-lived commands. A
+dirty `swapoff` has a separate 120-second bound: the kernel may need to page
+hundreds of MiB back from the device before detach. Timeout, wait
 error, and a pipe kept open by an owned descendant signal exactly the private
 group with SIGKILL and bound the direct-child reap and capture-worker close.
 The runner never uses `pkill`, `pgrep`, or a name match. If group SIGKILL plus
