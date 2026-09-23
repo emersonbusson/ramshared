@@ -16,6 +16,7 @@ members = [
     "crates/ramshared-vulkan",
     "crates/ramshared-winsvc",
     "crates/ramshared-winbroker",
+    "crates/ramshared-ipc",
 ]
 
 [workspace.package]

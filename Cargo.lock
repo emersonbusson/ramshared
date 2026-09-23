@@ -1003,6 +1003,15 @@ name = "ramshared-integrity"
 version = "0.14.1"
 
 [[package]]
+name = "ramshared-ipc"
+version = "0.14.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "ramshared-tier"
 version = "0.14.1"
 

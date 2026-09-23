@@ -1,0 +1,18 @@
+[package]
+name = "ramshared-ipc"
+description = "Shared host-guest IPC protocol for RamShared vsock control plane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
