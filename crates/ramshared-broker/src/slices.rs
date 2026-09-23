@@ -22,6 +22,7 @@ pub enum SliceError {
     BadState { have: SliceState },
     TooManySlices { requested: u16, max: u16 },
     CapacityExceeded { required: u64, available: u64 },
+    InvalidAlignment { slice_bytes: u64 },
     AlreadyAllocated,
 }
 
@@ -43,6 +44,12 @@ impl std::fmt::Display for SliceError {
                     "slice capacity exceeded (required {required} > available {available})"
                 )
             }
+            Self::InvalidAlignment { slice_bytes } => {
+                write!(
+                    f,
+                    "slice alignment invalid (slice_bytes {slice_bytes} not power of 2)"
+                )
+            }
             Self::AlreadyAllocated => write!(f, "slice is already allocated"),
         }
     }
@@ -58,6 +65,9 @@ impl SliceMap {
                 requested: k,
                 max: MAX_SLICES,
             });
+        }
+        if !slice_bytes.is_power_of_two() {
+            return Err(SliceError::InvalidAlignment { slice_bytes });
         }
         let required =
             u64::from(k)
@@ -83,6 +93,42 @@ impl SliceMap {
             })
             .collect();
         Ok(Self { slices })
+    }
+
+    /// Gets the fragmentation ratio of the slices.
+    pub fn fragmentation_ratio(&self) -> f64 {
+        let mut fragmented = 0;
+        let mut in_free_run = false;
+
+        for s in &self.slices {
+            if s.state == SliceState::Free {
+                if !in_free_run {
+                    fragmented += 1;
+                    in_free_run = true;
+                }
+            } else {
+                in_free_run = false;
+            }
+        }
+
+        let free_count = self
+            .slices
+            .iter()
+            .filter(|s| s.state == SliceState::Free)
+            .count() as f64;
+        if free_count == 0.0 {
+            return 0.0;
+        }
+
+        // A perfect non-fragmented free space would just be 1 contiguous block.
+        // Ratio = (number of distinct free runs) / (total free slices).
+        // e.g. 4 free slices in 4 blocks = 4/4 = 1.0 (highly fragmented)
+        // e.g. 4 free slices in 1 block = 1/4 = 0.25 (less fragmented)
+        (fragmented as f64) / free_count
+    }
+
+    pub fn emit_fragmentation_metrics(&self) {
+        metrics::gauge!("vram_fragmentation_ratio").set(self.fragmentation_ratio());
     }
 
     /// Sum of sizes (total exportable capacity).
@@ -264,6 +310,41 @@ mod tests {
         // lease cannot be drained (not Active).
         m.lease(0).unwrap();
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
+    }
+
+    #[test]
+    fn fragmentation_ratio() {
+        let mut m = SliceMap::new(4, 64, 256).unwrap();
+        // 4 free slices in 1 contiguous block. Free count = 4, fragmented runs = 1.
+        // Ratio = 1/4 = 0.25
+        assert_eq!(m.fragmentation_ratio(), 0.25);
+        m.assign(1, 7).unwrap();
+        // Free slices are 0, and [2,3]. Free count = 3.
+        // Fragmented runs = 2 (slice 0, and slices 2-3).
+        // Ratio = 2/3 = 0.6666...
+        assert!((m.fragmentation_ratio() - 0.6666666666666666).abs() < f64::EPSILON);
+        m.assign(0, 8).unwrap();
+        // Free slices are [2,3]. Free count = 2.
+        // Fragmented runs = 1.
+        // Ratio = 1/2 = 0.5
+        assert_eq!(m.fragmentation_ratio(), 0.5);
+    }
+
+    #[test]
+    fn fragmentation_metrics_emitted() {
+        let mut m = SliceMap::new(4, 64, 256).unwrap();
+        m.assign(0, 7).unwrap();
+        m.emit_fragmentation_metrics();
+        // We can't really assert on metrics emitted directly in this test without setting up a recorder,
+        // but we verify it runs.
+    }
+
+    #[test]
+    fn new_rejects_non_power_of_two_slice_bytes() {
+        assert!(matches!(
+            SliceMap::new(2, 63, 126),
+            Err(SliceError::InvalidAlignment { slice_bytes: 63 })
+        ));
     }
 
     #[test]
