@@ -82,7 +82,7 @@
    - `p99_cycle_latency_ms`: 0.0019–0.0049
    - `buffer_drop_duration_ms`: 77.6–93.1
    - `host_vram_min_free_mb`: 4264–4368
-   - Status: `INCONCLUSIVE` (cascade não ativo — correto sem `ramshared up`)
+   - Status: `INCONCLUSIVE` (cascade not active — expected without `ramshared up`)
 
 ## Kahneman Map Disciplines Addressed
 
