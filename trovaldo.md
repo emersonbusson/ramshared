@@ -121,6 +121,7 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-09-13 | WSL2 Full 3-Tier Qualification | Booted custom kernel #2 with architecture-neutral `late_initcall` VMBus headroom (512 MB) and `hv_balloon` backpressure; empirically qualified 100% Tier 1 (1,024 MB ZRAM), 100% Tier 2 (4,096 MB VRAM @ 486.4 MB/s DMA, 24.3x vs SSD), and Tier 3 (802 MB SSD) with 5,922 MB total swap, 13.66 GB/s reclaim, and `PASS_ZERO_PANIC` | `trovaldo.md` / `IMPL.md` |
 | 2026-09-17 | LKML PATCH v3 Submission | Promoted RamShared block driver from RFC to production PATCH v3; dispatched series to Jens Axboe & linux-block mailing list via authenticated SMTP (Result: 250) | `[PATCH v3]` / `artifacts/lkml-patchset/` |
 | 2026-09-17 | Hyper-V Upstream Submission | Dispatched 2-patch VMBus resilience series (dynamic min_free_kbytes headroom + vzalloc ring fallback) to linux-hyperv mailing list & Microsoft maintainers via authenticated SMTP (Result: 250) | `[PATCH v1]` / `lore.kernel.org/linux-hyperv` |
+| 2026-09-23 | Hyper-V Upstream v2 & CoCo | Addressed Michael Kelley review regarding ARM64 CCA / Intel TDX Confidential VM non-contiguous decryption; unified buffer lifecycle into `struct vmbus_buffer` calling `vmbus_alloc_buffer()` down to order 0, qualified clean QEMU KVM Hyper-V boot on Linux 7.3-rc4 (0 errors, 0 warnings `checkpatch.pl`), and backported to WSL2 6.18 LTS (`kernel-ramshared-v4`) | `[PATCH v2]` / `trovaldo.md` |
 
 
 
