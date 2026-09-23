@@ -70,7 +70,7 @@ The supervisor's policy closes admission in `GUARDED`,
 shrinks cache and manages discardable scopes in `CRITICAL`,
 and enforces bounded termination sequences in `EMERGENCY`.
 
-### Modular Architecture — 15 Workspace Crates
+### Modular Architecture — 16 Workspace Crates
 
 The codebase is organized into 15 focused Rust crates across 6 architectural tiers:
 
@@ -81,6 +81,7 @@ The codebase is organized into 15 focused Rust crates across 6 architectural tie
 | **Layer 3: Broker & Policy** | [`ramshared-broker`](crates/ramshared-broker/README.md)<br>[`ramshared-config`](crates/ramshared-config/README.md)<br>[`ramshared-tier`](crates/ramshared-tier/README.md) | Logical lease arbitration, fail-closed configuration parsing, and 3-tier cascade state machine (N1/N2/N3 hysteresis). |
 | **Layer 4: Memory & I/O** | [`ramshared-vram`](crates/ramshared-vram/README.md)<br>[`ramshared-cuda`](crates/ramshared-cuda/README.md)<br>[`ramshared-vulkan`](crates/ramshared-vulkan/README.md)<br>[`ramshared-uring`](crates/ramshared-uring/README.md) | Hardware-agnostic VRAM allocator abstraction, NVIDIA CUDA DMA, cross-vendor Vulkan allocator (AMD/Intel), and Linux `io_uring` engine. |
 | **Layer 5: Storage & Origin** | [`ramshared-block`](crates/ramshared-block/README.md)<br>[`ramshared-integrity`](crates/ramshared-integrity/README.md)<br>[`ramshared-dxg`](crates/ramshared-dxg/README.md) | Authoritative SSD origin persistence, SHA-256 block corruption prevention, and `/dev/dxg` WDDM memory budget query. |
+| **Layer 6: Host-Guest IPC** | [`ramshared-ipc`](crates/ramshared-ipc/README.md) | Shared vsock control plane protocol (binary framing, HMAC handshake, heartbeat/lease, VHDX lifecycle messages). |
 | **Layer 6: Kernel Drivers** | `drivers/block/ramshared`<br>`drivers/windows/ramshared` | Native upstream Linux kernel block driver and high-performance Windows StorPort virtual miniport driver (C). |
 
 

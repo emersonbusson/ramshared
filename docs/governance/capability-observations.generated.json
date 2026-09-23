@@ -739,6 +739,45 @@
     },
     {
       "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-ipc/Cargo.toml",
+          "crates/ramshared-ipc/src/lib.rs",
+          "crates/ramshared-ipc/src/vsock.rs",
+          "crates/ramshared-winbroker/src/pipe.rs",
+          "crates/ramshared-winsvc/src/broker_tenant.rs",
+          "crates/ramshared-winsvc/src/config.rs",
+          "crates/ramshared-winsvc/src/ipc.rs",
+          "crates/ramshared-winsvc/src/product_online.rs",
+          "crates/ramshared-winsvc/src/proto.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/package/build-deb-package.sh",
+          "scripts/safety/ramshared-host-gate.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1",
+          "scripts/windows/Watch-RamSharedWsl.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/IMPL.md",
+        "prd": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/PRD.md",
+        "spec": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "native-vsock-host-guest-control-plane"
+    },
+    {
+      "claim_reconciliation": {
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",

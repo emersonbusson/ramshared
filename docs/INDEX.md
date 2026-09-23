@@ -32,6 +32,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD | — |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker | — | — | UNQUALIFIED | — |
 | [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | Microsoft-native N3 — Design | #196 | UNQUALIFIED | — |
+| [`native-vsock-host-guest-control-plane`](specs/no-milestone/native-vsock-host-guest-control-plane/) | Native vsock host-guest control plane (zero scripts) | — | — | UNQUALIFIED | — |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | PARTIAL | — |
 | [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195, #219, #221, #223, #225, #227, #229 | SPEC | — |
 | [`vmbus-ring-buffer-upstream-v2`](specs/no-milestone/vmbus-ring-buffer-upstream-v2/) | Fragmentation-resilient VMBus rings across confidential guests | — | — | UNQUALIFIED | — |

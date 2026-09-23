@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 334,
-    "classified": 331,
+    "total": 339,
+    "classified": 336,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -319,6 +319,18 @@
     },
     {
       "path": "crates/ramshared-integrity/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-ipc/README.md",
       "disposition": "classified",
       "ruleId": "crate-documentation",
       "verification": {
@@ -2213,6 +2225,54 @@
     },
     {
       "path": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {
