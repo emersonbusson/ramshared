@@ -106,7 +106,7 @@ Unifies ring buffers and generic VMBus buffers into `struct vmbus_buffer`:
 
 ## 6. Full Patch Reference
 
-See full patch file: [`artifacts/lkml-patchset/0001-hv-vmbus-convert-ring-buffer-allocation-to-vmbus_all.patch`](../../../artifacts/lkml-patchset/0001-hv-vmbus-convert-ring-buffer-allocation-to-vmbus_all.patch).
+See full patch file: `artifacts/lkml-patchset/0001-hv-vmbus-convert-ring-buffer-allocation-to-vmbus_all.patch`.
 
 ---
 
