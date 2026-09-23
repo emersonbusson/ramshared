@@ -720,6 +720,13 @@ impl BrokerCore {
                         self.to_tenant(from, Msg::SwapOff { slice }, out);
                     }
                 }
+
+                Action::RevokeOrphanedLease { slice } => {
+                    let _ = self.slice_map.unlease(slice);
+                    out.push(Outbound::Log(format!(
+                        "[ramsharedd] arbiter revoke-orphaned-lease slice=s{slice}"
+                    )));
+                }
                 Action::GrantLease { holder, slices } => {
                     if self.lease_ttl.is_zero() || now.checked_add(self.lease_ttl).is_none() {
                         let _ = self.lease_book.cancel_pending(holder);
