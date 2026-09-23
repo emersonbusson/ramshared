@@ -615,4 +615,117 @@ mod tests {
         let err = std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
     }
+
+    #[test]
+    fn test_ipc_deserialize_error_display() {
+        let err = IpcDeserializeError::Io(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(err.to_string(), "IO error: PermissionDenied");
+        assert_eq!(
+            IpcDeserializeError::InvalidMagic(42).to_string(),
+            "Invalid magic bytes: 0x2A"
+        );
+        assert_eq!(
+            IpcDeserializeError::UnsupportedVersion(3).to_string(),
+            "Unsupported IPC version: 3"
+        );
+        assert_eq!(
+            IpcDeserializeError::PayloadTooLarge(100).to_string(),
+            "Payload too large: 100 bytes"
+        );
+        assert_eq!(
+            IpcDeserializeError::IncompleteMessage.to_string(),
+            "Incomplete message header"
+        );
+        assert_eq!(
+            IpcDeserializeError::Disconnect.to_string(),
+            "Client disconnected gracefully"
+        );
+    }
+
+    #[test]
+    fn test_ipc_payload_round_trip_v1() {
+        let header = IpcMessageHeader::new(IPC_VERSION_1, 7);
+        let payload = b"payload";
+
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(payload);
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+
+        assert_eq!(read_header.magic, header.magic);
+        assert_eq!(read_header.payload_len, 7);
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_eq!(&read_payload[..], payload);
+    }
+
+    #[test]
+    fn test_ipc_payload_round_trip_v2() {
+        let mut header = IpcMessageHeader::new(IPC_VERSION_2, 7);
+        header.flags = 0x12345678;
+        let payload = b"payload";
+
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(payload);
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+
+        assert_eq!(read_header.magic, header.magic);
+        assert_eq!(read_header.version, IPC_VERSION_2);
+        assert_eq!(read_header.flags, 0x12345678);
+        assert_eq!(read_header.payload_len, 7);
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_eq!(&read_payload[..], payload);
+    }
+
+    #[test]
+    fn test_ipc_malformed_payload_too_large() {
+        let header = IpcMessageHeader::new(IPC_VERSION_1, MAX_PAYLOAD_LEN + 1);
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&header.magic.to_le_bytes());
+        buffer.extend_from_slice(&header.version.to_le_bytes());
+        buffer.extend_from_slice(&header.payload_len.to_le_bytes());
+
+        let mut reader = &buffer[..];
+        let err = IpcMessageHeader::read_from(&mut reader).unwrap_err();
+        assert_eq!(
+            err,
+            IpcDeserializeError::PayloadTooLarge(MAX_PAYLOAD_LEN + 1)
+        );
+    }
+
+    #[test]
+    fn test_ipc_truncated_payload() {
+        let mut header = IpcMessageHeader::new(IPC_VERSION_2, 100);
+        header.flags = 1;
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        buffer.extend_from_slice(b"short");
+
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        assert_eq!(read_header.payload_len, 100);
+
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        let err = std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn test_ipc_empty_payload() {
+        let header = IpcMessageHeader::new(IPC_VERSION_2, 0);
+        let mut buffer = Vec::new();
+        header.write_to(&mut buffer).unwrap();
+        let mut reader = &buffer[..];
+        let read_header = IpcMessageHeader::read_from(&mut reader).unwrap();
+        assert_eq!(read_header.payload_len, 0);
+        let mut read_payload = vec![0u8; read_header.payload_len as usize];
+        std::io::Read::read_exact(&mut reader, &mut read_payload).unwrap();
+        assert_eq!(read_payload.len(), 0);
+    }
 }
