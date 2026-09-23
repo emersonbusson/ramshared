@@ -111,7 +111,10 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
                     .saturating_sub(effective_reserve)
                     .min(config.target_bytes)
             }
-            Err(_) => config.target_bytes,
+            // No GPU measurement available: report zero target so the client
+            // and telemetry correctly reflect that physical VRAM is absent
+            // (SPEC RF-4, GAP-6).
+            Err(_) => 0,
         };
 
         Self {
@@ -282,7 +285,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                         correlation_id: hdr.correlation_id,
                         offset: hdr.offset,
                         payload_len: data.len() as u32,
-                        aux: 0,
+                        aux: (worker.cached_bytes() >> 10) as u32,
                     };
                     if let Err(e) = socket.write_all(&resp.encode()) {
                         return Err(format!("worker write read resp error: {e}"));
@@ -298,7 +301,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                         correlation_id: hdr.correlation_id,
                         offset: hdr.offset,
                         payload_len: 0,
-                        aux: 0,
+                        aux: (worker.cached_bytes() >> 10) as u32,
                     };
                     if let Err(e) = socket.write_all(&resp.encode()) {
                         return Err(format!("worker write read resp error: {e}"));
@@ -354,7 +357,7 @@ mod tests {
     use ramshared_vram::VramError;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     struct FakeMem {
         data: Arc<Mutex<Vec<u8>>>,
@@ -598,5 +601,41 @@ mod tests {
         let disable_outcome = client.disable();
         assert_eq!(disable_outcome, CacheMutation::Accepted);
         worker_thread.join().expect("join worker thread");
+    }
+
+    /// Kahneman #17 — teardown must be idempotent and bounded.
+    /// SPEC: `worker_teardown_is_idempotent_and_bounded`
+    #[test]
+    fn worker_teardown_is_idempotent_and_bounded() {
+        let provider = FakeProvider::new(4 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
+        let live_allocs = Arc::clone(&provider.live_allocations);
+        let config = GpuWorkerConfig {
+            target_bytes: 16 * 1024 * 1024,
+            chunk_bytes: 2 * 1024 * 1024,
+            reserve_floor_bytes: 1536 * 1024 * 1024,
+        };
+
+        let mut worker = GpuCacheWorker::new(&provider, config);
+        worker.handle_update(0, &[1, 2, 3]);
+        worker.handle_update(2 * 1024 * 1024, &[4, 5, 6]);
+        assert_eq!(live_allocs.load(Ordering::SeqCst), 2);
+
+        // First teardown: frees all allocations
+        let start = Instant::now();
+        worker.handle_disable();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "teardown must be bounded"
+        );
+        assert_eq!(live_allocs.load(Ordering::SeqCst), 0);
+
+        // Second teardown: idempotent — no panic, no double-free
+        worker.handle_disable();
+        assert_eq!(live_allocs.load(Ordering::SeqCst), 0);
+        assert!(worker.is_disabled());
+
+        // Third teardown on empty state: still idempotent
+        worker.handle_disable();
+        assert_eq!(worker.active_chunks_count(), 0);
     }
 }

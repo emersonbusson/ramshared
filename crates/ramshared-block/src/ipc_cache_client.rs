@@ -13,6 +13,9 @@ use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
 use crate::origin_cache::CacheState;
 
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(50);
+/// Handshake allows extra time for the worker to initialize CUDA/Vulkan
+/// contexts before the first frame is served (SPEC: DT-2, NFR-1).
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct IpcCacheClient {
     socket: UnixStream,
@@ -46,7 +49,7 @@ impl IpcCacheClient {
             payload_len: 0,
             aux: 0,
         };
-        let _ = self.socket.set_read_timeout(Some(self.read_timeout));
+        let _ = self.socket.set_read_timeout(Some(HANDSHAKE_TIMEOUT));
         self.socket
             .write_all(&req.encode())
             .map_err(|e| format!("handshake write error: {e}"))?;
@@ -64,7 +67,13 @@ impl IpcCacheClient {
             self.target_bytes = resp.offset;
         }
         self.cached_bytes = (resp.aux as u64) << 10;
-        self.state = CacheState::Active;
+        // target_bytes == 0 means the worker has no VRAM provider (GAP-6):
+        // report Unavailable so telemetry and cascade gates see the truth.
+        if self.target_bytes == 0 {
+            self.state = CacheState::Unavailable;
+        } else {
+            self.state = CacheState::Active;
+        }
         Ok(())
     }
 
@@ -76,25 +85,40 @@ impl IpcCacheClient {
         if self.state != CacheState::Active {
             return CacheMutation::Skipped;
         }
-        // Non-blocking write to satisfy RF-2 and DT-2
-        let _ = self.socket.set_nonblocking(true);
+        // Assemble the complete frame into one contiguous buffer so a single
+        // write call can dispatch it without leaving partial headers on the stream.
         let encoded_header = header.encode();
-        let res = self.socket.write_all(&encoded_header).and_then(|()| {
-            if !payload.is_empty() {
-                self.socket.write_all(payload)
-            } else {
-                Ok(())
-            }
-        });
+        let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload.len());
+        frame.extend_from_slice(&encoded_header);
+        frame.extend_from_slice(payload);
+
+        // Non-blocking write to satisfy RF-2 and DT-2: mutations must never
+        // stall the daemon I/O path. A single write() on the full frame means
+        // either the kernel accepts the entire frame or we detect the partial
+        // and fail-closed — never leaving a half-frame on the stream silently.
+        let _ = self.socket.set_nonblocking(true);
+        let res = std::io::Write::write(&mut self.socket, &frame);
         let _ = self.socket.set_nonblocking(false);
 
         match res {
-            Ok(()) => {
+            Ok(n) if n == frame.len() => {
                 self.cached_bytes = self
                     .cached_bytes
                     .saturating_add(payload.len() as u64)
                     .min(self.target_bytes);
                 CacheMutation::Accepted
+            }
+            Ok(_) => {
+                // Partial write on SOCK_STREAM: stream framing is broken.
+                // Fail-closed permanently (SPEC DT-2, RF-3).
+                self.fail();
+                CacheMutation::Failed
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Socket buffer full and zero bytes written — drop this
+                // mutation without corrupting the stream or disabling the
+                // cache (best-effort semantics).
+                CacheMutation::Skipped
             }
             Err(_) => {
                 self.fail();
@@ -136,6 +160,8 @@ impl BestEffortCache for IpcCacheClient {
             self.fail();
             return CacheRead::Failed;
         }
+        // Sync authoritative cached_bytes from the worker (aux carries KiB).
+        self.cached_bytes = (resp.aux as u64) << 10;
 
         match resp.status {
             STATUS_OK => {
