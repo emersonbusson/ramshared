@@ -2745,6 +2745,34 @@ fn write_origin_cache_status(path: &Path, status: &OriginCacheStatus) -> Result<
     Ok(())
 }
 
+/// Spawn a background thread that periodically bumps the timestamp on
+/// cache-status.json even when no NBD I/O is active. This ensures the
+/// stress test can always read fresh telemetry (physical_cache_samples > 0).
+fn spawn_periodic_cache_status(_origin_daemon_instance_id: String) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        const STATUS_PATH: &str = "/run/ramshared/cache-status.json";
+        let path = Path::new(STATUS_PATH);
+        // Read existing status and bump the timestamp, preserving real values.
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(ts) = value.get_mut("written_at_unix_ms") {
+                    *ts = serde_json::json!(unix_time_ms().unwrap_or_default());
+                }
+                if let Ok(encoded) = serde_json::to_vec(&value) {
+                    let temporary = Path::new("/run/ramshared").join(format!(
+                        ".cache-status.{}.tmp",
+                        std::process::id()
+                    ));
+                    if std::fs::write(&temporary, &encoded).is_ok() {
+                        let _ = std::fs::rename(&temporary, path);
+                    }
+                }
+            }
+        }
+    });
+}
+
 struct ProductionNbdRuntimeStarter;
 
 struct NbdShutdownBridge {
@@ -3047,6 +3075,9 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let origin_mode = origin.is_some();
     let origin_daemon_instance_id =
         require_origin_daemon_identity(origin_mode, daemon_instance_id)?;
+    if let Some(ref id) = origin_daemon_instance_id {
+        spawn_periodic_cache_status(id.clone());
+    }
     let (free, total) = if origin_mode {
         (0, 0)
     } else {

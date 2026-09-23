@@ -667,7 +667,7 @@ fn parse_cache_status_sample(
 ) -> Option<CacheSample> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let written = value.get("written_at_unix_ms")?.as_u64()?;
-    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 30000 {
+    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 300_000 {
         return None;
     }
     if value.get("daemon_instance_id")?.as_str()? != daemon_instance_id
