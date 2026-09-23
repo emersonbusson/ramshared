@@ -4,7 +4,7 @@
 
 ## Status
 
-**implemented (all 6 ITEMs, hermetic gates passed)** · cover ✓ (87.8%–95.0%) · E2E env-bound (requires Windows host + WSL2 with AF_HYPERV/AF_VSOCK) · BINARY_MATCH pending
+**PARTIAL (hermetic protocol and gate code only)** · historical cover ✓ (87.8%–95.0%) · E2E env-bound (requires Windows host + WSL2 with AF_HYPERV/AF_VSOCK) · BINARY_MATCH pending. `listen_hyperv`/accept return unsupported, `connect_vsock` does not prove a hard connect deadline, and the new gate is not wired into product activation. The September 23 audit replaced a no-op VHDX command timeout with a reaped direct-child deadline; no Windows live qualification follows from that local test.
 
 ## Files
 

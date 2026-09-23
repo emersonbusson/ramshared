@@ -2,10 +2,10 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 339,
-    "classified": 336,
+    "total": 341,
+    "classified": 337,
     "excluded": 3,
-    "unclassified": 0,
+    "unclassified": 1,
     "ambiguous": 0
   },
   "entries": [
@@ -102,6 +102,14 @@
       },
       "owner": "release-engineering",
       "reason": "Review template is governed as repository process metadata."
+    },
+    {
+      "path": ".mimocode/plans/1790185959340-nimble-tiger.md",
+      "disposition": "unclassified",
+      "ruleId": null,
+      "verification": {
+        "state": "unverified"
+      }
     },
     {
       "path": "AGENTS.md",
@@ -1193,6 +1201,18 @@
     },
     {
       "path": "docs/reliability/incidents/2026-08-23-wsl2-dxg-fortify-systemd-no-go.md",
+      "disposition": "classified",
+      "ruleId": "reliability-incidents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/incidents/2026-09-23-wsl2-stress-branch-audit.md",
       "disposition": "classified",
       "ruleId": "reliability-incidents",
       "verification": {

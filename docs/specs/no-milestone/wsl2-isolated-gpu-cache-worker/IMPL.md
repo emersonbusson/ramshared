@@ -4,7 +4,7 @@
 
 ## Status
 
-**implemented (hermetic source & fault-injection gates passed)** · cover ✓ (86.7% / 88.7%) · E2E env-bound (requires host GPU validation) · BINARY_MATCH pending
+**PARTIAL (hermetic source and fault-injection gates passed)** · historical cover ✓ (86.7% / 88.7%) · E2E env-bound (requires host GPU validation) · BINARY_MATCH pending. The September 23 audit reproduced and locally corrected partial-chunk cache hits, estimated allocation telemetry, and missing live free-VRAM admission. The changed slice requires a fresh coverage gate and physical host evidence before qualification.
 
 ## Files
 
