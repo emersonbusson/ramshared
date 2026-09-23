@@ -306,6 +306,30 @@
       "min": 80
     },
     {
+      "id": "vulkan-backend-provider",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-vulkan",
+        "--files",
+        "crates/ramshared-vulkan/src/lib.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/vulkan-backend-provider-cov.json"
+      ],
+      "packages": [
+        "ramshared-vulkan"
+      ],
+      "files": [
+        "crates/ramshared-vulkan/src/lib.rs"
+      ],
+      "min": 80
+    },
+    {
       "id": "cuda-probe-planning-coverage",
       "kind": "rust-line-coverage",
       "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
