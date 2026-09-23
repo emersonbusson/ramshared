@@ -5651,3 +5651,20 @@ Rust topology residuals remain explicit.
 **How to measure:** `cargo test -p ramshared-cli`; `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/cascade/cascade_io.rs --min 80`; `./target/release/ramshared monitor --once`; `./scripts/docs-check.sh`.
 **Measured data:** 311 unit tests passed (0 failed). 10 CLI integration tests passed (0 failed). Line slice coverage: `main.rs` 91.1%, `cascade_io.rs` 80.3% (gate >= 80% passed). Live cascade armed: `phase: Armed (armed_low_vram_used)`, `protection: READY`, tiers `zram0(200) > nbd0(100) > sdb(-2)`. Kernel ring buffer clean: `PASS_ZERO_PANIC`.
 **Verdict:** ✅ `PASS` — full qualification under strict SSDV3 Step 3 TDD with zero kernel panics.
+
+## 2026-09-23 11:40 -03 — WSL2 Kernel Build #5 100% 3-tier cascade saturation qualification
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0046`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-23T14:40:29Z`.
+**Verified at:** `2026-09-23T14:40:29Z`.
+**Source revision:** `96f516cf`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only record and associated benchmark history json.
+**Freshness:** Revalidate after kernel rebuild, memory management, or cascade policy changes.
+**Category:** `qualification`.
+**What:** Live empirical qualification of 100% 3-tier cascade saturation on WSL2 custom kernel Build #5 (`6.18.40.1-microsoft-standard-WSL2+`) with backported `vmbus_alloc_buffer()` safe chunk allocation, order-7 ring fallback, and autonomous sealed VHDX origin attachment. Under peak memory pressure, 16,640 MB RAM allocated (+1,872 MB workload ceiling), driving 9,216 MB total active swap with concurrent 100% saturation across all three tiers: Tier 1 ZRAM (1,024 MB, 100%), Tier 2 GPU VRAM (4,096 MB via direct PCIe DMA, 100%), and Tier 3 SSD (4,096 MB via StorVSC, 100%). Flash reclaim achieved 14.42 GB/s (+3.47 GB/s faster, +31.7%) in 1,127.16 ms with 10 completed active dirty page I/O cycles (10.0/10.0 PSI memory pressure ceiling), 0 hung tasks in kernel D-state, 0 DMA watchdog trips, and 0 memory leaks (10,302 MB free RAM restored).
+**How to measure:** `./target/release/ramshared test-tier --tier3-target-pct 100 --hold-secs 30`; `cat /proc/swaps`; `dmesg -T`; `cat docs/benchmarks/history/latest.json`.
+**Measured data:** 16,640 MB allocated RAM; 9,216 MB swap (1,024 MB ZRAM + 4,096 MB VRAM + 4,096 MB SSD); reclaim speed 14.42 GB/s in 1,127.16 ms; P50 cycle latency 0.0005 ms, P99 0.0023 ms; 10 active page cycles completed; 0 hung tasks; 0 DMA trips; 10,302 MB restored free RAM.
+**Verdict:** ✅ `PASS` — 100% qualified 3-tier cascade under kernel Build #5 with PASS_ZERO_PANIC status.
