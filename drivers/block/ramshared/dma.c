@@ -28,8 +28,13 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 		return -ENODEV;
 	}
 
+	if (bar_len == 0) {
+		dev_err(&pdev->dev, "PCIe BAR0 length is zero\n");
+		return -ENODEV;
+	}
+
 	/* SPEC: kernel-pci-bar-capacity-contract §RF-2. */
-	if (bar_len == 0 || (u64)bar_len < rs_dev->capacity_bytes) {
+	if ((u64)bar_len < rs_dev->capacity_bytes) {
 		dev_err(&pdev->dev,
 			"BAR0 is smaller than requested capacity (%llu < %llu)\n",
 			(unsigned long long)bar_len,
@@ -40,6 +45,22 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	if (rs_dev->capacity_bytes > SIZE_MAX) {
 		dev_err(&pdev->dev, "requested capacity exceeds mapping width\n");
 		return -EOVERFLOW;
+	}
+
+	if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+		dev_warn(&pdev->dev, "64-bit DMA mask failed, attempting 32-bit\n");
+		if (dma_set_mask(&pdev->dev, DMA_BIT_MASK(32))) {
+			dev_err(&pdev->dev, "no usable DMA mask configuration\n");
+			return -EFAULT;
+		}
+	}
+
+	if (dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+		dev_warn(&pdev->dev, "64-bit coherent DMA mask failed, attempting 32-bit\n");
+		if (dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32))) {
+			dev_err(&pdev->dev, "no usable coherent DMA mask configuration\n");
+			return -EFAULT;
+		}
 	}
 
 	rs_dev->dma.pci_addr = bar_start;
