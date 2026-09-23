@@ -34,12 +34,14 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | Microsoft-native N3 — Design | #196 | UNQUALIFIED | — |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | PARTIAL | — |
 | [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195, #219, #221, #223, #225, #227, #229 | SPEC | — |
+| [`vmbus-ring-buffer-upstream-v2`](specs/no-milestone/vmbus-ring-buffer-upstream-v2/) | Fragmentation-resilient VMBus rings across confidential guests | — | — | UNQUALIFIED | — |
 | [`vram-host-safety-and-dynamic-tiering`](specs/no-milestone/vram-host-safety-and-dynamic-tiering/) | Host-aware VRAM safety ceiling, dynamic chunk tiering, and non-blocking spillover | — | — | SPEC | — |
 | [`vram-reclaim-pressure-matrix`](specs/no-milestone/vram-reclaim-pressure-matrix/) | PRD - VRAM reclaim pressure matrix | — | — | UNQUALIFIED | — |
 | [`windows-autonomous-broker-service`](specs/no-milestone/windows-autonomous-broker-service/) | Autonomous Windows broker service packaging and supervision | — | #156 | UNQUALIFIED | — |
 | [`windows-storport-cuda-vram`](specs/no-milestone/windows-storport-cuda-vram/) | Windows StorPort I/O backed by CUDA VRAM | — | #28 | UNQUALIFIED | — |
 | [`windows-swap-driver`](specs/no-milestone/windows-swap-driver/) | Swap-to-VRAM on Native Windows (StorPort virtual miniport) | P4 | — | UNQUALIFIED | — |
 | [`windows-task-manager-disk-counters`](specs/no-milestone/windows-task-manager-disk-counters/) | Windows virtual disk identity, counters, and performance matrix | — | — | UNQUALIFIED | — |
+| [`wsl2-autonomous-cascade-up`](specs/no-milestone/wsl2-autonomous-cascade-up/) | Autonomous WSL2 origin attachment and systemd scope envelopment | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-boot`](specs/no-milestone/wsl2-cascade-boot/) | WSL2 cascade auto-start on boot with fail-closed anti-hang | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-legacy-migration`](specs/no-milestone/wsl2-cascade-legacy-migration/) | Attended migration from a legacy WSL2 cascade | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan detection and bound recovery | — | — | UNQUALIFIED | — |

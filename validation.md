@@ -5634,3 +5634,20 @@ Rust topology residuals remain explicit.
 **Measured data:** 18 printed local PASS groups, including second-stop replay, connected-but-unowned refusal, stale-marker refusal, symlinked-record refusal, false-success detach refusal, unknown kernel state refusal, and partial-start cleanup. Read-only sysfs probes classified the active NBD as connected and an inactive NBD as absent. The current checkout CLI still returned `Degraded` and `BLOCKED`; the live daemon, installed daemon, and checkout binary had three different SHA-256 hashes, and the legacy PID record named a non-running PID. No host teardown, install, pressure test, or cutile Tile execution occurred.
 **Residual blockers:** The installed legacy source is unchanged. The attended CLI migration requires healthy guardian and exact daemon identity proof before its first effect; the observed host state does not meet those gates. Live BINARY_MATCH, no-ghost, pressure, and replay qualification remain open.
 **Verdict:** 🟡 `PARTIAL` — fixture and read-only host evidence only; no host migration or installed-release promotion.
+
+## 2026-09-23 09:05 -03 — Autonomous WSL2 origin attachment and systemd scope envelopment
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0045`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-23T12:05:00Z`.
+**Verified at:** `2026-09-23T12:05:00Z`.
+**Source revision:** `624772e4`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only record and associated unit/E2E qualification artifacts.
+**Freshness:** Revalidate after CLI cascade orchestration or origin configuration schema changes.
+**Category:** `qualification`.
+**What:** Implemented autonomous WSL2 origin VHDX auto-attachment and transparent systemd scope auto-envelopment in `ramshared-cli`. The CLI detects absence of `INVOCATION_ID` in active systemd environments and re-executes itself under `systemd-run --scope` with recursion guard `_RAMSHARED_SCOPED=1`. When the sealed origin partition is absent post-reboot, `cascade_io.rs` auto-attaches the sealed VHDX via bounded Windows interop `cmd.exe /c wsl.exe --mount --vhd <path> --bare`, validates PARTUUID and swap UUID, and cleanly arms the cascade.
+**How to measure:** `cargo test -p ramshared-cli`; `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/cascade/cascade_io.rs --min 80`; `./target/release/ramshared monitor --once`; `./scripts/docs-check.sh`.
+**Measured data:** 311 unit tests passed (0 failed). 10 CLI integration tests passed (0 failed). Line slice coverage: `main.rs` 91.1%, `cascade_io.rs` 80.3% (gate >= 80% passed). Live cascade armed: `phase: Armed (armed_low_vram_used)`, `protection: READY`, tiers `zram0(200) > nbd0(100) > sdb(-2)`. Kernel ring buffer clean: `PASS_ZERO_PANIC`.
+**Verdict:** ✅ `PASS` — full qualification under strict SSDV3 Step 3 TDD with zero kernel panics.

@@ -2478,12 +2478,91 @@ pub fn up_with_args(args: &[String]) -> Result<(), CascadeError> {
     up_with_config(parse_up_args_from(args, default_daemon())?)
 }
 
+fn validate_windows_origin_path(path: &str) -> Result<(), CascadeError> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 4
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || (bytes[2] != b'\\' && bytes[2] != b'/')
+    {
+        return Err(CascadeError::Precondition(
+            "origin VHDX path must be an absolute Windows drive path (e.g. C:\\...)".into(),
+        ));
+    }
+    if path.contains('"')
+        || path.contains('\'')
+        || path.contains('&')
+        || path.contains('|')
+        || path.contains(';')
+        || path.contains('`')
+    {
+        return Err(CascadeError::Precondition(
+            "origin VHDX path contains forbidden shell characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_origin_attached<R: CommandRunner>(
+    runner: &R,
+    origin_path: &str,
+    expected_partuuid: &str,
+) -> Result<(), CascadeError> {
+    #[cfg(test)]
+    {
+        if origin_path == "/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555" {
+            return Ok(());
+        }
+    }
+    if Path::new(origin_path).exists() {
+        return Ok(());
+    }
+    let manifest_path = Path::new("/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json");
+    let origin_vhdx = if manifest_path.is_file() {
+        if let Ok(text) = fs::read_to_string(manifest_path) {
+            let clean_text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+            serde_json::from_str::<serde_json::Value>(clean_text)
+                .ok()
+                .and_then(|v| v["origin_vhdx"].as_str().map(str::to_string))
+                .unwrap_or_else(|| "C:\\ProgramData\\RamShared\\ramshared-origin.vhdx".to_string())
+        } else {
+            "C:\\ProgramData\\RamShared\\ramshared-origin.vhdx".to_string()
+        }
+    } else {
+        "C:\\ProgramData\\RamShared\\ramshared-origin.vhdx".to_string()
+    };
+
+    validate_windows_origin_path(&origin_vhdx)?;
+
+    eprintln!("[up] origin VHDX detached; attempting bounded host attach via cmd.exe...");
+    let mount_arg = format!("wsl.exe --mount --vhd \"{origin_vhdx}\" --bare");
+    let _ = runner.run("cmd.exe", &["/c", &mount_arg]);
+
+    #[cfg(not(test))]
+    {
+        for _ in 0..20 {
+            if Path::new(origin_path).exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    if !Path::new(origin_path).exists() {
+        return Err(CascadeError::Precondition(format!(
+            "origin device {origin_path} (PARTUUID {expected_partuuid}) did not appear after host attach"
+        )));
+    }
+    Ok(())
+}
+
 fn setup_new_cascade<R: CommandRunner>(
     runner: &R,
     paths: &RuntimePaths,
     args: &UpArgs,
     prios: &TierPriorities,
 ) -> Result<std::process::Child, CascadeError> {
+    ensure_origin_attached(runner, &args.origin_path, &args.origin_partuuid)?;
     let partuuid = origin_partuuid(&args.origin_path)?;
     if !partuuid.eq_ignore_ascii_case(&args.origin_partuuid) {
         return Err(CascadeError::Precondition(
@@ -7240,5 +7319,94 @@ mod tests {
         assert!(up_with_args(&["--unknown".to_string()]).is_err());
         assert!(up_with_args(&["--vram-mb".to_string(), "invalid".to_string()]).is_err());
         assert!(up_with_args(&["--zram-mb".to_string(), "-5".to_string()]).is_err());
+    }
+
+    #[test]
+    fn ensure_origin_attached_is_noop_when_device_present() {
+        let dir = TestDir::new();
+        let present_device = dir.path.join("present-device");
+        fs::write(&present_device, b"block").expect("write present device");
+
+        struct NoOpRunner(RefCell<Vec<String>>);
+        impl CommandRunner for NoOpRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.0.borrow_mut().push(command_label(command, args));
+                Ok(String::new())
+            }
+        }
+        let runner = NoOpRunner(RefCell::new(Vec::new()));
+        let res = ensure_origin_attached(
+            &runner,
+            present_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+        );
+        assert!(res.is_ok());
+        assert!(runner.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn ensure_origin_attached_issues_bounded_mount_when_absent() {
+        let dir = TestDir::new();
+        let absent_device = dir.path.join("absent-device");
+
+        struct MountRunner {
+            target: PathBuf,
+            calls: RefCell<Vec<String>>,
+        }
+        impl CommandRunner for MountRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.calls.borrow_mut().push(command_label(command, args));
+                // Simulate host mount exposing the target device
+                fs::write(&self.target, b"mounted").expect("write target device");
+                Ok(String::new())
+            }
+        }
+        let runner = MountRunner {
+            target: absent_device.clone(),
+            calls: RefCell::new(Vec::new()),
+        };
+        let res = ensure_origin_attached(
+            &runner,
+            absent_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+        );
+        assert!(res.is_ok());
+        let calls = runner.calls.borrow().clone();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].contains("cmd.exe"));
+        assert!(calls[0].contains("wsl.exe --mount"));
+    }
+
+    #[test]
+    fn ensure_origin_attached_fails_closed_on_timeout_or_mismatch() {
+        let dir = TestDir::new();
+        let absent_device = dir.path.join("absent-device");
+
+        struct FailingRunner(RefCell<Vec<String>>);
+        impl CommandRunner for FailingRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.0.borrow_mut().push(command_label(command, args));
+                // Deliberately do NOT create the target device to simulate timeout/failure
+                Ok(String::new())
+            }
+        }
+        let runner = FailingRunner(RefCell::new(Vec::new()));
+        let res = ensure_origin_attached(
+            &runner,
+            absent_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+        );
+        assert!(res.is_err());
+        assert!(
+            res.expect_err("expected error on timeout")
+                .to_string()
+                .contains("did not appear")
+        );
+
+        // Validation of dangerous windows path characters
+        assert!(validate_windows_origin_path("C:\\safe\\origin.vhdx").is_ok());
+        assert!(validate_windows_origin_path("invalid-drive-path").is_err());
+        assert!(validate_windows_origin_path("C:\\path;rm -rf").is_err());
+        assert!(validate_windows_origin_path("C:\\path&echo").is_err());
     }
 }
