@@ -49,6 +49,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-control-plane-pressure-incident`](specs/no-milestone/wsl2-control-plane-pressure-incident/) | WSL2 control-plane pressure containment | — | — | UNQUALIFIED | — |
 | [`wsl2-custom-kernel-p1`](specs/no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 kernel P1 — official-tree base + ublk + zram writeback | — | microsoft/WSL#41054 | UNQUALIFIED | — |
 | [`wsl2-freeze-elimination-campaign`](specs/no-milestone/wsl2-freeze-elimination-campaign/) | WSL2 freeze-elimination campaign evidence gate | — | — | UNQUALIFIED | — |
+| [`wsl2-isolated-gpu-cache-worker`](specs/no-milestone/wsl2-isolated-gpu-cache-worker/) | Process-isolated GPU cache worker for WSL2 origin swap | — | — | UNQUALIFIED | — |
 | [`wsl2-kernel-vmbus-headroom`](specs/no-milestone/wsl2-kernel-vmbus-headroom/) | Native Linux Kernel VMBus Atomic Headroom and Hyper-V Balloon Protection | — | microsoft/WSL#8768, microsoft/WSL#4166, microsoft/WSL#7254, microsoft/WSL#10495, microsoft/WSL#40795 | UNQUALIFIED | — |
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | UNQUALIFIED | — |
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD | — |

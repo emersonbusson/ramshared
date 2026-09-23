@@ -27,10 +27,11 @@ use ramshared_block::protocol::{
     NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH, NBD_FLAG_SEND_FUA,
 };
 use ramshared_block::{
-    AuthoritativeOriginBackend, BlockBackend, CacheState as OriginCacheState, Command,
-    CommitBudgetGate, DisabledCache, FileOrigin, OriginState as DurableOriginState,
-    SparseVramBackend, WriteOptions, chunk_bytes_from_env, commit_cap_bytes_from_env,
-    idle_free_secs_from_env, reserve_floor_bytes_from_env, safe_commit_cap, serve,
+    AuthoritativeOriginBackend, BestEffortCache, BlockBackend, CacheMutation, CacheRead,
+    CacheState as OriginCacheState, Command, CommitBudgetGate, DisabledCache, FileOrigin,
+    GpuWorkerConfig, IpcCacheClient, OriginState as DurableOriginState, SparseVramBackend,
+    WriteOptions, chunk_bytes_from_env, commit_cap_bytes_from_env, idle_free_secs_from_env,
+    reserve_floor_bytes_from_env, run_gpu_worker_loop, safe_commit_cap, serve,
 };
 #[cfg(test)]
 use ramshared_block::{GpuSample, WriteThroughCacheBackend};
@@ -64,6 +65,7 @@ unsafe extern "C" {
     fn kill_process_group_raw(pid: c_int, signal: c_int) -> c_int;
 }
 const PR_SET_IO_FLUSHER: c_int = 57;
+const PR_SET_PDEATHSIG: c_int = 1;
 const MCL_CURRENT: c_int = 1;
 const SIGINT: c_int = 2;
 const SIGTERM: c_int = 15;
@@ -1999,6 +2001,9 @@ trait DaemonActionRunner {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let raw_args = std::env::args().collect::<Vec<_>>();
+    if raw_args.get(1).map(String::as_str) == Some("__gpu_worker") {
+        return run_isolated_gpu_worker_entry(&raw_args[2..]);
+    }
     if daemon_version_requested(&raw_args) {
         println!("ramsharedd {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
@@ -2478,6 +2483,236 @@ trait NbdRuntimeStarter {
     fn teardown_retry_delay(&mut self) -> Duration {
         Duration::from_secs(5)
     }
+
+    fn spawn_isolated_gpu_worker(
+        &mut self,
+        target_bytes: u64,
+        chunk_bytes: u64,
+        reserve_floor: u64,
+    ) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>> {
+        spawn_isolated_gpu_worker(target_bytes, chunk_bytes, reserve_floor)
+    }
+}
+
+enum OriginCache {
+    Ipc(IpcCacheClient),
+    Disabled(DisabledCache),
+}
+
+impl BestEffortCache for OriginCache {
+    fn read(&mut self, offset: u64, destination: &mut [u8]) -> CacheRead {
+        match self {
+            Self::Ipc(c) => c.read(offset, destination),
+            Self::Disabled(c) => c.read(offset, destination),
+        }
+    }
+
+    fn update(&mut self, offset: u64, data: &[u8]) -> CacheMutation {
+        match self {
+            Self::Ipc(c) => c.update(offset, data),
+            Self::Disabled(c) => c.update(offset, data),
+        }
+    }
+
+    fn promote(&mut self, offset: u64, data: &[u8]) -> CacheMutation {
+        match self {
+            Self::Ipc(c) => c.promote(offset, data),
+            Self::Disabled(c) => c.promote(offset, data),
+        }
+    }
+
+    fn disable(&mut self) -> CacheMutation {
+        match self {
+            Self::Ipc(c) => c.disable(),
+            Self::Disabled(c) => c.disable(),
+        }
+    }
+
+    fn state(&self) -> OriginCacheState {
+        match self {
+            Self::Ipc(c) => c.state(),
+            Self::Disabled(c) => c.state(),
+        }
+    }
+
+    fn cached_bytes(&self) -> u64 {
+        match self {
+            Self::Ipc(c) => c.cached_bytes(),
+            Self::Disabled(c) => c.cached_bytes(),
+        }
+    }
+
+    fn target_bytes(&self) -> u64 {
+        match self {
+            Self::Ipc(c) => c.target_bytes(),
+            Self::Disabled(c) => c.target_bytes(),
+        }
+    }
+}
+
+enum WorkerChildHandle {
+    Process(std::process::Child),
+    #[cfg(test)]
+    #[allow(dead_code)]
+    Thread {
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    },
+}
+
+struct IsolatedWorkerSupervisor {
+    child: WorkerChildHandle,
+}
+
+impl IsolatedWorkerSupervisor {
+    fn pid(&self) -> u32 {
+        match &self.child {
+            WorkerChildHandle::Process(c) => c.id(),
+            #[cfg(test)]
+            WorkerChildHandle::Thread { .. } => std::process::id(),
+        }
+    }
+
+    fn shutdown(&mut self) {
+        match &mut self.child {
+            WorkerChildHandle::Process(child) => {
+                let start = Instant::now();
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) => {
+                            if start.elapsed() > Duration::from_secs(5) {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            break;
+                        }
+                    }
+                }
+            }
+            #[cfg(test)]
+            WorkerChildHandle::Thread { stop, handle } => {
+                stop.store(true, Ordering::SeqCst);
+                if let Some(h) = handle.take() {
+                    let _ = h.join();
+                }
+            }
+        }
+    }
+}
+
+fn spawn_isolated_gpu_worker(
+    target_bytes: u64,
+    chunk_bytes: u64,
+    reserve_floor: u64,
+) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>> {
+    let (client_sock, worker_sock) = std::os::unix::net::UnixStream::pair()?;
+    let worker_fd = std::os::unix::io::AsRawFd::as_raw_fd(&worker_sock);
+
+    rustix::io::fcntl_setfd(&worker_sock, rustix::io::FdFlags::empty())?;
+
+    let exe = std::env::current_exe()?;
+    let child = std::process::Command::new(exe)
+        .arg("__gpu_worker")
+        .arg("--fd")
+        .arg(worker_fd.to_string())
+        .arg("--target-bytes")
+        .arg(target_bytes.to_string())
+        .arg("--chunk-bytes")
+        .arg(chunk_bytes.to_string())
+        .arg("--reserve-floor")
+        .arg(reserve_floor.to_string())
+        .spawn()?;
+
+    drop(worker_sock);
+
+    let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), target_bytes);
+    client
+        .perform_handshake()
+        .map_err(|e| format!("worker handshake failed: {e}"))?;
+
+    Ok((
+        client,
+        IsolatedWorkerSupervisor {
+            child: WorkerChildHandle::Process(child),
+        },
+    ))
+}
+
+fn run_isolated_gpu_worker_entry(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    unsafe {
+        let _ = prctl(PR_SET_PDEATHSIG, SIGTERM as c_ulong, 0, 0, 0);
+    }
+    if rustix::process::getppid() == Some(rustix::process::Pid::INIT) {
+        return Ok(());
+    }
+
+    let mut fd_raw: Option<i32> = None;
+    let mut target_bytes: u64 = 4 * GIB;
+    let mut chunk_bytes: usize = 2 * 1024 * 1024;
+    let mut reserve_floor: u64 = 1536 * 1024 * 1024;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--fd" => {
+                i += 1;
+                fd_raw = args.get(i).and_then(|s| s.parse().ok());
+            }
+            "--target-bytes" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|s| s.parse().ok()) {
+                    target_bytes = v;
+                }
+            }
+            "--chunk-bytes" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|s| s.parse().ok()) {
+                    chunk_bytes = v;
+                }
+            }
+            "--reserve-floor" => {
+                i += 1;
+                if let Some(v) = args.get(i).and_then(|s| s.parse().ok()) {
+                    reserve_floor = v;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let fd_raw = fd_raw.ok_or_else(|| "missing --fd for isolated gpu worker".to_string())?;
+    use std::os::unix::io::FromRawFd;
+    let socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd_raw) };
+
+    let config = GpuWorkerConfig {
+        target_bytes,
+        chunk_bytes,
+        reserve_floor_bytes: reserve_floor,
+    };
+
+    if let Ok(cuda) = Cuda::load()
+        && let Ok(dev) = cuda.device(0)
+        && let Ok(provider) = cuda.create_context(&dev)
+    {
+        let _ = run_gpu_worker_loop(socket, provider, config);
+        return Ok(());
+    }
+
+    if let Ok(vulkan) = VulkanProvider::open(0) {
+        let _ = run_gpu_worker_loop(socket, vulkan, config);
+        return Ok(());
+    }
+
+    let _ = run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+    Ok(())
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -2880,7 +3115,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
 
     enum Be<'a, Pr: VramProvider + 'a> {
         Sparse(SparseVramBackend<'a, Pr>),
-        Origin(AuthoritativeOriginBackend<FileOrigin, DisabledCache>),
+        Origin(AuthoritativeOriginBackend<FileOrigin, OriginCache>),
     }
     impl<'a, Pr: VramProvider + 'a> BlockBackend for Be<'a, Pr> {
         fn size_bytes(&self) -> u64 {
@@ -2926,43 +3161,62 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         }
     }
 
-    let mut backend: Be<'_, P> = if let Some(origin) = origin {
-        let cache = AuthoritativeOriginBackend::new(origin, DisabledCache, size, BLOCK_SIZE)
-            .map_err(|error| error.0)?;
-        eprintln!(
-            "[ramsharedd] mode=authoritative-origin logical={} MiB cache=UNAVAILABLE \
-             isolation=bounded-worker-required",
-            size >> 20
-        );
-        Be::Origin(cache)
-    } else {
-        let chunk = chunk_bytes_from_env();
-        let reserve = reserve_floor;
-        let env_cap = commit_cap_bytes_from_env();
-        let auto_cap = safe_commit_cap(size, total, reserve);
-        let commit_cap = env_cap.min(auto_cap);
-        let sparse = SparseVramBackend::new_with_config(
-            &provider,
-            ramshared_block::sparse_vram::SparseVramConfig {
-                capacity: size,
-                chunk_bytes: chunk,
-                block_size: BLOCK_SIZE,
-                reserve_floor_bytes: reserve,
-                commit_cap_bytes: Some(commit_cap),
-                budget_gate,
-            },
-        )
-        .map_err(|e| e.0)?;
-        eprintln!(
-            "[ramsharedd] VRAM mode=sparse capacity={} MiB chunk={} MiB \
+    let (mut backend, worker_supervisor): (Be<'_, P>, Option<IsolatedWorkerSupervisor>) =
+        if let Some(origin) = origin {
+            let chunk = chunk_bytes_from_env();
+            let reserve = reserve_floor;
+            let (origin_cache, supervisor) = match starter
+                .spawn_isolated_gpu_worker(size, chunk, reserve)
+            {
+                Ok((client, supervisor)) => {
+                    eprintln!(
+                        "[ramsharedd] mode=authoritative-origin logical={} MiB cache=ACTIVE \
+                             worker_pid={} isolation=process-isolated",
+                        size >> 20,
+                        supervisor.pid()
+                    );
+                    (OriginCache::Ipc(client), Some(supervisor))
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[ramsharedd] mode=authoritative-origin logical={} MiB cache=UNAVAILABLE \
+                             isolation=bounded-worker-fallback error={error}",
+                        size >> 20
+                    );
+                    (OriginCache::Disabled(DisabledCache), None)
+                }
+            };
+            let cache = AuthoritativeOriginBackend::new(origin, origin_cache, size, BLOCK_SIZE)
+                .map_err(|error| error.0)?;
+            (Be::Origin(cache), supervisor)
+        } else {
+            let chunk = chunk_bytes_from_env();
+            let reserve = reserve_floor;
+            let env_cap = commit_cap_bytes_from_env();
+            let auto_cap = safe_commit_cap(size, total, reserve);
+            let commit_cap = env_cap.min(auto_cap);
+            let sparse = SparseVramBackend::new_with_config(
+                &provider,
+                ramshared_block::sparse_vram::SparseVramConfig {
+                    capacity: size,
+                    chunk_bytes: chunk,
+                    block_size: BLOCK_SIZE,
+                    reserve_floor_bytes: reserve,
+                    commit_cap_bytes: Some(commit_cap),
+                    budget_gate,
+                },
+            )
+            .map_err(|e| e.0)?;
+            eprintln!(
+                "[ramsharedd] VRAM mode=sparse capacity={} MiB chunk={} MiB \
              commit_cap={} MiB reserve_floor={} MiB committed=0 (ondemand+safety)",
-            size >> 20,
-            chunk >> 20,
-            commit_cap >> 20,
-            reserve >> 20
-        );
-        Be::Sparse(sparse)
-    };
+                size >> 20,
+                chunk >> 20,
+                commit_cap >> 20,
+                reserve >> 20
+            );
+            (Be::Sparse(sparse), None)
+        };
 
     // --- Unix socket ---
     let path = Path::new(&sock);
@@ -3508,6 +3762,9 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                 released >> 20
             );
         }
+    }
+    if let Some(mut sup) = worker_supervisor {
+        sup.shutdown();
     }
     if let Some(probe) = probe.as_mut() {
         let _ = probe.zero();
@@ -5523,6 +5780,16 @@ mod tests {
             ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
             {
                 panic!("origin composition must not initialize DXG")
+            }
+
+            fn spawn_isolated_gpu_worker(
+                &mut self,
+                _target_bytes: u64,
+                _chunk_bytes: u64,
+                _reserve_floor: u64,
+            ) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>>
+            {
+                Err("origin test fixture uses disabled cache fallback".into())
             }
         }
 
@@ -10821,5 +11088,127 @@ Filename Type Size Used Priority
             "Mock environment under 2048 MiB must not be clamped"
         );
         assert_eq!(safe_slice, requested_slice);
+    }
+
+    #[test]
+    fn daemon_survives_abrupt_gpu_worker_kill() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-worker-kill-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let origin_path = root.join("origin.bin");
+        let origin_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&origin_path)
+            .unwrap();
+        origin_file.set_len(16 * 1024 * 1024).unwrap();
+        let origin = FileOrigin::from_file(origin_file);
+
+        let (client_sock, worker_sock) = std::os::unix::net::UnixStream::pair().unwrap();
+        let worker_fd: std::os::fd::OwnedFd = worker_sock.into();
+
+        // Spawn a child process holding worker_sock that will be abruptly killed
+        let child = std::process::Command::new("sleep")
+            .arg("60")
+            .stdin(worker_fd)
+            .spawn()
+            .unwrap();
+
+        let mut supervisor = IsolatedWorkerSupervisor {
+            child: WorkerChildHandle::Process(child),
+        };
+
+        let client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 4 * 1024 * 1024);
+
+        let mut backend = AuthoritativeOriginBackend::new(
+            origin,
+            OriginCache::Ipc(client),
+            16 * 1024 * 1024,
+            BLOCK_SIZE,
+        )
+        .unwrap();
+
+        let write_data = vec![0x33; 4096];
+        backend.write_at(0, &write_data).unwrap();
+
+        // Abruptly kill the worker child process (SIGKILL)
+        match &mut supervisor.child {
+            WorkerChildHandle::Process(child) => {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            #[cfg(test)]
+            _ => {}
+        }
+
+        // Read at offset 0: transparently falls back to origin storage with 0 error!
+        let mut read_buf = vec![0u8; 4096];
+        let read_result = backend.read_at(0, &mut read_buf);
+        assert!(
+            read_result.is_ok(),
+            "daemon must serve read from origin after worker kill"
+        );
+        assert_eq!(
+            read_buf, write_data,
+            "data from origin must match written data"
+        );
+        assert_eq!(backend.origin_state(), DurableOriginState::Ready);
+        assert_eq!(backend.cache_state(), OriginCacheState::Unavailable);
+
+        // Subsequent writes and reads also succeed against origin
+        let next_data = vec![0x77; 4096];
+        assert!(backend.write_at(4096, &next_data).is_ok());
+        let mut second_buf = vec![0u8; 4096];
+        assert!(backend.read_at(4096, &mut second_buf).is_ok());
+        assert_eq!(second_buf, next_data);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn daemon_publishes_live_worker_telemetry() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-telemetry-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let status_path = root.join("wsl2-cache-status.json");
+
+        let status = OriginCacheStatus {
+            schema_version: 1,
+            daemon_instance_id: "test-daemon-instance-42".to_string(),
+            written_at_unix_ms: 1234567890,
+            ok: true,
+            origin_state: "READY",
+            cache_state: "ACTIVE",
+            logical_capacity_kib: 4194304,
+            vram_cached_kib: 131072,
+            gpu_headroom_kib: Some(524288),
+            ssd_origin_written_kib: 8192,
+            cache_fallback_reads: 3,
+            cache_invalidations: 0,
+            cache_releases: 0,
+            cache_target_kib: 262144,
+        };
+
+        write_origin_cache_status(&status_path, &status).unwrap();
+        assert!(status_path.exists());
+
+        let content = std::fs::read_to_string(&status_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert_eq!(parsed["schema_version"], 1);
+        assert_eq!(parsed["daemon_instance_id"], "test-daemon-instance-42");
+        assert_eq!(parsed["ok"], true);
+        assert_eq!(parsed["origin_state"], "READY");
+        assert_eq!(parsed["cache_state"], "ACTIVE");
+        assert_eq!(parsed["logical_capacity_kib"], 4194304);
+        assert_eq!(parsed["vram_cached_kib"], 131072);
+        assert_eq!(parsed["cache_target_kib"], 262144);
+        assert_eq!(parsed["cache_fallback_reads"], 3);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -10,8 +10,10 @@
 #![forbid(unsafe_code)]
 
 pub mod elastic_cache;
+pub mod gpu_cache_worker;
 pub mod handshake;
 pub mod inflight;
+pub mod ipc_cache_client;
 pub mod isolated_origin;
 pub mod origin_cache;
 pub mod protocol;
@@ -22,8 +24,12 @@ pub mod vram_backend;
 pub use elastic_cache::{
     ELASTIC_CHUNK_BYTES, ElasticCacheConfig, ElasticExtentTable, ElasticVramCache,
 };
+pub use gpu_cache_worker::{
+    FRAME_HEADER_LEN, FrameHeader, GpuCacheWorker, GpuWorkerConfig, run_gpu_worker_loop,
+};
 pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
+pub use ipc_cache_client::{DEFAULT_READ_TIMEOUT, IpcCacheClient};
 pub use isolated_origin::{
     AuthoritativeOriginBackend, BestEffortCache, BoundedCacheClient, CacheMutation, CacheRead,
     DisabledCache, IsolatedCacheControl, IsolatedCacheRequest, IsolatedCacheWorker,
