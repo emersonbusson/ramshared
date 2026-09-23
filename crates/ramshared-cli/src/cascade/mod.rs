@@ -1407,6 +1407,10 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
     let ghosts = ghost_vram_swaps(entries);
     let (daemon_alive, daemon_pid) = daemon_alive_pid();
+    let daemon_identity_unreadable = matches!(
+        fs::read_to_string(PID_FILE),
+        Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+    );
     let product_active = daemon_alive || vram.present;
     let cache_status = fs::read_to_string(CACHE_STATUS_FILE)
         .ok()
@@ -1484,6 +1488,9 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         Duration::from_secs(15),
     );
     let mut measurement_errors = Vec::new();
+    if vram.present && daemon_identity_unreadable {
+        measurement_errors.push("daemon_identity_unreadable".to_string());
+    }
     if product_active && !control_plane_current {
         measurement_errors.push("cache_status_not_current".to_string());
     }

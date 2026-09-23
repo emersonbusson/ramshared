@@ -35,9 +35,9 @@
 
 | # | Decision | Why |
 | :--- | :--- | :--- |
-| **DT-1** | Use `cmd.exe /c "wsl.exe --mount --vhd <path> --bare"` for host attachment. | WSL interop (/init) transparently dispatches cmd.exe without interactive UAC prompts or PowerShell startup overhead (~50ms vs ~1500ms). |
-| **DT-2** | Derive origin VHDX path from `/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json` with fallback to `C:\ProgramData\RamShared\ramshared-origin.vhdx`. | Ensures strict alignment with the sealed host manifest while rejecting caller-controlled arbitrary paths. |
-| **DT-3** | Bound device poll to 5 seconds with 250ms intervals. | Prevents indefinite hangs if the host fails to expose SCSI LUNs; provides fast detection upon device appearance. |
+| **DT-1** | The CLI invokes `wsl.exe --mount --vhd <path> --bare` directly with a bounded argument vector. | Avoids shell interpretation of a host path. |
+| **DT-2** | Verify the host manifest SHA-256 against the sealed origin configuration, require its PARTUUID to match, then use its VHDX path. | Refuses missing, changed, or mismatched host manifests without a hard-coded path fallback. |
+| **DT-3** | Bound host command to 10 seconds and device poll to 5 seconds with 250ms intervals. | Prevents indefinite hangs if the host fails to expose SCSI LUNs; provides fast detection upon device appearance. |
 | **DT-4** | Re-exec via `systemd-run --scope` in `main.rs` when `INVOCATION_ID` is absent. | Completely transparent to the user; guarantees systemd cgroup v2 containment and canonical invocation tracking required by `superprompt.md`. |
 
 ---
@@ -75,7 +75,7 @@
 - [x] **Hot-unplug / device-gone:** Handled fail-closed: missing device triggers immediate refusal.
 - [x] **Host safety:** No unsupervised live pressure; bounded timeouts on all host interop calls.
 - [x] **Shared-hardware cushion:** Preserves existing GPU headroom calculations.
-- [x] **Bounded DMA / foreign driver calls:** Host `cmd.exe` call bounded by 10s deadline.
+- [x] **Bounded DMA / foreign driver calls:** Direct `wsl.exe` call bounded by 10s deadline.
 - [x] **Cooperative cascade spillover:** Preserves full 3-tier cascade (`zram0` > `nbd0` > `sdb`).
 - [x] **Replayable ops:** Idempotent: attaching an already-attached VHDX is a no-op.
 
@@ -97,7 +97,7 @@
 - **Purpose:** Add `ensure_origin_attached()` invoked in `setup_new_cascade()` before `origin_partuuid(&args.origin_path)`.
 - **RF / DT:** RF-4, RF-5, RF-6, RF-7, RF-8; DT-1, DT-2, DT-3.
 - **Symbol:** `ensure_origin_attached()`, `probe_host_origin_vhdx_path()`, `attach_origin_vhdx_via_host()`.
-- **Before → After:** Previously failed immediately with `CascadeError::Precondition` if `origin_path` was absent. Now detects absence, resolves sealed Windows VHDX path, issues bounded `cmd.exe /c wsl.exe --mount` host command, and polls until PARTUUID is visible or deadline expires.
+- **Before → After:** Previously failed immediately with `CascadeError::Precondition` if `origin_path` was absent. Now detects absence, resolves sealed Windows VHDX path, issues bounded direct `wsl.exe --mount` host command, and polls until PARTUUID is visible or deadline expires.
 - **Tests:** `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `ensure_origin_attached_is_noop_when_device_present`, `ensure_origin_attached_issues_bounded_mount_when_absent`, `ensure_origin_attached_fails_closed_on_timeout_or_mismatch`.
 - **Cover target:** >=80%.
 

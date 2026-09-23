@@ -28,7 +28,7 @@ Implement a two-stage autonomous bootstrap directly in `crates/ramshared-cli`:
    When `ramshared up` is invoked from a shell where `INVOCATION_ID` is not present in `std::env::var("INVOCATION_ID")`, and systemd is detected as active (`/run/systemd/system` exists), the CLI does not attempt unmanaged activation. Instead, it transparently executes `systemd-run --scope -q -- /proc/self/exe up <args>` using `execvp` (or `Command::status`). If already inside a systemd unit or scope, it proceeds directly.
 
 2. **Just-In-Time Origin Auto-Attachment (Cascade Setup):**
-   During cascade initialization in `cascade_io.rs`, before verifying partition identity, the CLI checks if the target `origin_path` exists. If absent, it parses the host VHDX path from `/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json` (or `/etc/ramshared/origin.conf`), runs a bounded host command `cmd.exe /c wsl.exe --mount --vhd <path> --bare` (timeout 10s), and waits up to 5s for the specified PARTUUID to appear in `/dev/disk/by-partuuid/`. If attachment fails or the PARTUUID does not match the sealed manifest, it aborts fail-closed.
+   During cascade initialization in `cascade_io.rs`, before verifying partition identity, the CLI checks if the target `origin_path` exists. If absent, it verifies the SHA-256 and PARTUUID of `/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json` against `/etc/ramshared/origin.conf`, reads the VHDX path, runs bounded `wsl.exe --mount --vhd <path> --bare` (timeout 10s), and waits up to 5s for the specified partition to appear. An attachment or identity failure aborts fail-closed.
 
 ### Discarded Alternatives
 
@@ -45,7 +45,7 @@ Implement a two-stage autonomous bootstrap directly in `crates/ramshared-cli`:
 - **RF-2:** If `systemd-run` is unavailable or fails to spawn the scope, `ramshared up` must exit with an explicit error code and message without touching devices or swap.
 - **RF-3:** If `INVOCATION_ID` is already present, `ramshared up` must execute inline without recursive re-envelopment.
 - **RF-4:** Before validating origin block devices, `cascade_io.rs` must probe whether the sealed `origin_path` is present.
-- **RF-5:** If `origin_path` is missing, `cascade_io.rs` must execute bounded host attachment via WSL interop (`cmd.exe /c wsl.exe --mount --vhd <path> --bare`) with a strict 10-second timeout.
+- **RF-5:** If `origin_path` is missing, `cascade_io.rs` must execute bounded host attachment via WSL interop (`wsl.exe --mount --vhd <path> --bare`) with a strict 10-second timeout.
 - **RF-6:** After issuing the host mount command, the CLI must poll for up to 5 seconds for `/dev/disk/by-partuuid/<PARTUUID>` to appear.
 - **RF-7:** If the device appears, its GPT PARTUUID, parent disk identity, and swap UUID must be validated against `/etc/ramshared/origin.conf`. Any mismatch must result in immediate fail-closed termination.
 - **RF-8:** If the host mount command times out, fails, or the device fails to appear, `ramshared up` must exit fail-closed with status code 1, leaving the host and existing swaps untouched.
@@ -65,7 +65,7 @@ Implement a two-stage autonomous bootstrap directly in `crates/ramshared-cli`:
 3. CLI prints `[up] auto-enveloping execution in systemd transient scope...` and executes `systemd-run --scope -- ramshared up`.
 4. In the child process under systemd scope, `INVOCATION_ID` is present.
 5. Setup phase reads `/etc/ramshared/origin.conf`. Checks `/dev/disk/by-partuuid/<uuid>`: absent.
-6. CLI prints `[up] origin VHDX detached; attempting bounded host attach...` and runs `cmd.exe /c wsl.exe --mount ... --bare`.
+6. CLI prints `[up] origin VHDX detached; attempting bounded host attach...` and runs `wsl.exe --mount ... --bare` directly.
 7. Origin SCSI disk appears; `/dev/disk/by-partuuid/<uuid>` resolves to the sealed origin partition.
 8. Partition dev_t and swap UUID match manifest.
 9. ZRAM and NBD tiers initialized.
@@ -99,7 +99,7 @@ Implement a two-stage autonomous bootstrap directly in `crates/ramshared-cli`:
 ## 8. Interfaces
 
 - **CLI:** `ramshared up [--vram MiB] [--zram MiB]` (preserves all existing CLI flags and syntax).
-- **Host Interop Command:** `cmd.exe /c "wsl.exe --mount --vhd <path> --bare"`.
+- **Host Interop Command:** `wsl.exe --mount --vhd <path> --bare`.
 
 ## 9. Dependencies and Risks
 

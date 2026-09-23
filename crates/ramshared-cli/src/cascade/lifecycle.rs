@@ -267,17 +267,30 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
     if !s.order_ok {
         reasons.push("priority_order_bad".into());
     }
-    let hot_vram_no_daemon = s.vram.present && !s.daemon_alive && s.vram.used_kib >= thr;
+    let daemon_identity_unreadable = s.vram.present
+        && s.measurement_errors
+            .iter()
+            .any(|error| error == "daemon_identity_unreadable");
+    if daemon_identity_unreadable {
+        reasons.push("daemon_identity_unreadable".into());
+    }
+    let hot_vram_no_daemon =
+        s.vram.present && !s.daemon_alive && !daemon_identity_unreadable && s.vram.used_kib >= thr;
     if hot_vram_no_daemon {
         reasons.push("daemon_dead_hot_vram".into());
     }
-    let vram_present_no_daemon = s.vram.present && !s.daemon_alive && s.vram.used_kib < thr;
+    let vram_present_no_daemon =
+        s.vram.present && !s.daemon_alive && !daemon_identity_unreadable && s.vram.used_kib < thr;
     // Half-state: vram swapon without daemon even if used low (degraded safety).
     if vram_present_no_daemon {
         reasons.push("vram_tier_without_daemon".into());
     }
 
-    let degraded = s.ghost || !s.order_ok || hot_vram_no_daemon || vram_present_no_daemon;
+    let degraded = s.ghost
+        || !s.order_ok
+        || daemon_identity_unreadable
+        || hot_vram_no_daemon
+        || vram_present_no_daemon;
     if degraded {
         return LifecycleView {
             phase: CascadePhase::Degraded,
@@ -285,6 +298,8 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
                 "ghost"
             } else if !s.order_ok {
                 "priority_order_bad"
+            } else if daemon_identity_unreadable {
+                "daemon_identity_unreadable"
             } else if hot_vram_no_daemon {
                 "daemon_dead_hot_vram"
             } else {
@@ -768,6 +783,26 @@ mod tests {
         let v = derive_lifecycle(&s);
         assert_eq!(v.phase, CascadePhase::Degraded);
         assert_eq!(v.phase_reason, "daemon_dead_hot_vram");
+    }
+
+    #[test]
+    fn unreadable_daemon_identity_does_not_claim_daemon_death() {
+        let mut s = base();
+        s.daemon_alive = false;
+        s.daemon_pid = None;
+        s.vram.used_kib = 50_000;
+        s.measurement_errors
+            .push("daemon_identity_unreadable".to_string());
+        let view = derive_lifecycle(&s);
+        assert_eq!(view.phase, CascadePhase::Degraded);
+        assert_eq!(view.phase_reason, "daemon_identity_unreadable");
+        assert!(
+            !view
+                .reasons
+                .iter()
+                .any(|reason| reason == "daemon_dead_hot_vram")
+        );
+        assert_eq!(overall_state(&view, &s), OverallState::Blocked);
     }
 
     #[test]

@@ -1,5 +1,13 @@
 # IMPL — cascade-transport-policy
 
+## 2026-09-23 teardown timeout correction
+
+An attended `ramshared down` refused safely after the shared 5-second command
+bound killed `swapoff` while the NBD still held about 0.9 GiB of pages. The
+backend, binding, and swaps remained active. The source now gives `swapoff` a
+120-second bound and retains the same fail-closed behavior on timeout. Targeted
+source tests pass; no corrected binary or live teardown is qualified yet.
+
 > Passo 3 SSDV3. Implements [`SPEC.md`](SPEC.md). AUDIT-2.5: **GO** (NBD Day-1).  
 > **Date:** 2026-07-10  
 > **Status:** **HISTORICAL NBD CAPABILITY EVIDENCE; CURRENT AUTOMATIC BOOT

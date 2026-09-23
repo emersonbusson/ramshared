@@ -5668,3 +5668,75 @@ Rust topology residuals remain explicit.
 **How to measure:** `./target/release/ramshared test-tier --tier3-target-pct 100 --hold-secs 30`; `cat /proc/swaps`; `dmesg -T`; `cat docs/benchmarks/history/latest.json`.
 **Measured data:** 16,640 MB allocated RAM; 9,216 MB swap (1,024 MB ZRAM + 4,096 MB VRAM + 4,096 MB SSD); reclaim speed 14.42 GB/s in 1,127.16 ms; P50 cycle latency 0.0005 ms, P99 0.0023 ms; 10 active page cycles completed; 0 hung tasks; 0 DMA trips; 10,302 MB restored free RAM.
 **Verdict:** ✅ `PASS` — 100% qualified 3-tier cascade under kernel Build #5 with PASS_ZERO_PANIC status.
+
+## 2026-09-23 12:45 -03 — Build #5 stress evidence correction and host preflight
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0047`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-23T15:44:46Z`.
+**Verified at:** `2026-09-23T15:44:46Z`.
+**Source revision:** `ea7f9449`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain EVD-0046 and its JSON as historical raw observations; this append-only correction governs their interpretation.
+**Freshness:** Recheck host control-plane identity and cache telemetry before any new pressure run; requalify after the corrected binary is installed.
+**Category:** `audit`.
+**What:** EVD-0046 does not qualify simultaneous physical three-tier saturation or its reported performance. Its Tier 2 figure is logical NBD swap occupancy, not GPU-resident VRAM. The benchmark hard-coded an SSD disk that differs from the active swap device and derived the reported reclaim speed from dropping an allocation vector. The speedup, DMA watchdog, integrity, and kernel PASS claims lack independent measurements. The corrected source now distinguishes logical NBD from daemon-bound physical cache telemetry, selects the active SSD swap disk, and emits null for unmeasured hardware metrics with `INCONCLUSIVE` status. The origin auto-attach path now verifies the host manifest SHA-256 and PARTUUID and invokes bounded `wsl.exe` directly.
+**How to measure:** `cargo test -p ramshared-cli --bin ramshared ensure_origin_attached`; targeted stress parser and tier-snapshot tests; `node --test tools/ci/compare-benchmarks.test.mjs`; `cargo fmt --all --check`; `cargo clippy -p ramshared-cli --all-targets -- -D warnings`; read-only `ramshared status --json`, `/proc/swaps`, `/run/ramshared/cache-status.json`, and `lifecycle-recovery-status.sh`.
+**Measured data:** Targeted source tests, formatter, and clippy passed before this record. Host has active `/dev/nbd0` and `/dev/zram0` managed swaps and a daemon process, while status is `Degraded/BLOCKED` with `daemon_dead_hot_vram`, cache telemetry is `UNAVAILABLE` with zero cached KiB, and lifecycle recovery is `PENDING`. No new pressure, swapoff, detach, or shutdown was performed. No three-round matched campaign exists for the corrected code.
+**Residual blockers:** Reconcile running/installed binary and daemon binding by supported recovery; qualify the corrected attachment and stress paths on a clean host, including same-sample physical residency, integrity, kernel logs, and three matched baseline/candidate runs. VMBus v2 requires fault-injection and CoCo tests before upstream submission.
+**Verdict:** 🟡 `PARTIAL` — EVD-0046's 100% VRAM, +31.7%, DMA, and `PASS_ZERO_PANIC` qualification claims are superseded; source fixes alone do not establish live qualification.
+
+## 2026-09-23 12:51 -03 — Root-scoped control-plane identity correction
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0048`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-23T15:50:42Z`.
+**Verified at:** `2026-09-23T15:50:42Z`.
+**Source revision:** `ea7f9449`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this read-only host observation with EVD-0047; recheck after any recovery.
+**Freshness:** Current boot only; status and identity must be sampled again before activation or pressure.
+**Category:** `audit`.
+**What:** EVD-0047's unprivileged `daemon_dead_hot_vram` status is a permission artifact: `/run/ramshared` is root-only, so an unprivileged CLI cannot read its PID. Root status recognizes PID 73692 and the managed topology. The actual blockers are unavailable cache, degraded origin, stale/missing supervisor and guardian telemetry, inactive controller, and release ownership mismatch. The recovery marker is absent, so the marker-gated Windows recovery controller cannot safely claim this lifecycle.
+**How to measure:** Compare `ramshared status --json` with `sudo ramshared status --json`; inspect read-only `/run/ramshared/lifecycle-binding.json`, `/proc/<pid>/exe`, `/run/ramshared/cache-status.json`, `systemctl status ramshared-cascade.service`, `lifecycle-recovery-status.sh`, and SHA-256 of live/checkout/selected-release binaries.
+**Measured data:** Root status: daemon alive, `topology_ok=true`, `overall_state=BLOCKED`, cache `UNAVAILABLE`, origin `DEGRADED`, guardian `BLOCKED`; cache reports zero physical KiB and no target. Managed swaps `/dev/nbd0` and `/dev/zram0` remain active. The controller unit is inactive and the recovery marker is absent while recovery status is `PENDING`. The live `/usr/local/bin/ramsharedd` hash matches checkout `target/release/ramsharedd` (`cfff8749...`) but differs from selected the selected release daemon (`a0ac2951...`, release an older selected release). No device or daemon was changed.
+**Residual blockers:** Review an attended ownership-preserving swapoff-first recovery path for the markerless orphan; then establish a single installed release and prove fresh cache, supervisor, guardian, and status evidence. The source status path now reports `daemon_identity_unreadable` instead of claiming daemon death when the protected PID cannot be read; this fix passed targeted tests but has not been installed on the host.
+**Verdict:** 🟡 `PARTIAL` — host is not a valid stress surface and Build #5 qualification remains open.
+
+## 2026-09-23 12:59 -03 — Attended swapoff-first recovery from dirty NBD
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0049`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-23T15:58:30Z`.
+**Verified at:** `2026-09-23T15:58:30Z`.
+**Source revision:** `ea7f9449`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the before/after command observations in this append-only record; recheck after any activation.
+**Freshness:** This terminal proof applies only to the current boot before a new cascade start.
+**Category:** `qualification`.
+**What:** With explicit attended authorization, the installed CLI attempted sealed `down`. The first attempt timed out after the common 5-second command limit while NBD swap still held pages; it preserved backend, binding, and swaps. Source was corrected to give dirty `swapoff` a 120-second bound while retaining exact lifecycle checks and fail-closed behavior. The corrected release CLI then completed NBD swapoff, ZRAM swapoff, NBD disconnect, and daemon stop in order.
+**How to measure:** Before and after: root `/proc/swaps`, NBD kernel `pid`, daemon PID/executable, lifecycle binding, root `ramshared status --json`, and `lifecycle-recovery-status.sh`; corrected CLI `down`; `ramshared check --json`; targeted timeout/order/refusal tests.
+**Measured data:** Before corrected teardown, NBD used about 840 MiB and ZRAM about 905 MiB, with 7.8 GiB MemAvailable. Corrected `down` returned 0 after approximately 40 seconds and printed successful NBD and ZRAM swapoff followed by cascade unmount. Afterward, `/proc/swaps` contains only the WSL fallback swap; no NBD kernel PID, daemon, runtime swap markers, or lifecycle binding remains. Recovery status is `CLEAN` with zero managed swaps, daemon, and attached device. Root status is `Off`, `ghost=false`, `topology_ok=true`; `check --json` is `ready` with no blockers. Guardian status remains stale while the product is off.
+**Residual blockers:** The corrected CLI is a local build, not the selected installed release. A fresh attended start needs one exact release, controller ownership, BINARY_MATCH, fresh guardian/cache/supervisor telemetry, and before→action→after proof. No stress campaign or Build #5 physical three-tier qualification has run with corrected metrics.
+**Verdict:** ✅ `PASS` for attended swapoff-first terminal recovery only; 🟡 `PARTIAL` for release activation and benchmark qualification.
+
+## 2026-09-23 13:06 -03 — Installed diagnostic release and controlled activation gate
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0050`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-23T16:05:53Z`.
+**Verified at:** `2026-09-23T16:05:53Z`.
+**Source revision:** `ea7f9449`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the local diagnostic build/install identity and this append-only before→action→after record; do not promote the dirty working tree as a release.
+**Freshness:** Revalidate after any build, installation, guardian change, controller start, or kernel reboot.
+**Category:** `qualification`.
+**What:** With separate attended approvals, built and installed a diagnostic release containing the corrected CLI and matching daemon. The installer left the cascade unit disabled. Restarted the existing Windows guardian task and obtained a fresh HEALTHY record for the current boot. One version-scoped, controller-owned cascade start passed installed-release preflight and runtime BINARY_MATCH. The daemon reported origin READY internally but cache UNAVAILABLE with zero physical target; the control-plane supervisor was inactive, so aggregate status remained BLOCKED. The temporary start approval was removed, and the controller completed a clean swapoff-first stop. Source inspection confirms the product origin path deliberately selects an unavailable GPU provider and `DisabledCache` pending a process-isolated cache worker.
+**How to measure:** Package SHA256SUMS; installer plan/receipt; installed versus built CLI/daemon hashes; Windows guardian task state and fresh health timestamp; release preflight before/after; root status and cache-status JSON; controller journal; `/proc/swaps`; lifecycle recovery status; source selection in `ramshared-wsl2d` and the revocable-cache IMPL.
+**Measured data:** Package checksum verification passed. Installed CLI SHA-256 matched local build (`4ce533aa...`); installed daemon matched local build (`cfff8749...`). Preflight progressed from `PRODUCT_OFF` to `READY` with `NBD_BINARY_MATCH=PASS`. Initial swaps had zero usage on managed ZRAM and NBD. Cache-status reported `origin_state=READY`, `cache_state=UNAVAILABLE`, `vram_cached_kib=0`, `cache_target_kib=0`; aggregate status reported `BLOCKED` with stale supervisor status. After controlled stop, the controller logged `STOPPED_CLEAN`; recovery status was `CLEAN`, with zero managed swaps, daemon, and attached NBD. No pressure run occurred.
+**Residual blockers:** A process-isolated GPU cache worker is absent from the product origin path. Supervisor and cache telemetry must be brought into a fresh consistent state; only then can a controlled physical-cache campaign be considered. The diagnostic release was built from a dirty tree and is not a merge or release artifact. VMBus v2 still lacks fallback fault-injection and CoCo tests.
+**Verdict:** ✅ `PASS` for bounded install/start/stop and runtime BINARY_MATCH; 🟡 `PARTIAL` for control-plane readiness; 🔴 `BLOCKED` for the claimed physical VRAM stress qualification.

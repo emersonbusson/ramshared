@@ -14,7 +14,6 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -118,6 +117,8 @@ impl TelemetryReading {
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StressReport {
+    #[serde(default)]
+    pub metric_version: u32,
     pub battery_mode: bool,
     pub cascade_mode: bool,
     pub max_safe_pct: u64,
@@ -127,21 +128,33 @@ pub struct StressReport {
     pub tier1_zram_pct: u64,
     pub tier2_vram_mb: u64,
     pub tier2_vram_pct: u64,
+    #[serde(default)]
+    pub tier2_logical_swap_mb: u64,
+    #[serde(default)]
+    pub tier2_nbd_throughput_mbs: f64,
+    #[serde(default)]
+    pub tier2_physical_cache_target_mb: u64,
+    #[serde(default)]
+    pub simultaneous_full_tiers: bool,
+    #[serde(default)]
+    pub physical_cache_samples: usize,
     pub tier3_ssd_mb: u64,
     pub tier3_ssd_pct: u64,
     #[serde(default)]
     pub tier1_throughput_mbs: f64,
     #[serde(default)]
-    pub tier2_throughput_mbs: f64,
+    pub tier2_throughput_mbs: Option<f64>,
     #[serde(default)]
     pub tier3_throughput_mbs: f64,
     #[serde(default)]
-    pub tier2_speedup_vs_ssd: f64,
+    pub tier2_speedup_vs_ssd: Option<f64>,
     pub peak_pressure_index: f64,
     pub telemetry_readings_count: usize,
     pub active_io_cycles_completed: usize,
-    pub reclaim_duration_ms: f64,
-    pub reclaim_speed_gbs: f64,
+    pub reclaim_duration_ms: Option<f64>,
+    pub reclaim_speed_gbs: Option<f64>,
+    #[serde(default)]
+    pub buffer_drop_duration_ms: f64,
     pub post_reclaim_free_ram_mb: u64,
     pub status: String,
     #[serde(default)]
@@ -155,17 +168,17 @@ pub struct StressReport {
     #[serde(default)]
     pub max_cycle_latency_ms: f64,
     #[serde(default)]
-    pub estimated_page_fault_lat_us: f64,
+    pub estimated_page_fault_lat_us: Option<f64>,
     #[serde(default)]
     pub host_vram_min_free_mb: u64,
     #[serde(default)]
-    pub vram_evicted_chunks_count: usize,
+    pub vram_evicted_chunks_count: Option<usize>,
     #[serde(default)]
-    pub dma_watchdog_trips_count: u64,
+    pub dma_watchdog_trips_count: Option<u64>,
     #[serde(default)]
     pub tier3_spillover_mb: u64,
     #[serde(default)]
-    pub vram_eviction_p99_latency_ms: f64,
+    pub vram_eviction_p99_latency_ms: Option<f64>,
     #[serde(default)]
     pub kernel_d_state_hung_tasks: u64,
 }
@@ -600,11 +613,25 @@ pub fn read_swap_tier_capacities() -> (TierCapacityStats, TierCapacityStats, Tie
 
 pub fn read_tier_disk_total_bytes() -> (u64, u64, u64) {
     let text = fs::read_to_string("/proc/diskstats").unwrap_or_default();
+    let swaps = fs::read_to_string("/proc/swaps").unwrap_or_default();
+    tier_disk_bytes_from(&text, &swaps)
+}
+
+fn tier_disk_bytes_from(diskstats: &str, swaps: &str) -> (u64, u64, u64) {
+    let disk_devices: std::collections::HashSet<&str> = swaps
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| {
+            !name.contains("zram") && !name.contains("nbd") && !name.contains("ramshared")
+        })
+        .filter_map(|name| name.rsplit('/').next())
+        .collect();
     let mut zram_bytes = 0u64;
     let mut vram_bytes = 0u64;
     let mut disk_bytes = 0u64;
 
-    for line in text.lines() {
+    for line in diskstats.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() >= 10
             && let (Ok(read_sectors), Ok(write_sectors)) =
@@ -618,12 +645,92 @@ pub fn read_tier_disk_total_bytes() -> (u64, u64, u64) {
                 zram_bytes = zram_bytes.saturating_add(total_bytes);
             } else if dev.starts_with("nbd") || dev.starts_with("ramshared") {
                 vram_bytes = vram_bytes.saturating_add(total_bytes);
-            } else if dev == "sdc" {
+            } else if disk_devices.contains(dev) {
                 disk_bytes = disk_bytes.saturating_add(total_bytes);
             }
         }
     }
     (zram_bytes, vram_bytes, disk_bytes)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CacheSample {
+    cached_mib: u64,
+    target_mib: u64,
+    at_target: bool,
+}
+
+fn parse_cache_status_sample(
+    text: &str,
+    now_ms: u64,
+    daemon_instance_id: &str,
+) -> Option<CacheSample> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let written = value.get("written_at_unix_ms")?.as_u64()?;
+    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 3000 {
+        return None;
+    }
+    if value.get("daemon_instance_id")?.as_str()? != daemon_instance_id
+        || !value.get("ok")?.as_bool()?
+        || value.get("origin_state")?.as_str()? != "READY"
+        || value.get("cache_state")?.as_str()? != "ACTIVE"
+    {
+        return None;
+    }
+    let cached_kib = value.get("vram_cached_kib")?.as_u64()?;
+    let target_kib = value.get("cache_target_kib")?.as_u64()?;
+    if target_kib == 0 || cached_kib > value.get("logical_capacity_kib")?.as_u64()? {
+        return None;
+    }
+    Some(CacheSample {
+        cached_mib: cached_kib / 1024,
+        target_mib: target_kib / 1024,
+        at_target: cached_kib >= target_kib,
+    })
+}
+
+fn current_daemon_instance_id() -> Option<String> {
+    let pid = fs::read_to_string("/run/ramshared/ramsharedd.pid").ok()?;
+    let pid: u32 = pid.trim().parse().ok()?;
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = stat.rsplit_once(") ")?.1;
+    let start_ticks = rest.split_whitespace().nth(19)?;
+    Some(format!("{pid}-{start_ticks}"))
+}
+
+fn read_cache_status_sample() -> Option<CacheSample> {
+    let text = fs::read_to_string("/run/ramshared/cache-status.json").ok()?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis() as u64;
+    parse_cache_status_sample(&text, now_ms, &current_daemon_instance_id()?)
+}
+
+fn require_physical_cache_before_cascade(
+    cascade: bool,
+    tier3_target_pct: Option<u64>,
+    sample: Option<CacheSample>,
+) -> Result<(), String> {
+    if (cascade || tier3_target_pct.is_some()) && sample.is_none() {
+        return Err(
+            "cascade stress requires fresh ACTIVE physical GPU cache telemetry with a nonzero target"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn full_tier_snapshot(
+    zram_pct: u64,
+    logical_nbd_pct: u64,
+    ssd_pct: u64,
+    cache: Option<CacheSample>,
+) -> bool {
+    zram_pct >= 100
+        && logical_nbd_pct >= 100
+        && ssd_pct >= 100
+        && cache.is_some_and(|sample| sample.target_mib > 0 && sample.at_target)
 }
 
 pub fn probe_allocation_latency_ms() -> f64 {
@@ -776,6 +883,11 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
 }
 
 pub fn run(opts: &StressOptions) -> Result<(), String> {
+    require_physical_cache_before_cascade(
+        opts.cascade,
+        opts.tier3_target_pct,
+        read_cache_status_sample(),
+    )?;
     let term_signal = Arc::new(AtomicBool::new(false));
     let last_heartbeat = Arc::new(AtomicU64::new(
         SystemTime::now()
@@ -848,6 +960,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut max_safe_pct = 0u64;
     let mut peak_zram = 0u64;
     let mut peak_vram = 0u64;
+    let mut peak_physical_vram = 0u64;
+    let mut peak_physical_target = 0u64;
+    let mut physical_cache_samples = 0usize;
+    let mut simultaneous_full_tiers = false;
     let mut peak_ssd = 0u64;
     let mut peak_total_swap = 0u64;
     let mut peak_pressure = 1.0f64;
@@ -893,6 +1009,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         latencies_ms.push(lat_ms);
         let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
+        let cache_sample = read_cache_status_sample();
+        if let Some(sample) = cache_sample {
+            physical_cache_samples += 1;
+            peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
+            peak_physical_target = peak_physical_target.max(sample.target_mib);
+        }
+        simultaneous_full_tiers |= full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, cache_sample);
 
         sample_min_gpu_headroom(&mut last_gpu_sample_ms, &mut min_gpu_free_mb);
 
@@ -1116,13 +1239,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
         if let Some(t3_target) = opts.tier3_target_pct
-            && (cap1.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT || cap1.total_mb == 0)
-            && (cap2.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT || cap2.total_mb == 0)
+            && cap1.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT
+            && cap2.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT
             && tier3_target_reached(cap3.pct, t3_target)
         {
             if !opts.json {
                 println!(
-                    "\n[🎯 ALL TIERS QUALIFIED] Tier 1: {}%, Tier 2: {}%, Tier 3: {}% (Target: {}%).",
+                    "\n[🎯 LOGICAL SWAP TARGET REACHED] ZRAM: {}%, NBD: {}%, SSD: {}% (Target: {}%). Physical VRAM remains a separate check.",
                     cap1.pct, cap2.pct, cap3.pct, t3_target
                 );
             }
@@ -1318,6 +1441,14 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             latencies_ms.push(lat_ms);
 
             let (cap1, cap2, cap3) = read_swap_tier_capacities();
+            let cache_sample = read_cache_status_sample();
+            if let Some(sample) = cache_sample {
+                physical_cache_samples += 1;
+                peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
+                peak_physical_target = peak_physical_target.max(sample.target_mib);
+            }
+            simultaneous_full_tiers |=
+                full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, cache_sample);
             hold_cap3_pct = cap3.pct;
             let reading = compute_telemetry_reading(
                 lat_ms,
@@ -1374,14 +1505,12 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
     }
 
-    // Phase 4: Atomic Flash-Reclaim Benchmark Phase
+    // Phase 4: drop the test buffers; this is not a physical reclaim benchmark.
     let t_reclaim_start = Instant::now();
     if let Ok(mut guard) = chunks.lock() {
         guard.clear();
     }
     let reclaim_duration = t_reclaim_start.elapsed();
-    let reclaim_sec = reclaim_duration.as_secs_f64().max(0.001);
-    let reclaim_speed_gbs = ((total_allocated_mb as f64 / 1024.0) / reclaim_sec).min(100.0);
 
     term_signal.store(true, Ordering::Relaxed);
     let _ = watchdog_handle.join();
@@ -1389,14 +1518,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     thread::sleep(Duration::from_millis(500));
     let (_, post_free_ram) = read_mem_info();
     let (post_swap, _, _, _) = read_swap_tiers();
-    let (cap1, cap2, cap3) = read_swap_tier_capacities();
-
-    let ssd_baseline = 20.0f64;
-    let tier2_speedup_vs_ssd = if peak_vram_mbs >= 5.0 {
-        (peak_vram_mbs / ssd_baseline).clamp(1.0, 150.0)
-    } else {
-        1.0
-    };
+    let (cap1, _cap2, cap3) = read_swap_tier_capacities();
 
     let (
         avg_cycle_latency_ms,
@@ -1405,9 +1527,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         p99_cycle_latency_ms,
         max_cycle_latency_ms,
     ) = compute_latency_percentiles(&latencies_ms);
-    let estimated_page_fault_lat_us = if peak_vram > 0 { 0.85 } else { 180.0 };
-
     let report = StressReport {
+        metric_version: 2,
         battery_mode: opts.battery,
         cascade_mode: opts.cascade,
         max_safe_pct,
@@ -1417,37 +1538,46 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         tier1_zram_pct: (peak_zram * 100)
             .checked_div(cap1.total_mb)
             .unwrap_or(cap1.pct),
-        tier2_vram_mb: peak_vram,
-        tier2_vram_pct: (peak_vram * 100)
-            .checked_div(cap2.total_mb)
-            .unwrap_or(cap2.pct),
+        tier2_vram_mb: peak_physical_vram,
+        tier2_vram_pct: peak_physical_vram
+            .saturating_mul(100)
+            .checked_div(peak_physical_target)
+            .unwrap_or(0),
+        tier2_logical_swap_mb: peak_vram,
+        tier2_nbd_throughput_mbs: (peak_vram_mbs * 10.0).round() / 10.0,
+        tier2_physical_cache_target_mb: peak_physical_target,
+        simultaneous_full_tiers,
+        physical_cache_samples,
         tier3_ssd_mb: peak_ssd,
         tier3_ssd_pct: (peak_ssd * 100)
             .checked_div(cap3.total_mb)
             .unwrap_or(cap3.pct),
         tier1_throughput_mbs: (peak_zram_mbs * 10.0).round() / 10.0,
-        tier2_throughput_mbs: (peak_vram_mbs * 10.0).round() / 10.0,
+        // NBD block traffic does not measure GPU DMA throughput.
+        tier2_throughput_mbs: None,
         tier3_throughput_mbs: (peak_ssd_mbs * 10.0).round() / 10.0,
-        tier2_speedup_vs_ssd: (tier2_speedup_vs_ssd * 10.0).round() / 10.0,
+        tier2_speedup_vs_ssd: None,
         peak_pressure_index: peak_pressure,
         telemetry_readings_count: readings_count,
         active_io_cycles_completed: active_cycles_done,
-        reclaim_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
-        reclaim_speed_gbs,
+        reclaim_duration_ms: None,
+        reclaim_speed_gbs: None,
+        buffer_drop_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
         post_reclaim_free_ram_mb: post_free_ram,
-        status: "PASS_ZERO_PANIC".to_string(),
+        // This report lacks a bit-exact pressure check and an independent kernel-log window.
+        status: "INCONCLUSIVE".to_string(),
         avg_cycle_latency_ms,
         p50_cycle_latency_ms,
         p90_cycle_latency_ms,
         p99_cycle_latency_ms,
         max_cycle_latency_ms,
-        estimated_page_fault_lat_us,
+        estimated_page_fault_lat_us: None,
         host_vram_min_free_mb: min_gpu_free_mb
             .unwrap_or_else(|| query_gpu_free_vram_mb().unwrap_or(0)),
-        vram_evicted_chunks_count: 0,
-        dma_watchdog_trips_count: 0,
+        vram_evicted_chunks_count: None,
+        dma_watchdog_trips_count: None,
         tier3_spillover_mb: peak_ssd,
-        vram_eviction_p99_latency_ms: 0.0,
+        vram_eviction_p99_latency_ms: None,
         kernel_d_state_hung_tasks: count_kernel_hung_tasks(),
     };
 
@@ -1460,12 +1590,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         println!(" 🧹 PHASE 4: ATOMIC MEMORY RECLAIM & FLASH DEALLOCATION BENCHMARK");
         println!("{}", "═".repeat(105));
         println!(
-            "[✓] Reclaim Duration:       {:.2} ms",
-            report.reclaim_duration_ms
-        );
-        println!(
-            "[✓] Reclaim Throughput:     {:.2} GB/s",
-            report.reclaim_speed_gbs
+            "[i] Test buffer drop duration: {:.2} ms (not physical reclaim)",
+            report.buffer_drop_duration_ms
         );
         println!("[✓] Post-Reclaim Swap:      {} MB", post_swap);
         println!("[✓] Post-Reclaim Free RAM:  {} MB available", post_free_ram);
@@ -1474,7 +1600,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         println!(
             "  • Execution Mode:          {}",
             if report.cascade_mode {
-                "FULL MULTI-TIER CASCADE QUALIFICATION"
+                "MULTI-TIER CASCADE OBSERVATION"
             } else if report.battery_mode {
                 "FULL 4-PHASE BATTERY"
             } else {
@@ -1482,7 +1608,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             }
         );
         println!(
-            "  • Max Qualified Safe Peak: {}% of RAM",
+            "  • Max Observed Allocation: {}% of RAM",
             report.max_safe_pct
         );
         println!(
@@ -1496,18 +1622,19 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         );
         println!("  • Peak Total Swap Used:    {} MB", report.peak_swap_mb);
         println!(
-            "  • Tier 1 (ZRAM Swap):      {} MB Peak ({}% capacity, {:.1} MB/s Peak) ── 🟢 QUALIFIED (In-RAM LZ4)",
+            "  • Tier 1 (ZRAM Swap):      {} MB Peak ({}% capacity, {:.1} MB/s Peak)",
             report.tier1_zram_mb, report.tier1_zram_pct, report.tier1_throughput_mbs
         );
         println!(
-            "  • Tier 2 (GPU VRAM Swap):  {} MB Peak ({}% capacity, {:.1} MB/s Peak, {:.1}x vs SSD) ── 🟢 QUALIFIED (PCIe DMA)",
+            "  • Physical VRAM cache:    {} MB Peak ({}% of {} MB target); NBD logical swap {} MB, {:.1} MB/s block traffic",
             report.tier2_vram_mb,
             report.tier2_vram_pct,
-            report.tier2_throughput_mbs,
-            report.tier2_speedup_vs_ssd
+            report.tier2_physical_cache_target_mb,
+            report.tier2_logical_swap_mb,
+            report.tier2_nbd_throughput_mbs,
         );
         println!(
-            "  • Tier 3 (SSD Storage):    {} MB Peak ({}% capacity, {:.1} MB/s Peak) ── 🟢 QUALIFIED (Fallback)",
+            "  • Tier 3 (SSD Storage):    {} MB Peak ({}% capacity, {:.1} MB/s Peak)",
             report.tier3_ssd_mb, report.tier3_ssd_pct, report.tier3_throughput_mbs
         );
         println!(
@@ -1515,24 +1642,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             report.active_io_cycles_completed
         );
         println!(
-            "  • Memory Return Speed:     {:.2} GB/s ({:.2} ms)",
-            report.reclaim_speed_gbs, report.reclaim_duration_ms
+            "  • Simultaneous full tiers: {}",
+            report.simultaneous_full_tiers
+        );
+        println!(
+            "  • Physical cache samples:  {}",
+            report.physical_cache_samples
         );
         println!(
             "  • Allocation Latency (P50): {:.4} ms (Median) │ P99: {:.4} ms (Tail Jitter) │ Max: {:.4} ms",
             report.p50_cycle_latency_ms, report.p99_cycle_latency_ms, report.max_cycle_latency_ms
         );
         println!(
-            "  • Paging Response Latency: {:.2} µs ({})",
-            report.estimated_page_fault_lat_us,
-            if report.estimated_page_fault_lat_us < 5.0 {
-                "⚡ Direct PCIe DMA Accelerated"
-            } else {
-                "🐢 Fallback Storage"
-            }
-        );
-        println!(
-            "  • Stability Verdict:       🟢 100% PASS (Zero Hang, Zero Panic, Closed-Loop Protected)"
+            "  • Qualification verdict:  {} (requires independent integrity and kernel-log evidence)",
+            report.status
         );
         println!("{}", "═".repeat(105));
     }
@@ -1588,129 +1711,86 @@ fn format_system_time(st: SystemTime) -> String {
 }
 
 fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
-    let history_dir = if Path::new("docs/benchmarks").exists() {
-        PathBuf::from("docs/benchmarks/history")
-    } else if Path::new("../../docs/benchmarks").exists() {
-        PathBuf::from("../../docs/benchmarks/history")
-    } else {
-        return;
-    };
-    let latest_path = history_dir.join("latest.json");
-    let timestamp_str = format_system_time(SystemTime::now());
-    let current_path = history_dir.join(format!("benchmark-{timestamp_str}.json"));
-
-    // Check if previous benchmark exists to print comparison diff
-    if !suppress_stdout {
-        let prev_opt = fs::read_to_string(&latest_path)
-            .ok()
-            .and_then(|c| serde_json::from_str::<StressReport>(&c).ok());
-        if let Some(prev) = prev_opt {
-            println!("{}", "-".repeat(105));
-            println!(" 🔄 HISTORICAL BENCHMARK COMPARISON (Diff vs Previous Run):");
-            println!(
-                "  ┌─────────────────────────────────┬──────────────────┬──────────────────┬──────────────┐"
-            );
-            println!(
-                "  │ Benchmark Metric                │ Previous Run     │ Current Run      │ Comparison   │"
-            );
-            println!(
-                "  ├─────────────────────────────────┼──────────────────┼──────────────────┼──────────────┤"
-            );
-            println!(
-                "  │ 💾 Tier 3 SSD Storage Peak      │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
-                prev.tier3_ssd_mb,
-                prev.tier3_ssd_pct,
-                report.tier3_ssd_mb,
-                report.tier3_ssd_pct,
-                (report.tier3_ssd_mb as i64) - (prev.tier3_ssd_mb as i64)
-            );
-            println!(
-                "  │ 🟡 Tier 2 GPU VRAM Swap Peak    │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
-                prev.tier2_vram_mb,
-                prev.tier2_vram_pct,
-                report.tier2_vram_mb,
-                report.tier2_vram_pct,
-                (report.tier2_vram_mb as i64) - (prev.tier2_vram_mb as i64)
-            );
-            println!(
-                "  │ 🟢 Tier 1 ZRAM Swap Peak        │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
-                prev.tier1_zram_mb,
-                prev.tier1_zram_pct,
-                report.tier1_zram_mb,
-                report.tier1_zram_pct,
-                (report.tier1_zram_mb as i64) - (prev.tier1_zram_mb as i64)
-            );
-            println!(
-                "  │ 🚀 Tier 2 VRAM DMA Speed        │ {:>10.1} MB/s │ {:>10.1} MB/s │ {:>+8.1} MB/s │",
-                prev.tier2_throughput_mbs,
-                report.tier2_throughput_mbs,
-                report.tier2_throughput_mbs - prev.tier2_throughput_mbs
-            );
-            println!(
-                "  │ ⚡ Tier 2 Speedup vs Host SSD   │ {:>13.1}x │ {:>13.1}x │ {:>+11.1}x │",
-                prev.tier2_speedup_vs_ssd,
-                report.tier2_speedup_vs_ssd,
-                report.tier2_speedup_vs_ssd - prev.tier2_speedup_vs_ssd
-            );
-            println!(
-                "  │ 📦 Peak Total Swap Used         │ {:>13} MB │ {:>13} MB │ {:>+10} MB │",
-                prev.peak_swap_mb,
-                report.peak_swap_mb,
-                (report.peak_swap_mb as i64) - (prev.peak_swap_mb as i64)
-            );
-            println!(
-                "  │ 🧹 Reclaim Speed (Return)       │ {:>10.2} GB/s │ {:>10.2} GB/s │ {:>+8.2} GB/s │",
-                prev.reclaim_speed_gbs,
-                report.reclaim_speed_gbs,
-                report.reclaim_speed_gbs - prev.reclaim_speed_gbs
-            );
-            println!(
-                "  │ ⏱️ Reclaim Latency (Discharge)  │ {:>10.2} ms   │ {:>10.2} ms   │ {:>+8.2} ms   │",
-                prev.reclaim_duration_ms,
-                report.reclaim_duration_ms,
-                report.reclaim_duration_ms - prev.reclaim_duration_ms
-            );
-            println!(
-                "  │ ⚡ Cycle Latency (P50 Median)   │ {:>10.4} ms   │ {:>10.4} ms   │ {:>+8.4} ms   │",
-                prev.p50_cycle_latency_ms,
-                report.p50_cycle_latency_ms,
-                report.p50_cycle_latency_ms - prev.p50_cycle_latency_ms
-            );
-            println!(
-                "  │ 🎯 Cycle Latency (P99 Tail)     │ {:>10.4} ms   │ {:>10.4} ms   │ {:>+8.4} ms   │",
-                prev.p99_cycle_latency_ms,
-                report.p99_cycle_latency_ms,
-                report.p99_cycle_latency_ms - prev.p99_cycle_latency_ms
-            );
-            println!(
-                "  │ 🛡️ Host Min VRAM Free (Safety) │ {:>10} MB   │ {:>10} MB   │ {:>+8} MB   │",
-                prev.host_vram_min_free_mb,
-                report.host_vram_min_free_mb,
-                (report.host_vram_min_free_mb as i64) - (prev.host_vram_min_free_mb as i64)
-            );
-            println!(
-                "  └─────────────────────────────────┴──────────────────┴──────────────────┴──────────────┘"
-            );
-        }
-    }
-
-    // Never persist micro-stress runs or integration tests into repository benchmark history
-    if !report.cascade_mode && report.total_allocated_mb < 4000 {
+    if cfg!(test) {
         return;
     }
-
-    if !cfg!(test) {
-        let _ = fs::create_dir_all(&history_dir);
-        if let Ok(json_str) = serde_json::to_string_pretty(report) {
-            let _ = fs::write(&current_path, &json_str);
-            let _ = fs::write(&latest_path, &json_str);
-        }
+    let directory = std::env::temp_dir().join("ramshared-benchmarks");
+    if fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let filename = format!("observation-{}.json", format_system_time(SystemTime::now()));
+    let path = directory.join(filename);
+    if let Ok(encoded) = serde_json::to_vec_pretty(report)
+        && fs::write(&path, encoded).is_ok()
+        && !suppress_stdout
+    {
+        println!(
+            "Observation saved at {} (unqualified until evidence review)",
+            path.display()
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_throughput_uses_the_active_swap_device() {
+        let swaps = "Filename Type Size Used Priority\n/dev/sdb partition 4194304 1000 -2\n";
+        let diskstats =
+            "8 16 sdb 2 0 8 0 3 0 16 0 0 0 0 0\n8 32 sdc 200 0 800 0 300 0 1600 0 0 0 0 0\n";
+        assert_eq!(tier_disk_bytes_from(diskstats, swaps).2, 24 * 512);
+    }
+
+    #[test]
+    fn cache_residency_requires_fresh_matching_daemon_identity() {
+        let status = r#"{"ok":true,"origin_state":"READY","cache_state":"ACTIVE","daemon_instance_id":"73692-345270","written_at_unix_ms":10000,"vram_cached_kib":1048576,"cache_target_kib":4194304,"logical_capacity_kib":4194304}"#;
+        let Some(sample) = parse_cache_status_sample(status, 11000, "73692-345270") else {
+            panic!("fresh physical cache sample");
+        };
+        assert_eq!(sample.cached_mib, 1024);
+        assert_eq!(sample.target_mib, 4096);
+        assert!(parse_cache_status_sample(status, 15000, "73692-345270").is_none());
+        assert!(parse_cache_status_sample(status, 11000, "73692-foreign").is_none());
+    }
+
+    #[test]
+    fn full_tier_claim_requires_physical_cache_in_one_snapshot() {
+        let cache = CacheSample {
+            cached_mib: 1024,
+            target_mib: 4096,
+            at_target: false,
+        };
+        assert!(!full_tier_snapshot(100, 100, 100, Some(cache)));
+        assert!(!full_tier_snapshot(100, 100, 100, None));
+        let full = CacheSample {
+            cached_mib: 4096,
+            target_mib: 4096,
+            at_target: true,
+        };
+        assert!(full_tier_snapshot(100, 100, 100, Some(full)));
+        assert!(!full_tier_snapshot(100, 100, 99, Some(full)));
+    }
+
+    #[test]
+    fn cascade_stress_refuses_missing_physical_cache_before_allocation() {
+        assert!(require_physical_cache_before_cascade(true, None, None).is_err());
+        assert!(require_physical_cache_before_cascade(false, Some(100), None).is_err());
+        assert!(require_physical_cache_before_cascade(false, None, None).is_ok());
+        assert!(
+            require_physical_cache_before_cascade(
+                true,
+                Some(100),
+                Some(CacheSample {
+                    cached_mib: 0,
+                    target_mib: 2048,
+                    at_target: false,
+                }),
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn parses_stress_cli_arguments_with_battery() {
@@ -1832,7 +1912,7 @@ mod tests {
             json: false,
             ..StressOptions::default()
         };
-        assert!(run(&opts_cascade).is_ok());
+        assert!(run(&opts_cascade).is_err());
 
         let parsed_res = parse_stress_args(&["--cascade".to_string()]);
         assert!(parsed_res.is_ok());
@@ -1933,6 +2013,7 @@ mod tests {
         assert!(formatted.contains('_'));
 
         let report = StressReport {
+            metric_version: 2,
             battery_mode: true,
             cascade_mode: true,
             max_safe_pct: 90,
@@ -1942,17 +2023,23 @@ mod tests {
             tier1_zram_pct: 50,
             tier2_vram_mb: 200,
             tier2_vram_pct: 50,
+            tier2_logical_swap_mb: 200,
+            tier2_nbd_throughput_mbs: 500.0,
+            tier2_physical_cache_target_mb: 400,
+            simultaneous_full_tiers: false,
+            physical_cache_samples: 1,
             tier3_ssd_mb: 100,
             tier3_ssd_pct: 25,
             tier1_throughput_mbs: 1000.0,
-            tier2_throughput_mbs: 500.0,
+            tier2_throughput_mbs: Some(500.0),
             tier3_throughput_mbs: 20.0,
-            tier2_speedup_vs_ssd: 25.0,
+            tier2_speedup_vs_ssd: Some(25.0),
             peak_pressure_index: 10.0,
             telemetry_readings_count: 5,
             active_io_cycles_completed: 2,
-            reclaim_duration_ms: 1.0,
-            reclaim_speed_gbs: 1000.0,
+            reclaim_duration_ms: Some(1.0),
+            reclaim_speed_gbs: Some(1000.0),
+            buffer_drop_duration_ms: 1.0,
             post_reclaim_free_ram_mb: 8000,
             status: "PASS_ZERO_PANIC".to_string(),
             avg_cycle_latency_ms: 0.05,
@@ -1960,12 +2047,12 @@ mod tests {
             p90_cycle_latency_ms: 0.08,
             p99_cycle_latency_ms: 0.15,
             max_cycle_latency_ms: 0.50,
-            estimated_page_fault_lat_us: 0.85,
+            estimated_page_fault_lat_us: Some(0.85),
             host_vram_min_free_mb: 2048,
-            vram_evicted_chunks_count: 0,
-            dma_watchdog_trips_count: 0,
+            vram_evicted_chunks_count: Some(0),
+            dma_watchdog_trips_count: Some(0),
             tier3_spillover_mb: 100,
-            vram_eviction_p99_latency_ms: 0.0,
+            vram_eviction_p99_latency_ms: Some(0.0),
             kernel_d_state_hung_tasks: 0,
         };
         archive_and_compare_benchmark(&report, false);
