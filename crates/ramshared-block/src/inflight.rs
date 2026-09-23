@@ -1,6 +1,7 @@
-//! Inflight range-conflict model (SPEC §8.1). A caller can use it to detect
-//! overlapping requests, but this module does not schedule or serialize I/O.
-//! It is not currently wired into the daemon worker.
+//! Map of inflight blocks (SPEC §8.1): ensures that a request to a range with
+//! an inflight operation on the **same** range is serialized behind it — avoiding torn
+//! reads or reordered write-after-write. Pure logic; the daemon queries before
+//! queueing the CUDA copy.
 
 /// Set of ranges `[offset, offset+len)` currently inflight.
 #[derive(Default)]
