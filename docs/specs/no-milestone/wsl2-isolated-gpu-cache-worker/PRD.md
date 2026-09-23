@@ -27,7 +27,7 @@ This PRD defines the architectural requirements, communication protocol, safety 
 
 Run the GPU cache worker as a separate dedicated process (`ramshared-gpu-worker`) or supervised subprocess spawned by `ramshared-wsl2d` during cascade startup. 
 
-The main daemon creates an anonymous Unix domain stream socket pair (`socketpair(AF_UNIX, SOCK_SEQPACKET, 0)` or `SOCK_STREAM`) and passes the worker FD to the child process. The worker initializes `/dev/dxg`, allocates physical VRAM chunks respecting a mathematical host headroom floor, and maintains a chunk-indexed cache.
+The main daemon creates an anonymous Unix domain stream socket pair (`socketpair(AF_UNIX, SOCK_STREAM, 0)`) and passes the worker FD to the child process. The worker initializes `/dev/dxg`, allocates physical VRAM chunks respecting a mathematical host headroom floor, and maintains a chunk-indexed cache.
 
 ### Discarded alternatives:
 1. *In-process GPU worker thread:* Rejected. If `/dev/dxg` hangs in kernel mode or crashes the driver, the entire daemon process hangs in D-state or dies with SIGSEGV/SIGBUS, immediately causing Linux kernel swap failure and whole-VM kernel panic.
@@ -36,7 +36,7 @@ The main daemon creates an anonymous Unix domain stream socket pair (`socketpair
 ## 4. Functional requirements (RF)
 
 - **RF-1 (Process Isolation):** The GPU cache worker must run in an isolated process space separate from `ramshared-wsl2d`. A fatal signal, abort, or unhandled exception in the worker must not terminate or corrupt the parent daemon.
-- **RF-2 (Bounded IPC Protocol):** Communication between daemon and worker must use two distinct lanes:
+- **RF-2 (Bounded IPC Protocol):** Communication between daemon and worker must use logical lanes over a single multiplexed socket:
   - *Data lane:* Non-blocking `Read`, `Update`, and `Promote` frames. Reads have a strict timeout (<= 50ms).
   - *Control lane:* Dedicated `Disable` and `Telemetry` requests that can never be starved by backlogged data frames.
 - **RF-3 (Fail-Closed Origin Fallback):** Any channel disconnect, protocol error, or read timeout must immediately transition the client to `CacheState::Unavailable`. All ongoing and subsequent read requests must transparently fall back to the authoritative SSD origin with zero I/O errors returned to the block layer.
@@ -104,7 +104,7 @@ The main daemon creates an anonymous Unix domain stream socket pair (`socketpair
 ```
 
 - Worker IPC Frame Header:
-  - `msg_type`: `u8` (1 = ReadReq, 2 = ReadResp, 3 = Update, 4 = Promote, 5 = DisableReq, 6 = DisableResp, 7 = Heartbeat)
+  - `msg_type`: `u8` (1 = ReadReq, 2 = ReadResp, 3 = Update, 4 = Promote, 5 = DisableReq, 6 = DisableResp, 7 = HeartbeatReq, 8 = HeartbeatResp, 9 = HandshakeReq, 10 = HandshakeResp)
   - `correlation_id`: `u64`
   - `offset`: `u64`
   - `payload_len`: `u32`
@@ -118,8 +118,8 @@ The main daemon creates an anonymous Unix domain stream socket pair (`socketpair
 
 ## 8. Interfaces
 
-- Binary: `/usr/local/bin/ramshared-gpu-worker` (or embedded worker entrypoint dispatched via `/proc/self/exe worker`).
-- Arguments: `--fd <socket_fd> --target-kib <kib> --reserve-floor-kib <kib>`
+- Binary: re-exec via `/proc/self/exe __gpu_worker` (no separate binary artifact).
+- Arguments: `--fd <socket_fd> --target-bytes <bytes> --chunk-bytes <bytes> --reserve-floor <bytes>`
 - Telemetry: `/run/ramshared/wsl2-cache-status.json` (atomic write via tempfile rename).
 
 ## 9. Dependencies and risks

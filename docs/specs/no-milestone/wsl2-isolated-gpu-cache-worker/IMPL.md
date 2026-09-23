@@ -4,7 +4,7 @@
 
 ## Status
 
-**implemented (hermetic source & fault-injection gates passed)** · cover ✓ (86.0% / 90.1%) · E2E env-bound (requires host GPU validation) · BINARY_MATCH pending
+**implemented (hermetic source & fault-injection gates passed)** · cover ✓ (86.7% / 88.7%) · E2E env-bound (requires host GPU validation) · BINARY_MATCH pending
 
 ## Files
 
@@ -13,7 +13,7 @@
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | ITEM-1, ITEM-3 / RF-1, RF-2 | Implemented 32-byte framing IPC protocol, `GpuCacheWorker` with LRU eviction and headroom floor enforcement (`max(1536 MiB, 20%)`), clean deallocation, and socket loop runner. |
 | `crates/ramshared-block/src/ipc_cache_client.rs` | ITEM-2 / RF-2, RF-3 | Implemented socket-backed `BestEffortCache` client with bounded 50ms read timeout, non-blocking asynchronous mutation dispatch (`update`, `promote`), and fail-closed transition to `CacheState::Unavailable`. |
 | `crates/ramshared-block/src/lib.rs` | ITEM-1, ITEM-2 | Exported `gpu_cache_worker` and `ipc_cache_client` modules and core types. |
-| `crates/ramshared-wsl2d/src/main.rs` | ITEM-4, ITEM-5 / RF-1, RF-4, RF-5 | Integrated `__gpu_worker` re-exec via `socketpair(AF_UNIX, SOCK_SEQPACKET, 0)`, `PR_SET_PDEATHSIG`, bounded 5s supervisor teardown, replaced `DisabledCache` in authoritative origin backend with supervised `OriginCache::Ipc`, and wired atomic status publication to `/run/ramshared/wsl2-cache-status.json`. |
+| `crates/ramshared-wsl2d/src/main.rs` | ITEM-4, ITEM-5 / RF-1, RF-4, RF-5 | Integrated `__gpu_worker` re-exec via `socketpair(AF_UNIX, SOCK_STREAM, 0)` with manual 32-byte framing, `PR_SET_PDEATHSIG`, bounded 5s supervisor teardown, replaced `DisabledCache` in authoritative origin backend with supervised `OriginCache::Ipc`, and wired atomic status publication to `/run/ramshared/wsl2-cache-status.json`. |
 
 ## Validation Results
 
@@ -26,7 +26,8 @@
    - `ipc_cache_client::tests::read_timeout_falls_back_cleanly` — **PASS**
    - `ipc_cache_client::tests::socket_disconnect_marks_unavailable` — **PASS**
    - `ipc_cache_client::tests::update_and_promote_are_non_blocking` — **PASS**
-   - Workspace suite: 103 passed, 0 failed.
+   - `gpu_cache_worker::tests::worker_teardown_is_idempotent_and_bounded` — **PASS**
+   - Workspace suite: 104 passed, 0 failed.
 
 2. **Crash Containment & Fault Injection (`ramshared-wsl2d`)**:
    - `tests::daemon_survives_abrupt_gpu_worker_kill` — **PASS**: Worker killed with `SIGKILL`; daemon continues serving origin reads without panic or hang; client transitions cleanly to `Unavailable`.
@@ -34,8 +35,8 @@
    - Package test suite: 256 passed, 0 failed.
 
 3. **Rust Slice Coverage Gate**:
-   - `crates/ramshared-block/src/gpu_cache_worker.rs`: **86.0%** (343 / 399 lines, >= 80% threshold) — **PASS**
-   - `crates/ramshared-block/src/ipc_cache_client.rs`: **90.1%** (192 / 213 lines, >= 80% threshold) — **PASS**
+   - `crates/ramshared-block/src/gpu_cache_worker.rs`: **86.7%** (365 / 421 lines, >= 80% threshold) — **PASS**
+   - `crates/ramshared-block/src/ipc_cache_client.rs`: **88.7%** (196 / 221 lines, >= 80% threshold) — **PASS**
    - Gate command: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/gpu_cache_worker.rs,crates/ramshared-block/src/ipc_cache_client.rs --min 80` — **PASS**
 
 4. **Code Quality & Lints**:

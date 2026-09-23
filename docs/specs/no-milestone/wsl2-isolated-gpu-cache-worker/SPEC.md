@@ -45,8 +45,8 @@
 
 | # | Decision | Why |
 | --- | --- | --- |
-| DT-1 | Worker process dispatched via re-execution (`/proc/self/exe __gpu_worker`) using an anonymous `socketpair(AF_UNIX, SOCK_SEQPACKET, 0)` passed via inherited FD. | Eliminates the need for a separate binary packaging artifact while providing full address space and memory crash isolation. `SOCK_SEQPACKET` preserves frame boundaries without manual byte-stream reassembly. |
-| DT-2 | 50ms hard timeout for cache read responses; non-blocking zero-wait sends for `Update` and `Promote`. | Origin swap must never stall waiting on GPU completion. Misses and timeouts fall back immediately to the authoritative SSD origin. |
+| DT-1 | Worker process dispatched via re-execution (`/proc/self/exe __gpu_worker`) using an anonymous `socketpair(AF_UNIX, SOCK_STREAM, 0)` passed via inherited FD. Framing uses a fixed 32-byte header with `payload_len`-based reassembly (manual byte-stream framing). | Eliminates the need for a separate binary packaging artifact while providing full address space and memory crash isolation. `SOCK_SEQPACKET` is unstable in Rust std; `SOCK_STREAM` with explicit framing is the pragmatic alternative and is well-tested. |
+| DT-2 | 50ms hard timeout for cache read responses; non-blocking single-write sends for `Update` and `Promote` (full frame assembled before dispatch). Handshake uses a separate 5s timeout to accommodate GPU context initialization. | Origin swap must never stall waiting on GPU completion. Misses and timeouts fall back immediately to the authoritative SSD origin. Assembling the full frame before a single `write()` prevents partial headers on the stream; `WouldBlock` with zero bytes written is treated as `Skipped`, partial writes trigger permanent fail-closed. |
 | DT-3 | Strict host safety floor: worker queries adapter budget and caps maximum allocation at `total - max(1536 MiB, 20%)`. | Guarantees that Windows host graphics, desktop compositor, and external GPU workloads never suffer out-of-memory errors due to RamShared. |
 | DT-4 | Atomic JSON telemetry publication via temporary file rename to `/run/ramshared/wsl2-cache-status.json`. | Prevents readers (`ramshared status`, `ramshared stress`) from seeing partial writes or corrupt JSON. |
 | DT-5 | Worker containment uses `prctl(PR_SET_PDEATHSIG, SIGTERM)` upon child startup, plus a 5-second bounded join timeout in parent daemon before SIGKILL escalation. | Guarantees zero zombie processes or orphaned GPU allocations if the daemon crashes or is terminated abruptly. |
@@ -71,7 +71,7 @@
 
 | ITEM / stage | # | Question | Min evidence | Abort |
 | --- | --- | --- | --- | --- |
-| ITEM-2 (Read Timeout) | #16 | Can a hung GPU ioctl delay an NBD block read past acceptable swap latency? | `cargo test -p ramshared-block isolated_worker_read_timeout_falls_back_to_origin` | Read takes > 50ms or returns EIO |
+| ITEM-2 (Read Timeout) | #16 | Can a hung GPU ioctl delay an NBD block read past acceptable swap latency? | `cargo test -p ramshared-block ipc_cache_client::tests::read_timeout_falls_back_cleanly` | Read takes > 50ms or returns EIO |
 | ITEM-3 (Worker Crash) | #13 | If the worker process receives SIGKILL, does the daemon stay alive and continue serving swap? | `cargo test -p ramshared-wsl2d daemon_survives_abrupt_gpu_worker_kill` | Daemon crashes or NBD client disconnects |
 | ITEM-4 (Teardown) | #17 | Does repeated teardown (`Disable` + reap) cleanly release all GPU memory without hanging? | `cargo test -p ramshared-block worker_teardown_is_idempotent_and_bounded` | Child remains zombie or cleanup > 5s |
 
@@ -193,6 +193,8 @@
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::worker_handshake_and_read_hit_cycle` | unit | #9 | >= 80% |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::worker_respects_headroom_floor` | unit | #16 | >= 80% |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::worker_disable_frees_allocations` | unit | #17 | >= 80% |
+| `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::worker_evicts_coldest_chunk_on_pressure` | unit | #9 | >= 80% |
+| `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::worker_teardown_is_idempotent_and_bounded` | unit | #17 | >= 80% |
 | `crates/ramshared-wsl2d/src/main.rs` | `tests::daemon_survives_abrupt_gpu_worker_kill` | integration | #13 | >= 80% |
 | `crates/ramshared-wsl2d/src/main.rs` | `tests::daemon_publishes_live_worker_telemetry` | integration | #9 | >= 80% |
 
