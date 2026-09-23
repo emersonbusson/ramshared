@@ -1968,8 +1968,18 @@ fn build_daemon_command(
             ORIGIN_CONFIG_FILE,
         ])
         .env("RAMSHARED_VRAM_CACHE_CAP_MIB", cache_cap_mib.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::null());
+    // Capture daemon stderr for debugging (Bug 5: was Stdio::null()).
+    let log_path = std::path::Path::new("/run/ramsharedd.log");
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        command.stderr(log_file);
+    } else {
+        command.stderr(Stdio::null());
+    }
     bounded_process::configure_process_group(&mut command);
     command
 }
@@ -1984,6 +1994,10 @@ fn spawn_daemon_with_deadline(
     readiness_timeout: Duration,
 ) -> Result<std::process::Child, CascadeError> {
     fs::create_dir_all(&paths.runtime_dir).map_err(|error| CascadeError::Io(error.to_string()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o755));
+    }
     remove_runtime_file(&paths.socket);
     remove_runtime_file(&paths.cache_status_file);
     remove_runtime_file(&paths.supervisor_status_file);
@@ -2553,7 +2567,10 @@ fn ensure_origin_attached<R: CommandRunner>(
             "sealed host origin manifest hash does not match origin configuration".into(),
         ));
     }
-    let value: serde_json::Value = serde_json::from_slice(&manifest).map_err(|error| {
+    let json_bytes = manifest
+        .strip_prefix(&[0xEF, 0xBB, 0xBF][..])
+        .unwrap_or(&manifest);
+    let value: serde_json::Value = serde_json::from_slice(json_bytes).map_err(|error| {
         CascadeError::Precondition(format!("sealed host origin manifest is invalid: {error}"))
     })?;
     let origin_vhdx = value
@@ -2574,8 +2591,13 @@ fn ensure_origin_attached<R: CommandRunner>(
     validate_windows_origin_path(origin_vhdx)?;
 
     eprintln!("[up] origin VHDX detached; attempting bounded host attach via wsl.exe...");
+    let wsl_path = if std::path::Path::new("/mnt/c/Windows/System32/wsl.exe").exists() {
+        "/mnt/c/Windows/System32/wsl.exe"
+    } else {
+        "wsl.exe"
+    };
     runner.run_bounded(
-        "wsl.exe",
+        wsl_path,
         &["--mount", "--vhd", origin_vhdx, "--bare"],
         Duration::from_secs(10),
     )?;
@@ -2618,6 +2640,10 @@ fn setup_new_cascade<R: CommandRunner>(
         ));
     }
     fs::create_dir_all(&paths.runtime_dir).map_err(|error| CascadeError::Io(error.to_string()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o755));
+    }
     arm_forensics_at(paths);
 
     // zram tier (HOT). --zram 0 skips.
@@ -7463,7 +7489,7 @@ mod tests {
         assert!(res.is_ok());
         let calls = runner.calls.borrow().clone();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].starts_with("wsl.exe --mount"));
+        assert!(calls[0].starts_with("wsl.exe --mount") || calls[0].starts_with("/mnt/c/Windows/System32/wsl.exe --mount"));
         assert!(!calls[0].contains("cmd.exe"));
     }
 

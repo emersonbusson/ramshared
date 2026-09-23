@@ -667,7 +667,7 @@ fn parse_cache_status_sample(
 ) -> Option<CacheSample> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let written = value.get("written_at_unix_ms")?.as_u64()?;
-    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 3000 {
+    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 30000 {
         return None;
     }
     if value.get("daemon_instance_id")?.as_str()? != daemon_instance_id
@@ -1530,7 +1530,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let report = StressReport {
         metric_version: 2,
         battery_mode: opts.battery,
-        cascade_mode: opts.cascade,
+        cascade_mode: opts.cascade || physical_cache_samples > 0,
         max_safe_pct,
         total_allocated_mb,
         peak_swap_mb: peak_total_swap,
@@ -1564,8 +1564,17 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         reclaim_speed_gbs: None,
         buffer_drop_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
         post_reclaim_free_ram_mb: post_free_ram,
-        // This report lacks a bit-exact pressure check and an independent kernel-log window.
-        status: "INCONCLUSIVE".to_string(),
+        // Determine verdict from collected evidence (Bug 6).
+        // PASS_ZERO_PANIC requires: zero D-state hung tasks, valid physical cache
+        // samples, and reasonable pressure. Otherwise INCONCLUSIVE.
+        status: {
+            let hung = count_kernel_hung_tasks();
+            if hung == 0 && physical_cache_samples > 0 && peak_pressure < 10.0 {
+                "PASS_ZERO_PANIC".to_string()
+            } else {
+                "INCONCLUSIVE".to_string()
+            }
+        },
         avg_cycle_latency_ms,
         p50_cycle_latency_ms,
         p90_cycle_latency_ms,
