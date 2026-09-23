@@ -584,6 +584,32 @@ mod tests {
     }
 
     #[test]
+    fn worker_accepts_mutation_larger_than_stream_socket_buffer() {
+        let (client_sock, worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let provider = FakeProvider::new(4 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
+        let worker_thread = std::thread::spawn(move || {
+            run_gpu_worker_loop(
+                worker_sock,
+                provider,
+                GpuWorkerConfig {
+                    target_bytes: 2 * 1024 * 1024,
+                    chunk_bytes: 2 * 1024 * 1024,
+                    reserve_floor_bytes: 1536 * 1024 * 1024,
+                },
+            )
+            .expect("worker loop failed");
+        });
+        let mut client =
+            IpcCacheClient::new(client_sock, Duration::from_millis(100), 2 * 1024 * 1024);
+        client.perform_handshake().expect("handshake failed");
+        let payload = vec![0x5a; 512 * 1024];
+        assert_eq!(client.update(0, &payload), CacheMutation::Accepted);
+        assert_eq!(client.refresh_cached_bytes(), Ok(2 * 1024 * 1024));
+        assert_eq!(client.disable(), CacheMutation::Accepted);
+        worker_thread.join().expect("join worker thread");
+    }
+
+    #[test]
     fn worker_respects_headroom_floor() {
         let total_vram = 8 * 1024 * 1024 * 1024u64; // 8 GiB
         let free_vram = 7 * 1024 * 1024 * 1024u64; // 7 GiB

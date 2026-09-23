@@ -1455,7 +1455,10 @@ fn cache_status_has_current_daemon_identity_at(
         return false;
     };
     cache_status_matches_current_daemon(&status, &expected, now_unix_ms)
-        && status.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+        // Cache health can degrade while the origin remains authoritative.
+        // Teardown still needs the exact live daemon identity so swapoff can
+        // complete before stopping that daemon.
+        && status.get("ok").and_then(serde_json::Value::as_bool).is_some()
         && status
             .get("origin_state")
             .and_then(serde_json::Value::as_str)
@@ -1491,6 +1494,15 @@ fn cache_status_has_current_daemon_identity(paths: &RuntimePaths, pid: u32) -> b
     unix_time_ms().is_some_and(|now_unix_ms| {
         cache_status_has_current_daemon_identity_at(paths, pid, now_unix_ms)
     })
+}
+
+fn cache_status_is_healthy(paths: &RuntimePaths, pid: u32) -> bool {
+    cache_status_has_current_daemon_identity(paths, pid)
+        && fs::read_to_string(&paths.cache_status_file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|status| status.get("ok").and_then(serde_json::Value::as_bool))
+            == Some(true)
 }
 
 fn verified_daemon_pid(paths: &RuntimePaths) -> Option<u32> {
@@ -2022,7 +2034,7 @@ fn spawn_daemon_with_deadline(
         return Err(CascadeError::Io(error.to_string()));
     }
     let deadline = Instant::now() + readiness_timeout;
-    while (!paths.socket.exists() || !cache_status_has_current_daemon_identity(paths, child.id()))
+    while (!paths.socket.exists() || !cache_status_is_healthy(paths, child.id()))
         && Instant::now() < deadline
     {
         sleep(Duration::from_millis(50));
@@ -2036,7 +2048,7 @@ fn spawn_daemon_with_deadline(
             "daemon did not start (socket missing)".into(),
         ));
     }
-    if !cache_status_has_current_daemon_identity(paths, child.id()) {
+    if !cache_status_is_healthy(paths, child.id()) {
         // No NBD attach exists yet. A daemon without an exact current identity
         // cannot safely consume control-plane zero-cache requests.
         terminate_spawned_child(&mut child)?;
@@ -4122,6 +4134,24 @@ mod tests {
             ),
         )
         .unwrap_or_else(|error| panic!("write cache identity status: {error}"));
+    }
+
+    #[test]
+    fn degraded_cache_keeps_exact_daemon_identity_for_swapoff_first_teardown() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime directory");
+        let pid = std::process::id();
+        let instance_id = daemon_instance_id_from_pid(pid).expect("current process identity");
+        fs::write(
+            &paths.cache_status_file,
+            format!(
+                r#"{{"schema_version":1,"daemon_instance_id":"{instance_id}","written_at_unix_ms":{},"ok":false,"origin_state":"READY","cache_state":"UNAVAILABLE","logical_capacity_kib":4194304,"vram_cached_kib":0,"gpu_headroom_kib":null,"ssd_origin_written_kib":1,"cache_fallback_reads":1,"cache_invalidations":0,"cache_releases":0,"cache_target_kib":4194304}}"#,
+                unix_time_ms().expect("current time")
+            ),
+        )
+        .expect("write degraded status");
+        assert!(cache_status_has_current_daemon_identity(&paths, pid));
     }
 
     fn seal_runtime_lifecycle(

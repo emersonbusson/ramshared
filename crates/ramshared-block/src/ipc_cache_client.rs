@@ -81,7 +81,8 @@ impl IpcCacheClient {
         Ok(())
     }
 
-    fn fail(&mut self) {
+    fn fail(&mut self, reason: &'static str) {
+        eprintln!("[ramsharedd] isolated GPU cache unavailable: {reason}");
         self.state = CacheState::Unavailable;
         self.cached_bytes = 0;
     }
@@ -103,7 +104,7 @@ impl IpcCacheClient {
         if self.socket.write_all(&req.encode()).is_err()
             || self.socket.read_exact(&mut buf).is_err()
         {
-            self.fail();
+            self.fail("heartbeat I/O failed");
             return Err("GPU cache worker heartbeat timed out");
         }
         let resp = FrameHeader::decode(&buf);
@@ -112,7 +113,7 @@ impl IpcCacheClient {
             || resp.status != STATUS_OK
             || resp.offset != self.target_bytes
         {
-            self.fail();
+            self.fail("heartbeat response mismatched");
             return Err("GPU cache worker heartbeat mismatched");
         }
         self.cached_bytes = (resp.aux as u64) << 10;
@@ -123,41 +124,24 @@ impl IpcCacheClient {
         if self.state != CacheState::Active {
             return CacheMutation::Skipped;
         }
-        // Assemble the complete frame into one contiguous buffer so a single
-        // write call can dispatch it without leaving partial headers on the stream.
+        // Assemble one frame and send it within the socket write deadline.
         let encoded_header = header.encode();
         let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload.len());
         frame.extend_from_slice(&encoded_header);
         frame.extend_from_slice(payload);
 
-        // Non-blocking write to satisfy RF-2 and DT-2: mutations must never
-        // stall the daemon I/O path. A single write() on the full frame means
-        // either the kernel accepts the entire frame or we detect the partial
-        // and fail-closed — never leaving a half-frame on the stream silently.
-        let _ = self.socket.set_nonblocking(true);
-        let res = std::io::Write::write(&mut self.socket, &frame);
-        let _ = self.socket.set_nonblocking(false);
-
-        match res {
-            Ok(n) if n == frame.len() => {
+        // SOCK_STREAM may accept only part of a large write even when the
+        // worker is healthy. write_all completes the frame while the bounded
+        // write timeout prevents an unresponsive worker from stalling NBD.
+        match self.socket.write_all(&frame) {
+            Ok(()) => {
                 // Accepted bytes are queued, not evidence of GPU allocation.
                 self.cached_bytes = 0;
                 CacheMutation::Accepted
             }
-            Ok(_) => {
-                // Partial write on SOCK_STREAM: stream framing is broken.
-                // Fail-closed permanently (SPEC DT-2, RF-3).
-                self.fail();
-                CacheMutation::Failed
-            }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // Socket buffer full and zero bytes written — drop this
-                // mutation without corrupting the stream or disabling the
-                // cache (best-effort semantics).
-                CacheMutation::Skipped
-            }
             Err(_) => {
-                self.fail();
+                // A timed-out write may have sent a prefix. Discard the stream.
+                self.fail("bounded mutation frame write failed");
                 CacheMutation::Failed
             }
         }
@@ -181,19 +165,19 @@ impl BestEffortCache for IpcCacheClient {
 
         let _ = self.socket.set_read_timeout(Some(self.read_timeout));
         if self.socket.write_all(&req.encode()).is_err() {
-            self.fail();
+            self.fail("read request write failed");
             return CacheRead::Failed;
         }
 
         let mut hdr_buf = [0u8; FRAME_HEADER_LEN];
         if self.socket.read_exact(&mut hdr_buf).is_err() {
-            self.fail();
+            self.fail("read response timed out");
             return CacheRead::Failed;
         }
 
         let resp = FrameHeader::decode(&hdr_buf);
         if resp.msg_type != MSG_READ_RESP || resp.correlation_id != self.seq {
-            self.fail();
+            self.fail("read response identity mismatched");
             return CacheRead::Failed;
         }
         // Sync authoritative cached_bytes from the worker (aux carries KiB).
@@ -202,18 +186,18 @@ impl BestEffortCache for IpcCacheClient {
         match resp.status {
             STATUS_OK => {
                 if resp.payload_len as usize != destination.len() {
-                    self.fail();
+                    self.fail("read response payload length mismatched");
                     return CacheRead::Failed;
                 }
                 if self.socket.read_exact(destination).is_err() {
-                    self.fail();
+                    self.fail("read response payload timed out");
                     return CacheRead::Failed;
                 }
                 CacheRead::Hit
             }
             STATUS_MISS => CacheRead::Miss,
             _ => {
-                self.fail();
+                self.fail("read response status failed");
                 CacheRead::Failed
             }
         }
@@ -352,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn update_and_promote_are_non_blocking() {
+    fn small_update_and_promote_complete_within_the_deadline() {
         let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
         let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
 

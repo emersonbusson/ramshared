@@ -2474,6 +2474,13 @@ trait NbdRuntimeStarter {
         None
     }
 
+    fn origin_cache_target_bytes(
+        &mut self,
+        logical_size: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        Ok(logical_size)
+    }
+
     /// Production waits between fail-closed teardown observations. Tests inject
     /// zero only after supplying deterministic replacement observations.
     fn teardown_retry_delay(&mut self) -> Duration {
@@ -2893,6 +2900,23 @@ fn spawn_nbd_shutdown_bridge(
 }
 
 impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
+    fn origin_cache_target_bytes(
+        &mut self,
+        logical_size: u64,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
+        let manifest = read_sealed_origin_manifest(ORIGIN_MANIFEST_PATH)?;
+        let target = manifest.physical_cache_cap_mib * 1024 * 1024;
+        if target == 0 || target > logical_size {
+            return Err("sealed physical cache cap exceeds logical capacity".into());
+        }
+        if let Ok(cli_cap) = std::env::var("RAMSHARED_VRAM_CACHE_CAP_MIB")
+            && cli_cap.parse::<u64>().ok() != Some(manifest.physical_cache_cap_mib)
+        {
+            return Err("CLI cache cap differs from sealed origin manifest".into());
+        }
+        Ok(target)
+    }
+
     fn lock_memory(
         &mut self,
         force: bool,
@@ -3168,9 +3192,12 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         if let Some(origin) = origin {
             let chunk = chunk_bytes_from_env();
             let reserve = reserve_floor;
-            let (origin_cache, supervisor) = match starter
-                .spawn_isolated_gpu_worker(size, chunk, reserve)
-            {
+            let cache_target = starter.origin_cache_target_bytes(size)?;
+            let (origin_cache, supervisor) = match starter.spawn_isolated_gpu_worker(
+                cache_target,
+                chunk,
+                reserve,
+            ) {
                 Ok((client, supervisor)) => {
                     eprintln!(
                         "[ramsharedd] mode=authoritative-origin logical={} MiB cache=ACTIVE \
@@ -5787,13 +5814,22 @@ mod tests {
                 panic!("origin composition must not initialize DXG")
             }
 
+            fn origin_cache_target_bytes(
+                &mut self,
+                logical_size: u64,
+            ) -> Result<u64, Box<dyn std::error::Error>> {
+                assert_eq!(logical_size, GIB);
+                Ok(256 * 1024 * 1024)
+            }
+
             fn spawn_isolated_gpu_worker(
                 &mut self,
-                _target_bytes: u64,
+                target_bytes: u64,
                 _chunk_bytes: u64,
                 _reserve_floor: u64,
             ) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>>
             {
+                assert_eq!(target_bytes, 256 * 1024 * 1024);
                 Err("origin test fixture uses disabled cache fallback".into())
             }
         }
