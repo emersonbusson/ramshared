@@ -668,7 +668,7 @@ fn run_check() -> CheckReport {
     let cuda = probe_cuda();
     let backends = probe_backends(&kernel);
 
-    let mut blockers = Vec::new();
+    let mut blockers = active_swap_activation_blockers(&swaps);
     let mut warnings = Vec::new();
 
     if wsl.status == Status::Fail {
@@ -854,6 +854,23 @@ fn parse_swaps(text: &str) -> Vec<SwapEntry> {
                 used_kib,
                 priority,
             })
+        })
+        .collect()
+}
+
+fn active_swap_activation_blockers(swaps: &[SwapEntry]) -> Vec<String> {
+    swaps
+        .iter()
+        .filter(|swap| {
+            cascade::is_nbd_device_path(&swap.filename)
+                || cascade::is_ublk_device_path(&swap.filename)
+                || cascade::is_zram_device_path(&swap.filename)
+        })
+        .map(|swap| {
+            format!(
+                "managed-style swap is already active at {} (used_kib={}); refuse a new activation and inspect `ramshared status`",
+                swap.filename, swap.used_kib
+            )
         })
         .collect()
 }
@@ -1979,6 +1996,36 @@ Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
         assert_eq!(swaps[0].size_kib, 8_388_608);
         assert_eq!(swaps[0].used_kib, 5_643_764);
         assert_eq!(swaps[0].priority, -2);
+    }
+
+    #[test]
+    fn check_blocks_existing_managed_swap_even_when_backend_is_available() {
+        let disk = SwapEntry {
+            filename: "/dev/sdb".to_string(),
+            kind: "partition".to_string(),
+            size_kib: 4_194_304,
+            used_kib: 0,
+            priority: -2,
+        };
+        assert!(active_swap_activation_blockers(&[disk]).is_empty());
+
+        for (device, used_kib) in [
+            ("/nbd0", 346_316),
+            ("/dev/nbd0", 0),
+            ("/dev/ublkb0", 0),
+            ("/zram1", 0),
+        ] {
+            let swaps = [SwapEntry {
+                filename: device.to_string(),
+                kind: "partition".to_string(),
+                size_kib: 3_801_084,
+                used_kib,
+                priority: 50,
+            }];
+            let blockers = active_swap_activation_blockers(&swaps);
+            assert_eq!(blockers.len(), 1, "{device} must block a new activation");
+            assert!(blockers[0].contains(device));
+        }
     }
 
     #[test]
