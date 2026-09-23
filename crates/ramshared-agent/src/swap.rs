@@ -93,19 +93,18 @@ pub fn swapon_args(dev: &str, prio: Option<i32>) -> Vec<String> {
 fn run(cmd: &str, args: &[String]) -> Result<()> {
     let status = Command::new(cmd).args(args).status()?;
     if status.success() {
-        Ok(())
-    } else {
-        if let Some(code) = status.code() {
-            match code {
-                28 | 13 | 34 => return Err(Error::from_raw_os_error(code)),
-                _ => {}
-            }
-        }
-        Err(Error::other(format!(
-            "{cmd} {} -> {status}",
-            args.join(" ")
-        )))
+        return Ok(());
     }
+    if let Some(code) = status.code() {
+        match code {
+            28 | 13 | 34 => return Err(Error::from_raw_os_error(code)),
+            _ => {}
+        }
+    }
+    Err(Error::other(format!(
+        "{cmd} {} -> {status}",
+        args.join(" ")
+    )))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -118,15 +117,14 @@ pub enum SwapError {
 
 impl SwapError {
     fn from_io_err(e: Error, fallback_msg: String) -> Self {
-        if let Some(code) = e.raw_os_error() {
-            match code {
-                28 => SwapError::DiskFull,         // ENOSPC
-                13 => SwapError::PermissionDenied, // EACCES
-                34 => SwapError::InvalidSize,      // ERANGE
-                _ => SwapError::Other(fallback_msg),
-            }
-        } else {
-            SwapError::Other(fallback_msg)
+        let Some(code) = e.raw_os_error() else {
+            return SwapError::Other(fallback_msg);
+        };
+        match code {
+            28 => SwapError::DiskFull,         // ENOSPC
+            13 => SwapError::PermissionDenied, // EACCES
+            34 => SwapError::InvalidSize,      // ERANGE
+            _ => SwapError::Other(fallback_msg),
         }
     }
 }
