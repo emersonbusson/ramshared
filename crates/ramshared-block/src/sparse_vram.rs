@@ -356,6 +356,14 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                 )));
             };
             if let Some(m) = &chunk.mem {
+                if (rel as u64).saturating_add(n as u64) > m.len() as u64 {
+                    return Err(IoError(format!(
+                        "sparse physical read oob rel={} len={} phys_len={}",
+                        rel,
+                        n,
+                        m.len()
+                    )));
+                }
                 m.read_at(rel as u64, &mut buf[done..done + n])
                     .map_err(|e: VramError| IoError(e.to_string()))?;
             } else {
@@ -401,6 +409,14 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                 .mem
                 .as_mut()
                 .ok_or_else(|| IoError("sparse: mem missing after ensure".into()))?;
+            if (rel as u64).saturating_add(n as u64) > m.len() as u64 {
+                return Err(IoError(format!(
+                    "sparse physical write oob rel={} len={} phys_len={}",
+                    rel,
+                    n,
+                    m.len()
+                )));
+            }
             m.write_at(rel as u64, &data[done..done + n])
                 .map_err(|e: VramError| IoError(e.to_string()))?;
 
@@ -707,6 +723,24 @@ mod tests {
             err.0.contains("sparse page table oob idx=9999")
                 || err.0.contains("exceeds physical map len")
         );
+    }
+
+    #[test]
+    fn physical_bounds_check_prevents_oob_dma() {
+        let p = FakeProvider::new();
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        be.ensure_live(0).unwrap();
+        if let Some(c) = be.chunks.get_mut(0)
+            && let Some(m) = &mut c.mem {
+                m.0.truncate(4096);
+            }
+        let buf = [1u8; 8192];
+        let err_w = be.write_at(0, &buf).unwrap_err();
+        assert!(err_w.0.contains("sparse physical write oob"));
+
+        let mut read_buf = [0u8; 8192];
+        let err_r = be.read_at(0, &mut read_buf).unwrap_err();
+        assert!(err_r.0.contains("sparse physical read oob"));
     }
 
     #[test]
