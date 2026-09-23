@@ -26,6 +26,7 @@ pub const MSG_HANDSHAKE_RESP: u8 = 10;
 pub const STATUS_OK: u8 = 0;
 pub const STATUS_MISS: u8 = 1;
 pub const STATUS_ERROR: u8 = 2;
+const RUNTIME_FREE_BUFFER_BYTES: u64 = 768 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameHeader {
@@ -91,6 +92,31 @@ impl Default for GpuWorkerConfig {
 struct CacheChunk<'p, P: VramProvider + 'p> {
     mem: P::Mem<'p>,
     last_accessed: Instant,
+    valid_ranges: Vec<(u64, u64)>,
+}
+
+impl<P: VramProvider> CacheChunk<'_, P> {
+    fn contains(&self, start: u64, end: u64) -> bool {
+        self.valid_ranges
+            .iter()
+            .any(|&(valid_start, valid_end)| valid_start <= start && end <= valid_end)
+    }
+
+    fn mark_valid(&mut self, start: u64, end: u64) {
+        self.valid_ranges.push((start, end));
+        self.valid_ranges.sort_unstable_by_key(|range| range.0);
+        let mut merged: Vec<(u64, u64)> = Vec::with_capacity(self.valid_ranges.len());
+        for (start, end) in self.valid_ranges.drain(..) {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+                continue;
+            }
+            merged.push((start, end));
+        }
+        self.valid_ranges = merged;
+    }
 }
 
 pub struct GpuCacheWorker<'p, P: VramProvider + 'p> {
@@ -154,6 +180,9 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         }
         let chunk_base = chunk_idx.saturating_mul(chunk_bytes);
         if let Some(chunk) = self.chunks.get_mut(&chunk_base) {
+            if !chunk.contains(chunk_off, chunk_off + len as u64) {
+                return None;
+            }
             chunk.last_accessed = Instant::now();
             let mut buf = vec![0u8; len];
             if chunk.mem.read_at(chunk_off, &mut buf).is_ok() {
@@ -178,8 +207,12 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         }
         let chunk_base = chunk_idx.saturating_mul(chunk_bytes);
         if let Some(chunk) = self.chunks.get_mut(&chunk_base) {
+            if chunk.mem.write_at(chunk_off, data).is_err() {
+                self.chunks.remove(&chunk_base);
+                return;
+            }
+            chunk.mark_valid(chunk_off, chunk_off + data.len() as u64);
             chunk.last_accessed = Instant::now();
-            let _ = chunk.mem.write_at(chunk_off, data);
             return;
         }
         self.allocate_and_write(chunk_base, chunk_off, data);
@@ -198,19 +231,31 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         let chunk_bytes = self.config.chunk_bytes;
         let needed = chunk_bytes as u64;
 
+        // Capacity reserve bounds the target; live free memory separately
+        // protects the display and other GPU consumers at each allocation.
+        if !self
+            .provider
+            .mem_info()
+            .is_ok_and(|(free, _)| free >= needed.saturating_add(RUNTIME_FREE_BUFFER_BYTES))
+        {
+            return;
+        }
+
         while self.cached_bytes().saturating_add(needed) > self.effective_target_bytes {
             if !self.evict_coldest_chunk() {
                 return;
             }
         }
 
-        if let Ok(mut mem) = self.provider.alloc(chunk_bytes) {
-            let _ = mem.write_at(chunk_off, data);
+        if let Ok(mut mem) = self.provider.alloc(chunk_bytes)
+            && mem.write_at(chunk_off, data).is_ok()
+        {
             self.chunks.insert(
                 chunk_base,
                 CacheChunk {
                     mem,
                     last_accessed: Instant::now(),
+                    valid_ranges: vec![(chunk_off, chunk_off + data.len() as u64)],
                 },
             );
         }
@@ -491,6 +536,54 @@ mod tests {
     }
 
     #[test]
+    fn worker_never_serves_unwritten_bytes_from_an_allocated_chunk() {
+        let provider = FakeProvider::new(4 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
+        let mut worker = GpuCacheWorker::new(
+            &provider,
+            GpuWorkerConfig {
+                target_bytes: 2 * 1024 * 1024,
+                chunk_bytes: 2 * 1024 * 1024,
+                reserve_floor_bytes: 1536 * 1024 * 1024,
+            },
+        );
+        worker.handle_update(0, &[1, 2, 3, 4]);
+        assert_eq!(worker.handle_read(0, 4), Some(vec![1, 2, 3, 4]));
+        assert_eq!(worker.handle_read(4096, 4), None);
+        assert_eq!(worker.handle_read(2, 4), None);
+        worker.handle_update(4, &[5, 6, 7, 8]);
+        assert_eq!(worker.handle_read(0, 8), Some(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+    }
+
+    #[test]
+    fn worker_reports_allocated_vram_after_bounded_heartbeat() {
+        let (client_sock, worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let provider = FakeProvider::new(4 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
+        let worker_thread = std::thread::spawn(move || {
+            run_gpu_worker_loop(
+                worker_sock,
+                provider,
+                GpuWorkerConfig {
+                    target_bytes: 2 * 1024 * 1024,
+                    chunk_bytes: 2 * 1024 * 1024,
+                    reserve_floor_bytes: 1536 * 1024 * 1024,
+                },
+            )
+            .expect("worker loop failed");
+        });
+        let mut client =
+            IpcCacheClient::new(client_sock, Duration::from_millis(100), 2 * 1024 * 1024);
+        client.perform_handshake().expect("handshake failed");
+        assert_eq!(client.update(0, &[1, 2, 3, 4]), CacheMutation::Accepted);
+        assert_eq!(
+            client.refresh_cached_bytes().expect("heartbeat failed"),
+            2 * 1024 * 1024
+        );
+        assert_eq!(client.cached_bytes(), 2 * 1024 * 1024);
+        assert_eq!(client.disable(), CacheMutation::Accepted);
+        worker_thread.join().expect("join worker thread");
+    }
+
+    #[test]
     fn worker_respects_headroom_floor() {
         let total_vram = 8 * 1024 * 1024 * 1024u64; // 8 GiB
         let free_vram = 7 * 1024 * 1024 * 1024u64; // 7 GiB
@@ -508,6 +601,23 @@ mod tests {
 
         let worker = GpuCacheWorker::new(&provider, config);
         assert_eq!(worker.target_bytes(), 6 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn worker_refuses_allocation_when_live_gpu_free_buffer_is_low() {
+        let provider = FakeProvider::new(6 * 1024 * 1024 * 1024, 256 * 1024 * 1024);
+        let allocations = Arc::clone(&provider.live_allocations);
+        let mut worker = GpuCacheWorker::new(
+            &provider,
+            GpuWorkerConfig {
+                target_bytes: 2 * 1024 * 1024,
+                chunk_bytes: 2 * 1024 * 1024,
+                reserve_floor_bytes: 1536 * 1024 * 1024,
+            },
+        );
+        worker.handle_update(0, &[1, 2, 3, 4]);
+        assert_eq!(allocations.load(Ordering::SeqCst), 0);
+        assert_eq!(worker.cached_bytes(), 0);
     }
 
     #[test]

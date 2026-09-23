@@ -114,7 +114,7 @@ impl VhdxLifecycle {
         }
     }
 
-    /// Attach a VHDX via `wsl.exe --mount --vhd <path> --bare --type ext4`.
+    /// Attach a VHDX via `wsl.exe --mount --vhd <path> --bare`.
     /// Idempotent: skips if PartUUID already attached. Bounded to 10s (DT-4).
     pub fn attach(&self, path: &str, partuuid: &str) -> Result<(), String> {
         let _guard = self._serialize.lock().unwrap_or_else(|e| e.into_inner());
@@ -127,27 +127,19 @@ impl VhdxLifecycle {
             }
         }
 
-        // Production: CreateProcessW("wsl.exe", "--mount --vhd <path> --bare --type ext4")
-        // with 10s timeout. Env-bound for Day-0.
-        // For testing, we simulate success.
-        let output = std::process::Command::new("wsl.exe")
-            .args(["--mount", "--vhd", path, "--bare", "--type", "ext4"])
-            .timeout(Duration::from_secs(10))
-            .output();
-
-        match output {
-            Ok(out) if out.status.success() => {
+        match run_command_bounded(
+            "wsl.exe",
+            &["--mount", "--vhd", path, "--bare"],
+            Duration::from_secs(10),
+        ) {
+            Ok(()) => {
                 self.attached
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .push(partuuid.to_string());
                 Ok(())
             }
-            Ok(out) => Err(format!(
-                "wsl.exe --mount failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )),
-            Err(e) => Err(format!("wsl.exe spawn failed: {e}")),
+            Err(error) => Err(format!("wsl.exe --mount failed: {error}")),
         }
     }
 
@@ -155,24 +147,15 @@ impl VhdxLifecycle {
     pub fn detach(&self, path: &str) -> Result<(), String> {
         let _guard = self._serialize.lock().unwrap_or_else(|e| e.into_inner());
 
-        let output = std::process::Command::new("wsl.exe")
-            .args(["--unmount", path])
-            .timeout(Duration::from_secs(10))
-            .output();
-
-        match output {
-            Ok(out) if out.status.success() => {
+        match run_command_bounded("wsl.exe", &["--unmount", path], Duration::from_secs(10)) {
+            Ok(()) => {
                 self.attached
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .retain(|_| true); // clear all (single-VHDX Day-0)
+                    .clear(); // single-VHDX Day-0 state
                 Ok(())
             }
-            Ok(out) => Err(format!(
-                "wsl.exe --unmount failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )),
-            Err(e) => Err(format!("wsl.exe spawn failed: {e}")),
+            Err(error) => Err(format!("wsl.exe --unmount failed: {error}")),
         }
     }
 
@@ -218,15 +201,32 @@ pub trait CommandRunner {
     fn run(&self, program: &str, args: &[&str], timeout: Duration) -> Result<String, String>;
 }
 
-/// Extension trait for `std::process::Command` with timeout.
-trait CommandTimeout {
-    fn timeout(&mut self, d: Duration) -> &mut Self;
-}
-
-impl CommandTimeout for std::process::Command {
-    fn timeout(&mut self, _d: Duration) -> &mut Self {
-        // Production: spawn + kill after deadline. For now, rely on process timeout.
-        self
+fn run_command_bounded(program: &str, args: &[&str], deadline: Duration) -> Result<(), String> {
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("exit status {status}")),
+            Ok(None) if start.elapsed() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {} ms", deadline.as_millis()));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        }
     }
 }
 
@@ -331,10 +331,16 @@ mod tests {
     }
 
     #[test]
-    fn command_timeout_extension_does_not_panic() {
-        use super::CommandTimeout;
-        let mut cmd = std::process::Command::new("true");
-        cmd.timeout(Duration::from_secs(1));
-        // No assertion needed — just verify it compiles and doesn't panic
+    fn bounded_command_accepts_success() {
+        assert!(run_command_bounded("true", &[], Duration::from_secs(1)).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vhdx_command_runner_reaps_a_timed_out_child() {
+        let start = Instant::now();
+        let result = run_command_bounded("sleep", &["2"], Duration::from_millis(20));
+        assert!(result.is_err());
+        assert!(start.elapsed() < Duration::from_millis(500));
     }
 }

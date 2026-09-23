@@ -7489,7 +7489,10 @@ mod tests {
         assert!(res.is_ok());
         let calls = runner.calls.borrow().clone();
         assert_eq!(calls.len(), 1);
-        assert!(calls[0].starts_with("wsl.exe --mount") || calls[0].starts_with("/mnt/c/Windows/System32/wsl.exe --mount"));
+        assert!(
+            calls[0].starts_with("wsl.exe --mount")
+                || calls[0].starts_with("/mnt/c/Windows/System32/wsl.exe --mount")
+        );
         assert!(!calls[0].contains("cmd.exe"));
     }
 

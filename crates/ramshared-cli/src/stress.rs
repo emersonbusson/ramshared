@@ -250,7 +250,6 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                 if opts.tier3_target_pct.is_none() {
                     opts.tier3_target_pct = Some(15);
                 }
-                opts.max_psi_full = opts.max_psi_full.max(50.0);
                 if opts.step_pct == 1 {
                     opts.step_pct = 5;
                 }
@@ -271,7 +270,6 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                 if !target_explicit {
                     opts.target_pct = 100;
                 }
-                opts.max_psi_full = opts.max_psi_full.max(50.0);
                 if opts.step_pct == 1 {
                     opts.step_pct = 5;
                 }
@@ -340,6 +338,9 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     opts.start_pct = opts.start_pct.clamp(1, 200);
     opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
+    if opts.cascade && is_wsl2() {
+        opts.max_psi_full = opts.max_psi_full.min(10.0);
+    }
     Ok(opts)
 }
 
@@ -404,6 +405,51 @@ pub fn count_kernel_hung_tasks() -> u64 {
     } else {
         0
     }
+}
+
+fn count_kernel_fault_lines(text: &str) -> u64 {
+    text.lines()
+        .filter(|line| {
+            line.contains("Possible stuck request")
+                || line.contains("I/O error, dev nbd")
+                || line.contains("Receive control failed")
+                || line.contains("MCE: Killing")
+                || line.contains("blocked for more than")
+                || line.contains("hung_task")
+                || line.contains("BUG:")
+                || line.contains("Oops:")
+                || line.contains("Kernel panic")
+        })
+        .count() as u64
+}
+
+fn current_kernel_faults() -> Option<u64> {
+    let output = std::process::Command::new("dmesg").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(count_kernel_fault_lines(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+fn stress_passes(
+    kernel_faults: Option<u64>,
+    cascade: bool,
+    physical_samples: usize,
+    cache_lost: bool,
+    safety_halt: bool,
+    simultaneous_full_tiers: bool,
+    peak_pressure: f64,
+) -> bool {
+    cascade
+        && kernel_faults == Some(0)
+        && peak_pressure.is_finite()
+        && peak_pressure < 10.0
+        && physical_samples > 0
+        && !cache_lost
+        && !safety_halt
+        && simultaneous_full_tiers
 }
 
 const GPU_SAMPLE_INTERVAL_MS: u64 = 1_000;
@@ -667,7 +713,7 @@ fn parse_cache_status_sample(
 ) -> Option<CacheSample> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let written = value.get("written_at_unix_ms")?.as_u64()?;
-    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 300_000 {
+    if written > now_ms.saturating_add(1000) || now_ms.saturating_sub(written) > 15_000 {
         return None;
     }
     if value.get("daemon_instance_id")?.as_str()? != daemon_instance_id
@@ -888,6 +934,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         opts.tier3_target_pct,
         read_cache_status_sample(),
     )?;
+    if (opts.cascade || opts.tier3_target_pct.is_some()) && current_kernel_faults() != Some(0) {
+        return Err("kernel fault evidence is unavailable or already contains faults".to_string());
+    }
     let term_signal = Arc::new(AtomicBool::new(false));
     let last_heartbeat = Arc::new(AtomicU64::new(
         SystemTime::now()
@@ -916,6 +965,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 {
                     guard.clear();
                 }
+                term_watchdog.store(true, Ordering::Relaxed);
                 break;
             }
         }
@@ -963,6 +1013,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut peak_physical_vram = 0u64;
     let mut peak_physical_target = 0u64;
     let mut physical_cache_samples = 0usize;
+    let mut cache_lost_during_stress = false;
+    let mut safety_halt = false;
     let mut simultaneous_full_tiers = false;
     let mut peak_ssd = 0u64;
     let mut peak_total_swap = 0u64;
@@ -992,6 +1044,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut last_gpu_sample_ms = 0u64;
     while current_target <= effective_target {
         if term_signal.load(Ordering::Relaxed) {
+            safety_halt = true;
+            break;
+        }
+        if (opts.cascade || opts.tier3_target_pct.is_some()) && current_kernel_faults() != Some(0) {
+            safety_halt = true;
             break;
         }
 
@@ -1010,6 +1067,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
         let cache_sample = read_cache_status_sample();
+        if (opts.cascade || opts.tier3_target_pct.is_some()) && cache_sample.is_none() {
+            cache_lost_during_stress = true;
+            safety_halt = true;
+            break;
+        }
         if let Some(sample) = cache_sample {
             physical_cache_samples += 1;
             peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
@@ -1084,6 +1146,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             }
         }
 
+        if term_signal.load(Ordering::Relaxed) {
+            safety_halt = true;
+            break;
+        }
+
         let floor_breached = if is_multi_tier {
             avail_mb <= hard_floor && idle_cycles >= max_idle_cycles
         } else {
@@ -1091,6 +1158,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         };
 
         if floor_breached {
+            safety_halt = true;
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -1134,6 +1202,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 }
             }
             if let BuddyInterlockAction::Halt { detected_chunks } = action {
+                safety_halt = true;
                 if !opts.json {
                     println!(
                         "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛡️  BUDDY INTERLOCK   │",
@@ -1157,65 +1226,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         if psi_full >= opts.max_psi_full {
-            if is_multi_tier {
-                // Transient PSI spike during heavy multi-tier swap; damp and wait up to 5s
-                let mut calmed = false;
-                for _ in 0..10 {
-                    if term_signal.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(500));
-                    let fresh_psi = read_psi_full();
-                    if fresh_psi < opts.max_psi_full {
-                        calmed = true;
-                        break;
-                    }
-                }
-                if !calmed {
-                    if !opts.json {
-                        println!(
-                            "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
-                            current_target,
-                            total_allocated_mb,
-                            peak_zram,
-                            peak_vram,
-                            peak_ssd,
-                            peak_total_swap,
-                            psi_full,
-                            lat_ms,
-                            reading.gauge
-                        );
-                        println!(
-                            "\n[⚠️  PRESSURE DAMPING] PSI Full pressure sustained ({:.1}%) >= {:.1}%. Halted at {}%.",
-                            psi_full, opts.max_psi_full, max_safe_pct
-                        );
-                    }
-                    break;
-                }
-            } else {
-                if !opts.json {
-                    println!(
-                        "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
-                        current_target,
-                        total_allocated_mb,
-                        peak_zram,
-                        peak_vram,
-                        peak_ssd,
-                        peak_total_swap,
-                        psi_full,
-                        lat_ms,
-                        reading.gauge
-                    );
-                    println!(
-                        "\n[⚠️  PRESSURE DAMPING] PSI Full pressure ({:.1}%) >= {:.1}%. Halted at {}%.",
-                        psi_full, opts.max_psi_full, max_safe_pct
-                    );
-                }
-                break;
+            safety_halt = true;
+            if !opts.json {
+                println!(
+                    "\n[⚠️ PRESSURE LIMIT] PSI Full {:.1}% reached the {:.1}% limit. Halted at {}%.",
+                    psi_full, opts.max_psi_full, max_safe_pct
+                );
             }
+            break;
         }
 
         if lat_ms >= opts.max_latency_ms {
+            safety_halt = true;
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⏱️  LATENCY SPIKE DAMP    │",
@@ -1288,6 +1310,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                     }
                 }
                 if !recovered {
+                    safety_halt = true;
                     if !opts.json {
                         println!(
                             "\n[🛑 RAM FLOOR BOUND] Memory headroom cannot recover above safe floor ({} MB <= {} MB). Halting ramp safely at {}%.",
@@ -1300,6 +1323,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 // triggered the wait are stale after writeback recovery.
                 continue;
             } else {
+                safety_halt = true;
                 break;
             }
         }
@@ -1372,7 +1396,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     }
 
     // Phase 2 & 3: Active Page Swapper & Cycler (Only in Battery Mode or when hold_sec > 0)
-    if opts.battery || opts.hold_sec > 0 {
+    if !safety_halt && (opts.battery || opts.hold_sec > 0) {
         if !opts.json {
             println!("{}", "═".repeat(105));
             println!(
@@ -1390,6 +1414,24 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let (_, _, init_cap3) = read_swap_tier_capacities();
         let mut hold_cap3_pct = init_cap3.pct;
         while Instant::now() < hold_end && !term_signal.load(Ordering::Relaxed) {
+            if (opts.cascade || opts.tier3_target_pct.is_some())
+                && current_kernel_faults() != Some(0)
+            {
+                safety_halt = true;
+                break;
+            }
+            let (_, free_before_touch_mb) = read_mem_info();
+            if read_psi_full() >= opts.max_psi_full
+                || free_before_touch_mb
+                    <= if is_wsl2() {
+                        opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB)
+                    } else {
+                        opts.min_ram_mb
+                    }
+            {
+                safety_halt = true;
+                break;
+            }
             cycle += 1;
             last_heartbeat.store(
                 SystemTime::now()
@@ -1442,6 +1484,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
             let (cap1, cap2, cap3) = read_swap_tier_capacities();
             let cache_sample = read_cache_status_sample();
+            if (opts.cascade || opts.tier3_target_pct.is_some()) && cache_sample.is_none() {
+                cache_lost_during_stress = true;
+                safety_halt = true;
+                break;
+            }
             if let Some(sample) = cache_sample {
                 physical_cache_samples += 1;
                 peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
@@ -1505,6 +1552,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
     }
 
+    if term_signal.load(Ordering::Relaxed) {
+        safety_halt = true;
+    }
+
     // Phase 4: drop the test buffers; this is not a physical reclaim benchmark.
     let t_reclaim_start = Instant::now();
     if let Ok(mut guard) = chunks.lock() {
@@ -1565,15 +1616,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         buffer_drop_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
         post_reclaim_free_ram_mb: post_free_ram,
         // Determine verdict from collected evidence (Bug 6).
-        // PASS_ZERO_PANIC requires: zero D-state hung tasks, valid physical cache
-        // samples, and reasonable pressure. Otherwise INCONCLUSIVE.
-        status: {
-            let hung = count_kernel_hung_tasks();
-            if hung == 0 && physical_cache_samples > 0 && peak_pressure < 10.0 {
-                "PASS_ZERO_PANIC".to_string()
-            } else {
-                "INCONCLUSIVE".to_string()
-            }
+        // PASS_ZERO_PANIC requires zero kernel faults, no safety halt, a simultaneous
+        // full three-tier sample, valid physical cache data, and bounded pressure.
+        status: if stress_passes(
+            current_kernel_faults(),
+            opts.cascade || opts.tier3_target_pct.is_some(),
+            physical_cache_samples,
+            cache_lost_during_stress,
+            safety_halt,
+            simultaneous_full_tiers,
+            peak_pressure,
+        ) {
+            "PASS_ZERO_PANIC".to_string()
+        } else {
+            "INCONCLUSIVE".to_string()
         },
         avg_cycle_latency_ms,
         p50_cycle_latency_ms,
@@ -1760,7 +1816,8 @@ mod tests {
         };
         assert_eq!(sample.cached_mib, 1024);
         assert_eq!(sample.target_mib, 4096);
-        assert!(parse_cache_status_sample(status, 15000, "73692-345270").is_none());
+        assert!(parse_cache_status_sample(status, 15000, "73692-345270").is_some());
+        assert!(parse_cache_status_sample(status, 26000, "73692-345270").is_none());
         assert!(parse_cache_status_sample(status, 11000, "73692-foreign").is_none());
     }
 
@@ -1780,6 +1837,20 @@ mod tests {
         };
         assert!(full_tier_snapshot(100, 100, 100, Some(full)));
         assert!(!full_tier_snapshot(100, 100, 99, Some(full)));
+    }
+
+    #[test]
+    fn stress_verdict_refuses_nbd_faults_and_missing_kernel_evidence() {
+        let clean = "nbd0: detected capacity change from 0 to 8388608";
+        let fault = "block nbd0: Possible stuck request: Runtime 30 seconds\nI/O error, dev nbd0\nMCE: Killing cron due to hardware memory corruption";
+        assert_eq!(count_kernel_fault_lines(clean), 0);
+        assert_eq!(count_kernel_fault_lines(fault), 3);
+        assert!(!stress_passes(None, true, 10, false, false, true, 1.0));
+        assert!(!stress_passes(Some(1), true, 10, false, false, true, 1.0));
+        assert!(!stress_passes(Some(0), true, 10, true, false, true, 1.0));
+        assert!(!stress_passes(Some(0), true, 10, false, true, true, 1.0));
+        assert!(!stress_passes(Some(0), true, 10, false, false, false, 1.0));
+        assert!(stress_passes(Some(0), true, 10, false, false, true, 1.0));
     }
 
     #[test]
@@ -1831,6 +1902,32 @@ mod tests {
         assert!(opts.battery);
         assert_eq!(opts.telemetry_log, "/tmp/test-telemetry.log");
         assert!(opts.json);
+    }
+
+    #[test]
+    fn cascade_flags_do_not_raise_the_pressure_abort_limit() {
+        for (args, native_limit) in [
+            (vec!["--cascade".to_string()], 20.0),
+            (
+                vec!["--tier3-target-pct".to_string(), "99".to_string()],
+                20.0,
+            ),
+            (
+                vec![
+                    "--cascade".to_string(),
+                    "--max-psi-full".to_string(),
+                    "50".to_string(),
+                ],
+                50.0,
+            ),
+        ] {
+            let opts = parse_stress_args(&args).unwrap_or_default();
+            assert!(opts.cascade);
+            assert_eq!(
+                opts.max_psi_full,
+                if is_wsl2() { 10.0 } else { native_limit }
+            );
+        }
     }
 
     #[test]
@@ -2002,7 +2099,7 @@ mod tests {
         assert_eq!(parsed.interval_ms, 50);
         assert_eq!(parsed.hold_sec, 3);
         assert_eq!(parsed.min_ram_mb, 300);
-        assert!((parsed.max_psi_full - 65.5).abs() < 0.01);
+        assert!((parsed.max_psi_full - if is_wsl2() { 10.0 } else { 65.5 }).abs() < 0.01);
         assert!((parsed.max_latency_ms - 15.2).abs() < 0.01);
         assert_eq!(parsed.tier3_target_pct, Some(75));
         assert_eq!(parsed.telemetry_log, "/tmp/test-tel.log");

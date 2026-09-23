@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use crate::gpu_cache_worker::{
     FRAME_HEADER_LEN, FrameHeader, MSG_DISABLE_REQ, MSG_DISABLE_RESP, MSG_HANDSHAKE_REQ,
-    MSG_HANDSHAKE_RESP, MSG_PROMOTE, MSG_READ_REQ, MSG_READ_RESP, MSG_UPDATE, STATUS_MISS,
-    STATUS_OK,
+    MSG_HANDSHAKE_RESP, MSG_HEARTBEAT_REQ, MSG_HEARTBEAT_RESP, MSG_PROMOTE, MSG_READ_REQ,
+    MSG_READ_RESP, MSG_UPDATE, STATUS_MISS, STATUS_OK,
 };
 use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
 use crate::origin_cache::CacheState;
@@ -32,6 +32,7 @@ pub struct IpcCacheClient {
 impl IpcCacheClient {
     pub fn new(socket: UnixStream, read_timeout: Duration, target_bytes: u64) -> Self {
         let _ = socket.set_read_timeout(Some(read_timeout));
+        let _ = socket.set_write_timeout(Some(read_timeout));
         Self {
             socket,
             read_timeout,
@@ -82,6 +83,40 @@ impl IpcCacheClient {
 
     fn fail(&mut self) {
         self.state = CacheState::Unavailable;
+        self.cached_bytes = 0;
+    }
+
+    pub fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
+        if self.state != CacheState::Active {
+            return Err("GPU cache worker is unavailable");
+        }
+        self.seq = self.seq.saturating_add(1);
+        let req = FrameHeader {
+            msg_type: MSG_HEARTBEAT_REQ,
+            status: STATUS_OK,
+            correlation_id: self.seq,
+            offset: 0,
+            payload_len: 0,
+            aux: 0,
+        };
+        let mut buf = [0u8; FRAME_HEADER_LEN];
+        if self.socket.write_all(&req.encode()).is_err()
+            || self.socket.read_exact(&mut buf).is_err()
+        {
+            self.fail();
+            return Err("GPU cache worker heartbeat timed out");
+        }
+        let resp = FrameHeader::decode(&buf);
+        if resp.msg_type != MSG_HEARTBEAT_RESP
+            || resp.correlation_id != self.seq
+            || resp.status != STATUS_OK
+            || resp.offset != self.target_bytes
+        {
+            self.fail();
+            return Err("GPU cache worker heartbeat mismatched");
+        }
+        self.cached_bytes = (resp.aux as u64) << 10;
+        Ok(self.cached_bytes)
     }
 
     fn send_mutation_frame(&mut self, header: FrameHeader, payload: &[u8]) -> CacheMutation {
@@ -105,10 +140,8 @@ impl IpcCacheClient {
 
         match res {
             Ok(n) if n == frame.len() => {
-                self.cached_bytes = self
-                    .cached_bytes
-                    .saturating_add(payload.len() as u64)
-                    .min(self.target_bytes);
+                // Accepted bytes are queued, not evidence of GPU allocation.
+                self.cached_bytes = 0;
                 CacheMutation::Accepted
             }
             Ok(_) => {
@@ -261,6 +294,10 @@ impl BestEffortCache for IpcCacheClient {
         }
     }
 
+    fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
+        IpcCacheClient::refresh_cached_bytes(self)
+    }
+
     fn target_bytes(&self) -> u64 {
         self.target_bytes
     }
@@ -327,6 +364,10 @@ mod tests {
         assert!(start.elapsed() < Duration::from_millis(50));
         assert_eq!(update_outcome, CacheMutation::Accepted);
         assert_eq!(promote_outcome, CacheMutation::Accepted);
-        assert_eq!(client.cached_bytes(), 8192);
+        assert_eq!(
+            client.cached_bytes(),
+            0,
+            "queued bytes are not physical allocations"
+        );
     }
 }

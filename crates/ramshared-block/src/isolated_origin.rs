@@ -67,6 +67,10 @@ pub trait BestEffortCache {
         0
     }
 
+    fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
+        Ok(self.cached_bytes())
+    }
+
     fn target_bytes(&self) -> u64 {
         0
     }
@@ -259,6 +263,10 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
 
     pub fn cached_bytes(&self) -> u64 {
         self.cache.cached_bytes()
+    }
+
+    pub fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
+        self.cache.refresh_cached_bytes()
     }
 
     pub fn target_bytes(&self) -> u64 {
