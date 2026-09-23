@@ -50,6 +50,7 @@ and no row authorizes activation of the current disabled candidate.
 | Multi-distro release packaging and v0.12.0 publication | Automated packaging workflow in `.github/workflows/release-packaging.yml` established with dynamic version detection, attaching qualified Debian (`.deb`), Fedora (`.rpm`), and Arch Linux (`.tar.gz`) binaries alongside `SHA256SUMS.txt` to GitHub Release `v0.12.0`. |
 | Public repository branch hygiene | Purged 503 obsolete external bot/test branches from remote origin, locking down canonical single-branch (`main`) governance. |
 | 4 GiB VRAM multi-tier stress qualification | Active 4,096 MB VRAM allocation with host display floor preservation max(1536 MB, 20%) verified on host. Multi-tier stress qualification battery completed passing 171% of RAM (20,208 MB allocated), saturating ZRAM (1,024 MB, 100%) and driving GPU VRAM to 1,707 - 1,969 MB (up to 311.6 MB/s PCIe DMA, 15.6x boost vs SSD), 21.66 GB/s flash reclaim in 910 ms, 0.0006 ms median allocation latency, and PASS_ZERO_PANIC stability. |
+| WSL2 Kernel Build #5 & 100% 3-tier cascade qualification | Live qualification of kernel Build #5 (`6.18.40.1-microsoft-standard-WSL2+`) with backported `vmbus_alloc_buffer()` safe chunk allocation and order-7 fallback. Under 16,640 MB allocated RAM and 9,216 MB active swap, saturated 100% Tier 1 (1,024 MB ZRAM), 100% Tier 2 (4,096 MB VRAM via PCIe DMA), and 100% Tier 3 (4,096 MB SSD via StorVSC) with 14.42 GB/s flash reclaim (+31.7%), 0 D-state hangs, 0 DMA trips, and PASS_ZERO_PANIC status (`EVD-0046`). |
 
 ## Rules
 
