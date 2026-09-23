@@ -2273,10 +2273,6 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                                 .into(),
                         );
                     }
-                    eprintln!(
-                        "[ramsharedd] GPU cache worker is isolated and not enabled; \
-                         serving the authoritative origin with cache=UNAVAILABLE"
-                    );
                     return run_nbd(
                         UnavailableVramProvider,
                         validated_origin,

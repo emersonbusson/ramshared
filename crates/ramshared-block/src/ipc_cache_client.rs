@@ -16,6 +16,9 @@ pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// Handshake allows extra time for the worker to initialize CUDA/Vulkan
 /// contexts before the first frame is served (SPEC: DT-2, NFR-1).
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Disable/teardown uses a longer timeout to accommodate GPU context cleanup.
+/// SPEC: DT-5 (5s bounded supervisor teardown).
+pub const DISABLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct IpcCacheClient {
     socket: UnixStream,
@@ -223,7 +226,7 @@ impl BestEffortCache for IpcCacheClient {
             aux: 0,
         };
 
-        let _ = self.socket.set_read_timeout(Some(self.read_timeout));
+        let _ = self.socket.set_read_timeout(Some(DISABLE_TIMEOUT));
         if self.socket.write_all(&req.encode()).is_err() {
             self.state = CacheState::Stuck;
             return CacheMutation::Failed;

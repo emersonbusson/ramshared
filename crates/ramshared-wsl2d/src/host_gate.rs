@@ -95,9 +95,10 @@ pub fn validate_origin_manifest(
         return Err(GateError::ManifestHashMismatch);
     }
 
-    // Parse as JSON and extract required fields
-    let value: serde_json::Value =
-        serde_json::from_slice(data).map_err(|e| GateError::ManifestInvalid(e.to_string()))?;
+    // Parse as JSON and extract required fields (strip UTF-8 BOM if present)
+    let json_bytes = data.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(data);
+    let value: serde_json::Value = serde_json::from_slice(json_bytes)
+        .map_err(|e| GateError::ManifestInvalid(e.to_string()))?;
 
     let logical_capacity_mib = value
         .get("logical_capacity_mib")
