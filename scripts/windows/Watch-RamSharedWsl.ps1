@@ -310,6 +310,8 @@ function Get-GuestProbeFailureCount {
 }
 
 function Invoke-IndependentHostProbe {
+    $p = Get-Process -Name wslservice -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $p) { throw [System.Management.Automation.ItemNotFoundException]::new("target WSL process not running") }
     $wsl = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments "--status" -TimeoutSeconds $GuestCommandTimeoutSec
     $hcs = Invoke-BoundedJsonQuery -Query 'Get-Service -Name vmcompute | Select-Object Name, Status | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
     $hcsFailed = (-not $hcs.completed) -or $null -eq $hcs.data -or [string]$hcs.data.Status -ne "Running"
