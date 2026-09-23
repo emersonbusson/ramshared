@@ -108,7 +108,11 @@ export function validatePolicy(policy, now = new Date()) {
 }
 
 export function listTrackedMarkdown(root = ROOT) {
-  return execFileSync('git', ['ls-files', '--', '*.md'], { cwd: root, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean).sort()
+  const deleted = new Set(execFileSync('git', ['ls-files', '--deleted', '--', '*.md'], { cwd: root, encoding: 'utf8' }).split(/\r?\n/).filter(Boolean))
+  return execFileSync('git', ['ls-files', '--', '*.md'], { cwd: root, encoding: 'utf8' })
+    .split(/\r?\n/)
+    .filter((pathname) => pathname && !deleted.has(pathname))
+    .sort()
 }
 
 export function listDocumentPaths(root = ROOT) {

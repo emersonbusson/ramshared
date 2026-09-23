@@ -433,6 +433,12 @@ impl CliActionRunner for SystemCliActions {
     }
 
     fn up(&mut self, args: &[String], _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        if should_auto_wrap_systemd_scope(
+            &|k| std::env::var(k),
+            Path::new("/run/systemd/system").exists(),
+        ) {
+            return dispatch_systemd_scope(args, stderr);
+        }
         to_exit(cascade::up_with_args(args), stderr)
     }
 
@@ -600,6 +606,58 @@ fn to_exit<E: fmt::Display>(r: Result<(), E>, stderr: &mut dyn Write) -> ExitCod
     }
 }
 
+fn should_auto_wrap_systemd_scope<F>(env_lookup: &F, systemd_running: bool) -> bool
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
+    if !systemd_running {
+        return false;
+    }
+    if env_lookup("RAMSHARED_NO_AUTO_SCOPE").is_ok() {
+        return false;
+    }
+    if env_lookup("_RAMSHARED_SCOPED").is_ok() {
+        return false;
+    }
+    env_lookup("INVOCATION_ID").is_err()
+}
+
+fn dispatch_systemd_scope(args: &[String], stderr: &mut dyn Write) -> ExitCode {
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "failed to resolve current binary path for systemd scope: {error}"
+            );
+            return ExitCode::from(1);
+        }
+    };
+    let mut cmd = Command::new("systemd-run");
+    cmd.arg("--scope")
+        .arg("-q")
+        .arg("--")
+        .arg(current_exe)
+        .arg("up");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.env("_RAMSHARED_SCOPED", "1");
+    match cmd.status() {
+        Ok(status) => {
+            if let Some(code) = status.code() {
+                ExitCode::from(code as u8)
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(error) => {
+            let _ = writeln!(stderr, "failed to spawn systemd-run --scope: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "usage:");
     let _ = writeln!(stderr, "  ramshared --version");
@@ -668,7 +726,7 @@ fn run_check() -> CheckReport {
     let cuda = probe_cuda();
     let backends = probe_backends(&kernel);
 
-    let mut blockers = Vec::new();
+    let mut blockers = active_swap_activation_blockers(&swaps);
     let mut warnings = Vec::new();
 
     if wsl.status == Status::Fail {
@@ -854,6 +912,23 @@ fn parse_swaps(text: &str) -> Vec<SwapEntry> {
                 used_kib,
                 priority,
             })
+        })
+        .collect()
+}
+
+fn active_swap_activation_blockers(swaps: &[SwapEntry]) -> Vec<String> {
+    swaps
+        .iter()
+        .filter(|swap| {
+            cascade::is_nbd_device_path(&swap.filename)
+                || cascade::is_ublk_device_path(&swap.filename)
+                || cascade::is_zram_device_path(&swap.filename)
+        })
+        .map(|swap| {
+            format!(
+                "managed-style swap is already active at {} (used_kib={}); refuse a new activation and inspect `ramshared status`",
+                swap.filename, swap.used_kib
+            )
         })
         .collect()
 }
@@ -1979,6 +2054,78 @@ Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
         assert_eq!(swaps[0].size_kib, 8_388_608);
         assert_eq!(swaps[0].used_kib, 5_643_764);
         assert_eq!(swaps[0].priority, -2);
+    }
+
+    #[test]
+    fn check_blocks_existing_managed_swap_even_when_backend_is_available() {
+        let disk = SwapEntry {
+            filename: "/dev/sdb".to_string(),
+            kind: "partition".to_string(),
+            size_kib: 4_194_304,
+            used_kib: 0,
+            priority: -2,
+        };
+        assert!(active_swap_activation_blockers(&[disk]).is_empty());
+
+        for (device, used_kib) in [
+            ("/nbd0", 346_316),
+            ("/dev/nbd0", 0),
+            ("/dev/ublkb0", 0),
+            ("/zram1", 0),
+        ] {
+            let swaps = [SwapEntry {
+                filename: device.to_string(),
+                kind: "partition".to_string(),
+                size_kib: 3_801_084,
+                used_kib,
+                priority: 50,
+            }];
+            let blockers = active_swap_activation_blockers(&swaps);
+            assert_eq!(blockers.len(), 1, "{device} must block a new activation");
+            assert!(blockers[0].contains(device));
+        }
+    }
+
+    #[test]
+    fn up_auto_envelops_in_systemd_scope_when_invocation_id_missing() {
+        let env_empty = |_key: &str| Err(std::env::VarError::NotPresent);
+        assert!(should_auto_wrap_systemd_scope(&env_empty, true));
+
+        // When systemd is not running, do not attempt systemd-run
+        assert!(!should_auto_wrap_systemd_scope(&env_empty, false));
+
+        // When RAMSHARED_NO_AUTO_SCOPE is set, do not auto-wrap
+        let env_no_scope = |key: &str| {
+            if key == "RAMSHARED_NO_AUTO_SCOPE" {
+                Ok("1".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert!(!should_auto_wrap_systemd_scope(&env_no_scope, true));
+
+        // When recursion guard _RAMSHARED_SCOPED is set, do not re-wrap
+        let env_scoped = |key: &str| {
+            if key == "_RAMSHARED_SCOPED" {
+                Ok("1".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert!(!should_auto_wrap_systemd_scope(&env_scoped, true));
+    }
+
+    #[test]
+    fn up_executes_inline_when_invocation_id_present() {
+        let env_with_invocation = |key: &str| {
+            if key == "INVOCATION_ID" {
+                Ok("0123456789abcdef0123456789abcdef".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert!(!should_auto_wrap_systemd_scope(&env_with_invocation, true));
+        assert!(!should_auto_wrap_systemd_scope(&env_with_invocation, false));
     }
 
     #[test]

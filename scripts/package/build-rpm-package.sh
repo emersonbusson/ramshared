@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.14.1}}"
 VERSION_CLEAN="${VERSION#v}"
 RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
 ARCH="x86_64"
@@ -16,19 +16,18 @@ SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
 
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
 
-# Ensure release binaries exist
+# This packaging step consumes previously built release binaries. Building
+# and validating those binaries is a separate caller responsibility.
 CLI_BIN="$ROOT/target/release/ramshared"
 DAEMON_BIN="$ROOT/target/release/ramsharedd"
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
-  echo "==> Binaries missing in target/release, skipping cargo or building if available"
-  if command -v cargo >/dev/null 2>&1; then
-    cargo build -p ramshared-cli -p ramshared-wsl2d --release || true
-  fi
+  echo "ERROR: Prebuilt release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
+  exit 1
 fi
 
-if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
-  echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
+if ! command -v rpmbuild >/dev/null 2>&1; then
+  echo "ERROR: rpmbuild is required to produce an RPM artifact" >&2
   exit 1
 fi
 
@@ -46,8 +45,8 @@ License:        GPL-2.0-only
 URL:            https://github.com/emersonbusson/ramshared
 
 %description
-RamShared accelerates system memory by creating zero-copy direct PCIe DMA
-memory tiers backed by discrete GPU VRAM with fail-safe SSD origin fallback.
+RamShared provides a bounded VRAM-backed memory tier with an authoritative
+origin. Transport and performance depend on the qualified host configuration.
 
 %install
 mkdir -p %{buildroot}/usr/bin
@@ -76,14 +75,17 @@ fi
 
 %changelog
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
-- Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
+- Official v0.14.1 Linux RPM release for the documented support matrix.
 SPEC_EOF
 
-if command -v rpmbuild >/dev/null 2>&1; then
-  echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
-  echo "✓ RPM package built under $OUT_DIR/"
-else
-  echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
+echo "==> Executing rpmbuild..."
+rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
+shopt -s nullglob
+rpm_artifacts=("$RPM_ROOT"/RPMS/*/*.rpm)
+shopt -u nullglob
+if (( ${#rpm_artifacts[@]} == 0 )); then
+  echo "ERROR: rpmbuild produced no RPM artifact" >&2
+  exit 1
 fi
+cp "${rpm_artifacts[@]}" "$OUT_DIR/"
+echo "✓ RPM package built under $OUT_DIR/"

@@ -256,7 +256,7 @@ entry is superseded by this statement.
 | **SSD Origin** | Synchronous Write (`fsync`) | **85.4 MB/s** | 2.997s / NTFS VHDX | Authoritative origin write |
 | **VRAM Cache** | Cache Populate (H2D) | **2,535.7 MiB/s** | 0.101s / PCIe Gen 3 x16 | Populated across 128 MiB chunks |
 | **VRAM Cache** | Cache Read Hit (D2H) | **6,211.2 MiB/s** | 0.041s / PCIe Gen 3 x16 | **100% SHA-256 MATCH** (0 bit flips) |
-| **GPU Revocation** | `cuMemFree` + Context Teardown | **Instant** | Explicit free | Cache state: REVOKED / OFFLINE |
+| **GPU Revocation** | `cuMemFree` + Context Teardown | **Not separately timed** | Explicit free | Cache state: REVOKED / OFFLINE |
 | **SSD Origin Read** | Post-Revocation Recovery | **140.7 MB/s** | 1.819s / NTFS VHDX | **100% SHA-256 MATCH** (0 bytes corrupted) |
 
 **Honest reading**
@@ -301,3 +301,27 @@ During live qualification, the exact 256 MiB write-through benchmark was evaluat
 - **PCIe Direct DMA Efficiency:** Utilizing page-locked host memory (`cuMemHostAlloc`) enables zero-copy PCIe DMA directly between host physical memory and GPU GDDR6 VRAM, elevating write throughput to 8.74 GB/s (8,947 MB/s) and read throughput to 6.38 GB/s (6,530 MB/s).
 - **Sub-Millisecond Kernel Latency:** Native `ublk` + `io_uring` block integration reduces 4KB random page-in latency to a p50 median of 231 µs (0.23 ms), eliminating socket context switches and preventing WSL2 desktop thrashing stalls.
 - **Data Integrity Verification:** Byte-by-byte comparison (`memcmp`) across the entire 256 MiB pinned payload confirmed 100% bit-exact reproduction with 0 corruptions.
+
+## Interpretation scope correction — 2026-09-20
+
+This is an editorial correction, not a new measurement. The table above
+combines two bounded observations on the recorded RTX 2060 / PCIe Gen3 x16
+surface: page-locked CUDA transfer throughput and a native Linux-compatible
+`ublk`/`io_uring` 4 KiB workload. EVD-0039 owns that combined transport
+qualification. It does not make `ublk` the standard WSL2 transport; standard
+WSL2 continues to use NBD as its baseline.
+
+EVD-0040 is separate and covers zero-copy CUDA host mapping through
+`cuMemHostRegister` / `PinnedHostMapping`. Neither evidence ID supports using a
+single throughput number as an environment-independent product description.
+
+## Interpretation scope correction — 2026-09-23 (EVD-0047)
+
+The Build #5 stress JSON retained at `docs/benchmarks/history/latest.json` is
+historical and unqualified. Its `tier2_vram_mb` counts logical NBD swap use,
+its SSD sample was tied to a fixed disk name, and its `reclaim_speed_gbs`
+measures vector release time rather than physical reclaim. The reported
+31.7% improvement and zero-panic verdict have no matched baseline or independent
+integrity/kernel-log proof. EVD-0046 remains in the append-only validation log,
+but EVD-0047 supersedes its qualification verdict. Re-run the corrected metric
+schema on a clean host with three matched rounds before publishing a new claim.

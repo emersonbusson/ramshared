@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # RamShared Boot Survival & VRAM Tier Service for Linux / WSL2
-# Follows SSDV3 GPU reserve rules: dynamically reserves max(2 GiB, 20% total VRAM)
-# Protected Cgroup v2 Isolation: memory.min=512M, memory.swap.max=0 (Zero-Deadlock Guarantee)
+# Broker/NBD capacity reserve: max(1536 MiB, 20% total VRAM), plus a separate
+# 768 MiB runtime free-VRAM buffer before selecting the tier size.
+# Protected cgroup v2 policy: memory.min=512M, memory.swap.max=0.
 set -euo pipefail
 
 NBD_DEV="/dev/nbd0"
 SOCK_PATH="/run/ramshared/wsl2d.sock"
 PID_FILE="/run/ramshared/ramsharedd.pid"
+DAEMON_BIN="/usr/local/bin/ramsharedd"
 SWAP_DEV_FILE="/run/ramshared/swap-dev"
 ZRAM_DEV_FILE="/run/ramshared/zram-dev"
 CAPACITY_STATUS_FILE="/run/ramshared/capacity-guaranteed"
@@ -87,25 +89,229 @@ detect_vram_capacity() {
     fi
 }
 
+nbd_device_ready() {
+    [[ -b "$NBD_DEV" ]]
+}
+
+swap_device_active() {
+    local device=$1 swap_table=${2:-/proc/swaps}
+    [[ -f $swap_table && -r $swap_table ]] || return 2
+    local device_alias=''
+    if [[ $device =~ ^/dev/(nbd|zram)[0-9]+$ ]]; then
+        device_alias="/${device##*/}"
+    fi
+    local state
+    if ! state=$(awk -v device="$device" -v device_alias="$device_alias" '
+        NR == 1 { if ($1 != "Filename" || $2 != "Type") exit 3; next }
+        $1 == device || ($1 == device_alias && $2 == "partition") { found = 1 }
+        END { if (NR == 0) exit 3; print found ? "active" : "absent" }
+    ' "$swap_table"); then
+        return 2
+    fi
+    case $state in
+        active) return 0 ;;
+        absent) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+swap_device_absent() {
+    local result=0
+    swap_device_active "$@" || result=$?
+    (( result == 1 ))
+}
+
+nbd_swap_active() {
+    swap_device_active "$NBD_DEV"
+}
+
+nbd_swap_absent() {
+    swap_device_absent "$NBD_DEV"
+}
+
+nbd_connection_absent() {
+    local sysfs_dir=${1:-/sys/block/${NBD_DEV##*/}}
+    if [[ ! -e $sysfs_dir ]]; then
+        [[ ! -b $NBD_DEV ]]
+        return
+    fi
+    [[ -d $sysfs_dir && -f $sysfs_dir/size && -r $sysfs_dir/size ]] || return 1
+    [[ ! -e $sysfs_dir/pid && ! -L $sysfs_dir/pid ]] || return 1
+    local sectors
+    sectors=$(<"$sysfs_dir/size")
+    [[ $sectors =~ ^[0-9]+$ ]] && (( sectors == 0 ))
+}
+
+nbd_connection_connected() {
+    local sysfs_dir=${1:-/sys/block/${NBD_DEV##*/}}
+    [[ -d $sysfs_dir && -f $sysfs_dir/size && -r $sysfs_dir/size \
+        && -f $sysfs_dir/pid && -r $sysfs_dir/pid ]] || return 1
+    local sectors kernel_pid
+    sectors=$(<"$sysfs_dir/size")
+    kernel_pid=$(<"$sysfs_dir/pid")
+    [[ $sectors =~ ^[0-9]+$ && $kernel_pid =~ ^[1-9][0-9]*$ ]] \
+        && (( sectors > 0 ))
+}
+
+activate_nbd_tier() {
+    local backend_desc=$1 backend_mb=$2
+    echo "[+] Connecting $NBD_DEV to $backend_desc daemon..."
+    if ! nbd_device_ready; then
+        echo "[-] Refusing activation: $NBD_DEV is not a block device" >&2
+        return 1
+    fi
+    if ! nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1; then
+        echo "[-] Refusing activation: NBD connection failed" >&2
+        return 1
+    fi
+    if ! mkswap -f "$NBD_DEV" >/dev/null 2>&1; then
+        echo "[-] Refusing activation: mkswap failed; NBD may remain connected" >&2
+        return 1
+    fi
+    if ! swapon -p 50 "$NBD_DEV" 2>/dev/null; then
+        echo "[-] Refusing activation: swapon failed; NBD may remain connected" >&2
+        return 1
+    fi
+    if ! nbd_swap_active; then
+        echo "[-] Refusing activation: $NBD_DEV is absent from /proc/swaps" >&2
+        return 1
+    fi
+    echo "$NBD_DEV" > "$SWAP_DEV_FILE"
+    echo "1" > "$CAPACITY_STATUS_FILE"
+    echo "[+] RamShared Tier active at priority 50 on $NBD_DEV (${backend_mb} MiB) [$backend_desc]"
+}
+
+zram_swap_active() {
+    local device=$1
+    swap_device_active "$device"
+}
+
+any_zram_swap_active() {
+    local swap_table=${1:-/proc/swaps}
+    [[ -f $swap_table && -r $swap_table ]] || return 2
+    local state
+    if ! state=$(awk '
+        NR == 1 { if ($1 != "Filename" || $2 != "Type") exit 3; next }
+        $1 ~ /^\/(dev\/)?zram[0-9]+$/ && $2 == "partition" { found = 1 }
+        END { if (NR == 0) exit 3; print found ? "active" : "absent" }
+    ' "$swap_table"); then
+        return 2
+    fi
+    case $state in
+        active) return 0 ;;
+        absent) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+zram_device_ready() {
+    [[ -b "$1" ]]
+}
+
+start_managed_zram() {
+    if [[ ! $ZRAM_MIB =~ ^[0-9]+$ ]]; then
+        echo "[-] Refusing ZRAM setup: RAMSHARED_ZRAM_MIB must be a nonnegative integer" >&2
+        return 1
+    fi
+    (( ZRAM_MIB > 0 )) || return 0
+    local existing_zram_status=0
+    any_zram_swap_active || existing_zram_status=$?
+    if (( existing_zram_status == 0 )); then
+        echo "[+] Existing ZRAM swap is unmanaged by this service; leaving it untouched"
+        return 0
+    elif (( existing_zram_status != 1 )); then
+        echo "[-] Refusing ZRAM setup: /proc/swaps state is unreadable" >&2
+        return 1
+    fi
+    if ! modprobe zram 2>/dev/null; then
+        echo "[-] Refusing ZRAM setup: module load failed" >&2
+        return 1
+    fi
+    local zram_dev
+    if ! zram_dev=$(zramctl --find --size "${ZRAM_MIB}M" 2>/dev/null); then
+        echo "[-] Refusing ZRAM setup: device allocation failed" >&2
+        return 1
+    fi
+    if [[ ! $zram_dev =~ ^/dev/zram[0-9]+$ ]] || ! zram_device_ready "$zram_dev"; then
+        echo "[-] Refusing ZRAM setup: allocated device is invalid" >&2
+        return 1
+    fi
+    echo "$zram_dev" > "$ZRAM_DEV_FILE"
+    if ! mkswap "$zram_dev" >/dev/null 2>&1; then
+        echo "[-] Refusing ZRAM setup: mkswap failed; retained device record for inspection" >&2
+        return 1
+    fi
+    if ! swapon -p 100 "$zram_dev" 2>/dev/null; then
+        echo "[-] Refusing ZRAM setup: swapon failed; retained device record for inspection" >&2
+        return 1
+    fi
+    if ! zram_swap_active "$zram_dev"; then
+        echo "[-] Refusing ZRAM setup: device is absent from /proc/swaps" >&2
+        return 1
+    fi
+    echo "[+] ZRAM active at priority 100 on $zram_dev"
+}
+
+stop_managed_zram() {
+    if [[ -L "$ZRAM_DEV_FILE" || ( -e "$ZRAM_DEV_FILE" && ! -f "$ZRAM_DEV_FILE" ) ]]; then
+        echo "[-] Refusing ZRAM cleanup: owned-device record is not a regular file" >&2
+        return 1
+    fi
+    [[ -f "$ZRAM_DEV_FILE" ]] || return 0
+    local zram_dev
+    zram_dev=$(<"$ZRAM_DEV_FILE")
+    if [[ ! $zram_dev =~ ^/dev/zram[0-9]+$ ]]; then
+        echo "[-] Refusing ZRAM cleanup: invalid owned-device record" >&2
+        return 1
+    fi
+    if ! zram_swap_active "$zram_dev"; then
+        echo "[-] Refusing ZRAM cleanup: recorded device is not active; inspect ownership" >&2
+        return 1
+    fi
+    echo "[+] Deactivating managed ZRAM swap $zram_dev..."
+    if ! swapoff "$zram_dev" 2>/dev/null; then
+        echo "[-] Refusing ZRAM reset: swapoff failed for $zram_dev" >&2
+        return 1
+    fi
+    if zram_swap_active "$zram_dev"; then
+        echo "[-] Refusing ZRAM reset: $zram_dev remains active in /proc/swaps" >&2
+        return 1
+    fi
+    if ! zramctl --reset "$zram_dev" 2>/dev/null; then
+        echo "[-] Refusing ZRAM record cleanup: reset failed for $zram_dev" >&2
+        return 1
+    fi
+    rm -f "$ZRAM_DEV_FILE"
+}
+
 start_tier() {
     echo "[+] Starting RamShared VRAM Tier Service (Protected Architecture)..."
+    if ! nbd_swap_absent; then
+        echo "[-] Refusing start: NBD swap is active or /proc/swaps is unreadable; use the sealed cascade lifecycle" >&2
+        return 1
+    fi
+    if [[ -e "$PID_FILE" || -L "$PID_FILE" || -e "$SOCK_PATH" || -L "$SOCK_PATH" \
+        || -e "$ZRAM_DEV_FILE" || -L "$ZRAM_DEV_FILE" ]]; then
+        echo "[-] Refusing start: daemon or ZRAM state already exists; inspect ownership before cleanup" >&2
+        return 1
+    fi
+    if ! command -v pgrep >/dev/null 2>&1; then
+        echo "[-] Refusing start: pgrep is unavailable for daemon collision check" >&2
+        return 1
+    fi
+    local pgrep_status=0
+    pgrep -x ramsharedd >/dev/null 2>&1 || pgrep_status=$?
+    if (( pgrep_status == 0 )); then
+        echo "[-] Refusing start: another ramsharedd process is already running" >&2
+        return 1
+    elif (( pgrep_status != 1 )); then
+        echo "[-] Refusing start: daemon collision check failed" >&2
+        return 1
+    fi
     setup_protected_cgroup
 
-    # 1. Setup ZRAM (Tier 0 - Priority 100)
-    if [[ $ZRAM_MIB -gt 0 ]]; then
-        modprobe zram 2>/dev/null || true
-        local zram_dev
-        zram_dev=$(zramctl --find --size "${ZRAM_MIB}M" 2>/dev/null || echo "/dev/zram0")
-        if ! grep -q zram /proc/swaps 2>/dev/null; then
-            echo "[+] Initializing ZRAM (${ZRAM_MIB} MiB)..."
-            if [[ -b "$zram_dev" ]]; then
-                mkswap "$zram_dev" >/dev/null 2>&1 || true
-                swapon -p 100 "$zram_dev" 2>/dev/null || true
-                echo "[+] ZRAM active at priority 100 on $zram_dev"
-            fi
-        fi
-        echo "$zram_dev" > "$ZRAM_DEV_FILE"
-    fi
+    # 1. Setup ZRAM (Tier 0 - Priority 100) without adopting another owner.
+    start_managed_zram || return 1
 
     # 2. Setup VRAM via GPU (Tier 1 - Priority 50)
     modprobe nbd max_part=8 2>/dev/null || true
@@ -125,24 +331,11 @@ start_tier() {
         echo "[+] Dynamic VRAM allocation: ${vram_mib} MiB on GPU"
     fi
 
-    # Clean prior stale sockets if daemon is dead
-    if [[ -f "$PID_FILE" ]]; then
-        local old_pid
-        old_pid=$(cat "$PID_FILE" 2>/dev/null || true)
-        if [[ -n "$old_pid" ]] && ! kill -0 "$old_pid" 2>/dev/null; then
-            rm -f "$SOCK_PATH" "$PID_FILE"
-        fi
-    fi
-
-    if ! grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
-        rm -f "$SOCK_PATH" "$PID_FILE"
-        
+    if nbd_swap_absent; then
         # Launch ramsharedd inside /ramshared-protected cgroup with memory.swap.max=0 and oom_score_adj=-1000
         bash -c "echo \$\$ > /sys/fs/cgroup/ramshared-protected/cgroup.procs 2>/dev/null || true; echo -1000 > /proc/\$\$/oom_score_adj 2>/dev/null || true; exec /usr/local/bin/ramsharedd --backend '$backend_type' --slices 1 --slice-mb '$backend_mb' --listen-nbd 127.0.0.1:10809 --arbiter-listen 127.0.0.1:9090" > "$LOG_FILE" 2>&1 &
         local daemon_pid=$!
         echo "$daemon_pid" > "$PID_FILE"
-        echo "$NBD_DEV" > "$SWAP_DEV_FILE"
-        echo "1" > "$CAPACITY_STATUS_FILE"
         
         # Wait for daemon socket
         for i in {1..20}; do
@@ -153,23 +346,14 @@ start_tier() {
         done
         
         if kill -0 "$daemon_pid" 2>/dev/null && [[ -S "$SOCK_PATH" ]]; then
-            echo "[+] Connecting $NBD_DEV to $backend_desc daemon (with swap immunity & zero block-layer timeout)..."
-            nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1 || true
-            sleep 1
-            if [[ -b "$NBD_DEV" ]]; then
-                mkswap -f "$NBD_DEV" >/dev/null 2>&1 || true
-                swapon -p 50 "$NBD_DEV" 2>/dev/null || true
-                echo "[+] RamShared Tier active at priority 50 on $NBD_DEV (${backend_mb} MiB) [$backend_desc]"
-            fi
+            activate_nbd_tier "$backend_desc" "$backend_mb" || return 1
         else
             echo "[-] Daemon failed to start, check $LOG_FILE"
-            exit 1
+            return 1
         fi
     else
-        echo "[!] VRAM tier is already active on $NBD_DEV"
-        echo "$NBD_DEV" > "$SWAP_DEV_FILE"
-        echo "1" > "$CAPACITY_STATUS_FILE"
-        pgrep -x "ramsharedd" | head -n 1 > "$PID_FILE" || true
+        echo "[-] Refusing start: NBD swap state changed before daemon launch" >&2
+        return 1
     fi
 
     chmod 0644 /run/ramshared/* 2>/dev/null || true
@@ -177,16 +361,85 @@ start_tier() {
 
 stop_tier() {
     echo "[+] Stopping RamShared VRAM Tier Service (Swapoff-first)..."
-    
-    # 1. Swapoff VRAM
-    if grep -q "$NBD_DEV" /proc/swaps 2>/dev/null; then
-        echo "[+] Deactivating swap on $NBD_DEV..."
-        swapoff "$NBD_DEV" 2>/dev/null || true
+    if ! nbd_swap_active && ! nbd_swap_absent; then
+        echo "[-] Refusing teardown: NBD swap state is unreadable" >&2
+        return 1
+    fi
+    if [[ -L "$PID_FILE" || ( -e "$PID_FILE" && ! -f "$PID_FILE" ) ]]; then
+        echo "[-] Refusing teardown: daemon PID record is not a regular file" >&2
+        return 1
+    fi
+    if [[ ! -e "$PID_FILE" && ! -L "$PID_FILE" ]]; then
+        if ! nbd_swap_absent || ! nbd_connection_absent; then
+            echo "[-] Refusing teardown: NBD is active or connected without a daemon record" >&2
+            return 1
+        fi
+        if [[ -e "$SOCK_PATH" || -L "$SOCK_PATH" || -e "$SWAP_DEV_FILE" \
+            || -L "$SWAP_DEV_FILE" || -e "$CAPACITY_STATUS_FILE" || -L "$CAPACITY_STATUS_FILE" ]]; then
+            echo "[-] Refusing no-op stop: unowned service state remains" >&2
+            return 1
+        fi
+        stop_managed_zram || return 1
+        echo "[+] RamShared VRAM Tier is already stopped."
+        return 0
+    fi
+
+    # The PID record is an ownership claim, not proof. Never touch an active
+    # swap device when the recorded daemon is missing or belongs to another
+    # executable; a stale PID can be recycled by an unrelated process.
+    if [[ -f "$PID_FILE" ]]; then
+        local pid observed_exe
+        pid=$(<"$PID_FILE")
+        if [[ ! $pid =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+            echo "[-] Refusing teardown: daemon PID record is not live" >&2
+            return 1
+        fi
+        observed_exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null) || {
+            echo "[-] Refusing teardown: daemon executable is unreadable" >&2
+            return 1
+        }
+        if [[ $observed_exe != "$DAEMON_BIN" ]]; then
+            echo "[-] Refusing teardown: daemon executable identity differs" >&2
+            return 1
+        fi
+    elif nbd_swap_active; then
+        echo "[-] Refusing teardown: active NBD swap has no daemon PID record" >&2
+        return 1
     fi
     
-    # 2. Disconnect NBD
-    if command -v nbd-client >/dev/null 2>&1; then
-        nbd-client -d "$NBD_DEV" >/dev/null 2>&1 || true
+    # 1. Swapoff VRAM
+    if nbd_swap_active; then
+        echo "[+] Deactivating swap on $NBD_DEV..."
+        if ! swapoff "$NBD_DEV" 2>/dev/null; then
+            echo "[-] Refusing NBD disconnect: swapoff failed for $NBD_DEV" >&2
+            return 1
+        fi
+        if ! nbd_swap_absent; then
+            echo "[-] Refusing NBD disconnect: $NBD_DEV remains active or /proc/swaps is unreadable" >&2
+            return 1
+        fi
+    fi
+    
+    # 2. Disconnect only a kernel-confirmed connection. A failed start may
+    # leave the owned daemon running without ever attaching NBD.
+    if nbd_connection_absent; then
+        echo "[+] NBD is already disconnected."
+    elif nbd_connection_connected; then
+        if ! command -v nbd-client >/dev/null 2>&1; then
+            echo "[-] Refusing daemon stop: nbd-client is unavailable" >&2
+            return 1
+        fi
+        if ! nbd-client -d "$NBD_DEV" >/dev/null 2>&1; then
+            echo "[-] Refusing daemon stop: NBD disconnect failed" >&2
+            return 1
+        fi
+        if ! nbd_connection_absent; then
+            echo "[-] Refusing daemon stop: kernel still reports NBD connected" >&2
+            return 1
+        fi
+    else
+        echo "[-] Refusing daemon stop: kernel NBD connection state is unknown" >&2
+        return 1
     fi
 
     # 3. Terminate Daemon
@@ -194,22 +447,40 @@ stop_tier() {
         local pid
         pid=$(cat "$PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
+            local observed_exe
+            observed_exe=$(readlink -f "/proc/$pid/exe" 2>/dev/null) || {
+                echo "[-] Refusing daemon stop: executable identity changed" >&2
+                return 1
+            }
+            if [[ $observed_exe != "$DAEMON_BIN" ]]; then
+                echo "[-] Refusing daemon stop: executable identity changed" >&2
+                return 1
+            fi
+            if ! nbd_swap_absent || ! nbd_connection_absent; then
+                echo "[-] Refusing daemon stop: NBD became active or reconnected" >&2
+                return 1
+            fi
             echo "[+] Terminating daemon PID $pid..."
-            kill "$pid" 2>/dev/null || true
-            sleep 1
-            kill -9 "$pid" 2>/dev/null || true
+            if ! kill -TERM "$pid" 2>/dev/null; then
+                echo "[-] Refusing state cleanup: daemon TERM failed" >&2
+                return 1
+            fi
+            for _ in {1..50}; do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                fi
+                sleep 0.1
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "[-] Refusing state cleanup: daemon did not exit after TERM" >&2
+                return 1
+            fi
         fi
-        rm -f "$PID_FILE" "$SOCK_PATH" "$SWAP_DEV_FILE" "$ZRAM_DEV_FILE" "$CAPACITY_STATUS_FILE"
+        rm -f "$PID_FILE" "$SOCK_PATH" "$SWAP_DEV_FILE" "$CAPACITY_STATUS_FILE"
     fi
 
-    # 4. Swapoff ZRAM
-    if grep -q zram /proc/swaps 2>/dev/null; then
-        for z in $(grep zram /proc/swaps | awk '{print $1}'); do
-            echo "[+] Deactivating ZRAM swap $z..."
-            swapoff "$z" 2>/dev/null || true
-            zramctl --reset "$z" 2>/dev/null || true
-        done
-    fi
+    # 4. Only the ZRAM device recorded by this service may be reset.
+    stop_managed_zram || return 1
 
     echo "[+] RamShared VRAM Tier deactivated cleanly."
 }

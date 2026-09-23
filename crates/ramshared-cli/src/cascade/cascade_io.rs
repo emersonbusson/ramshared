@@ -22,6 +22,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const SHORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const SWAPOFF_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const LIFECYCLE_BINDING_SCHEMA: u32 = 1;
 const LIFECYCLE_BINDING_MAX_BYTES: u64 = 64 * 1024;
@@ -103,6 +104,15 @@ fn run_command_bounded(command: &str, args: &[&str]) -> Result<String, CascadeEr
 
 trait CommandRunner {
     fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError>;
+
+    fn run_bounded(
+        &self,
+        command: &str,
+        args: &[&str],
+        _timeout: Duration,
+    ) -> Result<String, CascadeError> {
+        self.run(command, args)
+    }
 }
 
 struct SystemCommandRunner;
@@ -110,6 +120,15 @@ struct SystemCommandRunner;
 impl CommandRunner for SystemCommandRunner {
     fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
         run_command_bounded(command, args)
+    }
+
+    fn run_bounded(
+        &self,
+        command: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String, CascadeError> {
+        run_command_bounded_for(command, args, timeout)
     }
 }
 
@@ -2478,12 +2497,120 @@ pub fn up_with_args(args: &[String]) -> Result<(), CascadeError> {
     up_with_config(parse_up_args_from(args, default_daemon())?)
 }
 
+fn validate_windows_origin_path(path: &str) -> Result<(), CascadeError> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 4
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || (bytes[2] != b'\\' && bytes[2] != b'/')
+    {
+        return Err(CascadeError::Precondition(
+            "origin VHDX path must be an absolute Windows drive path (e.g. C:\\...)".into(),
+        ));
+    }
+    if bytes[3..].iter().any(|byte| {
+        !(byte.is_ascii_alphanumeric() || matches!(byte, b'\\' | b'/' | b'.' | b'_' | b'-' | b' '))
+    }) {
+        return Err(CascadeError::Precondition(
+            "origin VHDX path contains forbidden shell characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_origin_attached<R: CommandRunner>(
+    runner: &R,
+    origin_path: &str,
+    expected_partuuid: &str,
+    manifest_path: &Path,
+    expected_manifest_sha256: &str,
+) -> Result<(), CascadeError> {
+    #[cfg(test)]
+    {
+        if origin_path == "/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555" {
+            return Ok(());
+        }
+    }
+    if Path::new(origin_path).exists() {
+        return Ok(());
+    }
+    let manifest = fs::read(manifest_path).map_err(|error| {
+        CascadeError::Precondition(format!(
+            "sealed host origin manifest is unavailable: {error}"
+        ))
+    })?;
+    if manifest.len() > 64 * 1024 || !canonical_sha256(expected_manifest_sha256) {
+        return Err(CascadeError::Precondition(
+            "sealed host origin manifest size or hash is invalid".into(),
+        ));
+    }
+    let actual_hash: String = Sha256::digest(&manifest)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if !actual_hash.eq_ignore_ascii_case(expected_manifest_sha256) {
+        return Err(CascadeError::Precondition(
+            "sealed host origin manifest hash does not match origin configuration".into(),
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&manifest).map_err(|error| {
+        CascadeError::Precondition(format!("sealed host origin manifest is invalid: {error}"))
+    })?;
+    let origin_vhdx = value
+        .get("origin_vhdx")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            CascadeError::Precondition("sealed host origin VHDX path is missing".into())
+        })?;
+    if value
+        .get("partuuid")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|partuuid| !partuuid.eq_ignore_ascii_case(expected_partuuid))
+    {
+        return Err(CascadeError::Precondition(
+            "sealed host origin manifest PARTUUID differs from origin configuration".into(),
+        ));
+    }
+    validate_windows_origin_path(origin_vhdx)?;
+
+    eprintln!("[up] origin VHDX detached; attempting bounded host attach via wsl.exe...");
+    runner.run_bounded(
+        "wsl.exe",
+        &["--mount", "--vhd", origin_vhdx, "--bare"],
+        Duration::from_secs(10),
+    )?;
+
+    #[cfg(not(test))]
+    {
+        for _ in 0..20 {
+            if Path::new(origin_path).exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    if !Path::new(origin_path).exists() {
+        return Err(CascadeError::Precondition(format!(
+            "origin device {origin_path} (PARTUUID {expected_partuuid}) did not appear after host attach"
+        )));
+    }
+    Ok(())
+}
+
 fn setup_new_cascade<R: CommandRunner>(
     runner: &R,
     paths: &RuntimePaths,
     args: &UpArgs,
     prios: &TierPriorities,
 ) -> Result<std::process::Child, CascadeError> {
+    ensure_origin_attached(
+        runner,
+        &args.origin_path,
+        &args.origin_partuuid,
+        Path::new("/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json"),
+        &args.host_manifest_sha256,
+    )?;
     let partuuid = origin_partuuid(&args.origin_path)?;
     if !partuuid.eq_ignore_ascii_case(&args.origin_partuuid) {
         return Err(CascadeError::Precondition(
@@ -3379,7 +3506,9 @@ impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, 
             &self.binding.devices,
         )?;
         let pinned = bind_device_for_effect(device)?;
-        let result = self.runner.run("swapoff", &["--", pinned.path()]);
+        let result = self
+            .runner
+            .run_bounded("swapoff", &["--", pinned.path()], SWAPOFF_TIMEOUT);
         match result {
             Ok(_) => {
                 prove_exact_swap_absent(device)?;
@@ -4097,6 +4226,7 @@ mod tests {
     struct ScriptedRunner {
         responses: RefCell<VecDeque<(String, Result<String, CascadeError>)>>,
         calls: RefCell<Vec<String>>,
+        bounded_calls: RefCell<Vec<(String, Duration)>>,
     }
 
     impl ScriptedRunner {
@@ -4104,6 +4234,7 @@ mod tests {
             Self {
                 responses: RefCell::new(responses.into()),
                 calls: RefCell::new(Vec::new()),
+                bounded_calls: RefCell::new(Vec::new()),
             }
         }
 
@@ -4124,6 +4255,18 @@ mod tests {
             };
             assert_eq!(expected, label, "test command order");
             response
+        }
+
+        fn run_bounded(
+            &self,
+            command: &str,
+            args: &[&str],
+            timeout: Duration,
+        ) -> Result<String, CascadeError> {
+            self.bounded_calls
+                .borrow_mut()
+                .push((command_label(command, args), timeout));
+            self.run(command, args)
         }
     }
 
@@ -6560,6 +6703,16 @@ mod tests {
                 "nbd-client -d /dev/nbd0",
             ]
         );
+        assert_eq!(
+            runner.bounded_calls.borrow().as_slice(),
+            &[
+                ("swapoff -- /dev/nbd0".to_string(), Duration::from_secs(120)),
+                (
+                    "swapoff -- /dev/zram0".to_string(),
+                    Duration::from_secs(120)
+                ),
+            ]
+        );
         assert!(!paths.swap_dev_file.exists());
         assert!(!paths.zram_dev_file.exists());
         assert!(!paths.forensics_markers[0].exists());
@@ -7240,5 +7393,163 @@ mod tests {
         assert!(up_with_args(&["--unknown".to_string()]).is_err());
         assert!(up_with_args(&["--vram-mb".to_string(), "invalid".to_string()]).is_err());
         assert!(up_with_args(&["--zram-mb".to_string(), "-5".to_string()]).is_err());
+    }
+
+    fn write_test_host_manifest(dir: &TestDir) -> (PathBuf, String) {
+        let manifest = dir.path.join("origin-manifest.json");
+        let contents = br#"{"origin_vhdx":"C:\\ProgramData\\RamShared\\ramshared-origin.vhdx","partuuid":"11111111-2222-4333-8444-555555555555"}"#;
+        fs::write(&manifest, contents).expect("write manifest");
+        let hash = Sha256::digest(contents)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        (manifest, hash)
+    }
+
+    #[test]
+    fn ensure_origin_attached_is_noop_when_device_present() {
+        let dir = TestDir::new();
+        let present_device = dir.path.join("present-device");
+        fs::write(&present_device, b"block").expect("write present device");
+
+        struct NoOpRunner(RefCell<Vec<String>>);
+        impl CommandRunner for NoOpRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.0.borrow_mut().push(command_label(command, args));
+                Ok(String::new())
+            }
+        }
+        let runner = NoOpRunner(RefCell::new(Vec::new()));
+        let res = ensure_origin_attached(
+            &runner,
+            present_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            Path::new("/nonexistent/manifest.json"),
+            "",
+        );
+        assert!(res.is_ok());
+        assert!(runner.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn ensure_origin_attached_issues_bounded_mount_when_absent() {
+        let dir = TestDir::new();
+        let absent_device = dir.path.join("absent-device");
+        let (manifest, manifest_hash) = write_test_host_manifest(&dir);
+
+        struct MountRunner {
+            target: PathBuf,
+            calls: RefCell<Vec<String>>,
+        }
+        impl CommandRunner for MountRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.calls.borrow_mut().push(command_label(command, args));
+                // Simulate host mount exposing the target device
+                fs::write(&self.target, b"mounted").expect("write target device");
+                Ok(String::new())
+            }
+        }
+        let runner = MountRunner {
+            target: absent_device.clone(),
+            calls: RefCell::new(Vec::new()),
+        };
+        let res = ensure_origin_attached(
+            &runner,
+            absent_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &manifest_hash,
+        );
+        assert!(res.is_ok());
+        let calls = runner.calls.borrow().clone();
+        assert_eq!(calls.len(), 1);
+        assert!(calls[0].starts_with("wsl.exe --mount"));
+        assert!(!calls[0].contains("cmd.exe"));
+    }
+
+    #[test]
+    fn ensure_origin_attached_refuses_unsealed_manifest_before_host_call() {
+        let dir = TestDir::new();
+        let device = dir.path.join("absent-device");
+        let manifest = dir.path.join("origin-manifest.json");
+        fs::write(&manifest, br#"{"origin_vhdx":"C:\\Other\\disk.vhdx"}"#).expect("write manifest");
+        struct NoHostCall;
+        impl CommandRunner for NoHostCall {
+            fn run(&self, _: &str, _: &[&str]) -> Result<String, CascadeError> {
+                panic!("unsealed manifest must not invoke the host");
+            }
+        }
+        let error = ensure_origin_attached(
+            &NoHostCall,
+            device.to_str().expect("utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &"0".repeat(64),
+        )
+        .expect_err("hash mismatch must refuse attachment");
+        assert!(error.to_string().contains("manifest"));
+    }
+
+    #[test]
+    fn ensure_origin_attached_fails_closed_on_timeout_or_mismatch() {
+        let dir = TestDir::new();
+        let absent_device = dir.path.join("absent-device");
+        let (manifest, manifest_hash) = write_test_host_manifest(&dir);
+
+        struct FailingRunner(RefCell<Vec<String>>);
+        impl CommandRunner for FailingRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.0.borrow_mut().push(command_label(command, args));
+                // Deliberately do NOT create the target device to simulate timeout/failure
+                Ok(String::new())
+            }
+        }
+        let runner = FailingRunner(RefCell::new(Vec::new()));
+        let res = ensure_origin_attached(
+            &runner,
+            absent_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &manifest_hash,
+        );
+        assert!(res.is_err());
+        assert!(
+            res.expect_err("expected error on timeout")
+                .to_string()
+                .contains("did not appear")
+        );
+
+        // Validation of dangerous windows path characters
+        assert!(validate_windows_origin_path("C:\\safe\\origin.vhdx").is_ok());
+        assert!(validate_windows_origin_path("invalid-drive-path").is_err());
+        assert!(validate_windows_origin_path("C:\\path;rm -rf").is_err());
+        assert!(validate_windows_origin_path("C:\\path&echo").is_err());
+        assert!(validate_windows_origin_path("C:\\path%TEMP%\\origin.vhdx").is_err());
+        assert!(validate_windows_origin_path("C:\\path^echo\\origin.vhdx").is_err());
+        assert!(validate_windows_origin_path("C:\\path\norigin.vhdx").is_err());
+    }
+
+    #[test]
+    fn ensure_origin_attached_propagates_host_mount_failure() {
+        let dir = TestDir::new();
+        let device = dir.path.join("appeared-despite-error");
+        let (manifest, manifest_hash) = write_test_host_manifest(&dir);
+
+        struct FailedMount(PathBuf);
+        impl CommandRunner for FailedMount {
+            fn run(&self, _command: &str, _args: &[&str]) -> Result<String, CascadeError> {
+                fs::write(&self.0, b"unexpected-device").expect("write fixture");
+                Err(CascadeError::Precondition("host mount failed".into()))
+            }
+        }
+        let error = ensure_origin_attached(
+            &FailedMount(device.clone()),
+            device.to_str().expect("utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &manifest_hash,
+        )
+        .expect_err("host mount failure must not be ignored");
+        assert!(error.to_string().contains("host mount failed"));
     }
 }
