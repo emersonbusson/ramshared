@@ -1672,7 +1672,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
             format!(
                 concat!(
-                    " ╔══ 📦 TIER 1: RAM Swap (zram) ── Priority: 100 ── {zram_s}\n",
+                    " ╔══ 📦 TIER 1: RAM Swap (zram) ── Priority: 200 ── {zram_s}\n",
                     " ║   ├─ Memory Usage:       {z_use}\n",
                     " ║   ├─ Real-Time Speed:    {z_speed}\n",
                     " ║   ├─ Throughput Stats:   {z_rate}\n",
@@ -1680,7 +1680,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " ║   ├─ Hardware Latency:   {z_lat}\n",
                     " ║   └─ Speedup Factor:     {zram_speedup}\n",
                     " ╠{sep}\n",
-                    " ║   🚀 TIER 2: GPU VRAM (nbd0) ── Priority:  50 ── {vram_s}\n",
+                    " ║   🚀 TIER 2: GPU VRAM (nbd0) ── Priority: 100 ── {vram_s}\n",
                     " ║   ├─ Memory Usage:       {v_use}\n",
                     " ║   ├─ Real-Time Speed:    {v_speed}\n",
                     " ║   ├─ Throughput Stats:   {v_rate}\n",
