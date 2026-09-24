@@ -33,6 +33,7 @@ const TIER1_AND_TIER2_QUALIFICATION_PCT: u64 = 95;
 const ORIGIN_RUNTIME_FREE_BUFFER_MIB: u64 = 640;
 const TIER3_HEADROOM_RESERVE_MB: u64 = 16;
 const TIER3_MAX_STEP_MB: u64 = 8;
+const TIER3_ACTIVITY_MIN_GROWTH_MB: u64 = 32;
 const PRE_TIER3_FULL_STEP_HEADROOM_MB: u64 = 200;
 const PRE_TIER3_HEADROOM_RESERVE_MB: u64 = 50;
 const PRE_TIER3_MAX_STEP_MB: u64 = 128;
@@ -925,6 +926,10 @@ fn safe_allocation_mb(
     one_pct_mb.min(budget).min(step_cap)
 }
 
+fn tier3_active_since_baseline(used_mb: u64, initial_used_mb: u64) -> bool {
+    used_mb > initial_used_mb.saturating_add(TIER3_ACTIVITY_MIN_GROWTH_MB)
+}
+
 fn step_interval_ms(is_wsl2_host: bool, tier3_active: bool, requested_ms: u64) -> u64 {
     if is_wsl2_host && tier3_active {
         requested_ms.max(WSL2_TIER3_STEP_INTERVAL_MS)
@@ -1091,7 +1096,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     });
 
     let (ram_total_mb, ram_avail_init) = read_mem_info();
-    let (swap_init_total, _, _, _) = read_swap_tiers();
+    let (swap_init_total, _, _, initial_ssd_used_mb) = read_swap_tiers();
 
     if !opts.json {
         println!("{}", "═".repeat(105));
@@ -1403,9 +1408,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
+        let tier3_active = tier3_active_since_baseline(cap3.used_mb, initial_ssd_used_mb);
         let safe_alloc_mb = safe_allocation_mb(
             is_multi_tier,
-            cap3.used_mb > 0,
+            tier3_active,
             avail_mb,
             hard_floor,
             one_pct_mb,
@@ -1510,7 +1516,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         // Adaptive StorVSC I/O Pacing:
         // Tier 3 is backed by Hyper-V synthetic SCSI (storvsc) writing to swap.vhdx on NTFS.
         // If Tier 3 is active, pace steps by at least 500ms to allow StorVSC ring buffer completions.
-        let step_interval = step_interval_ms(is_wsl2(), cap3.used_mb > 0, opts.interval_ms);
+        let step_interval = step_interval_ms(is_wsl2(), tier3_active, opts.interval_ms);
         // Heartbeat before the planned sleep so the watchdog (4s stall) does not
         // misclassify a deliberate step_interval as a hang (Kahneman #9).
         last_heartbeat.store(
@@ -2412,6 +2418,13 @@ mod tests {
         assert_eq!(step_interval_ms(true, true, 800), 800);
         assert_eq!(step_interval_ms(true, false, 200), 200);
         assert_eq!(step_interval_ms(false, true, 200), 200);
+    }
+
+    #[test]
+    fn preexisting_fallback_swap_does_not_trigger_tier3_pacing() {
+        assert!(!tier3_active_since_baseline(3, 3));
+        assert!(!tier3_active_since_baseline(35, 3));
+        assert!(tier3_active_since_baseline(36, 3));
     }
 
     #[test]

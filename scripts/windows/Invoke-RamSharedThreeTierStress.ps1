@@ -70,10 +70,15 @@ artifact=$1
 release=/opt/ramshared/current
 bin="$release/bin/ramshared"
 daemon="$release/bin/ramsharedd"
+monitor_pid=""
 cleanup() {
   rc=$?
   "$bin" down >"$artifact/down.out" 2>"$artifact/down.err" || rc=1
   systemctl stop ramshared-supervisor.service >"$artifact/supervisor-stop.out" 2>"$artifact/supervisor-stop.err" || rc=1
+  if test -n "$monitor_pid"; then
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+  fi
   cat /proc/swaps >"$artifact/final-swaps.txt"
   dmesg | tail -n 300 >"$artifact/final-dmesg.txt" || true
   exit "$rc"
@@ -81,6 +86,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 test -x "$bin" && test -x "$daemon"
 "$bin" check >"$artifact/check.out" 2>"$artifact/check.err"
+"$bin" monitor --jsonl --interval-ms 1000 --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json --output "$artifact/monitor.jsonl" >"$artifact/monitor.out" 2>"$artifact/monitor.err" &
+monitor_pid=$!
 cat /proc/swaps >"$artifact/before-swaps.txt"
 "$bin" up --vram 4096 --zram 1024 --daemon "$daemon" >"$artifact/up.out" 2>"$artifact/up.err"
 systemctl start ramshared-supervisor.service
@@ -102,7 +109,7 @@ cat /proc/swaps >"$artifact/armed-swaps.txt"
 pid=$(pgrep -n -x ramsharedd)
 test "$(sha256sum "/proc/$pid/exe" | cut -d ' ' -f 1)" = "$(sha256sum "$daemon" | cut -d ' ' -f 1)"
 printf 'BINARY_MATCH=true\n' >"$artifact/binary-match.txt"
-"$bin" stress --full-three-tier --hold-sec 10 --json --log "$artifact/telemetry.jsonl" >"$artifact/stress.json" 2>"$artifact/stress.err"
+"$bin" stress --full-three-tier --step 5 --interval-ms 500 --hold-sec 10 --json --log "$artifact/telemetry.jsonl" >"$artifact/stress.json" 2>"$artifact/stress.err"
 '@
 [IO.File]::WriteAllText($scriptPath, ($guestScript -replace "`r`n", "`n"), [Text.Encoding]::ASCII)
 
