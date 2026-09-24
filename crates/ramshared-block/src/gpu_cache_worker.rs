@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
 
-use ramshared_vram::{VramMemory, VramProvider};
+use ramshared_vram::{VramError, VramMemory, VramProvider};
 
 pub const FRAME_HEADER_LEN: usize = 32;
 
@@ -27,6 +27,7 @@ pub const STATUS_OK: u8 = 0;
 pub const STATUS_MISS: u8 = 1;
 pub const STATUS_ERROR: u8 = 2;
 const RUNTIME_FREE_BUFFER_BYTES: u64 = 768 * 1024 * 1024;
+const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameHeader {
@@ -125,6 +126,7 @@ pub struct GpuCacheWorker<'p, P: VramProvider + 'p> {
     effective_target_bytes: u64,
     chunks: HashMap<u64, CacheChunk<'p, P>>,
     disabled: bool,
+    pressure_constrained: bool,
 }
 
 impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
@@ -149,6 +151,7 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
             effective_target_bytes: effective_target,
             chunks: HashMap::new(),
             disabled: false,
+            pressure_constrained: false,
         }
     }
 
@@ -227,7 +230,31 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         self.chunks.clear();
     }
 
+    /// Give clean cache chunks back when other GPU users consume the free buffer.
+    /// The durable origin remains authoritative for every evicted range.
+    pub fn reclaim_under_host_pressure(&mut self) -> Result<u64, VramError> {
+        let mut released = 0u64;
+        loop {
+            let (free, _) = self.provider.mem_info()?;
+            if free >= RUNTIME_RECOVERY_BUFFER_BYTES {
+                self.pressure_constrained = false;
+            }
+            if free >= RUNTIME_FREE_BUFFER_BYTES {
+                break;
+            }
+            self.pressure_constrained = true;
+            if !self.evict_coldest_chunk() {
+                break;
+            }
+            released = released.saturating_add(self.config.chunk_bytes as u64);
+        }
+        Ok(released)
+    }
+
     fn allocate_and_write(&mut self, chunk_base: u64, chunk_off: u64, data: &[u8]) {
+        if self.pressure_constrained {
+            return;
+        }
         let chunk_bytes = self.config.chunk_bytes;
         let needed = chunk_bytes as u64;
 
@@ -373,9 +400,16 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                 break;
             }
             MSG_HEARTBEAT_REQ => {
+                if worker.reclaim_under_host_pressure().is_err() {
+                    worker.handle_disable();
+                }
                 let resp = FrameHeader {
                     msg_type: MSG_HEARTBEAT_RESP,
-                    status: STATUS_OK,
+                    status: if worker.is_disabled() {
+                        STATUS_ERROR
+                    } else {
+                        STATUS_OK
+                    },
                     correlation_id: hdr.correlation_id,
                     offset: worker.target_bytes(),
                     payload_len: 0,
@@ -400,7 +434,7 @@ mod tests {
     use crate::ipc_cache_client::IpcCacheClient;
     use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
     use ramshared_vram::VramError;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -492,6 +526,151 @@ mod tests {
         fn mem_info(&self) -> Result<(u64, u64), VramError> {
             Ok((self.free, self.total))
         }
+    }
+
+    struct PressureProvider {
+        total: u64,
+        external: Arc<AtomicU64>,
+        live_allocations: Arc<AtomicUsize>,
+        chunk_bytes: u64,
+    }
+
+    impl VramProvider for PressureProvider {
+        type Mem<'p>
+            = FakeMem
+        where
+            Self: 'p;
+
+        fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+            self.live_allocations.fetch_add(1, Ordering::SeqCst);
+            Ok(FakeMem {
+                data: Arc::new(Mutex::new(vec![0u8; bytes])),
+                len: bytes,
+                live_allocations: Arc::clone(&self.live_allocations),
+            })
+        }
+
+        fn mem_info(&self) -> Result<(u64, u64), VramError> {
+            let cache_bytes = (self.live_allocations.load(Ordering::SeqCst) as u64)
+                .saturating_mul(self.chunk_bytes);
+            let free = self
+                .total
+                .saturating_sub(self.external.load(Ordering::SeqCst))
+                .saturating_sub(cache_bytes);
+            Ok((free, self.total))
+        }
+    }
+
+    #[test]
+    fn heartbeat_pressure_reclaims_cold_cache_and_keeps_origin_fallback() {
+        let chunk_bytes = 2 * 1024 * 1024;
+        let total = 2 * 1024 * 1024 * 1024;
+        let external = Arc::new(AtomicU64::new(0));
+        let live_allocations = Arc::new(AtomicUsize::new(0));
+        let provider = PressureProvider {
+            total,
+            external: Arc::clone(&external),
+            live_allocations: Arc::clone(&live_allocations),
+            chunk_bytes,
+        };
+        let mut worker = GpuCacheWorker::new(
+            &provider,
+            GpuWorkerConfig {
+                target_bytes: 4 * chunk_bytes,
+                chunk_bytes: chunk_bytes as usize,
+                reserve_floor_bytes: 128 * 1024 * 1024,
+            },
+        );
+        worker.handle_update(0, &[1]);
+        std::thread::sleep(Duration::from_millis(1));
+        worker.handle_update(chunk_bytes, &[2]);
+        assert_eq!(worker.cached_bytes(), 2 * chunk_bytes);
+
+        external.store(
+            total - 2 * chunk_bytes - (RUNTIME_FREE_BUFFER_BYTES - chunk_bytes),
+            Ordering::SeqCst,
+        );
+        assert_eq!(worker.reclaim_under_host_pressure().unwrap(), chunk_bytes);
+        assert_eq!(worker.cached_bytes(), chunk_bytes);
+        assert_eq!(worker.handle_read(0, 1), None);
+        assert_eq!(worker.handle_read(chunk_bytes, 1), Some(vec![2]));
+        assert_eq!(provider.mem_info().unwrap().0, RUNTIME_FREE_BUFFER_BYTES);
+        worker.handle_update(2 * chunk_bytes, &[3]);
+        assert_eq!(worker.cached_bytes(), chunk_bytes);
+        external.store(0, Ordering::SeqCst);
+        assert_eq!(worker.reclaim_under_host_pressure().unwrap(), 0);
+        worker.handle_update(2 * chunk_bytes, &[3]);
+        assert_eq!(worker.cached_bytes(), 2 * chunk_bytes);
+    }
+
+    #[test]
+    fn heartbeat_reports_physical_release_after_external_gpu_pressure() {
+        let chunk_bytes = 2 * 1024 * 1024;
+        let total = 2 * 1024 * 1024 * 1024;
+        let external = Arc::new(AtomicU64::new(0));
+        let live_allocations = Arc::new(AtomicUsize::new(0));
+        let provider = PressureProvider {
+            total,
+            external: Arc::clone(&external),
+            live_allocations: Arc::clone(&live_allocations),
+            chunk_bytes,
+        };
+        let (client_socket, worker_socket) = UnixStream::pair().expect("socketpair failed");
+        let worker_thread = std::thread::spawn(move || {
+            run_gpu_worker_loop(
+                worker_socket,
+                provider,
+                GpuWorkerConfig {
+                    target_bytes: 4 * chunk_bytes,
+                    chunk_bytes: chunk_bytes as usize,
+                    reserve_floor_bytes: 128 * 1024 * 1024,
+                },
+            )
+            .expect("worker loop failed");
+        });
+        let mut client =
+            IpcCacheClient::new(client_socket, Duration::from_secs(1), 4 * chunk_bytes);
+        client.perform_handshake().expect("handshake failed");
+        assert_eq!(client.update(0, &[1]), CacheMutation::Accepted);
+        assert_eq!(client.update(chunk_bytes, &[2]), CacheMutation::Accepted);
+        assert_eq!(
+            client.refresh_cached_bytes().expect("first heartbeat"),
+            2 * chunk_bytes
+        );
+
+        external.store(
+            total - 2 * chunk_bytes - (RUNTIME_FREE_BUFFER_BYTES - chunk_bytes),
+            Ordering::SeqCst,
+        );
+        assert_eq!(
+            client.refresh_cached_bytes().expect("pressure heartbeat"),
+            chunk_bytes
+        );
+        assert_eq!(client.read(0, &mut [0]), CacheRead::Miss);
+        assert_eq!(
+            client.update(2 * chunk_bytes, &[3]),
+            CacheMutation::Accepted
+        );
+        assert_eq!(
+            client.refresh_cached_bytes().expect("parked heartbeat"),
+            chunk_bytes
+        );
+        external.store(0, Ordering::SeqCst);
+        assert_eq!(
+            client.refresh_cached_bytes().expect("recovery heartbeat"),
+            chunk_bytes
+        );
+        assert_eq!(
+            client.update(2 * chunk_bytes, &[3]),
+            CacheMutation::Accepted
+        );
+        assert_eq!(
+            client.refresh_cached_bytes().expect("refill heartbeat"),
+            2 * chunk_bytes
+        );
+        drop(client);
+        worker_thread.join().expect("worker thread joined");
+        assert_eq!(live_allocations.load(Ordering::SeqCst), 0);
     }
 
     #[test]
