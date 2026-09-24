@@ -91,3 +91,32 @@ A development implementation is maintained in the [emersonbusson/WSL2-Linux-Kern
   - Documentation and Enterprise Qualification: [`0f2c68208`](https://github.com/emersonbusson/WSL2-Linux-Kernel/commit/0f2c68208)
 - **Testing on Host:** Follow the deployment guide in the fork's README to point `.wslconfig` directly to the compiled kernel.
 
+## 8. September 24, 2026 review status
+
+The installed WSL kernel is `6.18.40.1-microsoft-standard-WSL2+` build #6. Its
+`bzImage` SHA-256 matches `C:\wsl\kernel-ramshared-v5`, and the running kernel
+reports the same build identity. This proves the local candidate image booted;
+it does not prove that the order-7 fallback was exercised or that the patch is
+ready for upstream.
+
+The current candidate is a seven-file, uncommitted diff in
+`WSL2-Linux-Kernel-contribution`. `checkpatch.pl --strict` reports zero errors
+and warnings, plus four style checks (two continuation alignments and two
+unnecessary `extern` declarations). Code review also found that
+`vmbus_alloc_buffer()` narrows `PFN_UP(size) << PAGE_SHIFT` to `u32` without
+checking the rounded-size overflow, and the DXG GPADL caller does not act on the
+new buffer leak state if GPADL teardown fails. Resolve these before generating
+the upstream series.
+
+Michael Kelley's September 22 reply endorses using `vmbus_alloc_buffer()` for
+ring allocations, grouping buffer and GPADL lifetime state, and preserving
+memory when teardown or CoCo re-encryption cannot be proven. The WSL
+[PR #41690](https://github.com/microsoft/WSL/pull/41690) now reduces the ring
+order for selected host-initiated hv_sock listeners and describes a kernel
+allocator change as complementary. It does not remove the high-order
+allocation requirement from all VMBus users.
+
+The local draft has not passed allocation/decryption/GPADL fault injection,
+ordinary and Confidential VM teardown tests, or a clean build of the exact
+upstream patch series. The September 24 issue comment records the relationship
+without claiming the bug was reproduced or fixed.
