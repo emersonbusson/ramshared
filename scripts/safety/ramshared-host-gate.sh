@@ -37,7 +37,13 @@ cleanup_host_gate_candidate() {
   rm -f -- "$origin_candidate"
 }
 trap cleanup_host_gate_candidate EXIT
-install -d -m 0700 "$(dirname -- "$guest_gate")" "$(dirname -- "$lease")"
+# /run/ramshared must stay listable so `ramshared status` can read 0644
+# telemetry (cache/supervisor/demote). Sensitive files inside remain 0600.
+# /var/lib/ramshared only needs search: safe-mode presence is the gate, and
+# NotFound must be distinguishable from EACCES (Kahneman #9: ask whether the
+# marker exists, not whether this uid can read it).
+install -d -m 0755 "$(dirname -- "$lease")"
+install -d -m 0711 "$(dirname -- "$guest_gate")"
 # A failed or foreign proof must never retain authority minted by an earlier
 # invocation. Revoke before parsing any host-controlled origin or guardian data.
 rm -f -- "$lease"

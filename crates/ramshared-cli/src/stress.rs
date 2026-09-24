@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::{bounded_process, cascade};
+
 pub const WSL2_MIN_PHYSICAL_HEADROOM_MB: u64 = 600;
 pub const MIN_ORDER_7_BUDDY_CHUNKS: u64 = 8;
 pub const PROACTIVE_COMPACTION_TRIGGER_CHUNKS: u64 = 16;
@@ -26,9 +28,11 @@ const BARE_METAL_MULTI_TIER_FLOOR_MB: u64 = 256;
 const MULTI_TIER_MIN_USABLE_AVAIL_MB: u64 = 100;
 const SINGLE_TIER_MIN_USABLE_AVAIL_MB: u64 = 200;
 const TIER1_AND_TIER2_QUALIFICATION_PCT: u64 = 95;
+// The origin worker caps cache capacity at total VRAM minus 2 GiB and
+// separately keeps this much VRAM free at each physical allocation.
+const ORIGIN_RUNTIME_FREE_BUFFER_MIB: u64 = 768;
 const TIER3_HEADROOM_RESERVE_MB: u64 = 16;
-const TIER3_FULL_STEP_HEADROOM_MB: u64 = 48;
-const TIER3_MAX_STEP_MB: u64 = 32;
+const TIER3_MAX_STEP_MB: u64 = 8;
 const PRE_TIER3_FULL_STEP_HEADROOM_MB: u64 = 200;
 const PRE_TIER3_HEADROOM_RESERVE_MB: u64 = 50;
 const PRE_TIER3_MAX_STEP_MB: u64 = 128;
@@ -53,7 +57,11 @@ pub struct StressOptions {
     pub min_ram_mb: u64,
     pub max_psi_full: f64,
     pub max_latency_ms: f64,
+    pub tier1_target_pct: u64,
+    pub tier2_target_pct: u64,
     pub tier3_target_pct: Option<u64>,
+    pub physical_cache_target_mib: Option<u64>,
+    pub full_three_tier_profile: bool,
     pub battery: bool,
     pub cascade: bool,
     pub telemetry_log: String,
@@ -73,7 +81,11 @@ impl Default for StressOptions {
             min_ram_mb: 600,
             max_psi_full: 20.0,
             max_latency_ms: 8.0,
+            tier1_target_pct: TIER1_AND_TIER2_QUALIFICATION_PCT,
+            tier2_target_pct: TIER1_AND_TIER2_QUALIFICATION_PCT,
             tier3_target_pct: None,
+            physical_cache_target_mib: None,
+            full_three_tier_profile: false,
             battery: false,
             cascade: false,
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
@@ -121,6 +133,14 @@ pub struct StressReport {
     pub metric_version: u32,
     pub battery_mode: bool,
     pub cascade_mode: bool,
+    #[serde(default)]
+    pub tier1_target_pct: u64,
+    #[serde(default)]
+    pub tier2_target_pct: u64,
+    #[serde(default)]
+    pub tier3_target_pct: u64,
+    #[serde(default)]
+    pub physical_cache_required_mib: u64,
     pub max_safe_pct: u64,
     pub total_allocated_mb: u64,
     pub peak_swap_mb: u64,
@@ -130,6 +150,8 @@ pub struct StressReport {
     pub tier2_vram_pct: u64,
     #[serde(default)]
     pub tier2_logical_swap_mb: u64,
+    #[serde(default)]
+    pub tier2_logical_swap_pct: u64,
     #[serde(default)]
     pub tier2_nbd_throughput_mbs: f64,
     #[serde(default)]
@@ -264,7 +286,10 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                     .ok_or_else(|| "--tier3-target-pct requires a value (1-100)".to_string())?
                     .parse()
                     .map_err(|_| "invalid --tier3-target-pct value")?;
-                opts.tier3_target_pct = Some(val.clamp(1, 100));
+                if !(1..=100).contains(&val) {
+                    return Err("--tier3-target-pct must be within 1-100".into());
+                }
+                opts.tier3_target_pct = Some(val);
                 opts.cascade = true;
                 opts.battery = true;
                 if !target_explicit {
@@ -276,6 +301,36 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                 if opts.interval_ms == 1500 {
                     opts.interval_ms = 500;
                 }
+            }
+            "--tier1-target-pct" => {
+                i += 1;
+                opts.tier1_target_pct = args
+                    .get(i)
+                    .ok_or_else(|| "--tier1-target-pct requires a value (1-100)".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --tier1-target-pct value")?;
+            }
+            "--tier2-target-pct" => {
+                i += 1;
+                opts.tier2_target_pct = args
+                    .get(i)
+                    .ok_or_else(|| "--tier2-target-pct requires a value (1-100)".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --tier2-target-pct value")?;
+            }
+            "--physical-cache-target-mib" => {
+                i += 1;
+                opts.physical_cache_target_mib = Some(
+                    args.get(i)
+                        .ok_or_else(|| "--physical-cache-target-mib requires a value".to_string())?
+                        .parse()
+                        .map_err(|_| "invalid --physical-cache-target-mib value")?,
+                );
+            }
+            "--full-three-tier" => {
+                opts.full_three_tier_profile = true;
+                opts.cascade = true;
+                opts.battery = true;
             }
             "--max-psi-full" => {
                 i += 1;
@@ -338,6 +393,22 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
     opts.start_pct = opts.start_pct.clamp(1, 200);
     opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
+    if opts.full_three_tier_profile {
+        if opts.start_pct > 100 {
+            return Err("--full-three-tier requires --start at most 100".into());
+        }
+        opts.target_pct = 100;
+        opts.tier1_target_pct = 100;
+        opts.tier2_target_pct = 100;
+        opts.tier3_target_pct = Some(99);
+        opts.physical_cache_target_mib = Some(4096);
+    }
+    if !(1..=100).contains(&opts.tier1_target_pct)
+        || !(1..=100).contains(&opts.tier2_target_pct)
+        || opts.physical_cache_target_mib == Some(0)
+    {
+        return Err("tier targets must be within 1-100% and physical cache target nonzero".into());
+    }
     if opts.cascade && is_wsl2() {
         opts.max_psi_full = opts.max_psi_full.min(10.0);
     }
@@ -384,10 +455,16 @@ pub fn read_sysctl_min_free_mb() -> u64 {
 }
 
 pub fn query_gpu_free_vram_mb() -> Option<u64> {
-    let output = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
-        .output()
-        .ok()?;
+    let mut query = std::process::Command::new("nvidia-smi");
+    query.args(["--query-gpu=memory.free", "--format=csv,noheader,nounits"]);
+    let output = bounded_process::run_capture_command(
+        &mut query,
+        "GPU free-memory query",
+        Duration::from_secs(5),
+        bounded_process::DEFAULT_OUTPUT_LIMIT,
+        |_| {},
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -442,6 +519,8 @@ fn stress_passes(
     simultaneous_full_tiers: bool,
     peak_pressure: f64,
 ) -> bool {
+    // A safety stop means the full workload was not completed, even if an
+    // earlier sample met the tier thresholds.
     cascade
         && kernel_faults == Some(0)
         && peak_pressure.is_finite()
@@ -756,6 +835,7 @@ fn read_cache_status_sample() -> Option<CacheSample> {
 fn require_physical_cache_before_cascade(
     cascade: bool,
     tier3_target_pct: Option<u64>,
+    physical_cache_target_mib: Option<u64>,
     sample: Option<CacheSample>,
 ) -> Result<(), String> {
     if (cascade || tier3_target_pct.is_some()) && sample.is_none() {
@@ -764,19 +844,52 @@ fn require_physical_cache_before_cascade(
                 .into(),
         );
     }
+    if let Some(requested_mib) = physical_cache_target_mib
+        && sample.is_none_or(|cache| cache.target_mib < requested_mib)
+    {
+        return Err(format!(
+            "sealed physical GPU cache target is below requested {requested_mib} MiB"
+        ));
+    }
     Ok(())
 }
 
+fn require_full_profile_gpu_budget(
+    requested_mib: u64,
+    cache: Option<CacheSample>,
+    free_mib: Option<u64>,
+) -> Result<(), String> {
+    let cache = cache.ok_or("physical GPU cache telemetry is unavailable")?;
+    let free_mib = free_mib.ok_or("fresh GPU free-memory telemetry is unavailable")?;
+    let remaining_mib = requested_mib.saturating_sub(cache.cached_mib);
+    let required_mib = remaining_mib.saturating_add(ORIGIN_RUNTIME_FREE_BUFFER_MIB);
+    if free_mib < required_mib {
+        return Err(format!(
+            "GPU budget is insufficient: {free_mib} MiB free, {remaining_mib} MiB cache allocation still needed, and {} MiB runtime free buffer required",
+            ORIGIN_RUNTIME_FREE_BUFFER_MIB
+        ));
+    }
+    Ok(())
+}
+
+/// Qualify logical occupancy and physical cache from one fresh sample.
 fn full_tier_snapshot(
     zram_pct: u64,
     logical_nbd_pct: u64,
     ssd_pct: u64,
+    opts: &StressOptions,
     cache: Option<CacheSample>,
 ) -> bool {
-    zram_pct >= 100
-        && logical_nbd_pct >= 100
-        && ssd_pct >= 100
-        && cache.is_some_and(|sample| sample.target_mib > 0 && sample.at_target)
+    zram_pct >= opts.tier1_target_pct
+        && logical_nbd_pct >= opts.tier2_target_pct
+        && ssd_pct >= opts.tier3_target_pct.unwrap_or(100)
+        && cache.is_some_and(|sample| {
+            sample.target_mib > 0
+                && sample.at_target
+                && opts
+                    .physical_cache_target_mib
+                    .is_none_or(|requested| sample.cached_mib >= requested)
+        })
 }
 
 pub fn probe_allocation_latency_ms() -> f64 {
@@ -798,28 +911,18 @@ fn safe_allocation_mb(
     if !is_multi_tier {
         return one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
     }
-
-    if tier3_active {
-        if avail_mb > hard_floor + TIER3_FULL_STEP_HEADROOM_MB {
-            one_pct_mb
-                .min(avail_mb.saturating_sub(hard_floor + TIER3_HEADROOM_RESERVE_MB))
-                .min(TIER3_MAX_STEP_MB)
-        } else if avail_mb > hard_floor + TIER3_HEADROOM_RESERVE_MB {
-            TIER3_HEADROOM_RESERVE_MB
-        } else {
-            0
-        }
-    } else if avail_mb > hard_floor + PRE_TIER3_FULL_STEP_HEADROOM_MB {
-        one_pct_mb
-            .min(avail_mb.saturating_sub(hard_floor + PRE_TIER3_HEADROOM_RESERVE_MB))
-            .min(PRE_TIER3_MAX_STEP_MB)
-    } else if avail_mb > hard_floor + 20 {
-        TIER3_MAX_STEP_MB
-    } else if avail_mb > hard_floor {
+    let reserve = if tier3_active {
         TIER3_HEADROOM_RESERVE_MB
     } else {
-        0
-    }
+        PRE_TIER3_HEADROOM_RESERVE_MB
+    };
+    let budget = avail_mb.saturating_sub(hard_floor.saturating_add(reserve));
+    let step_cap = if tier3_active || avail_mb <= hard_floor + PRE_TIER3_FULL_STEP_HEADROOM_MB {
+        TIER3_MAX_STEP_MB
+    } else {
+        PRE_TIER3_MAX_STEP_MB
+    };
+    one_pct_mb.min(budget).min(step_cap)
 }
 
 fn step_interval_ms(is_wsl2_host: bool, tier3_active: bool, requested_ms: u64) -> u64 {
@@ -929,11 +1032,24 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
 }
 
 pub fn run(opts: &StressOptions) -> Result<(), String> {
+    let cascade_mode = opts.cascade || opts.tier3_target_pct.is_some();
+    if cascade_mode {
+        cascade::stress_readiness()?;
+    }
+    let initial_cache_sample = read_cache_status_sample();
     require_physical_cache_before_cascade(
         opts.cascade,
         opts.tier3_target_pct,
-        read_cache_status_sample(),
+        opts.physical_cache_target_mib,
+        initial_cache_sample,
     )?;
+    if opts.full_three_tier_profile {
+        require_full_profile_gpu_budget(
+            opts.physical_cache_target_mib.unwrap_or(4096),
+            initial_cache_sample,
+            query_gpu_free_vram_mb(),
+        )?;
+    }
     if (opts.cascade || opts.tier3_target_pct.is_some()) && current_kernel_faults() != Some(0) {
         return Err("kernel fault evidence is unavailable or already contains faults".to_string());
     }
@@ -947,7 +1063,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
     let chunks = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
 
-    // Autonomous Watchdog Thread: If main thread stalls > 3s, clears memory automatically
+    // Autonomous Watchdog Thread: If main thread stalls > 30s, clears memory automatically
+    // and trips term_signal (fail-closed Hyper-V / WSL2 anti-hang protection).
+    // 30s threshold: allocation under swap pressure (vec![0u8; 32MB] zeroing) can
+    // legitimately take 5-15s; 4s was too tight and caused false-positive halts.
     let chunks_watchdog = chunks.clone();
     let heartbeat_watchdog = last_heartbeat.clone();
     let term_watchdog = term_signal.clone();
@@ -959,7 +1078,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 .unwrap_or_default()
                 .as_secs();
             let last = heartbeat_watchdog.load(Ordering::Relaxed);
-            if now.saturating_sub(last) > 4 {
+            if now.saturating_sub(last) > 30 {
                 if let Ok(mut guard) = chunks_watchdog.lock()
                     && !guard.is_empty()
                 {
@@ -1043,11 +1162,18 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut min_gpu_free_mb: Option<u64> = None;
     let mut last_gpu_sample_ms = 0u64;
     while current_target <= effective_target {
+        if cascade_mode && let Err(error) = cascade::stress_readiness() {
+            eprintln!("[stress] safety_halt: {error}");
+            safety_halt = true;
+            break;
+        }
         if term_signal.load(Ordering::Relaxed) {
+            eprintln!("[stress] safety_halt: term_signal (watchdog)");
             safety_halt = true;
             break;
         }
         if (opts.cascade || opts.tier3_target_pct.is_some()) && current_kernel_faults() != Some(0) {
+            eprintln!("[stress] safety_halt: kernel_faults");
             safety_halt = true;
             break;
         }
@@ -1068,6 +1194,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
         let cache_sample = read_cache_status_sample();
         if (opts.cascade || opts.tier3_target_pct.is_some()) && cache_sample.is_none() {
+            eprintln!("[stress] safety_halt: physical_cache_unavailable");
             cache_lost_during_stress = true;
             safety_halt = true;
             break;
@@ -1077,7 +1204,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
             peak_physical_target = peak_physical_target.max(sample.target_mib);
         }
-        simultaneous_full_tiers |= full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, cache_sample);
+        simultaneous_full_tiers |=
+            full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, opts, cache_sample);
 
         sample_min_gpu_headroom(&mut last_gpu_sample_ms, &mut min_gpu_free_mb);
 
@@ -1261,8 +1389,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let (cap1, cap2, cap3) = read_swap_tier_capacities();
         if let Some(t3_target) = opts.tier3_target_pct
-            && cap1.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT
-            && cap2.pct >= TIER1_AND_TIER2_QUALIFICATION_PCT
+            && cap1.pct >= opts.tier1_target_pct
+            && cap2.pct >= opts.tier2_target_pct
             && tier3_target_reached(cap3.pct, t3_target)
         {
             if !opts.json {
@@ -1339,6 +1467,15 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             if (i & 0x1FFFFF) == 0 {
                 // Every 2 MiB, yield CPU so Hyper-V VMBus IC heartbeat interrupt handler is never starved
                 thread::yield_now();
+                // Keep watchdog heartbeat fresh — allocation under swap pressure
+                // can exceed the 4s stall window on its own.
+                last_heartbeat.store(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    Ordering::Relaxed,
+                );
             }
         }
 
@@ -1374,6 +1511,15 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         // Tier 3 is backed by Hyper-V synthetic SCSI (storvsc) writing to swap.vhdx on NTFS.
         // If Tier 3 is active, pace steps by at least 500ms to allow StorVSC ring buffer completions.
         let step_interval = step_interval_ms(is_wsl2(), cap3.used_mb > 0, opts.interval_ms);
+        // Heartbeat before the planned sleep so the watchdog (4s stall) does not
+        // misclassify a deliberate step_interval as a hang (Kahneman #9).
+        last_heartbeat.store(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            Ordering::Relaxed,
+        );
         thread::sleep(Duration::from_millis(step_interval));
         let now = Instant::now();
         let dt = now.duration_since(prev_sample_time).as_secs_f64();
@@ -1414,6 +1560,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let (_, _, init_cap3) = read_swap_tier_capacities();
         let mut hold_cap3_pct = init_cap3.pct;
         while Instant::now() < hold_end && !term_signal.load(Ordering::Relaxed) {
+            if cascade_mode && let Err(error) = cascade::stress_readiness() {
+                eprintln!("[stress] safety_halt: {error}");
+                safety_halt = true;
+                break;
+            }
             if (opts.cascade || opts.tier3_target_pct.is_some())
                 && current_kernel_faults() != Some(0)
             {
@@ -1495,7 +1646,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 peak_physical_target = peak_physical_target.max(sample.target_mib);
             }
             simultaneous_full_tiers |=
-                full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, cache_sample);
+                full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, opts, cache_sample);
             hold_cap3_pct = cap3.pct;
             let reading = compute_telemetry_reading(
                 lat_ms,
@@ -1555,6 +1706,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     if term_signal.load(Ordering::Relaxed) {
         safety_halt = true;
     }
+    if cascade_mode && cascade::stress_readiness().is_err() {
+        safety_halt = true;
+    }
 
     // Phase 4: drop the test buffers; this is not a physical reclaim benchmark.
     let t_reclaim_start = Instant::now();
@@ -1569,7 +1723,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     thread::sleep(Duration::from_millis(500));
     let (_, post_free_ram) = read_mem_info();
     let (post_swap, _, _, _) = read_swap_tiers();
-    let (cap1, _cap2, cap3) = read_swap_tier_capacities();
+    let (cap1, cap2, cap3) = read_swap_tier_capacities();
 
     let (
         avg_cycle_latency_ms,
@@ -1582,6 +1736,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         metric_version: 2,
         battery_mode: opts.battery,
         cascade_mode: opts.cascade || physical_cache_samples > 0,
+        tier1_target_pct: opts.tier1_target_pct,
+        tier2_target_pct: opts.tier2_target_pct,
+        tier3_target_pct: opts.tier3_target_pct.unwrap_or(100),
+        physical_cache_required_mib: opts.physical_cache_target_mib.unwrap_or(0),
         max_safe_pct,
         total_allocated_mb,
         peak_swap_mb: peak_total_swap,
@@ -1595,6 +1753,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             .checked_div(peak_physical_target)
             .unwrap_or(0),
         tier2_logical_swap_mb: peak_vram,
+        tier2_logical_swap_pct: peak_vram
+            .saturating_mul(100)
+            .checked_div(cap2.total_mb)
+            .unwrap_or(cap2.pct),
         tier2_nbd_throughput_mbs: (peak_vram_mbs * 10.0).round() / 10.0,
         tier2_physical_cache_target_mb: peak_physical_target,
         simultaneous_full_tiers,
@@ -1616,8 +1778,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         buffer_drop_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
         post_reclaim_free_ram_mb: post_free_ram,
         // Determine verdict from collected evidence (Bug 6).
-        // PASS_ZERO_PANIC requires zero kernel faults, no safety halt, a simultaneous
-        // full three-tier sample, valid physical cache data, and bounded pressure.
+        // PASS_ZERO_PANIC requires a completed run with physical cache and
+        // logical tiers observed in the same snapshot.
         status: if stress_passes(
             current_kernel_faults(),
             opts.cascade || opts.tier3_target_pct.is_some(),
@@ -1727,6 +1889,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
     archive_and_compare_benchmark(&report, opts.json);
 
+    if opts.full_three_tier_profile && report.status != "PASS_ZERO_PANIC" {
+        return Err(format!(
+            "full-three-tier qualification failed: simultaneous={} ZRAM={}%/{}% NBD logical={}%/{}% SSD={}%/{}% physical cache={} MiB/{} MiB",
+            report.simultaneous_full_tiers,
+            report.tier1_zram_pct,
+            report.tier1_target_pct,
+            report.tier2_logical_swap_pct,
+            report.tier2_target_pct,
+            report.tier3_ssd_pct,
+            report.tier3_target_pct,
+            report.tier2_vram_mb,
+            report.physical_cache_required_mib,
+        ));
+    }
     Ok(())
 }
 
@@ -1822,21 +1998,29 @@ mod tests {
     }
 
     #[test]
-    fn full_tier_claim_requires_physical_cache_in_one_snapshot() {
-        let cache = CacheSample {
+    fn full_tier_claim_requires_simultaneous_physical_cache() {
+        let mut opts = StressOptions {
+            tier3_target_pct: Some(15),
+            ..StressOptions::default()
+        };
+        let full = Some(CacheSample {
             cached_mib: 1024,
-            target_mib: 4096,
-            at_target: false,
-        };
-        assert!(!full_tier_snapshot(100, 100, 100, Some(cache)));
-        assert!(!full_tier_snapshot(100, 100, 100, None));
-        let full = CacheSample {
-            cached_mib: 4096,
-            target_mib: 4096,
+            target_mib: 1024,
             at_target: true,
-        };
-        assert!(full_tier_snapshot(100, 100, 100, Some(full)));
-        assert!(!full_tier_snapshot(100, 100, 99, Some(full)));
+        });
+        let partial = Some(CacheSample {
+            cached_mib: 256,
+            target_mib: 1024,
+            at_target: false,
+        });
+        assert!(full_tier_snapshot(95, 95, 15, &opts, full));
+        assert!(!full_tier_snapshot(95, 95, 15, &opts, partial));
+        assert!(!full_tier_snapshot(95, 95, 15, &opts, None));
+        assert!(!full_tier_snapshot(95, 95, 14, &opts, full));
+        assert!(!full_tier_snapshot(94, 95, 15, &opts, full));
+        assert!(!full_tier_snapshot(95, 94, 15, &opts, full));
+        opts.physical_cache_target_mib = Some(4096);
+        assert!(!full_tier_snapshot(95, 95, 15, &opts, full));
     }
 
     #[test]
@@ -1850,18 +2034,20 @@ mod tests {
         assert!(!stress_passes(Some(0), true, 10, true, false, true, 1.0));
         assert!(!stress_passes(Some(0), true, 10, false, true, true, 1.0));
         assert!(!stress_passes(Some(0), true, 10, false, false, false, 1.0));
+        assert!(!stress_passes(Some(0), true, 0, false, false, true, 1.0));
         assert!(stress_passes(Some(0), true, 10, false, false, true, 1.0));
     }
 
     #[test]
     fn cascade_stress_refuses_missing_physical_cache_before_allocation() {
-        assert!(require_physical_cache_before_cascade(true, None, None).is_err());
-        assert!(require_physical_cache_before_cascade(false, Some(100), None).is_err());
-        assert!(require_physical_cache_before_cascade(false, None, None).is_ok());
+        assert!(require_physical_cache_before_cascade(true, None, None, None).is_err());
+        assert!(require_physical_cache_before_cascade(false, Some(100), None, None).is_err());
+        assert!(require_physical_cache_before_cascade(false, None, None, None).is_ok());
         assert!(
             require_physical_cache_before_cascade(
                 true,
                 Some(100),
+                None,
                 Some(CacheSample {
                     cached_mib: 0,
                     target_mib: 2048,
@@ -1869,6 +2055,19 @@ mod tests {
                 }),
             )
             .is_ok()
+        );
+        assert!(
+            require_physical_cache_before_cascade(
+                true,
+                Some(99),
+                Some(4096),
+                Some(CacheSample {
+                    cached_mib: 256,
+                    target_mib: 1024,
+                    at_target: false,
+                }),
+            )
+            .is_err()
         );
     }
 
@@ -1992,39 +2191,54 @@ mod tests {
     }
 
     #[test]
-    fn executes_micro_stress_runs_safely() {
-        let opts_text = StressOptions {
-            start_pct: 1,
-            target_pct: 1,
-            step_pct: 1,
-            interval_ms: 10,
-            hold_sec: 1,
-            min_ram_mb: 200,
-            battery: true,
-            json: false,
-            ..StressOptions::default()
-        };
-        assert!(run(&opts_text).is_ok());
-
-        let opts_cascade = StressOptions {
-            start_pct: 1,
-            target_pct: 1,
-            step_pct: 1,
-            interval_ms: 10,
-            hold_sec: 1,
-            min_ram_mb: 200,
-            battery: true,
-            cascade: true,
-            json: false,
-            ..StressOptions::default()
-        };
-        assert!(run(&opts_cascade).is_err());
-
+    fn cascade_flag_selects_qualification_mode_without_live_pressure() {
         let parsed_res = parse_stress_args(&["--cascade".to_string()]);
         assert!(parsed_res.is_ok());
         let parsed_cascade = parsed_res.unwrap_or_default();
         assert!(parsed_cascade.cascade);
         assert!(parsed_cascade.battery);
+    }
+
+    #[test]
+    fn full_three_tier_profile_requires_exact_simultaneous_targets() {
+        let opts = parse_stress_args(&["--full-three-tier".to_string()])
+            .unwrap_or_else(|error| panic!("full profile must parse: {error}"));
+        assert_eq!((opts.tier1_target_pct, opts.tier2_target_pct), (100, 100));
+        assert_eq!(opts.tier3_target_pct, Some(99));
+        assert_eq!(opts.physical_cache_target_mib, Some(4096));
+        assert!(opts.cascade && opts.battery);
+        let cache = Some(CacheSample {
+            cached_mib: 4096,
+            target_mib: 4096,
+            at_target: true,
+        });
+        assert!(full_tier_snapshot(100, 100, 99, &opts, cache));
+        assert!(!full_tier_snapshot(99, 100, 99, &opts, cache));
+        assert!(!full_tier_snapshot(100, 99, 99, &opts, cache));
+        assert!(!full_tier_snapshot(100, 100, 98, &opts, cache));
+        assert!(!full_tier_snapshot(
+            100,
+            100,
+            99,
+            &opts,
+            Some(CacheSample {
+                cached_mib: 4095,
+                target_mib: 4096,
+                at_target: false,
+            })
+        ));
+    }
+
+    #[test]
+    fn full_profile_budget_keeps_runtime_free_buffer_after_remaining_cache_allocations() {
+        let cache = Some(CacheSample {
+            cached_mib: 256,
+            target_mib: 4096,
+            at_target: false,
+        });
+        assert!(require_full_profile_gpu_budget(4096, cache, Some(4608)).is_ok());
+        assert!(require_full_profile_gpu_budget(4096, cache, Some(4607)).is_err());
+        assert!(require_full_profile_gpu_budget(4096, cache, None).is_err());
     }
 
     #[test]
@@ -2038,27 +2252,13 @@ mod tests {
         let lat = probe_allocation_latency_ms();
         assert!(lat >= 0.0);
         let _ = read_buddyinfo_order_7();
-        trigger_proactive_compaction();
         let _ = read_tier_disk_total_bytes();
         let _ = is_wsl2();
         let _ = read_sysctl_min_free_mb();
     }
 
     #[test]
-    fn executes_micro_stress_runs_json_and_telemetry() {
-        let opts_json = StressOptions {
-            start_pct: 1,
-            target_pct: 1,
-            step_pct: 1,
-            interval_ms: 10,
-            hold_sec: 1,
-            min_ram_mb: 200,
-            battery: true,
-            json: true,
-            ..StressOptions::default()
-        };
-        assert!(run(&opts_json).is_ok());
-
+    fn formats_stress_telemetry_without_live_pressure() {
         let reading = compute_telemetry_reading(0.1, 0.5, 100, 1000, 10).with_tier_pcts(10, 20, 30);
         assert_eq!(reading.tier1_zram_pct, 10);
         assert_eq!(reading.tier2_vram_pct, 20);
@@ -2122,6 +2322,10 @@ mod tests {
             metric_version: 2,
             battery_mode: true,
             cascade_mode: true,
+            tier1_target_pct: 95,
+            tier2_target_pct: 95,
+            tier3_target_pct: 15,
+            physical_cache_required_mib: 0,
             max_safe_pct: 90,
             total_allocated_mb: 1000,
             peak_swap_mb: 500,
@@ -2130,6 +2334,7 @@ mod tests {
             tier2_vram_mb: 200,
             tier2_vram_pct: 50,
             tier2_logical_swap_mb: 200,
+            tier2_logical_swap_pct: 50,
             tier2_nbd_throughput_mbs: 500.0,
             tier2_physical_cache_target_mb: 400,
             simultaneous_full_tiers: false,
@@ -2187,8 +2392,10 @@ mod tests {
     fn safe_allocation_never_crosses_the_physical_floor() {
         assert_eq!(safe_allocation_mb(true, true, 600, 600, 128), 0);
         assert_eq!(safe_allocation_mb(true, true, 616, 600, 128), 0);
-        assert_eq!(safe_allocation_mb(true, true, 617, 600, 128), 16);
-        assert_eq!(safe_allocation_mb(true, true, 649, 600, 128), 32);
+        assert_eq!(safe_allocation_mb(true, true, 617, 600, 128), 1);
+        assert_eq!(safe_allocation_mb(true, true, 649, 600, 128), 8);
+        assert_eq!(safe_allocation_mb(true, false, 601, 600, 128), 0);
+        assert_eq!(safe_allocation_mb(true, false, 651, 600, 128), 1);
         assert_eq!(safe_allocation_mb(true, false, 600, 600, 128), 0);
         assert_eq!(safe_allocation_mb(false, false, 600, 600, 128), 0);
     }

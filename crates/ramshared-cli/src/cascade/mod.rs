@@ -1339,11 +1339,18 @@ fn guardian_state_from_files(
     health: &Path,
     max_age: Duration,
 ) -> (GuardianState, Option<String>) {
-    match fs::read_to_string(safe_mode) {
-        Ok(text) if serde_json::from_str::<serde_json::Value>(&text).is_ok() => {
-            return (GuardianState::SafeMode, None);
+    // Presence of the marker is the gate (Kahneman #9). Validate content only
+    // when readable; an unreadable marker is still a marker (fail-safe #16).
+    match fs::symlink_metadata(safe_mode) {
+        Ok(_) => {
+            return match fs::read_to_string(safe_mode) {
+                Ok(text) if serde_json::from_str::<serde_json::Value>(&text).is_ok() => {
+                    (GuardianState::SafeMode, None)
+                }
+                Ok(_) => (GuardianState::Blocked, Some("safe_mode_invalid".into())),
+                Err(_) => (GuardianState::SafeMode, None),
+            };
         }
-        Ok(_) => return (GuardianState::Blocked, Some("safe_mode_invalid".into())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return (GuardianState::Blocked, Some("safe_mode_unreadable".into())),
     }
@@ -1524,6 +1531,36 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         fallback_swap_used_kib: Some(fallback_swap_used_kib),
         measurement_errors,
     }
+}
+
+fn stress_readiness_from_snapshot(snapshot: &CascadeSnapshot) -> Result<(), String> {
+    let lifecycle = derive_lifecycle(snapshot);
+    if !lifecycle.ok
+        || snapshot.ghost
+        || !snapshot.order_ok
+        || !snapshot.zram.present
+        || !snapshot.vram.present
+        || !snapshot.disk.present
+        || !snapshot.daemon_alive
+        || !snapshot.capacity_guaranteed
+        || snapshot.control_state != ControlState::Healthy
+        || snapshot.origin_state != OriginState::Ready
+        || snapshot.cache_state != CacheState::Active
+        || snapshot.guardian_state != GuardianState::Healthy
+        || !snapshot.measurement_errors.is_empty()
+    {
+        return Err(format!(
+            "cascade stress requires healthy zram/NBD/disk, daemon, physical cache, supervisor, and host guardian (reasons: {:?}; measurement errors: {:?})",
+            lifecycle.reasons, snapshot.measurement_errors
+        ));
+    }
+    Ok(())
+}
+
+/// Read-only admission and continuation check for pressure workloads.
+pub fn stress_readiness() -> Result<(), String> {
+    let entries = read_swaps().map_err(|error| error.to_string())?;
+    stress_readiness_from_snapshot(&build_cascade_snapshot(&entries))
 }
 
 fn capacity_field(key: &str) -> Option<String> {
@@ -1776,6 +1813,59 @@ mod tests {
             },
             "written_at_unix_ms": 1_000,
         })
+    }
+
+    #[test]
+    fn stress_readiness_refuses_missing_control_plane_and_cache() {
+        let tier = TierSample {
+            present: true,
+            prio: Some(200),
+            size_kib: 1024,
+            used_kib: 0,
+        };
+        let mut snapshot = CascadeSnapshot {
+            zram: tier.clone(),
+            vram: TierSample {
+                prio: Some(100),
+                ..tier.clone()
+            },
+            disk: TierSample {
+                prio: Some(-2),
+                ..tier
+            },
+            ghost: false,
+            order_ok: true,
+            daemon_alive: true,
+            daemon_pid: Some(1),
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
+            demote: DemoteSnapshot::default(),
+            active_kib: 1024,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state: CacheState::Active,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(1024),
+            vram_cached_kib: Some(256),
+            gpu_headroom_kib: Some(768),
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
+        };
+        assert!(stress_readiness_from_snapshot(&snapshot).is_ok());
+        snapshot.control_state = ControlState::Guarded;
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
+        snapshot.control_state = ControlState::Healthy;
+        snapshot.cache_state = CacheState::Unavailable;
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
+        snapshot.cache_state = CacheState::Active;
+        snapshot.guardian_state = GuardianState::Blocked;
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
+        snapshot.guardian_state = GuardianState::Healthy;
+        snapshot
+            .measurement_errors
+            .push("cache_status_not_current".into());
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
     }
 
     #[test]
@@ -2207,6 +2297,56 @@ Filename Type Size Used Priority
             guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
             (GuardianState::SafeMode, None)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Kahneman #9/#16: the hard question is "is the safe-mode marker present?",
+    // not "can this uid read its bytes?". Presence is the gate; content is a
+    // secondary validation. An unreadable marker must still report SafeMode.
+    #[test]
+    fn safe_mode_marker_presence_is_the_gate_even_when_content_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-guardian-unreadable-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let safe = root.join("safe.json");
+        let health = root.join("health.json");
+        fs::write(
+            &health,
+            r#"{"schema_version":1,"distro":"Ubuntu-24.04","state":"HEALTHY"}"#,
+        )
+        .unwrap();
+
+        fs::write(&safe, "not-json").unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::Blocked, Some("safe_mode_invalid".into()))
+        );
+
+        // Deliberately invalid content: only presence-first semantics can yield
+        // SafeMode when the read is denied.
+        let mut perms = fs::metadata(&safe).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&safe, perms).unwrap();
+        let denied = fs::read_to_string(&safe).is_err();
+        let observed = guardian_state_from_files(&safe, &health, Duration::from_secs(15));
+        let mut perms = fs::metadata(&safe).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&safe, perms).unwrap();
+
+        if denied {
+            assert_eq!(observed, (GuardianState::SafeMode, None));
+        } else {
+            // CAP_DAC_OVERRIDE can still read mode 0000 and must reject the
+            // invalid content rather than invent SafeMode from bytes it saw.
+            assert_eq!(
+                observed,
+                (GuardianState::Blocked, Some("safe_mode_invalid".into()))
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
