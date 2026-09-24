@@ -26,8 +26,8 @@ pub const MSG_HANDSHAKE_RESP: u8 = 10;
 pub const STATUS_OK: u8 = 0;
 pub const STATUS_MISS: u8 = 1;
 pub const STATUS_ERROR: u8 = 2;
-const RUNTIME_FREE_BUFFER_BYTES: u64 = 768 * 1024 * 1024;
-const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 1024 * 1024 * 1024;
+const RUNTIME_FREE_BUFFER_BYTES: u64 = 640 * 1024 * 1024;
+const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 896 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameHeader {

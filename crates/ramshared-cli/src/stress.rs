@@ -30,7 +30,7 @@ const SINGLE_TIER_MIN_USABLE_AVAIL_MB: u64 = 200;
 const TIER1_AND_TIER2_QUALIFICATION_PCT: u64 = 95;
 // The origin worker caps cache capacity at total VRAM minus 2 GiB and
 // separately keeps this much VRAM free at each physical allocation.
-const ORIGIN_RUNTIME_FREE_BUFFER_MIB: u64 = 768;
+const ORIGIN_RUNTIME_FREE_BUFFER_MIB: u64 = 640;
 const TIER3_HEADROOM_RESERVE_MB: u64 = 16;
 const TIER3_MAX_STEP_MB: u64 = 8;
 const PRE_TIER3_FULL_STEP_HEADROOM_MB: u64 = 200;
@@ -2236,8 +2236,8 @@ mod tests {
             target_mib: 4096,
             at_target: false,
         });
-        assert!(require_full_profile_gpu_budget(4096, cache, Some(4608)).is_ok());
-        assert!(require_full_profile_gpu_budget(4096, cache, Some(4607)).is_err());
+        assert!(require_full_profile_gpu_budget(4096, cache, Some(4480)).is_ok());
+        assert!(require_full_profile_gpu_budget(4096, cache, Some(4479)).is_err());
         assert!(require_full_profile_gpu_budget(4096, cache, None).is_err());
     }
 
