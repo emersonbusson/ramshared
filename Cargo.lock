@@ -1026,6 +1026,10 @@ dependencies = [
 [[package]]
 name = "ramshared-vram"
 version = "0.14.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "ramshared-vulkan"
