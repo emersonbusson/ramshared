@@ -4,7 +4,7 @@
 
 ## Status
 
-**PARTIAL (protocol, gate, and transport source; product path not wired)** · Linux slice coverage and Windows-target type-check/Clippy were re-run on 2026-09-27 · live E2E and `BINARY_MATCH` are pending. Linux AF_VSOCK connect now uses nonblocking connect, `poll`, `SO_ERROR`, and a hard five-second ceiling; Windows AF_HYPERV bind/listen/accept is implemented with bounded nonblocking accept and RAII socket cleanup. Neither daemon starts this listener/client, the HMAC handshake is not composed with lease or manifest delivery, and disconnect does not yet revoke cache authority. The prior September 23 audit changed a VHDX command timeout; that separate local test does not qualify a Windows host run.
+**PARTIAL (protocol, gate, and transport source; product path not wired)** · Linux slice coverage and Windows-target type-check/Clippy were re-run on 2026-09-27 · live E2E and `BINARY_MATCH` are pending. Linux AF_VSOCK connect now uses nonblocking connect, `poll`, `SO_ERROR`, and a hard five-second ceiling; Windows AF_HYPERV bind/listen/accept is implemented with bounded nonblocking accept and RAII socket cleanup. Neither daemon starts this listener/client. The current protocol has a guest nonce/HMAC request and an unauthenticated `HandshakeAck`; it has no `HandshakeFinish` type or three-message proof flow. The handshake is not composed with lease or manifest delivery, and disconnect does not yet revoke cache authority. The prior September 23 audit changed a VHDX command timeout; that separate local test does not qualify a Windows host run.
 
 ## Files
 
@@ -39,7 +39,7 @@
    - `host_gate::tests::evaluate_safe_mode_allows_matching_boot_id` — **PASS**
    - `host_gate::tests::evaluate_safe_mode_denies_when_safe_mode_active` — **PASS**
    - `host_gate::tests::mint_lease_requires_all_gates` — **PASS**
-   - `host_gate::tests::lease_expiry_revokes_origin_authority` — **PASS**
+   - `host_gate::tests::lease_expiry_is_detected` — **PASS** (checks only whether the deadline has passed; it does not revoke authority or alter I/O behavior)
    - `host_gate::tests::host_gate_shadow_comparison` — **PASS**
 
 3. **Control Plane Tests (`ramshared-winsvc`)**: Current workspace run: 212 passed, 0 failed, 1 ignored in the library suite; 4 probe tests passed.
@@ -94,7 +94,7 @@
 - **#16 (Read timeout bounded):** `vsock_stream_read_timeout_is_bounded` verifies read timeout fires within 500ms.
 - **#15 (Disconnect detection):** `vsock_disconnect_detected_within_interval` verifies EOF/error on socket close within 500ms.
 - **#17 (Shadow comparison):** `host_gate_shadow_comparison` verifies Rust gate logic matches script on fixture inputs.
-- **#13 (Lease revocation):** `lease_expiry_revokes_origin_authority` verifies origin authority revoked on expiry.
+- **#13 (Lease revocation):** Current helper test `lease_expiry_is_detected` verifies only that the lease deadline has passed. Cache-admission revocation and verified-origin continuation have no product-path implementation or test yet.
 - **#16 (VHDX bounded):** `vhdx_attach_timeout_is_bounded` verifies attach completes within 15s window.
 
 ## Open Evidence (Env-Bound)

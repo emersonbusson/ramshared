@@ -390,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_expiry_revokes_origin_authority() {
+    fn lease_expiry_is_detected() {
         let origin = SealedOrigin {
             logical_capacity_mib: 4096,
             partuuid: "p".into(),

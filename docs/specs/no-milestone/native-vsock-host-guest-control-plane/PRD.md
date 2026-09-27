@@ -65,11 +65,11 @@ Extend the existing `ramshared-winsvc` and `ramshared-wsl2d` binaries with a new
 ## 4. Functional requirements (RF)
 
 - **RF-1 (Native Transport):** Integrated host-guest communication must use AF_HYPERV (Windows) / AF_VSOCK (Linux) stream sockets with a registered RamShared service GUID. The current adapters do not by themselves remove file-based control-plane state from either daemon.
-- **RF-2 (Shared Protocol):** Both sides must use a shared Rust protocol crate (`ramshared-ipc`) with binary framing (magic `0x52414D53`, versioned headers, bounded payloads ≤ 1MB). Protocol messages cover: Handshake, Heartbeat, LeaseRequest/Granted/Denied/Release, OriginManifest, SafeModeGate, GuardianHealth, VHDXAttach/Detach, Telemetry, Shutdown.
+- **RF-2 (Shared Protocol):** Both sides must use a shared Rust protocol crate (`ramshared-ipc`) with binary framing (magic `0x52414D53`, versioned headers, bounded payloads ≤ 1MB). Protocol messages cover: Handshake, HandshakeAck, HandshakeFinish, Heartbeat, LeaseRequest/Granted/Denied/Release, OriginManifest, SafeModeGate, GuardianHealth, VHDXAttach/Detach, Telemetry, and Shutdown. `HandshakeFinish` is planned and is not present in the current source yet.
 - **RF-3 (Heartbeat & Lease):** The guest daemon sends heartbeat frames at a configurable interval (default 5s). The host service tracks liveness and revokes the lease if no heartbeat arrives within 3× the interval. Lease revocation triggers fail-closed origin-only mode in the guest.
 - **RF-4 (VHDX Lifecycle):** The host service manages VHDX origin attachment via `wsl.exe --mount --vhd <path> --bare` (or equivalent WSL2 API) invoked programmatically. The guest daemon validates PartUUID and seals the origin manifest upon attach notification. No user PowerShell required.
 - **RF-5 (Script Absorption):** All runtime logic in `ramshared-host-gate.sh` (origin manifest validation, guardian health check, safe-mode gate, lease minting) must be absorbed into `ramshared-wsl2d`. All runtime logic in `Manage-RamSharedOrigin.ps1` and `Watch-RamSharedWsl.ps1` must be absorbed into `ramshared-winsvc`. After migration, zero runtime scripts execute in the control plane path.
-- **RF-6 (Fail-Closed Disconnect):** On vsock disconnect (VM suspend, crash, network partition), both sides must transition to fail-closed state within 1 heartbeat interval. The guest must revoke origin authority and fall back to safe mode. The host must trigger guardian isolation.
+- **RF-6 (Fail-Closed Disconnect):** On vsock disconnect (VM suspend, crash, network partition), both sides must transition within 1 heartbeat interval. The guest revokes the remote cache lease before the next I/O dispatch and enters origin-only mode while the locally sealed origin manifest and exact attached-device identity remain valid. If either local proof is absent or fails, the guest blocks I/O and enters safe mode. The host records the lease as revoked and applies its existing guardian policy; a socket disconnect alone must not terminate a healthy guest.
 - **RF-7 (Observability):** Host service emits ETW events for all state transitions. Guest daemon emits journald structured logs. Both sides expose a `status` JSON endpoint for CLI inspection.
 
 ## 5. Non-functional requirements (NFR)
@@ -78,64 +78,49 @@ Extend the existing `ramshared-winsvc` and `ramshared-wsl2d` binaries with a new
 - **NFR-2 (Zero Scripts at Runtime):** After migration, no `.ps1`, `.sh`, or Python process may execute in the host-guest control plane path. CI/build scripts are exempt.
 - **NFR-3 (Atomic Updates):** Guest daemon binary updates must be atomic (rename-based). Protocol version negotiation must support rolling upgrades (N and N-1).
 - **NFR-4 (Host Safety):** VHDX attach/detach operations must never corrupt existing host disk state. Operations are idempotent and bounded (≤ 10s timeout).
-- **NFR-5 (Security):** Before exchanging an origin manifest or lease authority, both sides must authenticate a fresh HMAC-SHA256 challenge with a shared secret. The Hyper-V service GUID is routing metadata and is not guest identity; the host listener binds a wildcard VM ID. No unauthenticated origin authority is allowed. All frames are bounded to 1MB.
+- **NFR-5 (Security):** Before exchanging an origin manifest or lease authority, both sides must prove possession of a shared secret using fresh 32-byte OS-CSPRNG nonces and role-separated HMAC-SHA256 transcript proofs. The host must not grant a lease or send an origin manifest until the guest's final proof validates; the guest must not accept the host's lease parameters until the host proof validates. HMAC comparison is constant-time. The Hyper-V service GUID is routing metadata and is not guest identity; the host listener binds a wildcard VM ID. The Windows key is DPAPI-protected for LocalSystem and ACL-restricted; the guest key is root-only mode 0600. A privileged installer provisions the guest key over stdin, never command-line arguments, logs, or environment variables. Missing or malformed keys fail closed. All frames are bounded to 1MB.
 
 ## 6. Execution flows
 
 ### 6.1 Happy Path — Boot, Handshake, Active Operation
 1. Windows boots; `ramshared-winsvc` starts and opens AF_HYPERV listener on well-known GUID.
 2. WSL2 starts; `ramshared-wsl2d` starts and connects via AF_VSOCK to host GUID.
-3. Guest sends `Handshake` with protocol version, boot_id, and distro identity.
-4. Host validates identity, sends `HandshakeAck` with lease parameters and origin manifest.
-5. Guest validates origin manifest (replacing `ramshared-host-gate.sh` logic), seals `/etc/ramshared/origin.conf`.
-6. Host sends `VHDXAttach` with origin VHDX path; guest validates PartUUID and confirms.
-7. Guest begins `Heartbeat` at configured interval. Host rewrites lease deadline on each heartbeat.
-8. Cascade activates: ZRAM + VRAM + SSD swap tiers come online.
-9. On shutdown: guest sends `Shutdown`; host sends `VHDXDetach`; both sides clean up.
+3. Guest sends `Handshake` with protocol range, boot_id, distro identity, a fresh guest nonce, and a role-separated HMAC over the request.
+4. Host validates the guest proof, then returns `HandshakeAck` with the negotiated version, a fresh host nonce, lease parameters, and a host HMAC over both nonces and the complete transcript.
+5. Guest validates the host proof and returns `HandshakeFinish` with its final transcript HMAC. A missing, stale, or invalid proof closes the socket without granting authority.
+6. Only after validating `HandshakeFinish` does the host send the origin manifest and lease grant. The guest validates the manifest against its independently sealed expected identity and returns an acknowledgement.
+7. Host attaches the exact VHDX, sends `VHDXAttach`, and the guest validates the attached PartUUID/device identity before sealing `/etc/ramshared/origin.conf`.
+8. Guest begins `Heartbeat` at the configured interval. The host refreshes the lease deadline; the cache may activate only while the verified lease and sealed origin are both valid.
+9. On shutdown: the guest sends `Shutdown`; the host detaches only after an acknowledged, exact-origin teardown; both sides publish the final state.
 
 ### 6.2 Error Path — VM Suspend or Crash
 1. WSL2 VM suspends or crashes.
 2. vsock connection breaks (kernel detects Hyper-V socket disconnect).
 3. Host detects disconnect within 1 heartbeat interval → emits ETW event → triggers guardian isolation.
-4. Guest (on resume/restart) finds lease expired → revokes origin authority → enters safe mode.
+4. Guest (on resume/restart) finds the lease expired → disables cache authority. It continues origin-only I/O only if the sealed manifest and attached device still match; otherwise it blocks I/O and enters safe mode.
 5. On next boot: guest reconnects, revalidates, reacquires lease.
 
 ### 6.3 Error Path — Host Service Crash
 1. `ramshared-winsvc` crashes or is terminated.
 2. vsock connection breaks.
-3. Guest detects disconnect within 1 heartbeat interval → revokes lease → enters safe mode.
+3. Guest detects disconnect within 1 heartbeat interval → revokes cache authority; it remains origin-only if local origin identity is still valid, otherwise it blocks I/O and enters safe mode.
 4. Host service restarts → reopens AF_HYPERV listener → guest reconnects.
 
 ## 7. Data and state model
 
-```text
-┌─────────────────────────────────────────────┐
-│           Control Plane State Machine        │
-└──────────────────────┬──────────────────────┘
-                       │
-              [vsock connected]
-                       ▼
-                 ┌───────────┐
-                 │ HANDSHAKE │
-                 └─────┬─────┘
-                       │ [HandshakeAck received]
-                       ▼
-                 ┌───────────┐
-                 │   LEASED  │◄────┐
-                 └─────┬─────┘     │ [heartbeat within deadline]
-                       │           │
-                       ├───────────┘
-                       │
-         [disconnect / lease expired]
-                       ▼
-                 ┌───────────┐
-                 │ SAFE_MODE │ (fail-closed, origin-only)
-                 └─────┬─────┘
-                       │ [reconnect + revalidate]
-                       ▼
-                 ┌───────────┐
-                 │  RECOVER  │
-                 └───────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> Handshake: vsock connected
+    Handshake --> SafeMode: invalid, missing, or out-of-order proof
+    Handshake --> ValidateOrigin: guest, host, and finish proofs valid
+    ValidateOrigin --> SafeMode: origin manifest or device identity invalid
+    ValidateOrigin --> Leased: origin manifest and device match
+    Leased --> Leased: heartbeat within deadline
+    Leased --> OriginOnly: disconnect or lease expiry; origin still verified
+    Leased --> SafeMode: disconnect or lease expiry; origin unverified
+    OriginOnly --> SafeMode: origin proof lost
+    OriginOnly --> Handshake: reconnect and revalidate
+    SafeMode --> Handshake: reconnect and revalidate
 ```
 
 - vsock frame header (extends existing `IpcMessageHeader`):
@@ -155,14 +140,14 @@ Extend the existing `ramshared-winsvc` and `ramshared-wsl2d` binaries with a new
   - 15 = VHDXAttach, 16 = VHDXAttachAck
   - 17 = VHDXDetach, 18 = VHDXDetachAck
   - 19 = Telemetry
-  - 20 = Shutdown, 21 = ShutdownAck
+  - 20 = Shutdown, 21 = ShutdownAck, 22 = HandshakeFinish
 
 ## 8. Interfaces
 
 - **Host listener (planned integration):** AF_HYPERV stream socket on a registered RamShared service GUID. It currently exists only as a library adapter.
 - **Guest client (planned integration):** AF_VSOCK stream socket to VMADDR_CID_HOST (CID 2) on the service port. The adapter currently is not called by `ramsharedd`.
 - **Protocol:** `ramshared-ipc` crate. Neither product runtime currently depends on or uses it.
-- **Config (planned integration):** Host/guest config must provide the service GUID, heartbeat interval, lease timeout, and HMAC secret. These settings are not currently wired into the product configs.
+- **Config (planned integration):** Host/guest config must provide the service GUID, heartbeat interval, lease timeout, and protected key-store locations. The secret is provisioned by an attended installer and is never serialized into ordinary TOML configuration. These settings are not currently wired into the product configs.
 - **Telemetry:** ETW provider `RamShared-ControlPlane` (host), journald structured logs (guest).
 - **CLI:** `ramshared status --json` reads guest daemon status over Unix socket (unchanged).
 

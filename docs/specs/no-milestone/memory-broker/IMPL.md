@@ -141,3 +141,15 @@ mismatch; or an owned socket remaining after exit.
 | --- | --- | --- |
 | RF-B1/RNF-6 | ITEM-7/8 test contract | `74f8f7f`, `dffba74` |
 | RF-B1/RNF-6 | ITEM-7/8 implementation | `20eb5bb`, `795a292` |
+
+## 2026-09-27 DT-50 contract reconciliation
+
+The 2026-08-11 entry above is historical. Its phrase “preserved earlier FIFO
+I/O” no longer describes the current shutdown contract. DT-50 now requires the
+atomic terminal flag to win before the worker receives another queued message;
+queued I/O is preempted at the next iteration boundary, while an operation
+already executing may finish at its bounded completion barrier. The current
+named tests are
+`daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary` and
+`daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills`. This
+contract is fail-closed and does not promise to drain queued I/O.
