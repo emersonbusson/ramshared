@@ -140,6 +140,7 @@ impl fmt::Display for MonitorError {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MemoryObservation {
+    pub required_counters_available: bool,
     pub total_kib: u64,
     pub available_kib: u64,
     pub swap_total_kib: u64,
@@ -507,9 +508,13 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
         .unwrap_or_default();
     let gpu = gpu_observation_from_status(&status_map, unix_epoch_ms());
     let mut control_plane = parse_memory_pressure(&pressure);
+    let mem = parse_meminfo(&meminfo);
     let mut errors = Vec::new();
     if !control_plane.memory_psi_available {
         errors.push("memory_psi_unavailable".to_string());
+    }
+    if !mem.required_counters_available {
+        errors.push("memory_telemetry_unavailable".to_string());
     }
     let (swap_in_pages, swap_out_pages, pgfault_total, pgmajfault_total) = parse_vmstat(&vmstat);
     let (swap_read_bytes, swap_write_bytes) = parse_swap_diskstats(&diskstats);
@@ -554,7 +559,7 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
         epoch_ms: unix_epoch_ms(),
         sample_age_ms: 0,
         memory_scope,
-        mem: parse_meminfo(&meminfo),
+        mem,
         cgroup_memory: collect_cgroup_memory(Path::new("/sys/fs/cgroup")),
         hyperv_balloon: parse_hyperv_balloon(
             &balloon_debugfs,
@@ -578,12 +583,23 @@ fn unix_epoch_ms() -> u64 {
 
 fn parse_meminfo(text: &str) -> MemoryObservation {
     let optional_value = |name: &str| parse_meminfo_value(text, name);
-    let value = |name: &str| optional_value(name).unwrap_or(0);
+    let total_kib = optional_value("MemTotal");
+    let available_kib = optional_value("MemAvailable");
+    let swap_total_kib = optional_value("SwapTotal");
+    let swap_free_kib = optional_value("SwapFree");
+    let required_counters_available =
+        match (total_kib, available_kib, swap_total_kib, swap_free_kib) {
+            (Some(total), Some(available), Some(swap_total), Some(swap_free)) => {
+                total > 0 && available <= total && swap_free <= swap_total
+            }
+            _ => false,
+        };
     MemoryObservation {
-        total_kib: value("MemTotal"),
-        available_kib: value("MemAvailable"),
-        swap_total_kib: value("SwapTotal"),
-        swap_free_kib: value("SwapFree"),
+        required_counters_available,
+        total_kib: total_kib.unwrap_or(0),
+        available_kib: available_kib.unwrap_or(0),
+        swap_total_kib: swap_total_kib.unwrap_or(0),
+        swap_free_kib: swap_free_kib.unwrap_or(0),
         anon_pages_kib: optional_value("AnonPages"),
         shmem_kib: optional_value("Shmem"),
         slab_kib: optional_value("Slab"),
@@ -1547,9 +1563,11 @@ fn tui_loop(
                 if let Ok(flight_line) = serde_json::to_string(&observation) {
                     let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
                 }
-                history.push_back(memory_used_pct(&observation.mem));
-                while history.len() > history_limit {
-                    history.pop_front();
+                if observation.mem.required_counters_available {
+                    history.push_back(memory_used_pct(&observation.mem));
+                    while history.len() > history_limit {
+                        history.pop_front();
+                    }
                 }
                 next_sample = Instant::now() + interval;
             } else {
@@ -2712,11 +2730,19 @@ fn draw_memory(
     } else {
         observation.memory_scope.ram_label().to_string()
     };
-    let text = format!(
-        " {ram_label}:  {bar} {used_pct:>2}% ({used_mib_text} / {total_mib_text} MiB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used_mib_text} / {swap_total_mib_text} MiB)\n {pressure_text}",
-        ram_label = ram_label,
-        pressure_text = pressure_text,
-    );
+    let ram_summary = if memory.required_counters_available {
+        format!(" {ram_label}:  {bar} {used_pct:>2}% ({used_mib_text} / {total_mib_text} MiB)")
+    } else {
+        format!(" {ram_label}: telemetry unavailable")
+    };
+    let swap_summary = if memory.required_counters_available {
+        format!(
+            " Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used_mib_text} / {swap_total_mib_text} MiB)"
+        )
+    } else {
+        " Total Swap: telemetry unavailable".to_string()
+    };
+    let text = format!("{ram_summary}\n{swap_summary}\n{pressure_text}");
     frame.render_widget(
         Paragraph::new(text).block(
             Block::default()
@@ -3324,6 +3350,7 @@ mod tests {
             sample_age_ms: 0,
             memory_scope: MemoryScope::LinuxHost,
             mem: MemoryObservation {
+                required_counters_available: true,
                 total_kib: 16_384,
                 available_kib: 8_192,
                 swap_total_kib: 8_192,
@@ -4177,6 +4204,22 @@ mod tests {
     }
 
     #[test]
+    fn meminfo_missing_or_inconsistent_core_values_are_unavailable() {
+        let missing = parse_meminfo("MemTotal: 4096 kB\n");
+        assert!(!missing.required_counters_available);
+
+        let inconsistent = parse_meminfo(
+            "MemTotal: 4096 kB\nMemAvailable: 8192 kB\nSwapTotal: 4096 kB\nSwapFree: 8192 kB\n",
+        );
+        assert!(!inconsistent.required_counters_available);
+
+        let valid = parse_meminfo(
+            "MemTotal: 16384 kB\nMemAvailable: 8192 kB\nSwapTotal: 4096 kB\nSwapFree: 2048 kB\n",
+        );
+        assert!(valid.required_counters_available);
+    }
+
+    #[test]
     // TestName: monitor_hyperv_balloon_diagnostics_capture_counters
     fn hyperv_balloon_diagnostics_capture_live_and_missing_counters() {
         let debugfs = "host_version          : 2.0\ncapabilities          : enabled hot_add\nstate                 : 1 (Initialized)\npages_added           : 2\npages_onlined         : 1\npages_ballooned       : 8\ntotal_pages_committed : 1000\nmax_dynamic_page_count: 4096\n";
@@ -4513,6 +4556,30 @@ mod tests {
         assert!(rendered.contains("Telemetry Sample Age:     1250 ms"));
         assert!(!rendered.contains("Read: 12.3"));
         assert!(!rendered.contains("Write: 4.5"));
+    }
+
+    #[test]
+    fn dashboard_displays_missing_memory_counters_as_unavailable() {
+        let mut sample = observation(false, false);
+        sample.memory_scope = MemoryScope::Wsl2;
+        sample.mem = parse_meminfo("MemTotal: 16384 kB\n");
+
+        let backend = TestBackend::new(220, 50);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("WSL2 Guest RAM: telemetry unavailable"));
+        assert!(rendered.contains("Total Swap: telemetry unavailable"));
+        assert!(!rendered.contains("0% (0 / 0 MiB)"));
     }
 
     #[test]
