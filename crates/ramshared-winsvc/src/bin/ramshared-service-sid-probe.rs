@@ -72,7 +72,7 @@ mod windows_probe {
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::service_dispatcher;
 
-    use super::{DEFAULT_SERVICE_NAME, parse_args};
+    use super::parse_args;
 
     const RESULT_PATH: &str = r"C:\ramshared\autonomous-broker\service-sid-probe.json";
     static SERVICE_NAME: OnceLock<String> = OnceLock::new();

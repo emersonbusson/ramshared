@@ -15,9 +15,13 @@
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use ash::vk;
-use ramshared_vram::{VramError, VramMemory, VramProvider};
+use ramshared_vram::{
+    GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetSource, VramError, VramMemory, VramProvider,
+    format_luid,
+};
 
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
@@ -138,12 +142,42 @@ pub struct VulkanProvider {
     staging_mapped: *mut u8,
     allocated: AtomicU64, // Σ bytes allocated via `alloc` (fallback of `mem_info`, DT-10)
     name: String,
+    adapter: Option<GpuAdapterIdentity>,
+    memory_budget_extension: bool,
 }
 
 impl VulkanProvider {
+    /// Returns the number of physical devices visible to the Vulkan loader.
+    pub fn device_count() -> Result<u32, VramError> {
+        // SAFETY: entry owns the loaded Vulkan loader for the instance lifetime below.
+        let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
+        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
+        let ci = vk::InstanceCreateInfo::default().application_info(&app);
+        // SAFETY: ci and app remain valid for the duration of the call.
+        let instance = unsafe { entry.create_instance(&ci, None) }
+            .map_err(|e| vk_err("create_instance", e))?;
+        // SAFETY: instance is valid and the query only enumerates device handles.
+        let result = unsafe { instance.enumerate_physical_devices() }
+            .map(|devices| devices.len().min(u32::MAX as usize) as u32)
+            .map_err(|e| vk_err("enumerate_physical_devices", e));
+        // SAFETY: instance was created above and is destroyed exactly once.
+        unsafe { instance.destroy_instance(None) };
+        result
+    }
+
     /// Loads the Vulkan loader, creates an instance, selects the physical device (prefers `DISCRETE_GPU`;
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
+        Self::open_with_selection(ordinal, false)
+    }
+
+    /// Opens exactly the enumerated physical-device ordinal, without discrete-GPU preference
+    /// or clamping. This is used when comparing adapters across backends.
+    pub fn open_exact(ordinal: u32) -> Result<Self, VramError> {
+        Self::open_with_selection(ordinal, true)
+    }
+
+    fn open_with_selection(ordinal: u32, exact: bool) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
         let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
@@ -153,8 +187,8 @@ impl VulkanProvider {
             .map_err(|e| vk_err("create_instance", e))?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
-        match Self::after_instance(&instance, ordinal) {
-            Ok((phys, name, bits)) => Ok(Self {
+        match Self::after_instance(&instance, ordinal, exact) {
+            Ok((phys, name, adapter, memory_budget_extension, bits)) => Ok(Self {
                 instance,
                 _entry: entry,
                 phys,
@@ -168,6 +202,8 @@ impl VulkanProvider {
                 staging_mapped: bits.staging_mapped,
                 allocated: AtomicU64::new(0),
                 name,
+                adapter,
+                memory_budget_extension,
             }),
             Err(e) => {
                 // SAFETY: `instance` created above and destroyed exactly once here.
@@ -181,29 +217,83 @@ impl VulkanProvider {
     fn after_instance(
         instance: &ash::Instance,
         ordinal: u32,
-    ) -> Result<(vk::PhysicalDevice, String, DeviceBits), VramError> {
+        exact: bool,
+    ) -> Result<
+        (
+            vk::PhysicalDevice,
+            String,
+            Option<GpuAdapterIdentity>,
+            bool,
+            DeviceBits,
+        ),
+        VramError,
+    > {
         // SAFETY: `instance` valid.
         let pdevs = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| vk_err("enumerate_physical_devices", e))?;
         if pdevs.is_empty() {
             return Err(VramError::Provider("no Vulkan physical device".into()));
         }
-        // Prefers a discrete GPU; otherwise the requested ordinal (clamped).
-        let discrete = pdevs.iter().copied().find(|&p| {
-            // SAFETY: `p` is a valid handle enumerated from `instance`.
-            unsafe { instance.get_physical_device_properties(p) }.device_type
-                == vk::PhysicalDeviceType::DISCRETE_GPU
-        });
-        let phys = discrete.unwrap_or_else(|| pdevs[(ordinal as usize).min(pdevs.len() - 1)]);
+        let phys = if exact {
+            pdevs.get(ordinal as usize).copied().ok_or_else(|| {
+                VramError::Provider(format!(
+                    "Vulkan physical-device ordinal {ordinal} is out of range ({} devices)",
+                    pdevs.len()
+                ))
+            })?
+        } else {
+            // Legacy/default open prefers a discrete GPU; cross-backend selection uses open_exact.
+            let discrete = pdevs.iter().copied().find(|&p| {
+                // SAFETY: `p` is a valid handle enumerated from `instance`.
+                unsafe { instance.get_physical_device_properties(p) }.device_type
+                    == vk::PhysicalDeviceType::DISCRETE_GPU
+            });
+            discrete.unwrap_or_else(|| pdevs[(ordinal as usize).min(pdevs.len() - 1)])
+        };
         // SAFETY: `phys` valid; `device_name` is a fixed-size NUL-terminated C-string.
         let props = unsafe { instance.get_physical_device_properties(phys) };
         let name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
             .to_string_lossy()
             .into_owned();
+        let mut id_props = vk::PhysicalDeviceIDProperties::default();
+        let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut id_props);
+        // SAFETY: physical device was enumerated from this instance; properties2 is initialized.
+        unsafe { instance.get_physical_device_properties2(phys, &mut props2) };
+        let adapter_key = id_props.device_uuid;
+        let uuid_key = adapter_key.iter().any(|byte| *byte != 0).then(|| {
+            adapter_key
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        });
+        let luid = (id_props.device_luid_valid == vk::TRUE)
+            .then(|| format_luid(id_props.device_luid))
+            .flatten();
+        let adapter = match (uuid_key, luid) {
+            (Some(key), luid) => Some(GpuAdapterIdentity {
+                backend: "vulkan".into(),
+                key,
+                luid,
+            }),
+            (None, Some(luid)) => Some(GpuAdapterIdentity {
+                backend: "vulkan".into(),
+                key: format!("luid:{luid}"),
+                luid: Some(luid),
+            }),
+            (None, None) => None,
+        };
+        // SAFETY: `phys` was enumerated from `instance`; this is a read-only capability query.
+        let extensions = unsafe { instance.enumerate_device_extension_properties(phys) }
+            .map_err(|e| vk_err("enumerate_device_extension_properties", e))?;
+        let memory_budget_extension = extensions.iter().any(|extension| {
+            // SAFETY: Vulkan extension_name is fixed-size and null-terminated by the driver.
+            (unsafe { CStr::from_ptr(extension.extension_name.as_ptr()) })
+                == c"VK_EXT_memory_budget"
+        });
         let qf = pick_transfer_family(instance, phys)
             .ok_or_else(|| VramError::Provider("sem queue family de transfer".into()))?;
-        let bits = create_device_resources(instance, phys, qf)?;
-        Ok((phys, name, bits))
+        let bits = create_device_resources(instance, phys, qf, memory_budget_extension)?;
+        Ok((phys, name, adapter, memory_budget_extension, bits))
     }
 
     /// Name of the selected device (e.g., \"NVIDIA GeForce RTX 2060\" or \"llvmpipe\" in software).
@@ -269,12 +359,19 @@ fn create_device_resources(
     instance: &ash::Instance,
     phys: vk::PhysicalDevice,
     qf: u32,
+    memory_budget_extension: bool,
 ) -> Result<DeviceBits, VramError> {
     let prio = [1.0f32];
     let qci = [vk::DeviceQueueCreateInfo::default()
         .queue_family_index(qf)
         .queue_priorities(&prio)];
-    let dci = vk::DeviceCreateInfo::default().queue_create_infos(&qci);
+    let enabled_extensions = memory_budget_extension
+        .then_some(c"VK_EXT_memory_budget".as_ptr())
+        .into_iter()
+        .collect::<Vec<_>>();
+    let dci = vk::DeviceCreateInfo::default()
+        .queue_create_infos(&qci)
+        .enabled_extension_names(&enabled_extensions);
     // SAFETY: `dci`/`qci`/`prio` valid during call; `phys` enumerated from `instance`. Before
     // device creation, there are no resources to clean up (returns directly on failure).
     let device = unsafe { instance.create_device(phys, &dci, None) }
@@ -451,11 +548,53 @@ impl VramProvider for VulkanProvider {
     }
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
-        // DT-10 (fallback without VK_EXT_memory_budget): total = largest DEVICE_LOCAL heap; free = total −
-        // Σ allocated by this provider. (Exact budget for VRAM of other processes: only on physical GPU.)
-        let total = self.device_local_total();
-        let used = self.allocated.load(Ordering::Relaxed);
-        Ok((total.saturating_sub(used), total))
+        let budget = self.budget_snapshot()?;
+        Ok((budget.available_bytes(), budget.total_bytes.unwrap_or(0)))
+    }
+
+    fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
+        if self.memory_budget_extension {
+            let mut budget_props = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+            let mut memory_props =
+                vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_props);
+            // SAFETY: physical device is valid and both output structures are initialized.
+            unsafe {
+                self.instance
+                    .get_physical_device_memory_properties2(self.phys, &mut memory_props)
+            };
+            let props = memory_props.memory_properties;
+            let heap_index = (0..props.memory_heap_count as usize)
+                .filter(|index| {
+                    props.memory_heaps[*index]
+                        .flags
+                        .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+                })
+                .max_by_key(|index| props.memory_heaps[*index].size);
+            if let Some(index) = heap_index {
+                let budget_bytes = budget_props.heap_budget[index];
+                if budget_bytes > 0 {
+                    return Ok(GpuBudgetSnapshot {
+                        adapter: self.adapter.clone(),
+                        total_bytes: Some(props.memory_heaps[index].size),
+                        budget_bytes,
+                        used_bytes: budget_props.heap_usage[index],
+                        source: GpuBudgetSource::DriverReported,
+                        sampled_at: Instant::now(),
+                    });
+                }
+            }
+        }
+
+        let total_bytes = self.device_local_total();
+        let used_bytes = self.allocated.load(Ordering::Relaxed);
+        Ok(GpuBudgetSnapshot {
+            adapter: self.adapter.clone(),
+            total_bytes: Some(total_bytes),
+            budget_bytes: total_bytes,
+            used_bytes,
+            source: GpuBudgetSource::ProviderLocalEstimate,
+            sampled_at: Instant::now(),
+        })
     }
 }
 
@@ -595,10 +734,26 @@ mod tests {
         let p = VulkanProvider::open(0).expect("opens Vulkan");
         assert!(!p.device_name().is_empty(), "device has a name");
         let total = p.device_local_total();
+        let budget = p.budget_snapshot().expect("budget snapshot");
+        assert_eq!(budget.total_bytes, Some(total));
+        assert!(budget.available_bytes() <= budget.budget_bytes);
+        if budget.source == GpuBudgetSource::DriverReported {
+            assert!(
+                budget.can_admit(0),
+                "driver budget needs a stable adapter ID"
+            );
+        } else {
+            assert!(
+                !budget.can_admit(0),
+                "provider-local estimate must not authorize automatic admission"
+            );
+        }
         eprintln!(
-            "Vulkan device='{}' heap_total={} MiB",
+            "Vulkan device='{}' heap_total={} MiB budget_source={:?} adapter={:?}",
             p.device_name(),
-            total >> 20
+            total >> 20,
+            budget.source,
+            budget.adapter
         );
         assert!(total > 0, "heap > 0");
     }
@@ -607,12 +762,14 @@ mod tests {
     #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
     fn vulkan_roundtrip_write_then_read() {
         let p = VulkanProvider::open(0).expect("opens Vulkan");
-        let (free0, total) = p.mem_info().expect("mem_info");
+        let initial_budget = p.budget_snapshot().expect("initial budget");
+        let total = initial_budget.total_bytes.unwrap_or(0);
         assert!(total > 0, "total > 0");
 
         // 2 MiB region; payload > staging (1 MiB) and offset != 0 -> exercises the chunk loop.
         let size = 2 * 1024 * 1024;
         let mut m = p.alloc(size).expect("alloc 2 MiB");
+        assert_eq!(p.allocated.load(Ordering::Relaxed), size as u64);
         assert_eq!(m.len(), size, "reported len = requested bytes");
 
         let n = (STAGING_BYTES as usize) + 4096; // 1 MiB + 4 KiB -> 2 chunks
@@ -638,15 +795,47 @@ mod tests {
             "read beyond the end -> OutOfRange"
         );
 
-        // free decreased after alloc (fallback DT-10).
-        let (free1, _) = p.mem_info().expect("mem_info 2");
-        assert!(free1 <= free0, "free did not increase after alloc");
+        drop(m);
+        assert_eq!(
+            p.allocated.load(Ordering::Relaxed),
+            0,
+            "RAII released provider allocation accounting"
+        );
+        let final_budget = p.budget_snapshot().expect("final budget");
         eprintln!(
-            "Vulkan round-trip OK device='{}' total={} MiB free0={} MiB free1={} MiB",
+            "Vulkan round-trip OK device='{}' total={} MiB budget={:?} -> {:?}",
             p.device_name(),
             total >> 20,
-            free0 >> 20,
-            free1 >> 20
+            initial_budget.source,
+            final_budget.source
+        );
+    }
+
+    #[test]
+    fn device_local_allocation_matches_the_largest_reported_budget_heap() {
+        let mut properties = vk::PhysicalDeviceMemoryProperties::default();
+        properties.memory_heap_count = 2;
+        properties.memory_heaps[0] = vk::MemoryHeap::default()
+            .size(4_000)
+            .flags(vk::MemoryHeapFlags::DEVICE_LOCAL);
+        properties.memory_heaps[1] = vk::MemoryHeap::default()
+            .size(8_000)
+            .flags(vk::MemoryHeapFlags::DEVICE_LOCAL);
+        properties.memory_type_count = 2;
+        properties.memory_types[0] = vk::MemoryType::default()
+            .heap_index(0)
+            .property_flags(vk::MemoryPropertyFlags::DEVICE_LOCAL);
+        properties.memory_types[1] = vk::MemoryType::default()
+            .heap_index(1)
+            .property_flags(vk::MemoryPropertyFlags::DEVICE_LOCAL);
+
+        assert_eq!(
+            pick_memory_type(
+                &properties,
+                0b11,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ),
+            Some(1)
         );
     }
 }
