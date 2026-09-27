@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.14.1}}"
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.15.0}}"
 VERSION_CLEAN="${VERSION#v}"
 RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
 ARCH="x86_64"
@@ -74,8 +74,8 @@ fi
 /lib/udev/rules.d/65-ramshared-observability.rules
 
 %changelog
-* Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
-- Official v0.14.1 Linux RPM release for the documented support matrix.
+* Sun Sep 27 2026 Emerson Busson - ${RPM_VERSION}-1
+- Official v0.15.0 Linux RPM release for the documented support matrix.
 SPEC_EOF
 
 echo "==> Executing rpmbuild..."

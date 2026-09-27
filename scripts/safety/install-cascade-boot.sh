@@ -184,10 +184,12 @@ record_installed_provenance() {
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 out, input_digest, commit, branch, tree_state, sink, identity, fs_block, available = sys.argv[1:]
 record = {
-    "schema_version": "ramshared-installed-release-provenance/v1",
+    "schema_version": "ramshared-installed-release-provenance/v2",
+    "installed_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "input_bundle_manifest_sha256": input_digest,
     "source_commit": commit,
     "source_branch": branch,
@@ -244,7 +246,19 @@ try:
         "schema_version", "input_bundle_manifest_sha256", "source_commit",
         "source_branch", "source_tree_state", "lower_sink",
     }
-    if set(record) != expected or record["schema_version"] != "ramshared-installed-release-provenance/v1":
+    schema = record.get("schema_version")
+    if schema == "ramshared-installed-release-provenance/v1":
+        if set(record) != expected:
+            raise ValueError("schema")
+    elif schema == "ramshared-installed-release-provenance/v2":
+        if set(record) != expected | {"installed_at_utc"}:
+            raise ValueError("schema")
+        installed_at = record["installed_at_utc"]
+        if not isinstance(installed_at, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", installed_at
+        ):
+            raise ValueError("installed_at_utc")
+    else:
         raise ValueError("schema")
     lower = record["lower_sink"]
     lower_expected = {

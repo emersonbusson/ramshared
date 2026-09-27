@@ -9,7 +9,7 @@ The project is intended for people who want to study or operate GPU-backed memor
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1"><img alt="Release v0.14.1" src="https://img.shields.io/badge/release-v0.14.1-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1"><img alt="Latest published stable v0.14.1" src="https://img.shields.io/badge/release-v0.14.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-stable-2f855a?style=flat-square">
 </p>
@@ -37,7 +37,7 @@ The project is intended for people who want to study or operate GPU-backed memor
 
 ## Current Status
 
-Latest published release: **[v0.14.1](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1)**. This checkout builds **0.14.1**, the current stable maintenance release.
+Release v0.15.0 is the source target built by this checkout. The latest published stable remains **[v0.14.1](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1)**; v0.15.0 has not been published yet.
 
 Standard WSL2 uses **NBD as its baseline transport**. `ublk`/`io_uring` is
 qualified on native Linux or WSL2 with a compatible custom kernel; it is not a

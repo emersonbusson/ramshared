@@ -33,10 +33,10 @@ function fixture({ binaries = true, rpmbuild = false } = {}) {
     writeFileSync(stub, '#!/bin/sh\nexit 0\n');
     chmodSync(stub, 0o755);
   }
-  const run = () => spawnSync('/usr/bin/bash', [script, 'v0.14.1'], {
+  const run = () => spawnSync('/usr/bin/bash', [script, 'v0.15.0'], {
     cwd: root,
     encoding: 'utf8',
-    env: { PATH: binDir, RAMSHARED_PACKAGE_VERSION: 'v0.14.1' },
+    env: { PATH: binDir, RAMSHARED_PACKAGE_VERSION: 'v0.15.0' },
   });
   return { root, run };
 }

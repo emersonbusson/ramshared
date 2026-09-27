@@ -1,11 +1,12 @@
 //! Read-only RamShared observability stream and terminal dashboard.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -16,6 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Sparkline, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::{cascade, workload};
 use ramshared_vram::{GpuBudgetSource, GpuBudgetTelemetry};
@@ -29,6 +31,13 @@ const GPU_BUDGET_MAX_AGE_MS: u64 = 5_000;
 const MIB_BYTES: u64 = 1024 * 1024;
 const BENCHMARK_EVIDENCE_SCHEMA_V1: &str = "ramshared-evidence/v1";
 const BENCHMARK_MIN_SAMPLE_COUNT: usize = 3;
+const BUILD_GIT_SHA: &str = env!("RAMSHARED_BUILD_GIT_SHA");
+const BUILD_TREE_STATE: &str = env!("RAMSHARED_BUILD_TREE_STATE");
+const INSTALLED_PROVENANCE_V1: &str = "ramshared-installed-release-provenance/v1";
+const INSTALLED_PROVENANCE_V2: &str = "ramshared-installed-release-provenance/v2";
+#[cfg(test)]
+const DIRECT_INSTALL_METADATA_V1: &str = "ramshared-direct-install-metadata/v1";
+const DIRECT_INSTALL_METADATA_V2: &str = "ramshared-direct-install-metadata/v2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MonitorOptions {
@@ -187,24 +196,24 @@ impl MemoryScope {
     fn ram_label(self) -> &'static str {
         match self {
             Self::LinuxHost => "Host RAM",
-            Self::Wsl => "WSL RAM",
-            Self::Wsl2 => "WSL2 RAM",
+            Self::Wsl => "WSL Guest RAM",
+            Self::Wsl2 => "WSL2 Guest RAM",
         }
     }
 
     fn panel_title(self) -> &'static str {
         match self {
             Self::LinuxHost => "Host RAM & Swap",
-            Self::Wsl => "WSL RAM & Swap",
-            Self::Wsl2 => "WSL2 RAM & Swap",
+            Self::Wsl => "WSL Guest RAM & Swap",
+            Self::Wsl2 => "WSL2 Guest RAM & Swap",
         }
     }
 
     fn history_title(self) -> &'static str {
         match self {
             Self::LinuxHost => "Host RAM History",
-            Self::Wsl => "WSL RAM History",
-            Self::Wsl2 => "WSL2 RAM History",
+            Self::Wsl => "WSL Guest RAM History",
+            Self::Wsl2 => "WSL2 Guest RAM History",
         }
     }
 }
@@ -1282,13 +1291,58 @@ fn should_exit_tui(event_opt: Option<Event>) -> bool {
 }
 
 fn run_tui(options: &MonitorOptions) -> Result<(), MonitorError> {
-    let mut terminal = ratatui::init();
-    let result = tui_loop(&mut terminal, options);
-    ratatui::restore();
-    result
+    let process_origin = current_process_install_origin();
+    let mut identity_cache = InstallationIdentityCache::default();
+    let mut allow_reexec = true;
+    let mut runtime_notice = None;
+
+    loop {
+        let mut terminal = ratatui::init();
+        let result = tui_loop(
+            &mut terminal,
+            options,
+            process_origin,
+            allow_reexec,
+            runtime_notice.as_deref(),
+            &mut identity_cache,
+        );
+        ratatui::restore();
+
+        match result? {
+            TuiExit::UserRequested => return Ok(()),
+            TuiExit::Restart(executable) => match exec_restarted_process(&executable) {
+                Ok(()) => unreachable!("exec replaces the process on success"),
+                Err(error) => {
+                    allow_reexec = false;
+                    runtime_notice = Some(format!(
+                        "Update restart failed; continuing this process: {error}"
+                    ));
+                }
+            },
+        }
+    }
 }
 
-fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TuiExit {
+    UserRequested,
+    Restart(PathBuf),
+}
+
+fn tui_loop(
+    terminal: &mut DefaultTerminal,
+    options: &MonitorOptions,
+    process_origin: ProcessInstallOrigin,
+    allow_reexec: bool,
+    runtime_notice: Option<&str>,
+    identity_cache: &mut InstallationIdentityCache,
+) -> Result<TuiExit, MonitorError> {
+    let mut dashboard_metadata =
+        DashboardMetadata::current(identity_cache, process_origin, allow_reexec, runtime_notice);
+    if let Some(executable) = dashboard_metadata.restart_executable.clone() {
+        return Ok(TuiExit::Restart(executable));
+    }
+    let mut next_identity_refresh = Instant::now() + Duration::from_secs(1);
     let history_limit =
         ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
     let mut history = VecDeque::with_capacity(history_limit);
@@ -1438,7 +1492,21 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             }
             next_sample = Instant::now() + interval;
         }
-        let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
+        if Instant::now() >= next_identity_refresh {
+            dashboard_metadata = DashboardMetadata::current(
+                identity_cache,
+                process_origin,
+                allow_reexec,
+                runtime_notice,
+            );
+            if let Some(executable) = dashboard_metadata.restart_executable.clone() {
+                return Ok(TuiExit::Restart(executable));
+            }
+            next_identity_refresh = Instant::now() + Duration::from_secs(1);
+        }
+        let _ = terminal.draw(|frame| {
+            draw_dashboard_with_metadata(frame, &observation, &history, &dashboard_metadata)
+        });
 
         let wait = next_sample
             .saturating_duration_since(Instant::now())
@@ -1449,9 +1517,42 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             None
         };
         if should_exit_tui(event_opt) {
-            return Ok(());
+            return Ok(TuiExit::UserRequested);
         }
     }
+}
+
+#[cfg(unix)]
+fn reexec_command(
+    executable: &Path,
+    argv0: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new(executable);
+    command.arg0(argv0).args(args);
+    command
+}
+
+#[cfg(unix)]
+fn exec_restarted_process(executable: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::process::CommandExt;
+
+    let mut arguments = std::env::args_os();
+    let argv0 = arguments
+        .next()
+        .unwrap_or_else(|| executable.as_os_str().to_os_string());
+    let args = arguments.collect::<Vec<_>>();
+    Err(reexec_command(executable, &argv0, &args).exec())
+}
+
+#[cfg(not(unix))]
+fn exec_restarted_process(_executable: &Path) -> Result<(), std::io::Error> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "automatic re-exec is supported only on Unix hosts",
+    ))
 }
 
 fn memory_used_pct(memory: &MemoryObservation) -> u64 {
@@ -1465,11 +1566,968 @@ fn memory_used_pct(memory: &MemoryObservation) -> u64 {
         / memory.total_kib
 }
 
+fn format_grouped_number(value: u64) -> String {
+    let mut grouped = String::new();
+    for (index, digit) in value.to_string().bytes().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(char::from(digit));
+    }
+    grouped.chars().rev().collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DashboardMetadata {
+    version_line: String,
+    running_line: String,
+    direct_install_line: String,
+    active_install_line: String,
+    restart_executable: Option<PathBuf>,
+    runtime_notice: Option<String>,
+}
+
+impl DashboardMetadata {
+    fn current(
+        identity_cache: &mut InstallationIdentityCache,
+        process_origin: ProcessInstallOrigin,
+        allow_reexec: bool,
+        runtime_notice: Option<&str>,
+    ) -> Self {
+        let direct_executable = Path::new("/usr/local/bin/ramshared");
+        let active_release_executable = Path::new("/opt/ramshared/current/bin/ramshared");
+        let direct_install = identity_cache.read(direct_executable, InstallKind::Direct);
+        let active_install =
+            identity_cache.read(active_release_executable, InstallKind::ActiveRelease);
+        let running_metadata = current_running_executable_metadata();
+        let running_sha256 = current_running_executable_sha256();
+        let running = running_install_status_from_metadata(
+            running_metadata.as_ref(),
+            process_origin,
+            direct_executable,
+            active_release_executable,
+        );
+        let restart_executable = restart_target(
+            process_origin,
+            running_metadata.as_ref(),
+            running_sha256.as_deref(),
+            allow_reexec,
+            direct_install.as_ref(),
+            active_install.as_ref(),
+        );
+        Self {
+            version_line: format_build_identity(
+                env!("CARGO_PKG_VERSION"),
+                BUILD_GIT_SHA,
+                BUILD_TREE_STATE,
+            ),
+            running_line: format_running_identity_line(
+                env!("CARGO_PKG_VERSION"),
+                BUILD_GIT_SHA,
+                BUILD_TREE_STATE,
+                running,
+            ),
+            direct_install_line: format_installed_identity_line(
+                "direct /usr/local",
+                direct_install.as_ref(),
+            ),
+            active_install_line: format_installed_identity_line(
+                "active /opt/ramshared/current",
+                active_install.as_ref(),
+            ),
+            restart_executable,
+            runtime_notice: runtime_notice.map(str::to_string),
+        }
+    }
+}
+
+pub(crate) fn version_status_lines() -> String {
+    let mut identity_cache = InstallationIdentityCache::default();
+    let metadata = DashboardMetadata::current(
+        &mut identity_cache,
+        current_process_install_origin(),
+        false,
+        None,
+    );
+    format!(
+        "{}\n{}\n{}\n{}{}",
+        metadata.version_line,
+        metadata.running_line,
+        metadata.direct_install_line,
+        metadata.active_install_line,
+        metadata
+            .runtime_notice
+            .as_deref()
+            .map(|notice| format!("\n{notice}"))
+            .unwrap_or_default()
+    )
+}
+
+fn format_build_identity(version: &str, commit: &str, tree_state: &str) -> String {
+    format!(
+        "RamShared CLI {}",
+        format_identity(version, commit, tree_state)
+    )
+}
+
+pub(crate) fn build_info_lines() -> String {
+    let commit = full_commit_sha(BUILD_GIT_SHA).unwrap_or_else(|| "unavailable".to_string());
+    let tree_state = normalized_tree_state(BUILD_TREE_STATE);
+    format!(
+        "version={}\nsource_commit={commit}\nsource_tree_state={tree_state}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn full_commit_sha(commit: &str) -> Option<String> {
+    if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(commit.to_ascii_lowercase())
+}
+
+fn normalized_tree_state(tree_state: &str) -> &'static str {
+    match tree_state {
+        "clean" => "clean",
+        "dirty" => "dirty",
+        _ => "unavailable",
+    }
+}
+
+fn format_identity(version: &str, commit: &str, tree_state: &str) -> String {
+    let Some(commit) = short_commit_sha(commit) else {
+        return format!("v{version} · source unavailable");
+    };
+    let state = match normalized_tree_state(tree_state) {
+        "clean" => "clean",
+        "dirty" => "dirty",
+        _ => "state unavailable",
+    };
+    format!("v{version} · {commit} ({state})")
+}
+
+fn short_commit_sha(commit: &str) -> Option<String> {
+    if commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(commit[..8].to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum InstallKind {
+    Direct,
+    ActiveRelease,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessInstallOrigin {
+    Direct,
+    ActiveRelease,
+    Both,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FileStamp {
+    device: Option<u64>,
+    inode: Option<u64>,
+    length: u64,
+    modified_ns: Option<u128>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InstallFingerprint(Vec<Option<FileStamp>>);
+
+#[derive(Clone, Debug)]
+struct CachedInstallIdentity {
+    fingerprint: InstallFingerprint,
+    identity: Option<InstalledIdentity>,
+}
+
+#[derive(Default)]
+struct InstallationIdentityCache {
+    direct: Option<CachedInstallIdentity>,
+    active_release: Option<CachedInstallIdentity>,
+}
+
+impl InstallationIdentityCache {
+    fn read(&mut self, executable: &Path, kind: InstallKind) -> Option<InstalledIdentity> {
+        let fingerprint = install_fingerprint(executable, kind);
+        let cached = match kind {
+            InstallKind::Direct => &mut self.direct,
+            InstallKind::ActiveRelease => &mut self.active_release,
+        };
+        if let Some(entry) = cached
+            .as_ref()
+            .filter(|entry| entry.fingerprint == fingerprint)
+        {
+            return entry.identity.clone();
+        }
+
+        let identity = read_installed_identity_uncached(executable, kind);
+        *cached = Some(CachedInstallIdentity {
+            fingerprint,
+            identity: identity.clone(),
+        });
+        identity
+    }
+}
+
+fn install_fingerprint(executable: &Path, kind: InstallKind) -> InstallFingerprint {
+    let mut paths = vec![executable.to_path_buf()];
+    match kind {
+        InstallKind::Direct => {
+            if let Some(daemon) = executable.parent().map(|parent| parent.join("ramsharedd")) {
+                paths.push(daemon);
+            }
+            paths.extend(direct_install_metadata_path(executable));
+            paths.extend(direct_install_timestamp_path(executable));
+        }
+        InstallKind::ActiveRelease => {
+            if let Some(root) = executable.parent().and_then(Path::parent) {
+                paths.push(root.join("bin/ramsharedd"));
+                for name in [
+                    "RELEASE_VERSION",
+                    "SOURCE_COMMIT",
+                    "SOURCE_TREE_STATE",
+                    "INSTALL_PROVENANCE.json",
+                    "SHA256SUMS",
+                    "INSTALLED_MANIFEST_SHA256",
+                ] {
+                    paths.push(root.join(name));
+                }
+            }
+        }
+    }
+    InstallFingerprint(paths.iter().map(|path| file_stamp(path)).collect())
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())?;
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    #[cfg(unix)]
+    let (device, inode) = {
+        use std::os::unix::fs::MetadataExt;
+        (Some(metadata.dev()), Some(metadata.ino()))
+    };
+    #[cfg(not(unix))]
+    let (device, inode) = (None, None);
+    Some(FileStamp {
+        device,
+        inode,
+        length: metadata.len(),
+        modified_ns,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InstalledIdentity {
+    executable: PathBuf,
+    version: Option<String>,
+    source_commit: Option<String>,
+    source_tree_state: Option<String>,
+    installed_at_utc: Option<String>,
+    executable_sha256: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunningInstallStatus {
+    InstalledDirect,
+    InstalledActiveRelease,
+    InstalledBoth,
+    UpdatePendingDirect,
+    UpdatePendingActiveRelease,
+    UpdatePendingBoth,
+    NotInstalled,
+    Unknown,
+}
+
+fn format_running_identity_line(
+    version: &str,
+    commit: &str,
+    tree_state: &str,
+    status: RunningInstallStatus,
+) -> String {
+    let value = match status {
+        RunningInstallStatus::InstalledDirect => "installed (direct)",
+        RunningInstallStatus::InstalledActiveRelease => "installed (active release)",
+        RunningInstallStatus::InstalledBoth => "installed (both)",
+        RunningInstallStatus::UpdatePendingDirect => "updated on disk; restart pending (direct)",
+        RunningInstallStatus::UpdatePendingActiveRelease => {
+            "updated on disk; restart pending (active release)"
+        }
+        RunningInstallStatus::UpdatePendingBoth => "updated on disk; restart pending",
+        RunningInstallStatus::NotInstalled => "not installed",
+        RunningInstallStatus::Unknown => "unknown",
+    };
+    format!(
+        "Running: {} · {value}",
+        format_identity(version, commit, tree_state)
+    )
+}
+
+#[cfg(test)]
+fn running_install_status(
+    executable: Option<&Path>,
+    direct_install_executable: &Path,
+    active_release_executable: &Path,
+) -> RunningInstallStatus {
+    let running_metadata = executable
+        .and_then(|path| fs::metadata(path).ok())
+        .filter(|metadata| metadata.is_file());
+    let origin = executable.map_or(ProcessInstallOrigin::Unknown, |path| {
+        process_install_origin_for_path(path, direct_install_executable, active_release_executable)
+    });
+    running_install_status_from_metadata(
+        running_metadata.as_ref(),
+        origin,
+        direct_install_executable,
+        active_release_executable,
+    )
+}
+
+fn running_install_status_from_metadata(
+    running_metadata: Option<&fs::Metadata>,
+    origin: ProcessInstallOrigin,
+    direct_install_executable: &Path,
+    active_release_executable: &Path,
+) -> RunningInstallStatus {
+    let Some(running_metadata) = running_metadata else {
+        return RunningInstallStatus::Unknown;
+    };
+    let direct_metadata = fs::metadata(direct_install_executable)
+        .ok()
+        .filter(|metadata| metadata.is_file());
+    let active_metadata = fs::metadata(active_release_executable)
+        .ok()
+        .filter(|metadata| metadata.is_file());
+    let direct_match = direct_metadata
+        .as_ref()
+        .is_some_and(|candidate| same_file_identity(running_metadata, candidate));
+    let active_match = active_metadata
+        .as_ref()
+        .is_some_and(|candidate| same_file_identity(running_metadata, candidate));
+    match (direct_match, active_match) {
+        (true, true) => RunningInstallStatus::InstalledBoth,
+        (true, false) => RunningInstallStatus::InstalledDirect,
+        (false, true) => RunningInstallStatus::InstalledActiveRelease,
+        (false, false) if origin == ProcessInstallOrigin::Direct => {
+            RunningInstallStatus::UpdatePendingDirect
+        }
+        (false, false) if origin == ProcessInstallOrigin::ActiveRelease => {
+            RunningInstallStatus::UpdatePendingActiveRelease
+        }
+        (false, false) if origin == ProcessInstallOrigin::Both => {
+            RunningInstallStatus::UpdatePendingBoth
+        }
+        (false, false) if direct_metadata.is_some() || active_metadata.is_some() => {
+            RunningInstallStatus::NotInstalled
+        }
+        (false, false) => RunningInstallStatus::Unknown,
+    }
+}
+
+fn format_installed_identity_line(label: &str, installed: Option<&InstalledIdentity>) -> String {
+    let Some(installed) = installed else {
+        return format!("Installed {label}: not found");
+    };
+    let identity = match (
+        installed.version.as_deref(),
+        installed.source_commit.as_deref(),
+        installed.source_tree_state.as_deref(),
+    ) {
+        (Some(version), Some(commit), Some(tree_state))
+            if full_commit_sha(commit).is_some() && valid_version_identity(version) =>
+        {
+            format_identity(version, commit, tree_state)
+        }
+        _ => "identity unknown".to_string(),
+    };
+    let timestamp = installed
+        .installed_at_utc
+        .as_deref()
+        .filter(|value| is_utc_timestamp(value))
+        .map(|value| format!("{} {} UTC", &value[..10], &value[11..19]))
+        .unwrap_or_else(|| "install time unknown".to_string());
+    format!("Installed {label}: {identity} · {timestamp}")
+}
+
+#[cfg(test)]
+fn read_installed_identity(executable: &Path, kind: InstallKind) -> Option<InstalledIdentity> {
+    read_installed_identity_uncached(executable, kind)
+}
+
+fn read_installed_identity_uncached(
+    executable: &Path,
+    kind: InstallKind,
+) -> Option<InstalledIdentity> {
+    if !fs::metadata(executable)
+        .ok()
+        .is_some_and(|metadata| metadata.is_file())
+    {
+        return None;
+    }
+    match kind {
+        InstallKind::ActiveRelease => Some(
+            read_versioned_release_identity(executable).unwrap_or_else(|| InstalledIdentity {
+                executable: executable.to_path_buf(),
+                version: None,
+                source_commit: None,
+                source_tree_state: None,
+                installed_at_utc: read_install_timestamp_for_executable(executable),
+                executable_sha256: None,
+            }),
+        ),
+        InstallKind::Direct => Some(read_direct_install_identity(executable)),
+    }
+}
+
+fn read_versioned_release_identity(executable: &Path) -> Option<InstalledIdentity> {
+    let release_root = executable.parent()?.parent()?;
+    let manifest_hashes = verify_release_manifest(release_root)?;
+    let version = read_regular_line(&release_root.join("RELEASE_VERSION"))?;
+    let version = normalize_version_identity(&version)?;
+    let commit = read_regular_line(&release_root.join("SOURCE_COMMIT"))?;
+    let commit = full_commit_sha(&commit)?;
+    let tree_state = read_regular_line(&release_root.join("SOURCE_TREE_STATE"))?;
+    if !valid_tree_state(&tree_state) {
+        return None;
+    }
+
+    let path = release_root.join("INSTALL_PROVENANCE.json");
+    if !fs::symlink_metadata(&path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    let record: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    let schema = record.get("schema_version").and_then(Value::as_str)?;
+    if !matches!(schema, INSTALLED_PROVENANCE_V1 | INSTALLED_PROVENANCE_V2)
+        || record.get("source_commit").and_then(Value::as_str) != Some(commit.as_str())
+        || record.get("source_tree_state").and_then(Value::as_str) != Some(tree_state.as_str())
+    {
+        return None;
+    }
+    let installed_at_utc = record
+        .get("installed_at_utc")
+        .and_then(Value::as_str)
+        .filter(|value| is_utc_timestamp(value))
+        .map(str::to_string);
+    if schema == INSTALLED_PROVENANCE_V2 && installed_at_utc.is_none() {
+        return None;
+    }
+    Some(InstalledIdentity {
+        executable: executable.to_path_buf(),
+        version: Some(version),
+        source_commit: Some(commit),
+        source_tree_state: Some(tree_state),
+        installed_at_utc,
+        executable_sha256: manifest_hashes.get("bin/ramshared").cloned(),
+    })
+}
+
+fn read_direct_install_identity(executable: &Path) -> InstalledIdentity {
+    let metadata_path = direct_install_metadata_path(executable);
+    let timestamp_path = direct_install_timestamp_path(executable);
+    let timestamp_fallback = timestamp_path
+        .as_deref()
+        .and_then(read_install_timestamp_file);
+    let Some(path) = metadata_path else {
+        return InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version: None,
+            source_commit: None,
+            source_tree_state: None,
+            installed_at_utc: timestamp_fallback,
+            executable_sha256: None,
+        };
+    };
+    let Some(record) = read_regular_json(&path) else {
+        return InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version: None,
+            source_commit: None,
+            source_tree_state: None,
+            installed_at_utc: timestamp_fallback,
+            executable_sha256: None,
+        };
+    };
+    let valid_schema =
+        record.get("schema_version").and_then(Value::as_str) == Some(DIRECT_INSTALL_METADATA_V2);
+    let version = record
+        .get("version")
+        .and_then(Value::as_str)
+        .and_then(normalize_version_identity);
+    let source_commit = record
+        .get("source_commit")
+        .and_then(Value::as_str)
+        .and_then(full_commit_sha);
+    let source_tree_state = record
+        .get("source_tree_state")
+        .and_then(Value::as_str)
+        .filter(|value| valid_tree_state(value))
+        .map(str::to_string);
+    let installed_at_utc = record
+        .get("installed_at_utc")
+        .and_then(Value::as_str)
+        .filter(|value| is_utc_timestamp(value))
+        .map(str::to_string);
+    let cli_sha256 = record
+        .get("cli_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| valid_sha256(value))
+        .map(str::to_string);
+    let daemon_sha256 = record
+        .get("daemon_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| valid_sha256(value))
+        .map(str::to_string);
+    let daemon_executable = executable.parent().map(|parent| parent.join("ramsharedd"));
+    let hashes_match = cli_sha256
+        .as_deref()
+        .is_some_and(|expected| sha256_file(executable).as_deref() == Some(expected))
+        && daemon_sha256.as_deref().is_some_and(|expected| {
+            daemon_executable
+                .as_deref()
+                .and_then(sha256_file)
+                .as_deref()
+                == Some(expected)
+        });
+    if valid_schema
+        && version.is_some()
+        && source_commit.is_some()
+        && source_tree_state.is_some()
+        && installed_at_utc.is_some()
+        && hashes_match
+    {
+        InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version,
+            source_commit,
+            source_tree_state,
+            installed_at_utc,
+            executable_sha256: cli_sha256,
+        }
+    } else {
+        InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version: None,
+            source_commit: None,
+            source_tree_state: None,
+            installed_at_utc: installed_at_utc.or(timestamp_fallback),
+            executable_sha256: None,
+        }
+    }
+}
+
+fn verify_release_manifest(release_root: &Path) -> Option<HashMap<String, String>> {
+    let manifest_path = release_root.join("SHA256SUMS");
+    let manifest_receipt_path = release_root.join("INSTALLED_MANIFEST_SHA256");
+    let expected_manifest_hash = read_regular_line(&manifest_receipt_path)?;
+    if !valid_sha256(&expected_manifest_hash)
+        || sha256_file(&manifest_path).as_deref() != Some(expected_manifest_hash.as_str())
+    {
+        return None;
+    }
+    let manifest = fs::read_to_string(&manifest_path).ok()?;
+    let mut hashes = HashMap::new();
+    for line in manifest.lines() {
+        let bytes = line.as_bytes();
+        if bytes.len() < 66 || &bytes[64..66] != b"  " {
+            return None;
+        }
+        let digest = std::str::from_utf8(&bytes[..64]).ok()?;
+        let relative_path = std::str::from_utf8(&bytes[66..]).ok()?;
+        let path = relative_path.strip_prefix("./")?;
+        if !valid_sha256(digest)
+            || path.is_empty()
+            || Path::new(path).is_absolute()
+            || Path::new(path)
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || hashes
+                .insert(path.to_string(), digest.to_ascii_lowercase())
+                .is_some()
+        {
+            return None;
+        }
+    }
+    for path in [
+        "bin/ramshared",
+        "bin/ramsharedd",
+        "RELEASE_VERSION",
+        "SOURCE_COMMIT",
+        "SOURCE_TREE_STATE",
+        "INSTALL_PROVENANCE.json",
+    ] {
+        let expected = hashes.get(path)?;
+        if sha256_file(&release_root.join(path)).as_deref() != Some(expected.as_str()) {
+            return None;
+        }
+    }
+    Some(hashes)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn sha256_file(path: &Path) -> Option<String> {
+    if !fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    let mut file = File::open(path).ok()?;
+    sha256_reader(&mut file)
+}
+
+fn sha256_reader(reader: &mut impl Read) -> Option<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(64);
+    for byte in digest.as_slice() {
+        use std::fmt::Write as FmtWrite;
+        write!(&mut encoded, "{byte:02x}").ok()?;
+    }
+    Some(encoded)
+}
+
+fn read_regular_json(path: &Path) -> Option<Value> {
+    if !fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+fn read_regular_line(path: &Path) -> Option<String> {
+    if !fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    let contents = fs::read_to_string(path).ok()?;
+    let line = contents.strip_suffix('\n').unwrap_or(&contents);
+    if line.is_empty() || line.contains(['\n', '\r']) {
+        return None;
+    }
+    Some(line.to_string())
+}
+
+fn direct_install_metadata_path(executable: &Path) -> Option<PathBuf> {
+    let prefix = executable.parent()?.parent()?;
+    Some(prefix.join("share/ramshared/INSTALL_METADATA.json"))
+}
+
+fn valid_tree_state(value: &str) -> bool {
+    matches!(value, "clean" | "dirty" | "unavailable")
+}
+
+fn valid_version_identity(value: &str) -> bool {
+    normalize_version_identity(value).is_some()
+}
+
+fn normalize_version_identity(value: &str) -> Option<String> {
+    let version = value.strip_prefix('v').unwrap_or(value);
+    if !version.is_empty()
+        && version.len() <= 128
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
+        && version.as_bytes()[0].is_ascii_alphanumeric()
+    {
+        Some(version.to_string())
+    } else {
+        None
+    }
+}
+
+fn restart_target(
+    origin: ProcessInstallOrigin,
+    running_metadata: Option<&fs::Metadata>,
+    running_sha256: Option<&str>,
+    allow_reexec: bool,
+    direct_install: Option<&InstalledIdentity>,
+    active_install: Option<&InstalledIdentity>,
+) -> Option<PathBuf> {
+    if !allow_reexec || running_metadata.is_none() {
+        return None;
+    }
+    let direct = direct_install
+        .filter(|installed| restart_required(installed, running_metadata, running_sha256));
+    let active = active_install
+        .filter(|installed| restart_required(installed, running_metadata, running_sha256));
+    match origin {
+        ProcessInstallOrigin::Direct => direct.map(|installed| installed.executable.clone()),
+        ProcessInstallOrigin::ActiveRelease => active.map(|installed| installed.executable.clone()),
+        ProcessInstallOrigin::Both => match (direct, active) {
+            (Some(direct), None) => Some(direct.executable.clone()),
+            (None, Some(active)) => Some(active.executable.clone()),
+            (Some(direct), Some(active))
+                if direct.executable_sha256 == active.executable_sha256
+                    && installed_source_identity(direct) == installed_source_identity(active) =>
+            {
+                Some(active.executable.clone())
+            }
+            _ => None,
+        },
+        ProcessInstallOrigin::Unknown => None,
+    }
+}
+
+fn restart_required(
+    installed: &InstalledIdentity,
+    running_metadata: Option<&fs::Metadata>,
+    running_sha256: Option<&str>,
+) -> bool {
+    let (Some(version), Some(commit), Some(tree_state), Some(installed_sha256)) = (
+        installed.version.as_deref(),
+        installed.source_commit.as_deref(),
+        installed.source_tree_state.as_deref(),
+        installed.executable_sha256.as_deref(),
+    ) else {
+        return false;
+    };
+    if !valid_version_identity(version)
+        || full_commit_sha(commit).is_none()
+        || !valid_tree_state(tree_state)
+        || !valid_sha256(installed_sha256)
+    {
+        return false;
+    }
+    if running_metadata.is_some_and(|running| {
+        fs::metadata(&installed.executable)
+            .ok()
+            .is_some_and(|candidate| same_file_identity(running, &candidate))
+    }) {
+        return false;
+    }
+    if let Some(running_sha256) = running_sha256 {
+        return installed_sha256 != running_sha256;
+    }
+    let current_sha = full_commit_sha(BUILD_GIT_SHA);
+    let installed_sha = full_commit_sha(commit);
+    !(version == env!("CARGO_PKG_VERSION")
+        && current_sha == installed_sha
+        && normalized_tree_state(tree_state) == normalized_tree_state(BUILD_TREE_STATE))
+}
+
+fn installed_source_identity(
+    identity: &InstalledIdentity,
+) -> (Option<&str>, Option<&str>, Option<&str>) {
+    (
+        identity.version.as_deref(),
+        identity.source_commit.as_deref(),
+        identity.source_tree_state.as_deref(),
+    )
+}
+
+fn current_running_executable_metadata() -> Option<fs::Metadata> {
+    #[cfg(target_os = "linux")]
+    {
+        fs::metadata("/proc/self/exe").ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| fs::metadata(path).ok())
+    }
+}
+
+fn current_running_executable_sha256() -> Option<String> {
+    static RUNNING_EXECUTABLE_SHA256: OnceLock<Option<String>> = OnceLock::new();
+    RUNNING_EXECUTABLE_SHA256
+        .get_or_init(|| {
+            #[cfg(target_os = "linux")]
+            if let Ok(mut executable) = File::open("/proc/self/exe") {
+                return sha256_reader(&mut executable);
+            }
+            let path = std::env::current_exe().ok()?;
+            sha256_file(&path)
+        })
+        .clone()
+}
+
+fn current_process_install_origin() -> ProcessInstallOrigin {
+    let direct_executable = Path::new("/usr/local/bin/ramshared");
+    let active_release_executable = Path::new("/opt/ramshared/current/bin/ramshared");
+    let running_path = {
+        #[cfg(target_os = "linux")]
+        {
+            fs::read_link("/proc/self/exe").ok()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            std::env::current_exe().ok()
+        }
+    };
+    running_path.map_or(ProcessInstallOrigin::Unknown, |path| {
+        process_install_origin_for_path(&path, direct_executable, active_release_executable)
+    })
+}
+
+fn process_install_origin_for_path(
+    running_path: &Path,
+    direct_executable: &Path,
+    active_release_executable: &Path,
+) -> ProcessInstallOrigin {
+    let display = running_path.to_string_lossy();
+    let clean_path = Path::new(display.strip_suffix(" (deleted)").unwrap_or(&display));
+    let direct_match = path_matches(clean_path, direct_executable);
+    let active_match = path_matches(clean_path, active_release_executable);
+    match (direct_match, active_match) {
+        (true, true) => ProcessInstallOrigin::Both,
+        (true, false) => ProcessInstallOrigin::Direct,
+        (false, true) => ProcessInstallOrigin::ActiveRelease,
+        (false, false) => ProcessInstallOrigin::Unknown,
+    }
+}
+
+fn path_matches(left: &Path, right: &Path) -> bool {
+    left == right
+        || left
+            .canonicalize()
+            .ok()
+            .zip(right.canonicalize().ok())
+            .is_some_and(|(left, right)| left == right)
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn is_utc_timestamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !(bytes.len() == 20
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes[19] == b'Z'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
+        }))
+    {
+        return false;
+    }
+    let year = value[0..4].parse::<u16>().unwrap_or(0);
+    let month = value[5..7].parse::<u8>().unwrap_or(0);
+    let day = value[8..10].parse::<u8>().unwrap_or(0);
+    let hour = value[11..13].parse::<u8>().unwrap_or(24);
+    let minute = value[14..16].parse::<u8>().unwrap_or(60);
+    let second = value[17..19].parse::<u8>().unwrap_or(60);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || year % 4 == 0 && year % 100 != 0 => 29,
+        2 => 28,
+        _ => return false,
+    };
+    year > 0 && (1..=days_in_month).contains(&day) && hour < 24 && minute < 60 && second < 60
+}
+
+fn read_install_timestamp_for_executable(executable: &Path) -> Option<String> {
+    let release_root = executable.parent()?.parent()?;
+    read_install_timestamp_from_release(release_root)
+        .or_else(|| read_install_timestamp_file(&direct_install_timestamp_path(executable)?))
+}
+
+fn direct_install_timestamp_path(executable: &Path) -> Option<PathBuf> {
+    let prefix = executable.parent()?.parent()?;
+    Some(prefix.join("share/ramshared/INSTALL_TIMESTAMP"))
+}
+
+fn read_install_timestamp_from_release(release_root: &Path) -> Option<String> {
+    let path = release_root.join("INSTALL_PROVENANCE.json");
+    if !fs::symlink_metadata(&path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let record: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    match record.get("schema_version").and_then(Value::as_str) {
+        Some(INSTALLED_PROVENANCE_V1 | INSTALLED_PROVENANCE_V2) => {}
+        _ => return None,
+    }
+    record
+        .get("installed_at_utc")
+        .and_then(Value::as_str)
+        .filter(|value| is_utc_timestamp(value))
+        .map(str::to_string)
+}
+
+fn read_install_timestamp_file(path: &Path) -> Option<String> {
+    if !fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let contents = fs::read_to_string(path).ok()?;
+    let timestamp = contents.strip_suffix('\n').unwrap_or(&contents);
+    if timestamp.contains('\n') || timestamp.contains('\r') || !is_utc_timestamp(timestamp) {
+        return None;
+    }
+    Some(timestamp.to_string())
+}
+
+#[cfg(test)]
 fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &VecDeque<u64>) {
+    let mut identity_cache = InstallationIdentityCache::default();
+    draw_dashboard_with_metadata(
+        frame,
+        observation,
+        history,
+        &DashboardMetadata::current(
+            &mut identity_cache,
+            ProcessInstallOrigin::Unknown,
+            false,
+            None,
+        ),
+    );
+}
+
+fn draw_dashboard_with_metadata(
+    frame: &mut Frame<'_>,
+    observation: &Observation,
+    history: &VecDeque<u64>,
+    metadata: &DashboardMetadata,
+) {
+    let header_height = if metadata.runtime_notice.is_some() {
+        8
+    } else {
+        7
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(header_height),
             Constraint::Percentage(35),
             Constraint::Percentage(55),
             Constraint::Length(2),
@@ -1506,22 +2564,31 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
             _ => ("🟡 STATUS: UNKNOWN", Color::Yellow, "UNKNOWN"),
         };
 
-    let version = env!("CARGO_PKG_VERSION");
     let uptime = observation.control_plane.uptime_seconds;
     let live_uptime = if uptime > 0 {
         format!("⏱️ {:02}m {:02}s", uptime / 60, uptime % 60)
     } else {
         "⏱️ Live".to_string()
     };
-    let header = Paragraph::new(Line::from(format!(
-        " RamShared v{version} │ {status_text} │ {live_uptime} │ Protection: {protection_text}",
-    )))
-    .style(Style::default().fg(state_color))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("System Overview"),
-    );
+    let mut header_lines = vec![
+        Line::from(metadata.version_line.as_str()),
+        Line::from(metadata.running_line.as_str()),
+        Line::from(metadata.direct_install_line.as_str()),
+        Line::from(metadata.active_install_line.as_str()),
+    ];
+    if let Some(notice) = metadata.runtime_notice.as_deref() {
+        header_lines.push(Line::from(notice));
+    }
+    header_lines.push(Line::from(format!(
+        "{status_text} │ {live_uptime} │ Protection: {protection_text}"
+    )));
+    let header = Paragraph::new(header_lines)
+        .style(Style::default().fg(state_color))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("System Overview"),
+        );
     frame.render_widget(header, rows[0]);
 
     draw_memory(frame, top[0], observation, history);
@@ -1545,10 +2612,12 @@ fn draw_memory(
         .constraints([Constraint::Length(5), Constraint::Min(1)])
         .split(area);
     let memory = &observation.mem;
-    let total_mb = (memory.total_kib + 512) / 1024;
-    let avail_mb = (memory.available_kib + 512) / 1024;
-    let used_mb = total_mb.saturating_sub(avail_mb);
-    let used_pct = (used_mb * 100).checked_div(total_mb).unwrap_or(0);
+    let total_mib = (memory.total_kib + 512) / 1024;
+    let avail_mib = (memory.available_kib + 512) / 1024;
+    let used_mib = total_mib.saturating_sub(avail_mib);
+    let used_pct = (used_mib * 100).checked_div(total_mib).unwrap_or(0);
+    let used_mib_text = format_grouped_number(used_mib);
+    let total_mib_text = format_grouped_number(total_mib);
 
     let bar_len: u64 = 20;
     let filled = (used_pct * bar_len / 100).min(bar_len);
@@ -1559,12 +2628,16 @@ fn draw_memory(
         "░".repeat(empty as usize)
     );
 
-    let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
-    let swap_total = (memory.swap_total_kib + 512) / 1024;
-    let swap_pct = (swap_used * 100).checked_div(swap_total).unwrap_or(0);
+    let swap_used_mib = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
+    let swap_total_mib = (memory.swap_total_kib + 512) / 1024;
+    let swap_pct = (swap_used_mib * 100)
+        .checked_div(swap_total_mib)
+        .unwrap_or(0);
+    let swap_used_mib_text = format_grouped_number(swap_used_mib);
+    let swap_total_mib_text = format_grouped_number(swap_total_mib);
     let swap_bar = make_bar(swap_pct, bar_len);
     let text = format!(
-        " {ram_label}:  {bar} {used_pct:>2}% ({used_mb:>5} MB / {total_mb} MB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used:>5} MB / {swap_total} MB)\n Pressure:   Light Stall (Some): {psi_some:.2}% │ Severe Stall (Full): {psi_full:.2}%",
+        " {ram_label}:  {bar} {used_pct:>2}% ({used_mib_text} / {total_mib_text} MiB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used_mib_text} / {swap_total_mib_text} MiB)\n Pressure:   Light Stall (Some): {psi_some:.2}% │ Severe Stall (Full): {psi_full:.2}%",
         ram_label = observation.memory_scope.ram_label(),
         psi_some = observation.control_plane.memory_psi_some_avg10,
         psi_full = observation.control_plane.memory_psi_full_avg10,
@@ -1849,7 +2922,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 .unwrap_or(0);
 
             let z_use = format!(
-                "{z_bar} {z_pct_str} ( {zram_u:>4} MB / {zram_t} MB ) │ Peak: {z_peak:>4} MB ({z_peak_pct:>3}%)",
+                "{z_bar} {z_pct_str} ( {zram_u:>4} MiB / {zram_t} MiB ) │ Peak: {z_peak:>4} MiB ({z_peak_pct:>3}%)",
                 z_bar = z_bar,
                 z_pct_str = z_pct_str,
                 zram_u = zram_used,
@@ -1858,7 +2931,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 z_peak_pct = z_peak_pct
             );
             let v_use = format!(
-                "{v_bar} {v_pct_str} ( {vram_u:>4} MB / {vram_t} MB ) │ Peak: {v_peak:>4} MB ({v_peak_pct:>3}%)",
+                "{v_bar} {v_pct_str} ( {vram_u:>4} MiB / {vram_t} MiB ) │ Peak: {v_peak:>4} MiB ({v_peak_pct:>3}%)",
                 v_bar = v_bar,
                 v_pct_str = v_pct_str,
                 vram_u = vram_used,
@@ -1867,7 +2940,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 v_peak_pct = v_peak_pct
             );
             let d_use = format!(
-                "{d_bar} {d_pct_str} ( {disk_u:>4} MB / {disk_t} MB ) │ Peak: {d_peak:>4} MB ({d_peak_pct:>3}%)",
+                "{d_bar} {d_pct_str} ( {disk_u:>4} MiB / {disk_t} MiB ) │ Peak: {d_peak:>4} MiB ({d_peak_pct:>3}%)",
                 d_bar = d_bar,
                 d_pct_str = d_pct_str,
                 disk_u = disk_used,
@@ -1876,10 +2949,10 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 d_peak_pct = d_peak_pct
             );
 
-            let format_speed = |read_mbs: f64, write_mbs: f64, used_mb: u64| {
+            let format_speed = |read_mbs: f64, write_mbs: f64, used_mib: u64| {
                 if read_mbs < 0.1 && write_mbs < 0.1 {
-                    if used_mb > 0 {
-                        format!("Read:   0.0 │ Write:   0.0 MB/s (💤 Retaining {used_mb:>4} MB)")
+                    if used_mib > 0 {
+                        format!("Read:   0.0 │ Write:   0.0 MB/s (💤 Retaining {used_mib:>4} MiB)")
                     } else {
                         "Read:   0.0 │ Write:   0.0 MB/s (💤 Standby)".to_string()
                     }
@@ -2196,6 +3269,522 @@ mod tests {
             top_processes: Vec::new(),
             errors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn build_identity_marks_dirty_and_unavailable_sources() {
+        let commit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+        assert_eq!(
+            format_build_identity("0.15.0", commit, "clean"),
+            "RamShared CLI v0.15.0 · abcdef01 (clean)"
+        );
+        assert_eq!(
+            format_build_identity("0.15.0", commit, "dirty"),
+            "RamShared CLI v0.15.0 · abcdef01 (dirty)"
+        );
+        assert_eq!(
+            format_build_identity("0.15.0", "", "unavailable"),
+            "RamShared CLI v0.15.0 · source unavailable"
+        );
+        assert_eq!(
+            format_build_identity("0.15.0", commit, "unexpected"),
+            "RamShared CLI v0.15.0 · abcdef01 (state unavailable)"
+        );
+    }
+
+    #[test]
+    fn running_install_status_compares_current_executable_identity() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-running-identity-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let installed = root.join("usr/local/bin/ramshared");
+        let local = root.join("build/ramshared");
+        fs::create_dir_all(installed.parent().expect("installed parent"))
+            .expect("create installed bin");
+        fs::create_dir_all(local.parent().expect("local parent")).expect("create local bin");
+        fs::write(&installed, b"installed binary").expect("write installed binary");
+        fs::write(&local, b"local binary").expect("write local binary");
+        let absent_active_release = root.join("missing-active/bin/ramshared");
+
+        assert_eq!(
+            running_install_status(Some(&installed), &installed, &absent_active_release),
+            RunningInstallStatus::InstalledDirect
+        );
+        assert_eq!(
+            running_install_status(Some(&local), &installed, &absent_active_release),
+            RunningInstallStatus::NotInstalled
+        );
+
+        let replaced_target = root.join("replace-target/ramshared");
+        let running_snapshot = root.join("running-image/ramshared");
+        fs::create_dir_all(replaced_target.parent().expect("replacement parent"))
+            .expect("create replacement target directory");
+        fs::create_dir_all(running_snapshot.parent().expect("running parent"))
+            .expect("create running image directory");
+        fs::write(&replaced_target, b"binary mapped by running process")
+            .expect("write original installed binary");
+        fs::hard_link(&replaced_target, &running_snapshot).expect("snapshot running inode");
+        let running_metadata = fs::metadata(&running_snapshot).expect("old running inode");
+        assert_eq!(
+            running_install_status_from_metadata(
+                Some(&running_metadata),
+                ProcessInstallOrigin::Direct,
+                &replaced_target,
+                &absent_active_release,
+            ),
+            RunningInstallStatus::InstalledDirect
+        );
+        let replacement = root.join("replace-target/staged");
+        fs::write(&replacement, b"new installed binary").expect("write replacement binary");
+        fs::rename(&replacement, &replaced_target).expect("atomically replace installed binary");
+        assert_eq!(
+            running_install_status_from_metadata(
+                Some(&running_metadata),
+                ProcessInstallOrigin::Direct,
+                &replaced_target,
+                &absent_active_release,
+            ),
+            RunningInstallStatus::UpdatePendingDirect
+        );
+        assert_eq!(
+            running_install_status(None, &installed, &absent_active_release),
+            RunningInstallStatus::Unknown
+        );
+        assert_eq!(
+            running_install_status(
+                Some(&local),
+                &root.join("missing/ramshared"),
+                &absent_active_release
+            ),
+            RunningInstallStatus::Unknown
+        );
+        assert_eq!(
+            format_running_identity_line(
+                "0.15.0",
+                "abcdef0123456789abcdef0123456789abcdef01",
+                "clean",
+                RunningInstallStatus::InstalledDirect
+            ),
+            "Running: v0.15.0 · abcdef01 (clean) · installed (direct)"
+        );
+        assert_eq!(
+            format_running_identity_line(
+                "0.15.0",
+                "",
+                "unavailable",
+                RunningInstallStatus::NotInstalled
+            ),
+            "Running: v0.15.0 · source unavailable · not installed"
+        );
+        assert_eq!(
+            format_running_identity_line(
+                "0.15.0",
+                "",
+                "unavailable",
+                RunningInstallStatus::Unknown
+            ),
+            "Running: v0.15.0 · source unavailable · unknown"
+        );
+
+        let old_release = root.join("opt/ramshared/releases/v0.14.1/bin/ramshared");
+        let active_release = root.join("opt/ramshared/releases/v0.15.0/bin/ramshared");
+        fs::create_dir_all(old_release.parent().expect("old release bin"))
+            .expect("create old release bin");
+        fs::create_dir_all(active_release.parent().expect("active release bin"))
+            .expect("create active release bin");
+        fs::write(&old_release, b"old release binary").expect("write old release binary");
+        fs::write(&active_release, b"active release binary").expect("write active release binary");
+        let current_link = root.join("opt/ramshared/current");
+        fs::create_dir_all(current_link.parent().expect("product root"))
+            .expect("create product root");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("releases/v0.15.0", &current_link)
+            .expect("select active release");
+        assert_eq!(
+            running_install_status(
+                Some(&active_release),
+                &installed,
+                &current_link.join("bin/ramshared")
+            ),
+            RunningInstallStatus::InstalledActiveRelease
+        );
+        assert_eq!(
+            running_install_status(
+                Some(&old_release),
+                &installed,
+                &current_link.join("bin/ramshared")
+            ),
+            RunningInstallStatus::NotInstalled
+        );
+        let old_release_metadata = fs::metadata(&old_release).expect("old release inode");
+        assert_eq!(
+            running_install_status_from_metadata(
+                Some(&old_release_metadata),
+                ProcessInstallOrigin::ActiveRelease,
+                &installed,
+                &current_link.join("bin/ramshared"),
+            ),
+            RunningInstallStatus::UpdatePendingActiveRelease
+        );
+
+        fs::remove_dir_all(&root).expect("remove running identity fixtures");
+    }
+
+    #[test]
+    fn process_origin_survives_replaced_executable_paths() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-process-origin-{}", std::process::id()));
+        let direct = root.join("usr/local/bin/ramshared");
+        let active = root.join("opt/ramshared/current/bin/ramshared");
+        let old_release = root.join("opt/ramshared/releases/v0.14.1/bin/ramshared");
+        fs::create_dir_all(direct.parent().expect("direct bin")).expect("create direct bin");
+        fs::create_dir_all(old_release.parent().expect("release bin")).expect("create release bin");
+        fs::write(&direct, b"direct image").expect("write direct image");
+        fs::write(&old_release, b"old release image").expect("write release image");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            "releases/v0.14.1",
+            active.parent().unwrap().parent().unwrap(),
+        )
+        .expect("select old release");
+
+        let deleted_direct = PathBuf::from(format!("{} (deleted)", direct.display()));
+        let deleted_release = PathBuf::from(format!("{} (deleted)", old_release.display()));
+        assert_eq!(
+            process_install_origin_for_path(&deleted_direct, &direct, &active),
+            ProcessInstallOrigin::Direct
+        );
+        assert_eq!(
+            process_install_origin_for_path(&deleted_release, &direct, &active),
+            ProcessInstallOrigin::ActiveRelease
+        );
+        assert_eq!(
+            process_install_origin_for_path(&root.join("target/debug/ramshared"), &direct, &active),
+            ProcessInstallOrigin::Unknown
+        );
+
+        fs::remove_dir_all(&root).expect("remove process origin fixture");
+    }
+
+    #[test]
+    fn ramshared_top_reexec_targets_only_its_updated_install() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-tui-reexec-{}", std::process::id()));
+        let target = root.join("usr/local/bin/ramshared");
+        let old_image = root.join("running/ramshared");
+        fs::create_dir_all(target.parent().expect("direct bin")).expect("create install bin");
+        fs::create_dir_all(old_image.parent().expect("running bin")).expect("create running bin");
+        fs::write(&target, b"new installed image").expect("write new installed image");
+        fs::write(&old_image, b"old running image").expect("write old running image");
+        let running_metadata = fs::metadata(&old_image).expect("stat running image");
+        let installed = InstalledIdentity {
+            executable: target.clone(),
+            version: Some("0.15.0".to_string()),
+            source_commit: Some("1234567890abcdef1234567890abcdef12345678".to_string()),
+            source_tree_state: Some("clean".to_string()),
+            installed_at_utc: Some("2026-09-27T18:04:05Z".to_string()),
+            executable_sha256: Some(sha256_file(&target).expect("hash new image")),
+        };
+        let running_sha256 = sha256_file(&old_image).expect("hash old image");
+
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Direct,
+                Some(&running_metadata),
+                Some(&running_sha256),
+                true,
+                Some(&installed),
+                None,
+            ),
+            Some(target.clone())
+        );
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Unknown,
+                Some(&running_metadata),
+                Some(&running_sha256),
+                true,
+                Some(&installed),
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Direct,
+                Some(&running_metadata),
+                Some(&running_sha256),
+                false,
+                Some(&installed),
+                None,
+            ),
+            None
+        );
+
+        fs::write(&target, b"old running image").expect("install same running image content");
+        let same_image_sha256 = sha256_file(&target).expect("hash identical installed image");
+        let same_build = InstalledIdentity {
+            executable: target.clone(),
+            executable_sha256: Some(same_image_sha256.clone()),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            source_commit: full_commit_sha(BUILD_GIT_SHA),
+            source_tree_state: Some(BUILD_TREE_STATE.to_string()),
+            installed_at_utc: Some("2026-09-27T18:04:05Z".to_string()),
+        };
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Direct,
+                Some(&running_metadata),
+                Some(&same_image_sha256),
+                true,
+                Some(&same_build),
+                None,
+            ),
+            None
+        );
+
+        fs::remove_dir_all(&root).expect("remove reexec fixture");
+    }
+
+    #[test]
+    fn installation_time_is_read_from_installer_metadata_only() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-install-metadata-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("create release bin fixture");
+        let executable = bin.join("ramshared");
+        let release_commit = "abcdef0123456789abcdef0123456789abcdef01";
+        fs::write(root.join("RELEASE_VERSION"), "v0.14.1\n").expect("write release version");
+        fs::write(root.join("SOURCE_COMMIT"), format!("{release_commit}\n"))
+            .expect("write source commit");
+        fs::write(root.join("SOURCE_TREE_STATE"), "clean\n").expect("write tree state");
+        fs::write(&executable, b"release binary").expect("write release executable");
+        let daemon = root.join("bin/ramsharedd");
+        fs::write(&daemon, b"release daemon").expect("write release daemon");
+        let provenance = root.join("INSTALL_PROVENANCE.json");
+        fs::write(
+            &provenance,
+            format!("{{\"schema_version\":\"{INSTALLED_PROVENANCE_V2}\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"clean\",\"installed_at_utc\":\"2026-09-27T17:23:45Z\"}}"),
+        )
+        .expect("write installed provenance fixture");
+        seal_release_fixture(&root);
+
+        assert_eq!(
+            read_install_timestamp_for_executable(&executable).as_deref(),
+            Some("2026-09-27T17:23:45Z")
+        );
+        assert_eq!(
+            read_installed_identity(&executable, InstallKind::ActiveRelease)
+                .and_then(|metadata| metadata.version),
+            Some("0.14.1".to_string())
+        );
+        let release_identity = read_installed_identity(&executable, InstallKind::ActiveRelease)
+            .expect("read versioned installed identity");
+        assert!(
+            format_installed_identity_line("active release", Some(&release_identity)).contains(
+                "Installed active release: v0.14.1 · abcdef01 (clean) · 2026-09-27 17:23:45 UTC"
+            )
+        );
+        fs::write(&daemon, b"tampered release daemon").expect("tamper release daemon");
+        let tampered = read_installed_identity(&executable, InstallKind::ActiveRelease)
+            .expect("installed image still exists");
+        assert!(
+            format_installed_identity_line("active release", Some(&tampered))
+                .contains("identity unknown")
+        );
+        fs::write(&daemon, b"release daemon").expect("restore release daemon");
+        seal_release_fixture(&root);
+
+        fs::write(
+            &provenance,
+            format!("{{\"schema_version\":\"{INSTALLED_PROVENANCE_V1}\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"clean\"}}"),
+        )
+        .expect("write legacy provenance fixture");
+        seal_release_fixture(&root);
+        assert_eq!(read_install_timestamp_for_executable(&executable), None);
+        let legacy_identity = read_installed_identity(&executable, InstallKind::ActiveRelease)
+            .expect("versioned binary remains recognized without timestamp metadata");
+        assert!(
+            format_installed_identity_line("active release", Some(&legacy_identity))
+                .contains("v0.14.1 · abcdef01 (clean) · install time unknown")
+        );
+
+        fs::remove_file(&provenance).expect("remove installed provenance fixture");
+        assert_eq!(read_install_timestamp_for_executable(&executable), None);
+
+        let direct_prefix = root.join("usr/local");
+        let direct_executable = direct_prefix.join("bin/ramshared");
+        let direct_timestamp = direct_prefix.join("share/ramshared/INSTALL_TIMESTAMP");
+        fs::create_dir_all(direct_timestamp.parent().expect("timestamp parent"))
+            .expect("create direct install metadata directory");
+        fs::create_dir_all(direct_executable.parent().expect("direct bin"))
+            .expect("create direct executable directory");
+        fs::write(&direct_executable, b"direct installed binary").expect("write direct binary");
+        let direct_daemon = direct_prefix.join("bin/ramsharedd");
+        fs::write(&direct_daemon, b"direct installed daemon").expect("write direct daemon");
+        fs::write(&direct_timestamp, "2026-09-27T18:04:05Z\n")
+            .expect("write direct install timestamp");
+        assert_eq!(
+            read_install_timestamp_for_executable(&direct_executable).as_deref(),
+            Some("2026-09-27T18:04:05Z")
+        );
+        assert_eq!(
+            direct_install_timestamp_path(Path::new("/usr/local/bin/ramshared")),
+            Some(PathBuf::from(
+                "/usr/local/share/ramshared/INSTALL_TIMESTAMP"
+            ))
+        );
+        assert_eq!(
+            direct_install_metadata_path(Path::new("/usr/local/bin/ramshared")),
+            Some(PathBuf::from(
+                "/usr/local/share/ramshared/INSTALL_METADATA.json"
+            ))
+        );
+        assert!(
+            format_installed_identity_line(
+                "direct /usr/local",
+                Some(&read_direct_install_identity(&direct_executable))
+            )
+            .contains("Installed direct /usr/local: identity unknown · 2026-09-27 18:04:05 UTC")
+        );
+        let legacy_record = format!(
+            "{{\"schema_version\":\"{DIRECT_INSTALL_METADATA_V1}\",\"version\":\"0.15.0\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"dirty\",\"installed_at_utc\":\"2026-09-27T18:04:05Z\"}}"
+        );
+        fs::write(
+            direct_install_metadata_path(&direct_executable).expect("metadata path"),
+            &legacy_record,
+        )
+        .expect("write legacy direct install identity metadata");
+        assert!(
+            format_installed_identity_line(
+                "direct /usr/local",
+                Some(&read_direct_install_identity(&direct_executable))
+            )
+            .contains("identity unknown · 2026-09-27 18:04:05 UTC")
+        );
+
+        let cli_sha256 = sha256_file(&direct_executable).expect("hash direct executable");
+        let daemon_sha256 = sha256_file(&direct_daemon).expect("hash direct daemon");
+        fs::write(
+            direct_install_metadata_path(&direct_executable).expect("metadata path"),
+            format!(
+                "{{\"schema_version\":\"{DIRECT_INSTALL_METADATA_V2}\",\"version\":\"0.15.0\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"dirty\",\"installed_at_utc\":\"2026-09-27T18:04:05Z\",\"cli_sha256\":\"{cli_sha256}\",\"daemon_sha256\":\"{daemon_sha256}\"}}"
+            ),
+        )
+        .expect("write hash-bound direct install identity metadata");
+        let direct_identity = read_installed_identity(&direct_executable, InstallKind::Direct)
+            .expect("read direct installed identity");
+        assert!(
+            format_installed_identity_line("direct /usr/local", Some(&direct_identity)).contains(
+                "Installed direct /usr/local: v0.15.0 · abcdef01 (dirty) · 2026-09-27 18:04:05 UTC"
+            )
+        );
+        fs::write(&direct_daemon, b"replaced daemon bytes").expect("replace direct daemon");
+        assert!(
+            format_installed_identity_line(
+                "direct /usr/local",
+                Some(&read_direct_install_identity(&direct_executable))
+            )
+            .contains("identity unknown · 2026-09-27 18:04:05 UTC")
+        );
+
+        assert!(is_utc_timestamp("2024-02-29T23:59:59Z"));
+        assert!(!is_utc_timestamp("2026-02-29T12:00:00Z"));
+        assert!(!is_utc_timestamp("2026-02-31T12:00:00Z"));
+        assert!(!is_utc_timestamp("2026-09-27T25:00:00Z"));
+
+        fs::remove_dir_all(&root).expect("remove release metadata fixture");
+    }
+
+    fn seal_release_fixture(root: &Path) {
+        let paths = [
+            "bin/ramshared",
+            "bin/ramsharedd",
+            "RELEASE_VERSION",
+            "SOURCE_COMMIT",
+            "SOURCE_TREE_STATE",
+            "INSTALL_PROVENANCE.json",
+        ];
+        let mut entries = paths
+            .iter()
+            .map(|relative| {
+                let digest = sha256_file(&root.join(relative)).expect("hash release fixture");
+                format!("{digest}  ./{relative}")
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        let manifest = format!("{}\n", entries.join("\n"));
+        fs::write(root.join("SHA256SUMS"), &manifest).expect("write release fixture manifest");
+        let manifest_sha256 = sha256_file(&root.join("SHA256SUMS")).expect("hash manifest");
+        fs::write(
+            root.join("INSTALLED_MANIFEST_SHA256"),
+            format!("{manifest_sha256}\n"),
+        )
+        .expect("write release fixture manifest receipt");
+    }
+
+    #[test]
+    fn dashboard_displays_build_revision_and_host_install_time_separately() {
+        let direct_install = InstalledIdentity {
+            executable: PathBuf::from("/usr/local/bin/ramshared"),
+            version: Some("0.14.1".to_string()),
+            source_commit: Some("abcdef0123456789abcdef0123456789abcdef01".to_string()),
+            source_tree_state: Some("clean".to_string()),
+            installed_at_utc: Some("2026-09-27T17:23:45Z".to_string()),
+            executable_sha256: Some("a".repeat(64)),
+        };
+        let metadata = DashboardMetadata {
+            version_line: format_build_identity(
+                "0.15.0",
+                "0123456789abcdef0123456789abcdef01234567",
+                "dirty",
+            ),
+            running_line: format_running_identity_line(
+                "0.15.0",
+                "0123456789abcdef0123456789abcdef01234567",
+                "dirty",
+                RunningInstallStatus::InstalledDirect,
+            ),
+            direct_install_line: format_installed_identity_line(
+                "direct /usr/local",
+                Some(&direct_install),
+            ),
+            active_install_line: format_installed_identity_line(
+                "active /opt/ramshared/current",
+                None,
+            ),
+            restart_executable: None,
+            runtime_notice: None,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                draw_dashboard_with_metadata(
+                    frame,
+                    &observation(false, false),
+                    &VecDeque::new(),
+                    &metadata,
+                )
+            })
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("v0.15.0 · 01234567 (dirty)"));
+        assert!(rendered.contains("installed (direct)"));
+        assert!(rendered.contains(
+            "Installed direct /usr/local: v0.14.1 · abcdef01 (clean) · 2026-09-27 17:23:45 UTC"
+        ));
+        assert!(rendered.contains("Installed active /opt/ramshared/current: not found"));
+        assert!(rendered.contains("STATUS: OFF"));
+        assert!(rendered.contains("Protection: OFF"));
     }
 
     fn reservation_ledger_fixture(schema_version: u32) -> String {
@@ -2545,17 +4134,56 @@ mod tests {
     fn memory_scope_distinguishes_wsl2_wsl1_and_native_linux() {
         let wsl2 = detect_memory_scope("6.18.40.1-microsoft-standard-WSL2+", false);
         assert_eq!(wsl2, MemoryScope::Wsl2);
-        assert_eq!(wsl2.panel_title(), "WSL2 RAM & Swap");
-        assert_eq!(wsl2.ram_label(), "WSL2 RAM");
+        assert_eq!(wsl2.panel_title(), "WSL2 Guest RAM & Swap");
+        assert_eq!(wsl2.ram_label(), "WSL2 Guest RAM");
 
         let wsl = detect_memory_scope("4.4.0-Microsoft", true);
         assert_eq!(wsl, MemoryScope::Wsl);
-        assert_eq!(wsl.panel_title(), "WSL RAM & Swap");
+        assert_eq!(wsl.panel_title(), "WSL Guest RAM & Swap");
 
         let linux = detect_memory_scope("6.12.0-generic", false);
         assert_eq!(linux, MemoryScope::LinuxHost);
         assert_eq!(linux.panel_title(), "Host RAM & Swap");
         assert_eq!(linux.ram_label(), "Host RAM");
+    }
+
+    #[test]
+    fn dashboard_labels_wsl2_guest_memory_and_formats_kib_as_mib() {
+        let osrelease = "6.18.40.1-microsoft-standard-WSL2+";
+        let mut sample = observation(false, false);
+        sample.memory_scope = detect_memory_scope(osrelease, false);
+        sample.mem.total_kib = 16_378_880;
+        sample.mem.available_kib = 1_182_720;
+
+        let metadata = DashboardMetadata {
+            version_line: "RamShared CLI v0.15.0 · 01234567 (clean)".to_string(),
+            running_line: "Running: v0.15.0 · 01234567 (clean) · installed (direct)".to_string(),
+            direct_install_line:
+                "Installed direct /usr/local: identity unknown · 2026-09-27 18:04:05 UTC"
+                    .to_string(),
+            active_install_line: "Installed active /opt/ramshared/current: not found".to_string(),
+            restart_executable: None,
+            runtime_notice: None,
+        };
+        let backend = TestBackend::new(180, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard_with_metadata(frame, &sample, &VecDeque::new(), &metadata))
+            .expect("render WSL2 dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert_eq!(sample.memory_scope, MemoryScope::Wsl2);
+        assert!(rendered.contains("WSL2 Guest RAM & Swap"));
+        assert!(rendered.contains("WSL2 Guest RAM:"));
+        assert!(rendered.contains("14,840 / 15,995 MiB"));
+        assert!(rendered.contains("Protection: OFF"));
+        assert!(!rendered.contains("Host RAM"));
     }
 
     #[test]
@@ -2631,10 +4259,10 @@ mod tests {
     #[test]
     fn dashboard_renders_active_and_unavailable_gpu_planes() {
         for (mut sample, expected_memory_label) in [
-            (observation(true, true), "WSL2 RAM"),
+            (observation(true, true), "WSL2 Guest RAM"),
             (observation(false, false), "Host RAM"),
         ] {
-            sample.memory_scope = if expected_memory_label == "WSL2 RAM" {
+            sample.memory_scope = if expected_memory_label == "WSL2 Guest RAM" {
                 MemoryScope::Wsl2
             } else {
                 MemoryScope::LinuxHost

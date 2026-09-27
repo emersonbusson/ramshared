@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO="emersonbusson/ramshared"
-VERSION="${RAMSHARED_VERSION:-v0.9.0-beta.2}"
+VERSION="${RAMSHARED_VERSION:-v0.14.1}"
 ARCH="amd64"
 INSTALL_PREFIX="/usr/local"
 BIN_DIR="${INSTALL_PREFIX}/bin"
@@ -54,8 +54,16 @@ if [[ -n "$SCRIPT_DIR" && -d "${SCRIPT_DIR}/../target/release" ]]; then
 fi
 
 TMP_DIR="$(mktemp -d /tmp/ramshared-install.XXXXXX)"
+TIMESTAMP_STAGING=""
+INSTALL_METADATA_STAGING=""
 cleanup() {
   rm -rf "$TMP_DIR"
+  if [[ -n "$TIMESTAMP_STAGING" ]]; then
+    rm -f -- "$TIMESTAMP_STAGING"
+  fi
+  if [[ -n "$INSTALL_METADATA_STAGING" ]]; then
+    rm -f -- "$INSTALL_METADATA_STAGING"
+  fi
 }
 trap cleanup EXIT
 
@@ -110,10 +118,44 @@ else
   fi
 fi
 
+# Resolve source identity before modifying an existing installation.
+if [[ -n "$LOCAL_SRC" && -x "${LOCAL_SRC}/target/release/ramshared" ]]; then
+  BUILD_INFO="$("${TMP_DIR}/ramshared" --build-info)"
+  BUILD_VERSION=""
+  BUILD_COMMIT=""
+  BUILD_TREE_STATE=""
+  while IFS='=' read -r key value; do
+    case "$key" in
+      version) BUILD_VERSION="$value" ;;
+      source_commit) BUILD_COMMIT="$value" ;;
+      source_tree_state) BUILD_TREE_STATE="$value" ;;
+    esac
+  done <<<"${BUILD_INFO}"
+else
+  RELEASE_ROOT="$(dirname -- "$(dirname -- "$FOUND_CLI")")"
+  BUILD_VERSION="$(<"${RELEASE_ROOT}/RELEASE_VERSION")"
+  BUILD_COMMIT="$(<"${RELEASE_ROOT}/SOURCE_COMMIT")"
+  BUILD_TREE_STATE="$(<"${RELEASE_ROOT}/SOURCE_TREE_STATE")"
+fi
+[[ "$BUILD_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$ ]] || {
+  echo "Error: install source returned invalid version metadata." >&2
+  exit 1
+}
+[[ "$BUILD_COMMIT" =~ ^([0-9a-f]{40}|unavailable)$ ]] || {
+  echo "Error: install source returned invalid source revision metadata." >&2
+  exit 1
+}
+[[ "$BUILD_TREE_STATE" =~ ^(clean|dirty|unavailable)$ ]] || {
+  echo "Error: install source returned invalid source tree state." >&2
+  exit 1
+}
+
 # Create target directories
 mkdir -p "${BIN_DIR}" "${SHARE_DIR}/scripts" "${CONF_DIR}" "${SYSTEMD_DIR}"
 
 # Install binaries
+# Drop the old receipt first; an interrupted update must not identify a mixed install.
+rm -f -- "${SHARE_DIR}/INSTALL_METADATA.json"
 install -m 0755 "${TMP_DIR}/ramshared" "${BIN_DIR}/ramshared"
 install -m 0755 "${TMP_DIR}/ramsharedd" "${BIN_DIR}/ramsharedd"
 echo "  [+] Installed binaries to ${BIN_DIR}/ (ramshared, ramsharedd)"
@@ -149,6 +191,27 @@ CONF_EOF
   fi
   echo "  [+] Created default configuration at ${CONF_DIR}/cascade.conf"
 fi
+
+# Record install time separately from source identity and bind it to both binaries.
+INSTALLED_AT_UTC="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+CLI_SHA256="$(sha256sum -- "${BIN_DIR}/ramshared" | awk '{print $1}')"
+DAEMON_SHA256="$(sha256sum -- "${BIN_DIR}/ramsharedd" | awk '{print $1}')"
+[[ "$CLI_SHA256" =~ ^[0-9a-f]{64}$ && "$DAEMON_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "Error: could not calculate installed binary digests." >&2
+  exit 1
+}
+TIMESTAMP_STAGING="$(mktemp "${SHARE_DIR}/.INSTALL_TIMESTAMP.XXXXXX")"
+printf '%s\n' "$INSTALLED_AT_UTC" >"${TIMESTAMP_STAGING}"
+chmod 0644 "${TIMESTAMP_STAGING}"
+mv -f -- "${TIMESTAMP_STAGING}" "${SHARE_DIR}/INSTALL_TIMESTAMP"
+TIMESTAMP_STAGING=""
+INSTALL_METADATA_STAGING="$(mktemp "${SHARE_DIR}/.INSTALL_METADATA.XXXXXX")"
+printf '{"schema_version":"ramshared-direct-install-metadata/v2","version":"%s","source_commit":"%s","source_tree_state":"%s","installed_at_utc":"%s","cli_sha256":"%s","daemon_sha256":"%s"}\n' \
+  "$BUILD_VERSION" "$BUILD_COMMIT" "$BUILD_TREE_STATE" "$INSTALLED_AT_UTC" "$CLI_SHA256" "$DAEMON_SHA256" \
+  >"${INSTALL_METADATA_STAGING}"
+chmod 0644 "${INSTALL_METADATA_STAGING}"
+mv -f -- "${INSTALL_METADATA_STAGING}" "${SHARE_DIR}/INSTALL_METADATA.json"
+INSTALL_METADATA_STAGING=""
 
 echo ""
 echo "  ======================================================="

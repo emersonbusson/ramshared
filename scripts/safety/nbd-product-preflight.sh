@@ -242,7 +242,19 @@ try:
         "schema_version", "input_bundle_manifest_sha256", "source_commit",
         "source_branch", "source_tree_state", "lower_sink",
     }
-    if set(record) != expected or record["schema_version"] != "ramshared-installed-release-provenance/v1":
+    schema = record.get("schema_version")
+    if schema == "ramshared-installed-release-provenance/v1":
+        if set(record) != expected:
+            raise ValueError("schema")
+    elif schema == "ramshared-installed-release-provenance/v2":
+        if set(record) != expected | {"installed_at_utc"}:
+            raise ValueError("schema")
+        installed_at = record["installed_at_utc"]
+        if not isinstance(installed_at, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", installed_at
+        ):
+            raise ValueError("installed_at_utc")
+    else:
         raise ValueError("schema")
     lower = record["lower_sink"]
     lower_expected = {

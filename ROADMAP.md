@@ -1,8 +1,8 @@
 # Roadmap
 
-Current release posture: **v0.14.1 stable maintenance release**. Standard WSL2
-uses NBD as its baseline transport. `ublk`/`io_uring` is qualified on native
-Linux or WSL2 with a compatible custom kernel (EVD-0039); product lifecycle
+Current release posture: source target **v0.15.0**; latest published stable **v0.14.1**.
+Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is qualified
+on native Linux or WSL2 with a compatible custom kernel (EVD-0039); product lifecycle
 promotion on the custom-kernel path remains deferred. EVD-0040 covers only
 zero-copy CUDA host mapping.
 
@@ -56,7 +56,7 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and isol
 
 ---
 
-## Next (v0.15.0)
+## Next (v0.16.0)
 
 | Priority | Milestone Target | Focus |
 | :--- | :--- | :--- |

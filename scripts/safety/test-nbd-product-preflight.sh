@@ -1671,10 +1671,12 @@ test_attended_derived_install_is_bound_and_sealed() {
   [[ $(tr -d '[:space:]' <"$installed/INSTALLED_MANIFEST_SHA256") == "$installed_digest" ]] || { fail 'attended_derived_install_is_bound_and_sealed installed receipt mismatch'; return; }
   python3 - "$installed/INSTALL_PROVENANCE.json" "$input_digest" <<'PY' || { fail 'attended_derived_install_is_bound_and_sealed provenance invalid'; return; }
 import json
+import re
 import sys
 with open(sys.argv[1], encoding="utf-8") as source:
     record = json.load(source)
-assert record["schema_version"] == "ramshared-installed-release-provenance/v1"
+assert record["schema_version"] == "ramshared-installed-release-provenance/v2"
+assert re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", record["installed_at_utc"])
 assert record["input_bundle_manifest_sha256"] == sys.argv[2]
 assert record["lower_sink"]["canonical_path"].startswith("/")
 PY

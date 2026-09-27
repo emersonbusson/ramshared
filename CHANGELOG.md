@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/emersonbusson/ramshared/compare/v0.14.1...v0.15.0) (2026-09-27)
+
+
+### Features
+
+* **cli:** show build revision and host installation time in the dashboard
+
 ## [0.14.1](https://github.com/emersonbusson/ramshared/compare/v0.14.0...v0.14.1) (2026-09-18)
 
 

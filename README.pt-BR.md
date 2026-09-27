@@ -12,7 +12,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1"><img alt="Versão v0.14.1" src="https://img.shields.io/badge/release-v0.14.1-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1"><img alt="Última versão estável publicada v0.14.1" src="https://img.shields.io/badge/release-v0.14.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-estável-2f855a?style=flat-square">
 </p>
@@ -40,7 +40,7 @@ O projeto é destinado a quem quer operar ou estudar camadas de memória acelera
 
 ## Status atual
 
-Última release publicada: **[v0.14.1](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1)**. Este checkout compila a versão **0.14.1**, a manutenção estável atual.
+Versão v0.15.0 é o alvo de código deste checkout. A versão estável mais recente publicada continua sendo **[v0.14.1](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1)**; a v0.15.0 ainda não foi publicada.
 
 O WSL2 padrão usa **NBD como transporte base**. `ublk`/`io_uring` é qualificado
 no Linux nativo ou no WSL2 com kernel customizado compatível; não é uma base

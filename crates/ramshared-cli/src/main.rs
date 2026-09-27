@@ -199,6 +199,7 @@ impl CheckReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CliCommand {
     Version,
+    BuildInfo,
     Run { args: Vec<String> },
     Session { args: Vec<String> },
     Supervise { args: Vec<String> },
@@ -254,6 +255,16 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
     };
 
     match command.as_str() {
+        "--build-info" => {
+            if options.is_empty() {
+                Ok(CliCommand::BuildInfo)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "--build-info",
+                    options: options.to_vec(),
+                })
+            }
+        }
         "version" | "-V" | "--version" => {
             if options.is_empty() {
                 Ok(CliCommand::Version)
@@ -566,9 +577,13 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Version) => {
             let _ = writeln!(
                 stdout,
-                "ramshared {} (Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)",
-                env!("CARGO_PKG_VERSION")
+                "{}\n(Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)",
+                monitor::version_status_lines()
             );
+            ExitCode::SUCCESS
+        }
+        Ok(CliCommand::BuildInfo) => {
+            let _ = writeln!(stdout, "{}", monitor::build_info_lines());
             ExitCode::SUCCESS
         }
         Ok(CliCommand::Run { args }) => actions.run_workload(&args, stdout, stderr),
@@ -1882,13 +1897,75 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::SUCCESS);
         assert!(actions.calls.is_empty());
-        assert_eq!(
-            String::from_utf8(stdout).expect("version output is UTF-8"),
-            format!(
-                "ramshared {} (Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)\n",
-                env!("CARGO_PKG_VERSION")
-            )
+        let output = String::from_utf8(stdout).expect("version output is UTF-8");
+        let mut lines = output.lines();
+        let build_line = lines.next().expect("version/build identity line");
+        assert!(
+            build_line.starts_with(&format!("RamShared CLI v{} · ", env!("CARGO_PKG_VERSION")))
         );
+        assert!(!build_line.contains("git "));
+        let build_info = monitor::build_info_lines();
+        if let Some(commit) = build_info
+            .lines()
+            .find_map(|line| line.strip_prefix("source_commit="))
+            .filter(|commit| commit.len() == 40)
+        {
+            assert!(build_line.contains(&commit[..8]));
+            assert!(!build_line.contains(commit));
+        }
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Running: "))
+        );
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Installed direct /usr/local:"))
+        );
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Installed active /opt/ramshared/current:"))
+        );
+        assert_eq!(
+            lines.next(),
+            Some("(Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)")
+        );
+        assert!(lines.next().is_none());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn build_info_keeps_full_commit_for_audit_tools() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_from_args(
+            &cli_args(&["--build-info"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(actions.calls.is_empty());
+        let output = String::from_utf8(stdout).expect("build info is UTF-8");
+        let fields = output
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            fields.get("version").copied(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert!(fields.get("source_commit").copied().is_some_and(|commit| {
+            commit == "unavailable"
+                || (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        }));
+        assert!(matches!(
+            fields.get("source_tree_state").copied(),
+            Some("clean" | "dirty" | "unavailable")
+        ));
         assert!(stderr.is_empty());
     }
 
