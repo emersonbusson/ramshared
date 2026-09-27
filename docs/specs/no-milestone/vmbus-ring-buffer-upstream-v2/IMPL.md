@@ -15,6 +15,37 @@ patches; the ignored local `0007` artifact is not part of the branch and has
 no lifecycle qualification. See `AUDIT-2.5.md` and EVD-0087. No source build,
 kernel install, or pressure test was performed for this audit.
 
+EVD-0088 and EVD-0089 record cumulative read-only growth in
+`vmbus_alloc_buffer` vmalloc entries: 14,003 at 12:21, 15,821 at 12:38, and
+17,690 at 12:55. The summed vmalloc area grew by 761.8 MiB from 12:38 to
+12:55; this includes virtual guard space and is not a Windows resident-RAM
+measurement. At 12:55, 17,350 mappings reported 104 backing pages each,
+against 102 registered VMBus channels. This is a strong buffer-retention
+candidate. The `50715f5f7` source snapshot has one in-tree allocator caller:
+`vmbus_alloc_ring()` creates one allocation for both ring halves, and its
+configured RELID limit is 2,048. If Build #6 came from that snapshot, 17,350
+104-page maps cannot be explained by simultaneously open in-tree rings. A
+separate later backport (`418653fde`) also converts NetVSC and UIO allocations;
+that branch must not be conflated with Build #6. Source review confirmed a
+retention bug in both snapshots: the rescind path reports teardown success
+without clearing the nonzero GPADL handle, then buffer release skips freeing
+and clears the owner structure. This is a concrete source-level explanation
+for cumulative retention, conditional on the running image containing this
+code and reaching that path. The Build #6 source revision is not matched, and
+the maps have not been correlated with channel lifecycle events. Guest
+MemAvailable rose between the samples while swap use increased; the latest
+Windows sample showed physical headroom rising and `VmmemWSL` working set
+falling. EVD-0091 at 14:02 then counted 24,932 maps and 10,667,855,872 bytes
+of vmalloc area: +7,242 maps and +2,950.7 MiB over 66:58, again about
+44 MiB/min. In that interval guest `MemAvailable` fell by about 1.99 GiB and
+`SwapFree` by about 849 MiB. A Windows sample 74 seconds later had 16,147 MiB
+physical headroom and a 6,605 MiB `VmmemWSL` working set; compared with 13:36,
+host headroom rose 1,810 MiB and working set fell 1,501 MiB. The evidence now
+strongly supports gradual guest-side accumulation with growing swap use, not
+continuous exhaustion of Windows physical RAM. It still does not prove that
+the running Build #6 contains the audited rescind path or that this was the
+freeze trigger.
+
 The versioned six-patch draft is based on Linux `v7.3-rc4`
 (`93f51579e7df248780214094418f205253383cc5`). The local draft at
 `docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` remains a working diff;

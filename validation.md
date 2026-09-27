@@ -6804,3 +6804,337 @@ cause. No current map count or exact owner was available.
 
 **Verdict:** 🟡 `PARTIAL` — current WSL memory and host residency are measured;
 the initiating allocation and historical freeze cause remain unproven.
+
+## 2026-09-27 12:21 -03 — VMBus map growth and current host headroom
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0088`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T15:21:27Z`.
+**Verified at:** `2026-09-27T15:23:38Z`.
+**Source revision:** `61f49c92759f10ba4da9a33a1ba9e55c9d104682`.
+**Source state:** Read-only host and guest measurements; no kernel source change,
+build, install, stress, process termination, or WSL restart.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070/0071 and EVD-0086/0087.
+**Freshness:** Two guest samples were 22 seconds apart. The Windows sample was
+collected about 1 minute 49 seconds after the second guest sample; these are
+near-time observations, not an instrumented common clock.
+**Category:** `reliability / memory / kernel-allocation`.
+**How to measure:** In the already-running WSL guest, read selected
+`/proc/meminfo` and `/proc/pressure/memory` fields, then use `sudo -n awk` to
+count `vmbus_alloc_buffer` entries and sum their mapped sizes in
+`/proc/vmallocinfo`; repeat once after 20 seconds in the same process. On
+Windows, read physical availability with `GlobalMemoryStatusEx` and inspect
+`vmmemWSL` and PowerShell with `Get-Process`. No `wsl.exe` launch or stress
+operation was used for the guest interval.
+
+**What:** Check whether the VMBus allocation maps were still accumulating
+after the WSL restart and whether the Windows host's physical RAM was rising
+at the same time.
+
+**Guest:** Kernel `6.18.40.1-microsoft-standard-WSL2+` reported
+`MemAvailable=4,398,348` then `4,316,424 KiB` (a decrease of about 80 MiB).
+`SwapFree` remained `3,915,476 KiB`, or about 272 MiB in use out of 4 GiB.
+Memory PSI `avg10`, `avg60`, and `avg300` remained zero for both `some` and
+`full`. `vmbus_alloc_buffer` mappings increased from 13,962 to 14,003; entries
+of 430,080 bytes increased from 13,684 to 13,724. The summed `vmallocinfo`
+area size increased from 5,980,024,832 to 5,997,494,272 bytes (+16.66 MiB) in
+22 seconds. This is virtual mapping-area size, including allocator guard
+space; it is not a direct measurement of Windows resident RAM.
+
+**Windows:** At 12:23:38 -03, physical RAM totaled 32,670 MiB with 10,991 MiB
+available (66% in use). `VmmemWSL` had a 10,692 MiB working set and 15,930
+MiB private bytes; PowerShell processes totaled 187 MiB private bytes. The
+six largest working sets were `VmmemWSL` (10,692 MiB), Memory Compression
+(1,590 MiB), `MsMpEng` (360 MiB), `Code` (344 MiB), `explorer` (336 MiB), and
+`msedge` (317 MiB).
+
+**Comparison:** Since EVD-0087 at 11:33, physical headroom increased by 348
+MiB and the `VmmemWSL` working set decreased by 117 MiB. The Windows samples
+therefore do not show host RAM continuing to rise during this interval. The
+guest's VMBus map count did show short-interval net growth; active channel
+creation and leaked buffers are not yet distinguished, so the map delta alone
+does not prove a leak or identify its owner.
+
+**Assessment:** The current host is not near physical-memory exhaustion and
+the guest PSI is quiet. The live VMBus map growth strengthens the GPADL/buffer
+lifetime-retention hypothesis and warrants matching these maps to channel
+create/close and rescind events. It does not establish that the maps are leaked, that the
+custom kernel initiated the prior freeze, or that a particular process caused
+the growth. The source-reviewed rescind helper remains removed and no fix has
+been built or installed.
+
+**Verdict:** 🟡 `PARTIAL` — short-interval VMBus map growth is observed, but
+ownership and leak causality are not yet proven.
+
+## 2026-09-27 12:38–12:55 -03 — Cumulative VMBus map growth and channel inventory
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0089`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T15:38:32Z`.
+**Verified at:** `2026-09-27T15:55:57Z`.
+**Source revision:** `61f49c92759f10ba4da9a33a1ba9e55c9d104682`.
+**Source state:** Read-only guest and Windows inspection; no stress, install,
+kernel build, WSL restart, or process termination.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0087 and EVD-0088 and the VMBus backport audit.
+**Freshness:** Guest samples were 17 minutes 25 seconds apart. The latest
+Windows physical-memory sample was at 12:39:24 -03, about 16 minutes before
+the second guest sample; it is not a simultaneous host/guest pair.
+**Category:** `reliability / memory / kernel-allocation`.
+**How to measure:** Read `/proc/meminfo`, `/proc/pressure/memory`, and
+`/proc/vmallocinfo` in the active guest. Count entries attributed to
+`vmbus_alloc_buffer`, sum the reported vmalloc area sizes, and separately sum
+the `pages=` field. Count channels by resolving each
+`/sys/bus/vmbus/devices/<instance-guid>/channels/` directory. Use
+`GlobalMemoryStatusEx` and `Get-Process` for the Windows sample.
+
+**What:** Determine whether the VMBus map count continues to rise during
+ordinary operation and compare it with the live channel inventory and host
+physical-memory trend.
+
+**Guest at 12:38:32:** Kernel `6.18.40.1-microsoft-standard-WSL2+ #6` reported
+`MemAvailable=3,697,224 KiB`, `SwapFree=3,824,000 KiB`, and zero PSI averages.
+There were 15,821 `vmbus_alloc_buffer` vmalloc entries with a summed area size
+of 6,774,464,512 bytes; 15,512 entries had a 430,080-byte area.
+
+**Guest at 12:55:57:** `MemAvailable=4,279,092 KiB`, `SwapFree=2,646,580 KiB`,
+and PSI `avg300` was 0.14 for `some` and 0.12 for `full`; `avg10` and `avg60`
+were zero. The vmalloc count increased to 17,690 and summed area size to
+7,573,204,992 bytes (+1,869 entries, +798,740,480 bytes or 761.8 MiB in 17:25).
+The `pages=` fields summed to 1,831,237 pages (7,500,746,752 bytes); 17,350
+entries each reported `pages=104` and a 430,080-byte area. The area size
+includes a guard page and must not be reported as resident host RAM. The
+`pages=` sum describes backing pages reported for these mappings, but does
+not identify their current Windows residency or owning VMBus channel.
+
+The same guest sample found 89 VMBus device links and 102 channel entries
+under their per-device `channels/` directories. In commit
+`50715f5f738f2793f2713401db69988df0347ecf`, the only in-tree caller of
+`vmbus_alloc_buffer()` is `vmbus_alloc_ring()`, which makes one allocation for
+the combined send and receive rings. That snapshot sets
+`MAX_CHANNEL_RELIDS=max(256, 2048)=2048`. If Build #6 came from that snapshot
+and the maps are those in-tree ring allocations, 17,350 mappings with 104
+backing pages each exceed the maximum relid count by more than 8x and cannot
+represent only simultaneously open in-tree rings. A later, separate WSL
+backport commit (`418653fde683813c65a88b20dd7e0c614c90806d`) also converts
+NetVSC and UIO buffers, so its callsites must not be attributed to Build #6
+without source identity. The map/channel discrepancy is therefore a strong
+retention signal under the `50715` hypothesis, but `/proc/vmallocinfo` does
+not identify map owner, channel, or lifecycle.
+
+The source audit confirmed a retention defect in both `50715` and `418653`:
+`vmbus_teardown_gpadl()` forces a successful return when `channel->rescind` is
+set, but only clears `gpadl_handle` after a teardown acknowledgement.
+`vmbus_release_buffer()` refuses to free a buffer while that handle remains,
+then clears the owner structure. The rescind path can therefore leave the
+mapping allocated without a tracked owner. In `50715`, the ring allocator is
+the sole in-tree `vmbus_alloc_buffer()` caller. This is a confirmed defect in
+those source snapshots, not proof that Build #6 contains either snapshot or
+that this path caused the freeze.
+
+**Windows at 12:39:24:** Physical memory totaled 32,670 MiB with 11,582 MiB
+available (64% used). `VmmemWSL` had a 9,956 MiB working set and 15,931 MiB
+private bytes. Three PowerShell processes totaled 252 MiB private bytes. Since
+EVD-0088 at 12:23:38, host physical headroom increased by 591 MiB and
+`VmmemWSL` working set fell by 736 MiB; PowerShell use remains far below the
+previous multi-GiB diagnostic. There is no later Windows sample paired with
+the 12:55 guest measurement.
+
+**Source identity:** The running kernel exposes `vmbus_alloc_buffer` and
+`vmbus_free_buffer`, and its installed image hash matches EVD-0051. The
+Microsoft WSL source checkout at `14794180686c2fb6307fbe359c359bec765249f3`
+does not contain that allocator, while the contribution fork has a separate
+backport commit `50715f5f738f2793f2713401db69988df0347ecf`. The installed image
+hash does not match either currently available `bzImage` artifact. The exact
+source commit for the running Build #6 image is therefore not proven, so the
+measured allocations cannot yet be attributed to a specific patch revision.
+The running kernel build timestamp is Thu Sep 24 08:39:30 -03, earlier than
+the recorded creation of backport commit `418653` at 21:44:52 -03 that day.
+This makes that exact commit less likely as the image source, but does not
+exclude an earlier uncommitted tree containing equivalent changes.
+
+**Assessment:** Two consecutive intervals show net growth at roughly 44 MiB
+per minute in reported vmalloc area size. The latest inventory found 102 live
+channels alongside 17,690 mappings; the previous inventory found 104 channels
+nearby in time. This is consistent with cumulative VMBus buffer retention
+during a long-running guest and could contribute to slow guest-memory
+depletion. It is not proof of a leak or of the previous freeze's cause. The guest's
+`MemAvailable` rose between these samples while swap use and five-minute PSI
+increased, so the overall memory trajectory is not a simple one-metric trend.
+The latest Windows sample shows host headroom rising rather than falling.
+
+**Verdict:** 🟡 `PARTIAL` — cumulative VMBus map growth is confirmed across
+multiple intervals and materially narrows the investigation; exact buffer
+ownership, source revision, and causal link to the freeze remain unresolved.
+
+## 2026-09-27 13:36 -03 — Follow-up Windows physical-memory sample
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0090`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T16:36:37Z`.
+**Verified at:** `2026-09-27T16:45:34Z`.
+**Source revision:** `61f49c92759f10ba4da9a33a1ba9e55c9d104682`.
+**Source state:** One read-only Windows sample; no WSL launch, stress, process
+termination, or configuration change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0088 and EVD-0089.
+**Freshness:** This is a later host-only sample, not simultaneous with a guest
+`/proc` sample. The comparison point is EVD-0089's 12:39:24 Windows sample.
+**Category:** `reliability / memory / host-telemetry`.
+**How to measure:** Read physical availability with `GlobalMemoryStatusEx`
+and inspect `VmmemWSL` and PowerShell process working sets/private bytes with
+`Get-Process`; do not launch `wsl.exe`.
+
+**What:** Check whether Windows physical RAM and `VmmemWSL` residency continued
+to rise after the observed guest VMBus-map growth.
+
+**Measured data:** At 13:36:37 -03, Windows reported 32,670 MiB physical RAM,
+14,337 MiB available, 18,333 MiB used, and 56% load. `VmmemWSL` had an 8,106
+MiB working set and 15,718 MiB private bytes. Three PowerShell processes used
+248 MiB private bytes combined, including the collector.
+
+**Comparison:** Since 12:39:24 in EVD-0089, Windows physical headroom rose
+2,755 MiB, physical load fell from 64% to 56%, and the `VmmemWSL` working set
+fell 1,850 MiB. Its private bytes fell 213 MiB; combined PowerShell private
+bytes fell 4.5 MiB. Private bytes measure committed process memory, not
+resident physical RAM.
+
+**Assessment:** This sample does not support a claim that host physical RAM
+was steadily consumed during the observed interval. It does not rule out
+guest-side VMBus page retention: the guest mappings grew in EVD-0089, but no
+guest map count was paired with this host sample, and Windows working set is
+not a per-allocation owner measure. The gradual guest map growth remains
+consistent with an accumulating retention bug; the prior freeze trigger is
+still unproven.
+
+**Verdict:** 🟡 `PARTIAL` — host physical headroom was higher and `VmmemWSL`
+working set lower at this sample; guest allocation ownership and freeze
+causality remain unresolved.
+
+## 2026-09-27 14:02–14:04 -03 — Guest VMBus growth with paired host telemetry
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0091`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T17:02:55Z`.
+**Verified at:** `2026-09-27T17:04:09Z`.
+**Source revision:** `61f49c92759f10ba4da9a33a1ba9e55c9d104682`.
+**Source state:** Read-only `/proc` inspection in the already-running guest,
+followed by one Windows-only memory sample; no WSL launch, stress, kernel
+build/install, process termination, or configuration change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0089 and EVD-0090.
+**Freshness:** Guest sample at 14:02:55 and Windows sample at 14:04:09 -03,
+about 74 seconds apart.
+**Category:** `reliability / memory / kernel-allocation`.
+**How to measure:** Read guest `/proc/meminfo`, `/proc/pressure/memory`,
+`/proc/swaps`, and `/proc/vmallocinfo` directly in the existing WSL shell.
+On Windows, read physical RAM with `GlobalMemoryStatusEx` and inspect
+`VmmemWSL` and PowerShell with `Get-Process`, without launching WSL.
+
+**What:** Test whether the previously observed VMBus-map growth continued and
+whether it coincided with rising Windows physical RAM use or guest memory
+depletion.
+
+**Guest at 14:02:55:** Kernel `6.18.40.1-microsoft-standard-WSL2+ #6` reported
+`MemAvailable=2,188,016 KiB`, `SwapTotal=4,194,304 KiB`, and
+`SwapFree=1,777,296 KiB` (2,417,008 KiB in use). PSI `avg10`, `avg60`, and
+`avg300` were all reported as `0.00` for `some` and `full`. There were 24,932
+`vmbus_alloc_buffer` vmalloc entries with summed area size 10,667,855,872
+bytes. Of these, 24,470 entries reported `pages=104`, totaling 2,544,880
+reported backing pages (10,423,828,480 bytes). The area includes guard space;
+these values do not directly measure Windows physical residency.
+
+**Comparison with EVD-0089 at 12:55:57:** Over 66 minutes 58 seconds, the
+entry count rose by 7,242 and summed vmalloc area rose by 3,094,650,880 bytes
+(2,950.7 MiB, about 44.1 MiB/min). Entries with `pages=104` rose by 7,120.
+Guest `MemAvailable` fell by 2,091,076 KiB (about 1.99 GiB), and `SwapFree`
+fell by 869,284 KiB (about 849 MiB). PSI averages at this sample were zero,
+so this does not show an active stall at 14:02.
+
+**Windows at 14:04:09:** Physical memory totaled 32,670 MiB with 16,147 MiB
+available (50% used). `VmmemWSL` had a 6,605 MiB working set and 15,952 MiB
+private bytes. Two PowerShell processes totaled 189 MiB private bytes.
+Compared with EVD-0090 at 13:36:37, host physical headroom rose 1,810 MiB,
+`VmmemWSL` working set fell 1,501 MiB, and its private bytes rose 234 MiB.
+The host sample and guest sample are near-time but are not an instrumented
+per-allocation residency match.
+
+**Assessment:** The guest-side pattern is now stronger than one isolated
+interval: VMBus allocator mappings continued to grow at roughly 44 MiB/min,
+while guest available memory declined and swap use increased. This is
+consistent with accumulating guest kernel-page retention during continuous
+operation and could lead to guest paging and a later freeze. Windows physical
+headroom did not decline; it rose, and `VmmemWSL` working set fell. Therefore
+the evidence supports a guest-memory accumulation candidate, not a Windows
+host-RAM exhaustion event. Build #6 source identity remains unresolved, so the
+specific `50715`/`418653` defect is not yet attributed to the running kernel.
+No freeze occurred during this sample, and current freeze causality remains
+unproven.
+
+**Verdict:** 🟡 `PARTIAL` — sustained guest VMBus map growth now tracks with
+declining guest headroom and increased swap use, while Windows physical
+headroom improves; exact source identity, ownership, and freeze causality
+remain unresolved.
+
+The current-boot kernel log filter found VMBus initialization and its
+`min_free_kbytes` reserve adjustment, but no matching GPADL/rescind, OOM,
+hung-task, or I/O-error lines. Those events may not be logged at the needed
+detail, so this absence does not rule out the retention path.
+
+## 2026-09-27 14:19 -03 — Follow-up Windows physical-memory sample
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0092`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T17:19:13Z`.
+**Verified at:** `2026-09-27T17:19:13Z`.
+**Source revision:** `61f49c92759f10ba4da9a33a1ba9e55c9d104682`.
+**Source state:** Windows-only read-only sample using `GlobalMemoryStatusEx`,
+`GetPerformanceInfo`, and `Get-Process`; no WSL launch, stress, process
+termination, or configuration change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0090 and EVD-0091.
+**Freshness:** This host sample was taken about 16 minutes after the latest
+guest sample at 14:02:55 -03; it is not simultaneous guest/host telemetry.
+**Category:** `reliability / memory / host-telemetry`.
+**How to measure:** Read physical availability with `GlobalMemoryStatusEx`,
+system commit with `GetPerformanceInfo`, and `VmmemWSL`/PowerShell working sets
+and private bytes with `Get-Process`, without launching `wsl.exe`.
+
+**What:** Check whether host physical RAM or the WSL process residency continued
+to rise after the guest VMBus-map growth observed in EVD-0091.
+
+**Measured data:** At 14:19:13 -03, Windows reported 32,670 MiB physical RAM,
+16,159 MiB available, 16,511 MiB used, and 50% load. System commit was 30,749
+MiB used out of a 57,246 MiB limit, with 26,497 MiB remaining and a 44,802 MiB
+peak. `VmmemWSL` had a 6,481.7 MiB working set and 15,981.2 MiB private bytes.
+Two PowerShell processes totaled 189.1 MiB private bytes. The pagefile-related
+fields returned by `GlobalMemoryStatusEx` matched the system commit limit and
+remaining commit; they do not report physical pagefile I/O or prove pagefile
+occupancy on disk.
+
+**Comparison:** Since EVD-0091's 14:04:09 host sample, physical RAM available
+rose by 12 MiB, load stayed at 50%, `VmmemWSL` working set fell by 123.4 MiB,
+and its private bytes rose by 29.4 MiB. PowerShell private bytes were unchanged.
+Since EVD-0090 at 13:36:37, physical headroom rose by 1,822 MiB and
+`VmmemWSL` working set fell by 1,624.6 MiB, while its private bytes rose by
+263.5 MiB. Private bytes and system commit are not resident physical RAM.
+
+**Assessment:** This later sample does not show host physical RAM continuing
+to rise: physical availability is effectively flat versus 14:04 and remains
+higher than at 13:36. `VmmemWSL` working-set residency is lower at both
+comparisons. The small private-byte increase is committed memory and does not
+establish increasing host physical use. The last guest allocation sample is
+about 16 minutes older, so this is not a contemporaneous allocation-to-residency
+comparison. The gradual guest-side VMBus-map growth remains a candidate for
+guest memory accumulation; ownership, installed source identity, and freeze
+causality remain unresolved.
+
+**Verdict:** 🟡 `PARTIAL` — host physical headroom remained stable over the latest
+interval and above the earlier sample; this does not identify the owner or
+cause of guest-side VMBus growth or the prior freeze.

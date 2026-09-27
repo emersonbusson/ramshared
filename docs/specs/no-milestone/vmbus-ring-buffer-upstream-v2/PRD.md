@@ -31,11 +31,23 @@ validation below and the operator separately approves sending it.
   allocation failure but requests the existing allocator for all rings,
   unified buffer/GPADL lifetime metadata, and a safe leak on uncertain
   teardown or re-encryption.
-- **Confirmed on September 24, 2026:** The daily WSL host runs Build #6 from
-  WSL 6.18.40.1 source. It already contains an earlier allocator backport,
-  but the exact mainline v7.3-rc4 series does not apply to that source. This
-  operator request adds a separately reviewed 6.18.40.1 backport and an
-  attended, rollbackable test installation to scope.
+- **Confirmed on September 27, 2026:** The daily WSL host runs kernel Build #6
+  (`6.18.40.1-microsoft-standard-WSL2+`) and exports
+  `vmbus_alloc_buffer()` / `vmbus_free_buffer()`. The installed image hash is
+  recorded in EVD-0051. The checked-out Microsoft WSL source at commit
+  `14794180686c2fb6307fbe359c359bec765249f3` does not contain that allocator;
+  the separate backport commit `50715f5f738f2793f2713401db69988df0347ecf`
+  does. The installed image has not been matched to either source revision.
+  Build #6 source provenance must be resolved before attributing runtime
+  findings or promoting a fix. The exact mainline v7.3-rc4 series also does
+  not apply to the WSL 6.18.40.1 tree.
+- **Confirmed in source, not yet attributed to Build #6:** In backport commits
+  `50715f5f7` and `418653fde`, rescind can make GPADL teardown return success
+  without clearing its handle. Buffer release then skips freeing the mapping
+  and clears the owner descriptor. In `50715`, the allocator is called only
+  for combined ring buffers and the RELID limit is 2,048. EVD-0091's 24,932
+  maps are consistent with cumulative retention if Build #6 contains this
+  source, but its exact image/source identity remains unresolved.
 
 ## Recommended option
 
@@ -60,11 +72,18 @@ does not remove fragmentation dependence.
   exposed pages to the allocator.
 - **RF-4:** Partial allocation, GPADL setup, ring-init, close, rescind, and
   replayed cleanup paths have deterministic ownership and error behavior.
+  A bounded repeated open/close drill reports balanced normal buffer
+  allocation/free counts and separately accounts for buffers retained after
+  injected uncertain ownership.
 - **RF-5:** UIO and sysfs ring mappings continue to expose the correct pages
   without assuming one physical extent or accepting an out-of-range offset.
 - **NFR-1:** No allocation or unmap operation sleeps in IRQ/atomic context.
 - **NFR-2:** No claimed performance or reliability gain without a matched
   before/after run on the same kernel, transport, hardware, and workload.
+- **NFR-3:** Lifecycle evidence identifies each buffer by stable device/channel
+  identity and role, records allocate/free/retain outcomes, and never logs
+  kernel virtual addresses. An unresolved image/source identity blocks host
+  attribution and installation claims.
 
 ## Flows and state
 
@@ -75,7 +94,9 @@ mark the buffer as unsafe to free and retain backing pages.
 
 The lifecycle object owns one virtual address, zero or more physical chunks,
 one GPADL handle, and one explicit leak flag. The ring still records the
-send-page offset and total page count needed by the VMBus protocol.
+send-page offset and total page count needed by the VMBus protocol. For
+diagnosis, each buffer lifecycle also reports its stable device GUID, channel
+relid, role, and terminal outcome without exposing a kernel address.
 
 ## Interfaces and risks
 
@@ -90,7 +111,10 @@ code under active channels.
 Develop on an upstream tag containing Kameron's accepted series. Use
 checkpatch, targeted kernel build, static analysis where available, and
 failure-injection tests. Qualify live channel open/close and memory pressure
-in an isolated Hyper-V/WSL2 lab, then CCA and no-paravisor TDX or equivalent
+in an isolated Hyper-V/WSL2 lab. Before any host test, bind the kernel image,
+modules, and exact source revision in one manifest. Reconcile live vmalloc
+maps with per-buffer allocate/free/retain records through at least 100 normal
+channel open/close cycles, then CCA and no-paravisor TDX or equivalent
 maintainer-accepted guest evidence. Do not run unsupervised pressure on the
 daily host. Publish no email until those gates and manual review pass.
 
@@ -105,7 +129,9 @@ rollback path; memory-pressure stress remains out of scope on the daily host.
 ## Acceptance criteria
 
 No high-order-only ring allocation remains; all ownership/error paths are
-audited; static and build gates pass; the WSL 6.18.40.1 backport passes its
-own build, QEMU and supervised host smoke gates; isolated live normal and
-failure paths pass; CoCo evidence exists or the mainline patch remains a draft
-rather than a sendable v2.
+audited; 100 normal channel open/close cycles leave no unexplained mapping
+growth; the image, modules, and source revision are manifest-bound; static and
+build gates pass; the WSL 6.18.40.1 backport passes its own build, QEMU and
+supervised host smoke gates; isolated live normal and failure paths pass; CoCo
+evidence exists or the mainline patch remains a draft rather than a sendable
+v2.
