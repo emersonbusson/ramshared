@@ -123,5 +123,527 @@
       "spec": "docs/specs/no-milestone/memory-broker/SPEC.md"
     }
   ],
-  "verdict": "PARTIAL"
+  "verdict": "PARTIAL",
+  "current_reconciliation": {
+    "observed_at_utc": "2026-09-27T21:13:36Z",
+    "source_revision": "a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5",
+    "worktree": "dirty; release identity implementation and final local validation recorded before commit",
+    "action": {
+      "planner": "node tools/ci/plan-rust-slice-coverage.mjs --all (prior local reconciliation)",
+      "candidate": "node tools/ci/check-public-hygiene.mjs --candidate (revalidated by final docs-check)",
+      "public_hygiene_tests": "final docs-check public-hygiene-tests",
+      "planner_tests": "previous current reconciliation 44/44; no planner-owned source changed",
+      "cli_tests": "RUSTC_WRAPPER= cargo test -p ramshared-cli",
+      "wsl2d_tests": "cargo test -p ramshared-wsl2d; initial restricted run hit four EPERM fixture failures, rerun outside sandbox passed",
+      "docs_check": "./scripts/docs-check.sh after all source and evidence edits",
+      "campaign_catalog": "node tools/ci/check-campaign-evidence-lifecycle.mjs --generate then final docs-check",
+      "script_syntax": "bash -n scripts/install.sh; bash -n scripts/safety/install-cascade-boot.sh; bash -n scripts/safety/nbd-product-preflight.sh",
+      "hosted_ci": "not dispatched",
+      "release_build_or_host_install": "not run"
+    },
+    "results": {
+      "planner_all": {
+        "status": "READY",
+        "exit_code": 0,
+        "entries": 32,
+        "duplicate_line_owners": 0
+      },
+      "public_hygiene_candidate": {
+        "status": "PASS",
+        "exit_code": 0,
+        "files": 1156,
+        "findings": 0
+      },
+      "public_hygiene_tests": {
+        "passed": 45,
+        "failed": 0
+      },
+      "planner_tests": {
+        "passed": 44,
+        "failed": 0,
+        "source_changed_since_run": false
+      },
+      "cargo_cli_tests": {
+        "unit_tests": 355,
+        "integration_tests": 10,
+        "failed": 0,
+        "exit_code": 0
+      },
+      "cargo_wsl2d_tests": {
+        "status": "PASS",
+        "exit_code": 0,
+        "failed": 0,
+        "intentionally_ignored": 19
+      },
+      "cargo_wsl2d_restricted_attempt": {
+        "status": "sandbox-limited",
+        "exit_code": 101,
+        "fixture_permission_errors": 4,
+        "follow_up": "full test suite rerun outside the restricted sandbox and passed"
+      },
+      "cargo_clippy": {
+        "status": "PASS",
+        "exit_code": 0,
+        "verified_before_final_test_fixture_literal_only_edit": true
+      },
+      "rustfmt": {
+        "status": "PASS",
+        "exit_code": 0
+      },
+      "installer_script_syntax": {
+        "status": "PASS",
+        "files": 3
+      },
+      "nbd_product_preflight_tests": {
+        "passed": 47,
+        "failed": 0
+      },
+      "campaign_evidence_lifecycle": {
+        "status": "PASS",
+        "observations": 176
+      },
+      "spec_evidence_manifests": {
+        "status": "PASS",
+        "count": 4
+      },
+      "docs_check": {
+        "status": "PASS",
+        "exit_code": 0,
+        "failed_gates": []
+      },
+      "documentation_localization": {
+        "status": "PARTIAL",
+        "findings": 0,
+        "reason": "human translation review receipt is still absent; the localization gate passes without one"
+      },
+      "hosted_same_revision_required_ci": "not observed",
+      "release_build_or_host_install": "not run"
+    },
+    "current_open_gaps": [
+      "Hosted same-revision required CI success has not been observed for the final committed source revision."
+    ],
+    "pending_rechecks": [
+      "Observe every required hosted CI context on the final pushed commit before release qualification."
+    ],
+    "status": "PARTIAL",
+    "history_note": "The original before/action/after/refusals/residuals/verdict remain the unchanged 2026-08-24 snapshot; each local reconciliation snapshot is preserved in current_reconciliation_history."
+  },
+  "current_reconciliation_history": [
+    {
+      "observed_at_utc": "2026-09-27T20:26:15.748Z",
+      "source_revision": "a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5",
+      "worktree": "dirty; unrelated active worktree changes were present",
+      "action": {
+        "planner": "node tools/ci/plan-rust-slice-coverage.mjs --all",
+        "candidate": "node tools/ci/check-public-hygiene.mjs --candidate",
+        "public_hygiene_tests": "node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs",
+        "planner_tests": "node --test --test-reporter=dot tools/ci/plan-rust-slice-coverage.test.mjs",
+        "per_file_coverage": "both named Node suites run with --experimental-test-coverage and 80% line/branch/function gates",
+        "docs_checks": "inventory, capability, campaign lifecycle, docs index, and SPEC evidence in check mode; inventory and capability catalogs regenerated after IMPL/AUDIT updates",
+        "cargo_rust_tests": "not run; validation was limited to Node/docs gates",
+        "hosted_ci": "not dispatched"
+      },
+      "results": {
+        "planner_all": {
+          "status": "READY",
+          "exit_code": 0,
+          "entries": 32,
+          "duplicate_line_owners": 0
+        },
+        "public_hygiene_candidate": {
+          "status": "PASS",
+          "exit_code": 0,
+          "files": 1156,
+          "findings": 0
+        },
+        "public_hygiene_tests": {
+          "passed": 45,
+          "failed": 0
+        },
+        "public_hygiene_coverage": {
+          "lines_percent": 93.58,
+          "branches_percent": 81.58,
+          "functions_percent": 99.14
+        },
+        "planner_tests": {
+          "passed": 44,
+          "failed": 0
+        },
+        "planner_coverage": {
+          "lines_percent": 89.95,
+          "branches_percent": 82.4,
+          "functions_percent": 98.63
+        },
+        "documentation_inventory": "in-sync",
+        "capability_observations": {
+          "status": "in-sync",
+          "observations": 53
+        },
+        "campaign_evidence_lifecycle": {
+          "status": "OK",
+          "observations": 176
+        },
+        "docs_index": "in-sync",
+        "spec_evidence_manifests": {
+          "status": "OK",
+          "count": 4
+        }
+      },
+      "shutdown_contract": {
+        "historical_name": "daemon_worker_shutdown_drains_queued_io_before_stop",
+        "historical_name_currently_required": false,
+        "current_spec_decision": "DT-50 preempts queued I/O at the terminal iteration boundary; an operation already executing may finish at its bounded completion barrier.",
+        "current_named_tests": [
+          "daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary",
+          "daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills"
+        ],
+        "source_and_spec_contract_present": true
+      },
+      "current_open_gaps": [
+        "Hosted same-revision required CI success has not been observed for source revision a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5."
+      ],
+      "status": "PARTIAL",
+      "history_note": "The top-level before/action/after/refusals/residuals/verdict remain the unchanged 2026-08-24 R5 snapshot; this current_reconciliation block supersedes its current-state interpretation."
+    },
+    {
+      "observed_at_utc": "2026-09-27T20:29:12.598Z",
+      "source_revision": "a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5",
+      "worktree": "dirty; unrelated active worktree changes were present",
+      "action": {
+        "planner": "node tools/ci/plan-rust-slice-coverage.mjs --all",
+        "candidate": "node tools/ci/check-public-hygiene.mjs --candidate",
+        "public_hygiene_tests": "node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs",
+        "planner_tests": "node --test --test-reporter=dot tools/ci/plan-rust-slice-coverage.test.mjs",
+        "per_file_coverage": "both named Node suites run with --experimental-test-coverage and 80% line/branch/function gates",
+        "docs_checks": "inventory, capability, campaign lifecycle, docs index, and SPEC evidence in check mode; inventory and capability catalogs regenerated after IMPL/AUDIT updates",
+        "cargo_rust_tests": "not run; validation was limited to Node/docs gates",
+        "hosted_ci": "not dispatched",
+        "docs_check": "./scripts/docs-check.sh",
+        "campaign_catalog_regeneration": "node tools/ci/check-campaign-evidence-lifecycle.mjs --generate"
+      },
+      "results": {
+        "planner_all": {
+          "status": "READY",
+          "exit_code": 0,
+          "entries": 32,
+          "duplicate_line_owners": 0
+        },
+        "public_hygiene_candidate": {
+          "status": "PASS",
+          "exit_code": 0,
+          "files": 1156,
+          "findings": 0
+        },
+        "public_hygiene_tests": {
+          "passed": 45,
+          "failed": 0
+        },
+        "public_hygiene_coverage": {
+          "lines_percent": 93.58,
+          "branches_percent": 81.58,
+          "functions_percent": 99.14
+        },
+        "planner_tests": {
+          "passed": 44,
+          "failed": 0
+        },
+        "planner_coverage": {
+          "lines_percent": 89.95,
+          "branches_percent": 82.4,
+          "functions_percent": 98.63
+        },
+        "documentation_inventory": "in-sync",
+        "capability_observations": {
+          "status": "in-sync",
+          "observations": 53
+        },
+        "campaign_evidence_lifecycle": {
+          "status": "OK",
+          "observations": 176
+        },
+        "docs_index": "in-sync",
+        "spec_evidence_manifests": {
+          "status": "OK",
+          "count": 4
+        },
+        "docs_check": {
+          "exit_code": 1,
+          "failed_gates": [
+            "release-automation"
+          ],
+          "failure": "ROADMAP.md does not declare the current release version",
+          "remaining_docs_gates_passed": true,
+          "campaign_catalog": "regenerated; check passed with 176 observations"
+        }
+      },
+      "shutdown_contract": {
+        "historical_name": "daemon_worker_shutdown_drains_queued_io_before_stop",
+        "historical_name_currently_required": false,
+        "current_spec_decision": "DT-50 preempts queued I/O at the terminal iteration boundary; an operation already executing may finish at its bounded completion barrier.",
+        "current_named_tests": [
+          "daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary",
+          "daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills"
+        ],
+        "source_and_spec_contract_present": true
+      },
+      "current_open_gaps": [
+        "The docs-check release-automation gate currently fails because ROADMAP.md does not declare the current release version.",
+        "Hosted same-revision required CI success has not been observed for source revision a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5."
+      ],
+      "status": "PARTIAL",
+      "history_note": "The top-level before/action/after/refusals/residuals/verdict remain the unchanged 2026-08-24 R5 snapshot; current_reconciliation records later observations, with prior reconciliation snapshots preserved in current_reconciliation_history."
+    },
+    {
+      "observed_at_utc": "2026-09-27T20:30:41.491Z",
+      "source_revision": "a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5",
+      "worktree": "dirty; concurrent release identity/evidence updates remain active",
+      "action": {
+        "planner": "node tools/ci/plan-rust-slice-coverage.mjs --all",
+        "candidate": "node tools/ci/check-public-hygiene.mjs --candidate",
+        "docs_catalog_checks": "inventory, capability, docs index, and SPEC evidence checks rerun after reconciliation edits",
+        "campaign_catalog": "final check deferred; latest check saw catalog-stale after concurrent evidence changes",
+        "docs_check": "final aggregate ./scripts/docs-check.sh deferred until concurrent release identity/evidence updates stabilize",
+        "cargo_rust_tests": "not run; validation limited to Node/docs gates",
+        "hosted_ci": "not dispatched"
+      },
+      "results": {
+        "planner_all": {
+          "status": "READY",
+          "exit_code": 0,
+          "entries": 32,
+          "duplicate_line_owners": 0
+        },
+        "public_hygiene_candidate": {
+          "status": "PASS",
+          "exit_code": 0,
+          "files": 1156,
+          "findings": 0
+        },
+        "public_hygiene_tests": {
+          "passed": 45,
+          "failed": 0
+        },
+        "public_hygiene_coverage": {
+          "lines_percent": 93.58,
+          "branches_percent": 81.58,
+          "functions_percent": 99.14
+        },
+        "planner_tests": {
+          "passed": 44,
+          "failed": 0
+        },
+        "planner_coverage": {
+          "lines_percent": 89.95,
+          "branches_percent": 82.4,
+          "functions_percent": 98.63
+        },
+        "documentation_inventory": "in-sync",
+        "capability_observations": {
+          "status": "in-sync",
+          "observations": 53
+        },
+        "campaign_evidence_lifecycle": "pending final recheck after concurrent evidence changes",
+        "docs_index": "in-sync",
+        "spec_evidence_manifests": {
+          "status": "OK",
+          "count": 4
+        }
+      },
+      "shutdown_contract": {
+        "historical_name": "daemon_worker_shutdown_drains_queued_io_before_stop",
+        "historical_name_currently_required": false,
+        "current_spec_decision": "DT-50 preempts queued I/O at the terminal iteration boundary; an operation already executing may finish at its bounded completion barrier.",
+        "current_named_tests": [
+          "daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary",
+          "daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills"
+        ],
+        "source_and_spec_contract_present": true,
+        "planner_named_test": "memory_broker_wsl2d_daemon_requires_exact_coverage_owner_and_named_tests",
+        "focused_cargo_test": "not run in this reconciliation"
+      },
+      "current_open_gaps": [
+        "Hosted same-revision required CI success has not been observed for source revision a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5."
+      ],
+      "pending_rechecks": [
+        "Recheck campaign-evidence catalog after concurrent evidence edits stabilize.",
+        "Run final docs-check after concurrent release identity/evidence edits stabilize."
+      ],
+      "status": "PARTIAL",
+      "history_note": "The top-level before/action/after/refusals/residuals/verdict remain the unchanged 2026-08-24 R5 snapshot; each current reconciliation snapshot is appended to current_reconciliation_history before a later snapshot replaces it."
+    },
+    {
+      "observed_at_utc": "2026-09-27T21:07:27Z",
+      "source_revision": "a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5",
+      "worktree": "dirty; release identity implementation and final local validation recorded before commit",
+      "action": {
+        "planner": "node tools/ci/plan-rust-slice-coverage.mjs --all (prior local reconciliation)",
+        "candidate": "node tools/ci/check-public-hygiene.mjs --candidate (revalidated by docs-check)",
+        "public_hygiene_tests": "docs-check public-hygiene-tests",
+        "planner_tests": "previous current reconciliation 44/44; no planner-owned source changed",
+        "rust_tests": "RUSTC_WRAPPER= cargo test -p ramshared-cli",
+        "docs_check": "./scripts/docs-check.sh",
+        "campaign_catalog": "node tools/ci/check-campaign-evidence-lifecycle.mjs --generate then --check",
+        "script_syntax": "bash -n scripts/install.sh; bash -n scripts/safety/install-cascade-boot.sh; bash -n scripts/safety/nbd-product-preflight.sh",
+        "hosted_ci": "not dispatched",
+        "release_build_or_host_install": "not run"
+      },
+      "results": {
+        "planner_all": {
+          "status": "READY",
+          "exit_code": 0,
+          "entries": 32,
+          "duplicate_line_owners": 0
+        },
+        "public_hygiene_candidate": {
+          "status": "PASS",
+          "exit_code": 0,
+          "files": 1156,
+          "findings": 0
+        },
+        "public_hygiene_tests": {
+          "passed": 45,
+          "failed": 0
+        },
+        "planner_tests": {
+          "passed": 44,
+          "failed": 0,
+          "source_changed_since_run": false
+        },
+        "cargo_rust_tests": {
+          "unit_tests": 355,
+          "integration_tests": 10,
+          "failed": 0,
+          "exit_code": 0
+        },
+        "cargo_clippy": {
+          "status": "PASS",
+          "exit_code": 0,
+          "verified_before_final_test_fixture_literal_only_edit": true
+        },
+        "rustfmt": {
+          "status": "PASS",
+          "exit_code": 0
+        },
+        "installer_script_syntax": {
+          "status": "PASS",
+          "files": 3
+        },
+        "nbd_product_preflight_tests": {
+          "passed": 47,
+          "failed": 0
+        },
+        "campaign_evidence_lifecycle": {
+          "status": "PASS",
+          "observations": 176
+        },
+        "docs_check": {
+          "status": "PASS",
+          "exit_code": 0,
+          "failed_gates": []
+        },
+        "documentation_localization": {
+          "status": "PARTIAL",
+          "findings": 0,
+          "reason": "human translation review receipt is still absent; the localization gate passes without one"
+        },
+        "hosted_same_revision_required_ci": "not observed",
+        "release_build_or_host_install": "not run"
+      },
+      "current_open_gaps": [
+        "Hosted same-revision required CI success has not been observed for the final committed source revision."
+      ],
+      "pending_rechecks": [
+        "Observe every required hosted CI context on the final pushed commit before release qualification."
+      ],
+      "status": "PARTIAL",
+      "history_note": "The original before/action/after/refusals/residuals/verdict remain the unchanged 2026-08-24 snapshot; each local reconciliation snapshot is preserved in current_reconciliation_history."
+    },
+    {
+      "observed_at_utc": "2026-09-27T21:07:27Z",
+      "source_revision": "a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5",
+      "worktree": "dirty; release identity implementation and final local validation recorded before commit",
+      "action": {
+        "planner": "node tools/ci/plan-rust-slice-coverage.mjs --all (prior local reconciliation)",
+        "candidate": "node tools/ci/check-public-hygiene.mjs --candidate (revalidated by docs-check)",
+        "public_hygiene_tests": "docs-check public-hygiene-tests",
+        "planner_tests": "previous current reconciliation 44/44; no planner-owned source changed",
+        "rust_tests": "RUSTC_WRAPPER= cargo test -p ramshared-cli",
+        "docs_check": "./scripts/docs-check.sh",
+        "campaign_catalog": "node tools/ci/check-campaign-evidence-lifecycle.mjs --generate then --check",
+        "script_syntax": "bash -n scripts/install.sh; bash -n scripts/safety/install-cascade-boot.sh; bash -n scripts/safety/nbd-product-preflight.sh",
+        "hosted_ci": "not dispatched",
+        "release_build_or_host_install": "not run"
+      },
+      "results": {
+        "planner_all": {
+          "status": "READY",
+          "exit_code": 0,
+          "entries": 32,
+          "duplicate_line_owners": 0
+        },
+        "public_hygiene_candidate": {
+          "status": "PASS",
+          "exit_code": 0,
+          "files": 1156,
+          "findings": 0
+        },
+        "public_hygiene_tests": {
+          "passed": 45,
+          "failed": 0
+        },
+        "planner_tests": {
+          "passed": 44,
+          "failed": 0,
+          "source_changed_since_run": false
+        },
+        "cargo_rust_tests": {
+          "unit_tests": 355,
+          "integration_tests": 10,
+          "failed": 0,
+          "exit_code": 0
+        },
+        "cargo_clippy": {
+          "status": "PASS",
+          "exit_code": 0,
+          "verified_before_final_test_fixture_literal_only_edit": true
+        },
+        "rustfmt": {
+          "status": "PASS",
+          "exit_code": 0
+        },
+        "installer_script_syntax": {
+          "status": "PASS",
+          "files": 3
+        },
+        "nbd_product_preflight_tests": {
+          "passed": 47,
+          "failed": 0
+        },
+        "campaign_evidence_lifecycle": {
+          "status": "PASS",
+          "observations": 176
+        },
+        "docs_check": {
+          "status": "PASS",
+          "exit_code": 0,
+          "failed_gates": []
+        },
+        "documentation_localization": {
+          "status": "PARTIAL",
+          "findings": 0,
+          "reason": "human translation review receipt is still absent; the localization gate passes without one"
+        },
+        "hosted_same_revision_required_ci": "not observed",
+        "release_build_or_host_install": "not run"
+      },
+      "current_open_gaps": [
+        "Hosted same-revision required CI success has not been observed for the final committed source revision."
+      ],
+      "pending_rechecks": [
+        "Observe every required hosted CI context on the final pushed commit before release qualification."
+      ],
+      "status": "PARTIAL",
+      "history_note": "The original before/action/after/refusals/residuals/verdict remain the unchanged 2026-08-24 snapshot; each local reconciliation snapshot is preserved in current_reconciliation_history."
+    }
+  ]
 }

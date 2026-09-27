@@ -108,6 +108,20 @@ This does not prove the reason for that change and shows why the staged reclaim
 setting cannot be credited before a fresh VM start. The exact freeze cause,
 Build #6 source, UIO VMA lifetime, and GPADL reclamation remain unresolved.
 
+EVD-0099 captures the repeated 15:42 freeze. At 15:37 the guest had about
+187 MiB available, 3.32 GiB of swap in use, and PSI `some`/`full` avg10 above
+32%, while RamShared activation and daemon were off. The I: SSD was at 100%
+active with 92.3 MB/s of reads and no writes; its reader remains unknown.
+Windows Task Manager showed about 51% total memory use, although its
+`VmmemWSL` figure does not reconcile with the guest's 15.9 GiB reading.
+Recovery included a short failed WSL startup before a successful boot. The
+evidence supports guest memory/swap thrashing, not Windows physical exhaustion
+or RamShared stress; it does not identify the initiating allocation. The same
+Build #6 source mismatch and unsafe GPADL/UIO lifetime gap remain. The
+dashboard's hardcoded `Protection: ACTIVE` was separately corrected in source
+commit `a5ea63d1` and passed five focused tests, but no release binary is
+installed. Keep the freeze gap `PARTIAL` and stress off.
+
 ## Closed In This Session
 
 All run IDs, commands, VM names, and `SANITIZED_*` values below are retained

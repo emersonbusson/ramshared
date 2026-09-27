@@ -7629,3 +7629,72 @@ is a no-pressure observation only.
 **Verdict:** 🟡 `PARTIAL` — confirms the staged reclaim setting is inactive and
 the current guest has low pressure; freeze cause, cache-mitigation efficacy,
 and safe kernel correction remain open. Do not enable stress.
+
+## 2026-09-27 15:37–16:47 -03 — Repeated WSL2 freeze and recovery
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0099`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T18:42:07Z`.
+**Verified at:** `2026-09-27T19:54:44Z`.
+**Source revision:** `a5ea63d17dee47d836b2ac7f8d9e1aba5295ebf5`.
+**Source state:** Read-only review of screenshots, prior guest health/journal,
+boot history, `.wslconfig`, and Windows events; then committed a TUI state fix
+as `a5ea63d1`. No release build/install, WSL shutdown, kernel install, or stress.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0095–EVD-0098 and the VMBus source audit.
+**Freshness:** Guest sample 15:37:15; last prior record 15:41:47; screenshots
+15:42:07–15:44:34; recovery boots 15:44:32 and 15:45:23; current guest
+16:43:18 and Windows 16:47:44 (-03).
+**Category:** `reliability / memory / freeze / recovery / dashboard`.
+**How to measure:** Compare prior-boot health/journal with screenshot times,
+Windows events, paired current guest/host memory, and VM/config timestamps.
+
+**What:** Determine whether RamShared stress was active and identify the
+best-supported cause of the repeat freeze.
+
+**Prior-boot pressure:** At 15:37:15, guest `MemAvailable=191,900 KiB`
+(~187 MiB), fallback swap used `3,479,772/4,194,304 KiB` (~3.32 GiB), and PSI
+some/full avg10 was 32.45%/32.09%. RamShared activation and daemon were false,
+phase was `Off`, and cgroup OOM counters were zero. The 1,543,500 KiB unmanaged
+footprint was mostly `rust-analyzer` swap (1,543,224 KiB, 276 KiB RSS), a
+contributor but not a proven trigger. Journald repeatedly flushed caches under
+pressure through its final record at 15:41:47; no kernel OOM/panic/oops,
+hung-task, or lockup signature was found.
+
+**Screenshots:** At 15:42 the RamShared screen shows 15,858/15,995 MiB RAM,
+3,376/4,096 MiB swap, ~26% PSI stalls, daemon stopped, and RAM/VRAM tiers off.
+`Host RAM` is the WSL 16 GiB limit. Task Manager in the same minute shows ~51%
+Windows memory use and `VmmemWSL` at 3,215.5 MiB; this does not reconcile with
+the guest reading. I: is 100% active at 92.3 MB/s read, 0 KB/s write, 150 ms
+response. Its reader is unknown; configured swap is on C:, so I: reads are not
+proven to be swap I/O.
+
+**Recovery:** The pressured boot ended at 15:41:47. A short boot ran
+15:44:32–15:45:17; WSL logged `/sbin/init` timeout at 15:44:43 and Interop
+failure at 15:44:53. The next boot began at 15:45:23 on the same
+`6.18.40.1-microsoft-standard-WSL2+ #6` kernel. Windows logs show informational
+vSwitch NIC changes but no Resource-Exhaustion-Detector or matching
+Hyper-V Compute/Worker event.
+
+**Current state:** At 16:43:18, guest availability was ~9.0 GiB, swap use
+44 MiB, PSI zero. At 16:47:44, Windows had 5,247 MiB free physical RAM and
+`vmmemWSL` 11,423 MiB working set / 15,758 MiB private bytes. The 16 GiB cap,
+4 GiB `C:/wsl/swap.vhdx`, and `autoMemoryReclaim=gradual` are configured, but
+`gradual` was edited at 16:14:37, after this VM started, and was not active.
+
+**Dashboard correction:** The screenshot's `ARMED & READY` / `Protection:
+ACTIVE` header contradicted phase Off and daemon stopped. Commit `a5ea63d1`
+derives the label from protection state and blocks stale ACTIVE without a live
+daemon; five focused tests pass. No release binary is installed.
+
+**Assessment:** The immediate mechanism is best explained by severe in-guest
+memory/swap pressure with sustained read stalls at the 16 GiB cap, not Windows
+physical-memory exhaustion or RamShared stress. EVD-0095's 12.54 GiB declared
+VMBus pages remain a strong kernel candidate, but were not measured at the
+freeze; process, allocation owner, and I: reader are unknown. Build #6 source
+is unmatched and the GPADL/UIO fix is unsafe to install.
+
+**Verdict:** 🟡 `PARTIAL` — guest thrashing is confirmed; the initiating
+allocation/process, I: reader, and safe matched-kernel fix remain unresolved.
+Keep stress off and do not install the unqualified kernel diff.

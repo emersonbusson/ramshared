@@ -51,9 +51,9 @@
         ]
       },
       "binary_match_required": true,
-      "environment_blocker": "The installed dashboard is still 0.14.1.",
+      "environment_blocker": "The corrected dashboard source has not been built, installed, or matched to a live process.",
       "missing_gate": "deployed runtime monitor BINARY_MATCH and legacy-record refusal",
-      "next_proof": "Build and install build and install the corrected source revision, verify BINARY_MATCH, and capture deployed output that refuses the legacy record.",
+      "next_proof": "Build and install the corrected source revision in the deployment environment, verify BINARY_MATCH, and capture deployed output that refuses the legacy record.",
       "rollback_trigger": "one invalid evidence record or false DONE passes"
     },
     {

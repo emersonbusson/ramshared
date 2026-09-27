@@ -42,9 +42,10 @@ partial · Node validators complete · runtime monitor fix source-tested · depl
 
 The Node benchmark validators and claim-manifest slice are complete. ITEM-6
 adds the runtime monitor consumer, and its source tests and line-coverage gate
-pass. The installed dashboard still runs the older 0.14.1 binary, so the
-changed parser has not passed a deployed `BINARY_MATCH` check. No promotable three-tier stress
-record exists yet, so the panel must remain `AWAITING_QUALIFICATION`.
+pass. The changed parser has not passed a deployed `BINARY_MATCH` check because
+the corrected source has not been built and installed in the deployment
+environment. No promotable three-tier stress record exists yet, so the panel
+must remain `AWAITING_QUALIFICATION`.
 
 ## Rollback trigger
 

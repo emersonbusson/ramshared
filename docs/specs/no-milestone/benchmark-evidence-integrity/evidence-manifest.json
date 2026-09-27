@@ -128,8 +128,8 @@
     "open": [],
     "env_bound": [
       {
-        "blocker": "The installed dashboard is the old 0.14.1 binary.",
-        "next_proof": "build and install the exact source revision, verify BINARY_MATCH, and capture deployed before/action/after output showing the legacy record remains AWAITING_QUALIFICATION."
+        "blocker": "The corrected dashboard source has not been built and installed in the deployment environment, so its live process identity remains unverified.",
+        "next_proof": "Build and install the exact source revision, verify BINARY_MATCH, and capture deployed before/action/after output showing the legacy record remains AWAITING_QUALIFICATION."
       }
     ]
   },
