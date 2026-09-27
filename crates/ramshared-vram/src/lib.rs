@@ -149,6 +149,45 @@ impl GpuBudgetSnapshot {
         self.budget_bytes.saturating_sub(self.used_bytes)
     }
 
+    /// Largest allocation target that preserves the configured display reserve and the
+    /// caller's independent runtime headroom, including current external use.
+    /// Callers must first validate source, identity, freshness, and budget consistency.
+    pub fn safe_target_bytes(
+        &self,
+        requested_bytes: u64,
+        configured_reserve_bytes: u64,
+        runtime_headroom_bytes: u64,
+    ) -> u64 {
+        let capacity = self
+            .total_bytes
+            .unwrap_or(self.budget_bytes)
+            .min(self.budget_bytes);
+        let reserve = configured_reserve_bytes.max(capacity.div_ceil(5));
+        let within_capacity = capacity.saturating_sub(reserve);
+        let within_live_headroom = self
+            .available_bytes()
+            .saturating_sub(reserve)
+            .saturating_sub(runtime_headroom_bytes);
+        requested_bytes
+            .min(within_capacity)
+            .min(within_live_headroom)
+    }
+
+    /// Current free bytes that must remain unavailable to new allocations.
+    pub fn required_free_bytes(
+        &self,
+        configured_reserve_bytes: u64,
+        runtime_headroom_bytes: u64,
+    ) -> u64 {
+        let capacity = self
+            .total_bytes
+            .unwrap_or(self.budget_bytes)
+            .min(self.budget_bytes);
+        configured_reserve_bytes
+            .max(capacity.div_ceil(5))
+            .saturating_add(runtime_headroom_bytes)
+    }
+
     /// Automatic admission requires a stable adapter identity and a driver-reported budget.
     /// Backend APIs define the scope and precision of the budget and usage values.
     pub fn can_admit(&self, required_bytes: u64) -> bool {
@@ -159,7 +198,9 @@ impl GpuBudgetSnapshot {
     pub fn can_admit_at(&self, required_bytes: u64, now: Instant, max_age: Duration) -> bool {
         self.adapter.is_some()
             && self.source == GpuBudgetSource::DriverReported
-            && now.saturating_duration_since(self.sampled_at) <= max_age
+            && now
+                .checked_duration_since(self.sampled_at)
+                .is_some_and(|age| age <= max_age)
             && self
                 .total_bytes
                 .is_none_or(|total| self.budget_bytes <= total)
@@ -252,6 +293,11 @@ mod tests {
             budget.sampled_at + std::time::Duration::from_secs(6),
             std::time::Duration::from_secs(5)
         ));
+        assert!(!budget.can_admit_at(
+            1,
+            budget.sampled_at - std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(5)
+        ));
 
         let unknown = GpuBudgetSnapshot {
             adapter: None,
@@ -291,6 +337,27 @@ mod tests {
             sampled_at: Instant::now(),
         };
         assert_eq!(snapshot.available_bytes(), 0);
+    }
+
+    #[test]
+    fn budget_target_preserves_reserve_after_existing_use() {
+        let budget = GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "cuda".into(),
+                key: "gpu:test".into(),
+                luid: None,
+            }),
+            total_bytes: Some(8_000),
+            budget_bytes: 6_000,
+            used_bytes: 1_000,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        };
+
+        // max(1_000, 20% of 6_000) reserve + 500 runtime headroom must remain
+        // free after the existing 1_000 bytes of provider/external use.
+        assert_eq!(budget.safe_target_bytes(10_000, 1_000, 500), 3_300);
+        assert_eq!(budget.required_free_bytes(1_000, 500), 1_700);
     }
 
     #[test]

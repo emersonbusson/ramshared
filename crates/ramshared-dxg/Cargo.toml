@@ -13,3 +13,4 @@ expect_used = "deny"
 
 [dependencies]
 libc = "0.2.189"
+ramshared-vram = { path = "../ramshared-vram" }

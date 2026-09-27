@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::origin_cache::{CacheState, CacheTelemetry, OriginState, OriginStorage};
 use crate::{BlockBackend, IoError, WriteOptions};
+use ramshared_vram::GpuBudgetTelemetry;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheRead {
@@ -73,6 +74,10 @@ pub trait BestEffortCache {
 
     fn target_bytes(&self) -> u64 {
         0
+    }
+
+    fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        None
     }
 }
 
@@ -271,6 +276,10 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
 
     pub fn target_bytes(&self) -> u64 {
         self.cache.target_bytes()
+    }
+
+    pub fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        self.cache.gpu_budget_telemetry()
     }
 
     pub fn telemetry(&self) -> CacheTelemetry {

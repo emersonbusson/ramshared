@@ -9,6 +9,8 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::Instant;
 
+use ramshared_vram::{GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetSource};
+
 unsafe extern "C" {
     fn ioctl(fd: i32, request: u64, ...) -> i32;
 }
@@ -63,6 +65,26 @@ impl fmt::Display for AdapterLuid {
     }
 }
 
+impl AdapterLuid {
+    /// Parses the canonical `high:low` hexadecimal representation used by the shared GPU identity.
+    pub fn parse_normalized(value: &str) -> Result<Self, DxgError> {
+        let Some((high, low)) = value.split_once(':') else {
+            return Err(DxgError::Malformed("adapter_luid"));
+        };
+        if high.len() != 8 || low.len() != 8 || value.bytes().any(|byte| byte.is_ascii_uppercase())
+        {
+            return Err(DxgError::Malformed("adapter_luid"));
+        }
+        let high =
+            u32::from_str_radix(high, 16).map_err(|_| DxgError::Malformed("adapter_luid"))?;
+        let low = u32::from_str_radix(low, 16).map_err(|_| DxgError::Malformed("adapter_luid"))?;
+        if high == 0 && low == 0 {
+            return Err(DxgError::Malformed("adapter_luid"));
+        }
+        Ok(Self { low, high })
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BudgetSnapshot {
     pub adapter: AdapterLuid,
@@ -71,6 +93,25 @@ pub struct BudgetSnapshot {
     pub current_reservation: u64,
     pub available_for_reservation: u64,
     pub sampled_at: Instant,
+}
+
+impl BudgetSnapshot {
+    /// Converts WDDM's adapter-bound segment budget into the shared provider contract.
+    /// WDDM reports a budget rather than physical capacity, so total capacity stays unknown.
+    pub fn to_vram_budget(&self) -> GpuBudgetSnapshot {
+        GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "dxg".into(),
+                key: self.adapter.to_string(),
+                luid: Some(self.adapter.to_string()),
+            }),
+            total_bytes: None,
+            budget_bytes: self.budget,
+            used_bytes: self.current_usage,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: self.sampled_at,
+        }
+    }
 }
 
 pub trait GpuBudgetProvider {
@@ -296,6 +337,64 @@ mod tests {
     use super::{
         AdapterLuid, BudgetSnapshot, DxgBudgetProvider, GpuBudgetProvider, select_adapter,
     };
+    use ramshared_vram::GpuBudgetSource;
+
+    #[test]
+    fn wddm_budget_maps_to_shared_adapter_bound_budget() {
+        let snapshot = BudgetSnapshot {
+            adapter: AdapterLuid {
+                low: 0x1122,
+                high: 0xaabbccdd,
+            },
+            budget: 8_000,
+            current_usage: 3_000,
+            current_reservation: 1_000,
+            available_for_reservation: 5_000,
+            sampled_at: std::time::Instant::now(),
+        }
+        .to_vram_budget();
+
+        assert_eq!(
+            snapshot.adapter.as_ref().map(|id| id.backend.as_str()),
+            Some("dxg")
+        );
+        assert_eq!(
+            snapshot.adapter.as_ref().map(|id| id.key.as_str()),
+            Some("aabbccdd:00001122")
+        );
+        assert_eq!(
+            snapshot.adapter.as_ref().and_then(|id| id.luid.as_deref()),
+            Some("aabbccdd:00001122")
+        );
+        assert_eq!(snapshot.total_bytes, None);
+        assert_eq!(snapshot.available_bytes(), 5_000);
+        assert_eq!(snapshot.source, GpuBudgetSource::DriverReported);
+        assert!(snapshot.can_admit(5_000));
+        assert!(!snapshot.can_admit(5_001));
+    }
+
+    #[test]
+    fn adapter_luid_parser_rejects_noncanonical_or_overflow_values() {
+        assert_eq!(
+            AdapterLuid::parse_normalized("aabbccdd:00001122"),
+            Ok(AdapterLuid {
+                high: 0xaabb_ccdd,
+                low: 0x1122,
+            })
+        );
+
+        for invalid in [
+            "AABBCCDD:00001122",
+            "aabbccd:00001122",
+            "aabbccdde:00001122",
+            "aabbccdd:0000112g",
+            "00000000:00000000",
+            "aabbccdd:00001122:extra",
+            " aabbccdd:00001122",
+        ] {
+            assert!(AdapterLuid::parse_normalized(invalid).is_err(), "{invalid}");
+        }
+    }
 
     #[test]
     fn official_uapi_layouts_and_ioctl_numbers_match_wsl_618() {

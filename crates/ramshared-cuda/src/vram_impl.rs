@@ -2,7 +2,8 @@
 //! backend behind `VramProvider`/`VramMemory`. A future `ramshared-vulkan` would do the same,
 //! without modifying the daemon. Orphan rule OK: the types (`Context`/`DeviceMem`) are local to this crate.
 
-use ramshared_vram::{VramError, VramMemory, VramProvider};
+use ramshared_vram::{GpuBudgetSnapshot, GpuBudgetSource, VramError, VramMemory, VramProvider};
+use std::time::Instant;
 
 use crate::driver::{Context, CudaError, DeviceMem};
 
@@ -53,6 +54,18 @@ impl<'a> VramProvider for Context<'a> {
         Context::mem_info(self)
             .map(|(f, t)| (f as u64, t as u64))
             .map_err(Into::into)
+    }
+
+    fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
+        let (available, total) = Context::mem_info(self).map_err(VramError::from)?;
+        Ok(GpuBudgetSnapshot {
+            adapter: self.adapter_identity().cloned(),
+            total_bytes: Some(total as u64),
+            budget_bytes: total as u64,
+            used_bytes: (total.saturating_sub(available)) as u64,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        })
     }
 }
 

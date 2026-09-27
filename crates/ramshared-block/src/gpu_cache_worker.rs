@@ -8,11 +8,10 @@ use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use ramshared_vram::{
-    GpuBudgetSnapshot, GpuBudgetTelemetry, VramError, VramMemory, VramProvider,
-};
+use ramshared_vram::{GpuBudgetSnapshot, GpuBudgetTelemetry, VramError, VramMemory, VramProvider};
 
 pub const FRAME_HEADER_LEN: usize = 32;
+pub const MAX_IPC_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 pub const MSG_READ_REQ: u8 = 1;
 pub const MSG_READ_RESP: u8 = 2;
@@ -28,7 +27,7 @@ pub const MSG_HANDSHAKE_RESP: u8 = 10;
 pub const STATUS_OK: u8 = 0;
 pub const STATUS_MISS: u8 = 1;
 pub const STATUS_ERROR: u8 = 2;
-const RUNTIME_FREE_BUFFER_BYTES: u64 = 640 * 1024 * 1024;
+pub const RUNTIME_FREE_BUFFER_BYTES: u64 = 640 * 1024 * 1024;
 const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 896 * 1024 * 1024;
 const MAX_GPU_BUDGET_PAYLOAD_BYTES: usize = 4096;
 
@@ -43,12 +42,11 @@ fn effective_target_from_budget(budget: &GpuBudgetSnapshot, config: GpuWorkerCon
     if !budget.can_admit(0) {
         return 0;
     }
-    let capacity = budget
-        .total_bytes
-        .unwrap_or(budget.budget_bytes)
-        .min(budget.budget_bytes);
-    let reserve = config.reserve_floor_bytes.max(capacity.div_ceil(5));
-    capacity.saturating_sub(reserve).min(config.target_bytes)
+    budget.safe_target_bytes(
+        config.target_bytes,
+        config.reserve_floor_bytes,
+        RUNTIME_FREE_BUFFER_BYTES,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -257,10 +255,13 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
             } else {
                 0
             };
-            if free >= RUNTIME_RECOVERY_BUFFER_BYTES {
+            let required_free = budget
+                .required_free_bytes(self.config.reserve_floor_bytes, RUNTIME_FREE_BUFFER_BYTES);
+            let recovery_free = required_free.max(RUNTIME_RECOVERY_BUFFER_BYTES);
+            if free >= recovery_free {
                 self.pressure_constrained = false;
             }
-            if free >= RUNTIME_FREE_BUFFER_BYTES {
+            if free >= required_free {
                 break;
             }
             self.pressure_constrained = true;
@@ -279,13 +280,17 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         let chunk_bytes = self.config.chunk_bytes;
         let needed = chunk_bytes as u64;
 
-        // Capacity reserve bounds the target; live free memory separately
-        // protects the display and other GPU consumers at each allocation.
-        if !self
-            .provider
-            .budget_snapshot()
-            .is_ok_and(|budget| budget.can_admit(needed.saturating_add(RUNTIME_FREE_BUFFER_BYTES)))
-        {
+        // Preserve the display reserve and runtime buffer from the live headroom
+        // on every allocation, including allocations after external GPU use changes.
+        let admissible = self.provider.budget_snapshot().is_ok_and(|budget| {
+            budget.can_admit(0)
+                && budget.available_bytes()
+                    >= needed.saturating_add(budget.required_free_bytes(
+                        self.config.reserve_floor_bytes,
+                        RUNTIME_FREE_BUFFER_BYTES,
+                    ))
+        });
+        if !admissible {
             return;
         }
 
@@ -344,7 +349,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
         let hdr = FrameHeader::decode(&hdr_buf);
 
         let payload = if hdr.payload_len > 0 {
-            if hdr.payload_len > 16 * 1024 * 1024 {
+            if hdr.payload_len as usize > MAX_IPC_PAYLOAD_BYTES {
                 return Err("worker payload len exceeds limit".to_string());
             }
             let mut buf = vec![0u8; hdr.payload_len as usize];
@@ -369,6 +374,9 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                 if let Err(e) = socket.write_all(&resp.encode()) {
                     return Err(format!("worker write handshake resp error: {e}"));
                 }
+            }
+            MSG_READ_REQ if hdr.aux as usize > MAX_IPC_PAYLOAD_BYTES => {
+                return Err("worker read length exceeds limit".to_string());
             }
             MSG_READ_REQ => match worker.handle_read(hdr.offset, hdr.aux as usize) {
                 Some(data) => {
@@ -495,10 +503,11 @@ mod tests {
 
     #[test]
     fn worker_budget_target_requires_external_adapter_bound_snapshot() {
+        const GIB: u64 = 1024 * 1024 * 1024;
         let config = GpuWorkerConfig {
-            target_bytes: 4 * 1024,
-            chunk_bytes: 512,
-            reserve_floor_bytes: 1024,
+            target_bytes: 4 * GIB,
+            chunk_bytes: 512 * 1024 * 1024,
+            reserve_floor_bytes: GIB,
         };
         let trusted = GpuBudgetSnapshot {
             adapter: Some(GpuAdapterIdentity {
@@ -506,13 +515,16 @@ mod tests {
                 key: "stable-id".into(),
                 luid: None,
             }),
-            total_bytes: Some(8 * 1024),
-            budget_bytes: 5 * 1024,
-            used_bytes: 1024,
+            total_bytes: Some(8 * GIB),
+            budget_bytes: 5 * GIB,
+            used_bytes: 0,
             source: GpuBudgetSource::DriverReported,
             sampled_at: Instant::now(),
         };
-        assert_eq!(effective_target_from_budget(&trusted, config), 4 * 1024);
+        assert_eq!(
+            effective_target_from_budget(&trusted, config),
+            4 * GIB - RUNTIME_FREE_BUFFER_BYTES
+        );
 
         let unknown = GpuBudgetSnapshot {
             adapter: None,
@@ -524,10 +536,11 @@ mod tests {
 
     #[test]
     fn worker_budget_target_never_exceeds_current_available_headroom() {
+        const GIB: u64 = 1024 * 1024 * 1024;
         let config = GpuWorkerConfig {
-            target_bytes: 4 * 1024,
-            chunk_bytes: 512,
-            reserve_floor_bytes: 1024,
+            target_bytes: 4 * GIB,
+            chunk_bytes: 512 * 1024 * 1024,
+            reserve_floor_bytes: GIB,
         };
         let low_headroom = GpuBudgetSnapshot {
             adapter: Some(GpuAdapterIdentity {
@@ -535,14 +548,41 @@ mod tests {
                 key: "stable-id".into(),
                 luid: None,
             }),
-            total_bytes: Some(8 * 1024),
-            budget_bytes: 5 * 1024,
-            used_bytes: 4 * 1024,
+            total_bytes: Some(8 * GIB),
+            budget_bytes: 5 * GIB,
+            used_bytes: 3 * GIB,
             source: GpuBudgetSource::DriverReported,
             sampled_at: Instant::now(),
         };
 
-        assert_eq!(effective_target_from_budget(&low_headroom, config), 1024);
+        assert_eq!(
+            effective_target_from_budget(&low_headroom, config),
+            2 * GIB - GIB - RUNTIME_FREE_BUFFER_BYTES
+        );
+    }
+
+    #[test]
+    fn worker_budget_target_is_zero_until_runtime_buffer_is_available() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let config = GpuWorkerConfig {
+            target_bytes: GIB,
+            chunk_bytes: 64 * 1024 * 1024,
+            reserve_floor_bytes: 0,
+        };
+        let insufficient = GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "test".into(),
+                key: "stable-id".into(),
+                luid: None,
+            }),
+            total_bytes: Some(2 * GIB),
+            budget_bytes: 2 * GIB,
+            used_bytes: 2 * GIB - (RUNTIME_FREE_BUFFER_BYTES - 1),
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        };
+
+        assert_eq!(effective_target_from_budget(&insufficient, config), 0);
     }
 
     struct FakeMem {
@@ -706,17 +746,20 @@ mod tests {
             total - 2 * chunk_bytes - (RUNTIME_FREE_BUFFER_BYTES - chunk_bytes),
             Ordering::SeqCst,
         );
-        assert_eq!(worker.reclaim_under_host_pressure().unwrap(), chunk_bytes);
-        assert_eq!(worker.cached_bytes(), chunk_bytes);
+        assert_eq!(
+            worker.reclaim_under_host_pressure().unwrap(),
+            2 * chunk_bytes
+        );
+        assert_eq!(worker.cached_bytes(), 0);
         assert_eq!(worker.handle_read(0, 1), None);
-        assert_eq!(worker.handle_read(chunk_bytes, 1), Some(vec![2]));
-        assert_eq!(provider.mem_info().unwrap().0, RUNTIME_FREE_BUFFER_BYTES);
+        assert_eq!(worker.handle_read(chunk_bytes, 1), None);
+        assert!(provider.mem_info().unwrap().0 >= RUNTIME_FREE_BUFFER_BYTES);
         worker.handle_update(2 * chunk_bytes, &[3]);
-        assert_eq!(worker.cached_bytes(), chunk_bytes);
+        assert_eq!(worker.cached_bytes(), 0);
         external.store(0, Ordering::SeqCst);
         assert_eq!(worker.reclaim_under_host_pressure().unwrap(), 0);
         worker.handle_update(2 * chunk_bytes, &[3]);
-        assert_eq!(worker.cached_bytes(), 2 * chunk_bytes);
+        assert_eq!(worker.cached_bytes(), chunk_bytes);
     }
 
     #[test]
@@ -760,21 +803,18 @@ mod tests {
         );
         assert_eq!(
             client.refresh_cached_bytes().expect("pressure heartbeat"),
-            chunk_bytes
+            0
         );
         assert_eq!(client.read(0, &mut [0]), CacheRead::Miss);
         assert_eq!(
             client.update(2 * chunk_bytes, &[3]),
             CacheMutation::Accepted
         );
-        assert_eq!(
-            client.refresh_cached_bytes().expect("parked heartbeat"),
-            chunk_bytes
-        );
+        assert_eq!(client.refresh_cached_bytes().expect("parked heartbeat"), 0);
         external.store(0, Ordering::SeqCst);
         assert_eq!(
             client.refresh_cached_bytes().expect("recovery heartbeat"),
-            chunk_bytes
+            0
         );
         assert_eq!(
             client.update(2 * chunk_bytes, &[3]),
@@ -782,7 +822,7 @@ mod tests {
         );
         assert_eq!(
             client.refresh_cached_bytes().expect("refill heartbeat"),
-            2 * chunk_bytes
+            chunk_bytes
         );
         drop(client);
         worker_thread.join().expect("worker thread joined");
@@ -879,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_accepts_mutation_larger_than_stream_socket_buffer() {
+    fn oversized_mutation_disables_cache_before_worker_frame_is_sent() {
         let (client_sock, worker_sock) = UnixStream::pair().expect("socketpair failed");
         let provider = FakeProvider::new(4 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024);
         let worker_thread = std::thread::spawn(move || {
@@ -898,9 +938,8 @@ mod tests {
             IpcCacheClient::new(client_sock, Duration::from_millis(100), 2 * 1024 * 1024);
         client.perform_handshake().expect("handshake failed");
         let payload = vec![0x5a; 512 * 1024];
-        assert_eq!(client.update(0, &payload), CacheMutation::Accepted);
-        assert_eq!(client.refresh_cached_bytes(), Ok(2 * 1024 * 1024));
-        assert_eq!(client.disable(), CacheMutation::Accepted);
+        assert_eq!(client.update(0, &payload), CacheMutation::Failed);
+        assert_eq!(client.state(), crate::origin_cache::CacheState::Unavailable);
         worker_thread.join().expect("join worker thread");
     }
 
@@ -910,10 +949,8 @@ mod tests {
         let free_vram = 7 * 1024 * 1024 * 1024u64; // 7 GiB
         let provider = FakeProvider::new(total_vram, free_vram);
 
-        // 20% of 8 GiB = 1.6 GiB (1717986919 bytes)
-        // reserve floor = 2 GiB (2147483648 bytes)
-        // effective reserve = max(2 GiB, 1.6 GiB) = 2 GiB
-        // max allocation = 8 GiB - 2 GiB = 6 GiB
+        // Current use leaves 7 GiB; a 2 GiB display reserve and 640 MiB runtime
+        // headroom must remain available after any cache allocation.
         let config = GpuWorkerConfig {
             target_bytes: 10 * 1024 * 1024 * 1024, // Request 10 GiB (more than available)
             chunk_bytes: 2 * 1024 * 1024,
@@ -921,7 +958,10 @@ mod tests {
         };
 
         let worker = GpuCacheWorker::new(&provider, config);
-        assert_eq!(worker.target_bytes(), 6 * 1024 * 1024 * 1024);
+        assert_eq!(
+            worker.target_bytes(),
+            7 * 1024 * 1024 * 1024 - 2 * 1024 * 1024 * 1024 - RUNTIME_FREE_BUFFER_BYTES
+        );
     }
 
     #[test]

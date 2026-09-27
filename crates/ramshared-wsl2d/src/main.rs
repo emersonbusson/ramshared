@@ -40,12 +40,20 @@ use ramshared_broker::lease::DEFAULT_LEASE_TTL;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
 use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
-use ramshared_vram::{VramMemory, VramProvider};
+use ramshared_vram::{
+    GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetTelemetry, VramMemory, VramProvider,
+};
 use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::autotier::{
     AutotierConfig, BudgetInput, RecoveryTracker, backend_release_allowed, commit_allowed,
 };
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
+use ramshared_wsl2d::gpu_budget::{
+    BROKER_DISPLAY_RESERVE_BYTES, BROKER_RUNTIME_HEADROOM_BYTES, BudgetAdmissionProvider,
+    GpuAdapterCandidate, GpuBackendKind, OptionalWddmBudgetProvider, WddmBudgetGuard,
+    constrained_budget, open_matching_wddm_provider, safe_broker_slice_bytes, safe_cache_target,
+    select_gpu_candidate, worker_config_for_candidate,
+};
 use ramshared_wsl2d::swap::{spawn_activate_swap, spawn_swapoff};
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
@@ -157,103 +165,6 @@ impl VramProvider for UnavailableVramProvider {
         Err(ramshared_vram::VramError::Provider(
             "GPU measurement is unavailable".into(),
         ))
-    }
-}
-
-/// Resilient backend combining VRAM primary storage with an in-process RAM fallback buffer.
-/// When VRAM operations fail (e.g. GPU channel dropped during Windows NVIDIA driver reload),
-/// the backend seamlessly switches I/O to the RAM fallback buffer in-memory, avoiding any
-/// NBD_EIO replies, protecting the kernel swap subsystem from panics or teardowns.
-#[cfg(test)]
-struct ResilientBackend<M: VramMemory> {
-    vram: Option<VramBackend<M>>,
-    ram: RamBackend,
-    failed_over: bool,
-}
-
-#[cfg(test)]
-impl<M: VramMemory> ResilientBackend<M> {
-    fn new(vram: VramBackend<M>, total_bytes: usize) -> Self {
-        Self {
-            vram: Some(vram),
-            ram: RamBackend::new(total_bytes),
-            failed_over: false,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
-        if let Some(ref mut vram) = self.vram {
-            vram.zero()?;
-        }
-        self.ram = RamBackend::new(self.ram.size_bytes() as usize);
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn failover_to_ram(&mut self) {
-        if !self.failed_over {
-            eprintln!(
-                "[ramsharedd] in-process failover engaged: switching active storage path to RAM buffer"
-            );
-            self.failed_over = true;
-        }
-    }
-
-    fn is_failed_over(&self) -> bool {
-        self.failed_over
-    }
-}
-
-#[cfg(test)]
-impl<M: VramMemory> BlockBackend for ResilientBackend<M> {
-    fn size_bytes(&self) -> u64 {
-        self.ram.size_bytes()
-    }
-
-    fn block_size(&self) -> u32 {
-        BLOCK_SIZE
-    }
-
-    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
-        if !self.failed_over
-            && let Some(ref mut vram) = self.vram
-        {
-            match vram.read_at(off, buf) {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    eprintln!(
-                        "[ramsharedd] VRAM read failed ({e:?}); hot-swapping in-process to RAM backend"
-                    );
-                    self.failed_over = true;
-                }
-            }
-        }
-        self.ram.read_at(off, buf)
-    }
-
-    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), ramshared_block::IoError> {
-        // Always mirror to RAM so failover buffer is 100% synchronized
-        let _ = self.ram.write_at(off, data);
-        if !self.failed_over
-            && let Some(ref mut vram) = self.vram
-            && let Err(e) = vram.write_at(off, data)
-        {
-            eprintln!(
-                "[ramsharedd] VRAM write failed ({e:?}); hot-swapping in-process to RAM backend"
-            );
-            self.failed_over = true;
-        }
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
-        if !self.failed_over
-            && let Some(ref mut vram) = self.vram
-        {
-            let _ = vram.flush();
-        }
-        self.ram.flush()
     }
 }
 
@@ -2029,6 +1940,11 @@ fn select_daemon_action(args: AppArgs) -> Result<DaemonAction, Box<dyn std::erro
         return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
     }
     if args.slices > 0 {
+        if args.backend != BackendKind::Ram {
+            return Err(
+                "GPU-backed --slices is unsupported because its driver calls are synchronous; use the single NBD --origin-manifest path for isolated, revocable GPU caching".into(),
+            );
+        }
         return Ok(DaemonAction::Broker(args));
     }
     if args.arbiter_addr.is_some() || args.listen_nbd_addr.is_some() {
@@ -2076,6 +1992,11 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                 } = args;
                 let arbiter_addr = arbiter_addr
                     .ok_or("--slices requires --arbiter-listen IP:PORT (broker control point)")?;
+                if backend != BackendKind::Ram {
+                    return Err(
+                        "GPU-backed --slices is unsupported because its driver calls are synchronous; use the single NBD --origin-manifest path for isolated, revocable GPU caching".into(),
+                    );
+                }
                 match backend {
                     BackendKind::Vram => {
                         let maybe_run = match Cuda::load() {
@@ -2558,10 +2479,17 @@ impl BestEffortCache for OriginCache {
             Self::Disabled(c) => c.target_bytes(),
         }
     }
+
+    fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        match self {
+            Self::Ipc(c) => c.gpu_budget_telemetry(),
+            Self::Disabled(c) => c.gpu_budget_telemetry(),
+        }
+    }
 }
 
 enum WorkerChildHandle {
-    Process(std::process::Child),
+    Process(ChildWorkerProcess),
     #[cfg(test)]
     #[allow(dead_code)]
     Thread {
@@ -2571,40 +2499,157 @@ enum WorkerChildHandle {
 }
 
 struct IsolatedWorkerSupervisor {
-    child: WorkerChildHandle,
+    child: Option<WorkerChildHandle>,
+}
+
+trait WorkerProcessControl: Send {
+    fn id(&self) -> u32;
+    fn try_wait(&mut self) -> std::io::Result<bool>;
+    fn kill(&mut self) -> std::io::Result<()>;
+    fn reap_in_background(&mut self) -> std::io::Result<()>;
+}
+
+struct ChildWorkerProcess {
+    pid: u32,
+    child: std::sync::Arc<std::sync::Mutex<Child>>,
+}
+
+impl ChildWorkerProcess {
+    fn new(child: Child) -> Self {
+        let pid = child.id();
+        Self {
+            pid,
+            child: std::sync::Arc::new(std::sync::Mutex::new(child)),
+        }
+    }
+}
+
+impl WorkerProcessControl for ChildWorkerProcess {
+    fn id(&self) -> u32 {
+        self.pid
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<bool> {
+        self.child
+            .lock()
+            .map_err(|_| std::io::Error::other("GPU worker child lock poisoned"))?
+            .try_wait()
+            .map(|status| status.is_some())
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.child
+            .lock()
+            .map_err(|_| std::io::Error::other("GPU worker child lock poisoned"))?
+            .kill()
+    }
+
+    fn reap_in_background(&mut self) -> std::io::Result<()> {
+        let child = std::sync::Arc::clone(&self.child);
+        std::thread::Builder::new()
+            .name("ramshared-gpu-worker-reaper".into())
+            .spawn(move || {
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.wait();
+                }
+            })
+            .map(drop)
+    }
+}
+
+fn wait_for_worker_exit(
+    child: &mut dyn WorkerProcessControl,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(true) => return true,
+            Ok(false) if Instant::now() < deadline => {
+                std::thread::sleep(
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(poll_interval),
+                );
+            }
+            Ok(false) => return false,
+            Err(error) => {
+                eprintln!(
+                    "[ramsharedd] GPU worker {} exit observation failed: {error}",
+                    child.id()
+                );
+                return false;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkerStopOutcome {
+    Exited,
+    ReaperStarted,
+    ReaperUnavailable,
+}
+
+fn stop_worker_process(
+    child: &mut dyn WorkerProcessControl,
+    graceful_timeout: Duration,
+    kill_timeout: Duration,
+    poll_interval: Duration,
+) -> WorkerStopOutcome {
+    if wait_for_worker_exit(child, graceful_timeout, poll_interval) {
+        return WorkerStopOutcome::Exited;
+    }
+    if let Err(error) = child.kill() {
+        eprintln!(
+            "[ramsharedd] GPU worker {} kill request failed: {error}",
+            child.id()
+        );
+    }
+    if wait_for_worker_exit(child, kill_timeout, poll_interval) {
+        return WorkerStopOutcome::Exited;
+    }
+    match child.reap_in_background() {
+        Ok(()) => {
+            eprintln!(
+                "[ramsharedd] GPU worker {} did not exit after bounded SIGKILL observation; background reaper retained its child handle",
+                child.id()
+            );
+            WorkerStopOutcome::ReaperStarted
+        }
+        Err(error) => {
+            eprintln!(
+                "[ramsharedd] GPU worker {} could not start background reaper: {error}; retaining child ownership",
+                child.id()
+            );
+            WorkerStopOutcome::ReaperUnavailable
+        }
+    }
 }
 
 impl IsolatedWorkerSupervisor {
     fn pid(&self) -> u32 {
-        match &self.child {
-            WorkerChildHandle::Process(c) => c.id(),
+        match self.child.as_ref() {
+            Some(WorkerChildHandle::Process(c)) => c.id(),
             #[cfg(test)]
-            WorkerChildHandle::Thread { .. } => std::process::id(),
+            Some(WorkerChildHandle::Thread { .. }) => std::process::id(),
+            None => 0,
         }
     }
 
     fn shutdown(&mut self) {
-        match &mut self.child {
-            WorkerChildHandle::Process(child) => {
-                let start = Instant::now();
-                loop {
-                    match child.try_wait() {
-                        Ok(Some(_)) => break,
-                        Ok(None) => {
-                            if start.elapsed() > Duration::from_secs(5) {
-                                let _ = child.kill();
-                                let _ = child.wait();
-                                break;
-                            }
-                            std::thread::sleep(Duration::from_millis(10));
-                        }
-                        Err(_) => {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                            break;
-                        }
-                    }
-                }
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let retain_child = match &mut child {
+            WorkerChildHandle::Process(process) => {
+                stop_worker_process(
+                    process,
+                    Duration::from_secs(5),
+                    Duration::from_millis(500),
+                    Duration::from_millis(10),
+                ) == WorkerStopOutcome::ReaperUnavailable
             }
             #[cfg(test)]
             WorkerChildHandle::Thread { stop, handle } => {
@@ -2612,8 +2657,18 @@ impl IsolatedWorkerSupervisor {
                 if let Some(h) = handle.take() {
                     let _ = h.join();
                 }
+                false
             }
+        };
+        if retain_child {
+            self.child = Some(child);
         }
+    }
+}
+
+impl Drop for IsolatedWorkerSupervisor {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -2642,17 +2697,17 @@ fn spawn_isolated_gpu_worker(
 
     drop(worker_sock);
 
+    let mut supervisor = IsolatedWorkerSupervisor {
+        child: Some(WorkerChildHandle::Process(ChildWorkerProcess::new(child))),
+    };
     let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), target_bytes);
-    client
-        .perform_handshake()
-        .map_err(|e| format!("worker handshake failed: {e}"))?;
+    if let Err(error) = client.perform_handshake() {
+        drop(client);
+        supervisor.shutdown();
+        return Err(format!("worker handshake failed: {error}").into());
+    }
 
-    Ok((
-        client,
-        IsolatedWorkerSupervisor {
-            child: WorkerChildHandle::Process(child),
-        },
-    ))
+    Ok((client, supervisor))
 }
 
 fn run_isolated_gpu_worker_entry(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
@@ -2708,21 +2763,274 @@ fn run_isolated_gpu_worker_entry(args: &[String]) -> Result<(), Box<dyn std::err
         reserve_floor_bytes: reserve_floor,
     };
 
+    let mut candidates = Vec::new();
     if let Ok(cuda) = Cuda::load()
-        && let Ok(dev) = cuda.device(0)
-        && let Ok(provider) = cuda.create_context(&dev)
+        && let Ok(count) = cuda.device_count()
     {
-        let _ = run_gpu_worker_loop(socket, provider, config);
+        for ordinal in 0..count.max(0) as u32 {
+            let Ok(device) = cuda.device(ordinal as i32) else {
+                continue;
+            };
+            let Ok(provider) = cuda.create_context(&device) else {
+                continue;
+            };
+            match gpu_candidate(&provider, GpuBackendKind::Cuda, ordinal, config) {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("[ramsharedd] CUDA adapter {ordinal} budget rejected: {error}");
+                }
+            }
+        }
+    }
+
+    if let Ok(count) = VulkanProvider::device_count() {
+        for ordinal in 0..count {
+            let Ok(provider) = VulkanProvider::open_exact(ordinal) else {
+                continue;
+            };
+            match gpu_candidate(&provider, GpuBackendKind::Vulkan, ordinal, config) {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("[ramsharedd] Vulkan adapter {ordinal} budget rejected: {error}");
+                }
+            }
+        }
+    }
+
+    if let Some(selected) = select_gpu_candidate(&candidates).cloned() {
+        let worker_config = worker_config_for_candidate(config, selected.safe_target_bytes);
+        eprintln!(
+            "[ramsharedd] gpu_adapter_selected backend={:?} ordinal={} key={} safe_target_bytes={}",
+            selected.backend, selected.ordinal, selected.identity.key, selected.safe_target_bytes
+        );
+        let result = match selected.backend {
+            GpuBackendKind::Cuda => {
+                Cuda::load()
+                    .map_err(|error| error.to_string())
+                    .and_then(|cuda| {
+                        let device = cuda
+                            .device(selected.ordinal as i32)
+                            .map_err(|error| error.to_string())?;
+                        let provider = cuda
+                            .create_context(&device)
+                            .map_err(|error| error.to_string())?;
+                        run_gpu_worker_with_selected_wddm(
+                            socket,
+                            provider,
+                            selected.identity,
+                            worker_config,
+                        )
+                    })
+            }
+            GpuBackendKind::Vulkan => VulkanProvider::open_exact(selected.ordinal)
+                .map_err(|error| error.to_string())
+                .and_then(|provider| {
+                    run_gpu_worker_with_selected_wddm(
+                        socket,
+                        provider,
+                        selected.identity,
+                        worker_config,
+                    )
+                }),
+        };
+        if let Err(error) = result {
+            eprintln!("[ramsharedd] selected GPU adapter failed revalidation: {error}");
+            return Err(error.into());
+        }
         return Ok(());
     }
 
-    if let Ok(vulkan) = VulkanProvider::open(0) {
-        let _ = run_gpu_worker_loop(socket, vulkan, config);
-        return Ok(());
-    }
-
+    eprintln!("[ramsharedd] no GPU adapter passed fresh safe-budget selection; cache unavailable");
     let _ = run_gpu_worker_loop(socket, UnavailableVramProvider, config);
     Ok(())
+}
+
+fn gpu_candidate<P: VramProvider>(
+    allocator: &P,
+    backend: GpuBackendKind,
+    ordinal: u32,
+    config: GpuWorkerConfig,
+) -> Result<Option<GpuAdapterCandidate>, String> {
+    let wddm = open_matching_wddm_provider(allocator, |luid| DxgBudgetProvider::open(Some(luid)))?;
+    let budget = match wddm {
+        Some(wddm) => constrained_budget(
+            allocator
+                .budget_snapshot()
+                .map_err(|error| error.to_string())?,
+            wddm.snapshot().map_err(|error| error.to_string())?,
+            Instant::now(),
+        ),
+        None => allocator.budget_snapshot(),
+    }
+    .map_err(|error| error.to_string())?;
+    let Some(identity) = budget.adapter.clone() else {
+        return Ok(None);
+    };
+    let Some(safe_target_bytes) = safe_cache_target(
+        &budget,
+        config.target_bytes,
+        config.reserve_floor_bytes,
+        Instant::now(),
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(GpuAdapterCandidate {
+        backend,
+        ordinal,
+        identity,
+        safe_target_bytes,
+    }))
+}
+
+fn run_gpu_worker_with_selected_wddm<P: VramProvider>(
+    socket: std::os::unix::net::UnixStream,
+    allocator: P,
+    expected_identity: GpuAdapterIdentity,
+    config: GpuWorkerConfig,
+) -> Result<(), String> {
+    let wddm =
+        match open_matching_wddm_provider(&allocator, |luid| DxgBudgetProvider::open(Some(luid))) {
+            Ok(wddm) => wddm,
+            Err(error) => {
+                eprintln!("[ramsharedd] selected adapter WDDM revalidation failed: {error}");
+                return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+            }
+        };
+    match wddm {
+        Some(wddm) => {
+            let allocator_budget = allocator.budget_snapshot();
+            let wddm_budget = wddm.snapshot();
+            let budget = match (allocator_budget, wddm_budget) {
+                (Ok(allocator_budget), Ok(wddm_budget)) => {
+                    constrained_budget(allocator_budget, wddm_budget, Instant::now())
+                        .map_err(|error| error.to_string())
+                }
+                (Err(error), _) => Err(error.to_string()),
+                (_, Err(error)) => Err(error.to_string()),
+            };
+            let budget = match budget {
+                Ok(budget) => budget,
+                Err(error) => {
+                    eprintln!("[ramsharedd] selected adapter budget revalidation failed: {error}");
+                    return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+                }
+            };
+            if let Err(error) = revalidate_selected_adapter(budget, &expected_identity, config) {
+                eprintln!("[ramsharedd] selected adapter identity/budget changed: {error}");
+                return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+            }
+            eprintln!(
+                "[ramsharedd] gpu_budget_guard=dxg adapter={}",
+                wddm.adapter_luid()
+            );
+            run_gpu_worker_loop(socket, WddmBudgetGuard { allocator, wddm }, config)
+        }
+        None => {
+            let budget = match allocator.budget_snapshot() {
+                Ok(budget) => budget,
+                Err(error) => {
+                    eprintln!("[ramsharedd] selected allocator budget unavailable: {error}");
+                    return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+                }
+            };
+            if let Err(error) = revalidate_selected_adapter(budget, &expected_identity, config) {
+                eprintln!("[ramsharedd] selected adapter identity/budget changed: {error}");
+                return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+            }
+            eprintln!(
+                "[ramsharedd] gpu_budget_guard=allocator_only reason=unavailable_or_unmatched_luid"
+            );
+            run_gpu_worker_loop(socket, allocator, config)
+        }
+    }
+}
+
+fn revalidate_selected_adapter(
+    budget: GpuBudgetSnapshot,
+    expected_identity: &GpuAdapterIdentity,
+    config: GpuWorkerConfig,
+) -> Result<(), String> {
+    if budget.adapter.as_ref() != Some(expected_identity) {
+        return Err("selected adapter identity changed during revalidation".into());
+    }
+    if safe_cache_target(
+        &budget,
+        config.target_bytes,
+        config.reserve_floor_bytes,
+        Instant::now(),
+    )
+    .is_none()
+    {
+        return Err("selected adapter no longer has a fresh safe cache budget".into());
+    }
+    Ok(())
+}
+
+fn publish_origin_cache_status<S: NbdRuntimeStarter>(
+    starter: &mut S,
+    cache: &mut AuthoritativeOriginBackend<FileOrigin, OriginCache>,
+    daemon_instance_id: &str,
+) {
+    if matches!(
+        cache.origin_state(),
+        DurableOriginState::Failed | DurableOriginState::Degraded
+    ) {
+        let _ = cache.probe_origin();
+    }
+    let critical_reclaim = unix_time_ms().is_some_and(|now_unix_ms| {
+        critical_cache_reclaim_requested_at(
+            Path::new(CACHE_TARGET_REQUEST_PATH),
+            Path::new(RECLAIM_REQUEST_PATH),
+            daemon_instance_id,
+            now_unix_ms,
+        )
+    });
+    if critical_reclaim {
+        match cache.release_cache() {
+            Ok(released_bytes) => eprintln!(
+                "[ramsharedd] control pressure reclaimed {} MiB of clean origin cache",
+                released_bytes >> 20
+            ),
+            Err(error) => eprintln!(
+                "[ramsharedd] control cache release was not acknowledged: {}",
+                error.0
+            ),
+        }
+    }
+    let physical_cached_bytes = cache.refresh_cached_bytes();
+    let gpu_budget = cache.gpu_budget_telemetry().cloned();
+    let gpu_headroom_kib = unix_time_ms().and_then(|now| {
+        gpu_budget
+            .as_ref()?
+            .trusted_available_at(now, 5_000)
+            .map(|bytes| bytes >> 10)
+    });
+    let telemetry = cache.telemetry();
+    starter.publish_origin_cache(&OriginCacheStatus {
+        schema_version: 1,
+        daemon_instance_id: daemon_instance_id.to_string(),
+        written_at_unix_ms: unix_time_ms().unwrap_or_default(),
+        ok: physical_cached_bytes.is_ok()
+            && !critical_reclaim
+            && origin_cache_runtime_ok(cache.origin_state(), cache.cache_state()),
+        origin_state: cache.origin_state().as_str(),
+        cache_state: cache.cache_state().as_str(),
+        logical_capacity_kib: cache.size_bytes() >> 10,
+        vram_cached_kib: physical_cached_bytes.unwrap_or_default() >> 10,
+        gpu_headroom_kib,
+        gpu_budget,
+        ssd_origin_written_kib: telemetry.origin_written_bytes >> 10,
+        cache_fallback_reads: telemetry.fallback_reads,
+        cache_invalidations: telemetry.invalidations,
+        cache_releases: telemetry.releases,
+        cache_target_kib: if critical_reclaim {
+            0
+        } else {
+            cache.target_bytes() >> 10
+        },
+    });
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -2736,6 +3044,7 @@ struct OriginCacheStatus {
     logical_capacity_kib: u64,
     vram_cached_kib: u64,
     gpu_headroom_kib: Option<u64>,
+    gpu_budget: Option<GpuBudgetTelemetry>,
     ssd_origin_written_kib: u64,
     cache_fallback_reads: u64,
     cache_invalidations: u64,
@@ -3266,6 +3575,12 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let _shutdown_bridge = starter.start_shutdown_bridge(jobs_tx)?;
     eprintln!("[ramsharedd] transmitting (single CUDA worker; multi-connection)");
 
+    if let (Be::Origin(cache), Some(daemon_instance_id)) =
+        (&mut backend, origin_daemon_instance_id.as_deref())
+    {
+        publish_origin_cache_status(starter, cache, daemon_instance_id);
+    }
+
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
     let mut demoted = false;
@@ -3556,62 +3871,10 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             }
         }
 
-        if let Be::Origin(ref mut cache) = backend {
-            if matches!(
-                cache.origin_state(),
-                DurableOriginState::Failed | DurableOriginState::Degraded
-            ) {
-                let _ = cache.probe_origin();
-            }
-            let critical_reclaim = origin_daemon_instance_id
-                .as_deref()
-                .zip(unix_time_ms())
-                .is_some_and(|(daemon_instance_id, now_unix_ms)| {
-                    critical_cache_reclaim_requested_at(
-                        Path::new(CACHE_TARGET_REQUEST_PATH),
-                        Path::new(RECLAIM_REQUEST_PATH),
-                        daemon_instance_id,
-                        now_unix_ms,
-                    )
-                });
-            let control_release = critical_reclaim.then(|| cache.release_cache());
-            match control_release {
-                Some(Ok(released_bytes)) => eprintln!(
-                    "[ramsharedd] control pressure reclaimed {} MiB of clean origin cache",
-                    released_bytes >> 20
-                ),
-                Some(Err(error)) => {
-                    eprintln!(
-                        "[ramsharedd] control cache release was not acknowledged: {}",
-                        error.0
-                    );
-                }
-                None => {}
-            }
-            let physical_cached_bytes = cache.refresh_cached_bytes();
-            let telemetry = cache.telemetry();
-            starter.publish_origin_cache(&OriginCacheStatus {
-                schema_version: 1,
-                daemon_instance_id: origin_daemon_instance_id.clone().unwrap_or_default(),
-                written_at_unix_ms: unix_time_ms().unwrap_or_default(),
-                ok: physical_cached_bytes.is_ok()
-                    && !critical_reclaim
-                    && origin_cache_runtime_ok(cache.origin_state(), cache.cache_state()),
-                origin_state: cache.origin_state().as_str(),
-                cache_state: cache.cache_state().as_str(),
-                logical_capacity_kib: cache.size_bytes() >> 10,
-                vram_cached_kib: physical_cached_bytes.unwrap_or_default() >> 10,
-                gpu_headroom_kib: None,
-                ssd_origin_written_kib: telemetry.origin_written_bytes >> 10,
-                cache_fallback_reads: telemetry.fallback_reads,
-                cache_invalidations: telemetry.invalidations,
-                cache_releases: telemetry.releases,
-                cache_target_kib: if critical_reclaim {
-                    0
-                } else {
-                    cache.target_bytes() >> 10
-                },
-            });
+        if let Be::Origin(ref mut cache) = backend
+            && let Some(daemon_instance_id) = origin_daemon_instance_id.as_deref()
+        {
+            publish_origin_cache_status(starter, cache, daemon_instance_id);
         }
 
         if !demoted
@@ -4840,67 +5103,6 @@ fn serve_broker_jobs_with_poll_heartbeat_and_reply_hook<B: BlockBackend>(
     backend
 }
 
-/// Calculates the maximum safe VRAM allocation per slice, respecting the host reserve floor.
-///
-/// Principle 11 (Shared Hardware & Tiering Coexistence Invariant):
-/// On shared-memory environments (such as WSL2/dxgkrnl), GPU VRAM is shared between the host OS
-/// display manager (DWM), host applications, and WSL2. Allocating too much VRAM starves the host
-/// GPU memory manager, leading to driver timeouts (TDR) and system deadlocks.
-/// Calculates the maximum safe VRAM slice size (in bytes) to prevent GPU starvation.
-///
-/// Ensures:
-/// - Real hardware threshold: If `total_vram < 2048 MB`, it is treated as a test mock/emulated
-///   environment, and no clamping is applied.
-/// - Windows Host DWM and desktop apps retain at least `max(1536 MiB, 20% of total VRAM)`.
-/// - If `free_vram` is known, allocation strictly respects runtime free headroom (768 MiB)
-///   to prevent runtime CUDA/DirectX allocation failures under external graphics pressure (SPEC §DT-1).
-/// - Slices are aligned to 128 MiB boundaries.
-pub fn calculate_safe_vram_slice(
-    requested_slice_bytes: u64,
-    slices: u16,
-    total_vram: u64,
-    free_vram: u64,
-) -> (u64, bool) {
-    const MIN_REAL_GPU_BYTES: u64 = 2048 * 1024 * 1024; // 2048 MiB
-    const MIN_HOST_RESERVE_BYTES: u64 = 1536 * 1024 * 1024; // 1536 MiB for Windows DWM
-    const HOST_RESERVE_PERCENT: u64 = 20; // 20% of total VRAM
-    const RUNTIME_FREE_HEADROOM_BYTES: u64 = 768 * 1024 * 1024; // 768 MiB runtime buffer (SPEC §DT-1)
-    const SLICE_ALIGNMENT_BYTES: u64 = 128 * 1024 * 1024; // 128 MiB boundary
-
-    if slices == 0 || requested_slice_bytes == 0 || total_vram < MIN_REAL_GPU_BYTES {
-        return (requested_slice_bytes, false);
-    }
-
-    let total_requested = match (slices as u64).checked_mul(requested_slice_bytes) {
-        Some(t) => t,
-        None => return (requested_slice_bytes, false),
-    };
-
-    let floor_pct = total_vram.saturating_mul(HOST_RESERVE_PERCENT) / 100;
-    let host_floor = std::cmp::max(MIN_HOST_RESERVE_BYTES, floor_pct);
-    let mut max_safe_total = total_vram.saturating_sub(host_floor);
-
-    // If active free VRAM is reported, allocation must strictly leave at least RUNTIME_FREE_HEADROOM_BYTES
-    if free_vram > 0 {
-        let safe_by_free = free_vram.saturating_sub(RUNTIME_FREE_HEADROOM_BYTES);
-        max_safe_total = std::cmp::min(max_safe_total, safe_by_free);
-    }
-
-    let max_safe_per_slice = max_safe_total / (slices as u64);
-
-    if total_requested <= max_safe_total {
-        (requested_slice_bytes, false)
-    } else {
-        let aligned_slice = (max_safe_per_slice / SLICE_ALIGNMENT_BYTES) * SLICE_ALIGNMENT_BYTES;
-        let final_safe_slice = if aligned_slice > 0 {
-            aligned_slice
-        } else {
-            max_safe_per_slice
-        };
-        (final_safe_slice, true)
-    }
-}
-
 /// VRAM broker path (ITEM-8): slices VRAM into `slices` NBD exports served by Unix +
 /// (optional) TCP, with the arbiter deciding who uses each slice. The single worker owns the
 /// VRAM/CUDA context and runs residency §9/§9.4. Live execution is the QEMU gate (`--backend
@@ -4917,12 +5119,31 @@ fn run_broker<P: VramProvider>(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (free, total_vram) = provider.mem_info().unwrap_or((0, 0));
-    let (effective_slice_bytes, was_clamped) =
-        calculate_safe_vram_slice(slice_bytes, slices, total_vram, free);
+    let wddm = open_matching_wddm_provider(&provider, |luid| DxgBudgetProvider::open(Some(luid)))
+        .map_err(std::io::Error::other)?;
+    let provider = BudgetAdmissionProvider::new(
+        OptionalWddmBudgetProvider {
+            allocator: provider,
+            wddm,
+        },
+        BROKER_DISPLAY_RESERVE_BYTES,
+        BROKER_RUNTIME_HEADROOM_BYTES,
+    );
+    let budget = provider.budget_snapshot()?;
+    let effective_slice_bytes = safe_broker_slice_bytes(
+        &budget,
+        slice_bytes,
+        slices,
+        CANARY_BYTES as u64,
+        Instant::now(),
+    )
+    .ok_or_else(|| {
+        std::io::Error::other("GPU budget does not leave enough safe headroom for the broker")
+    })?;
+    let was_clamped = effective_slice_bytes < slice_bytes;
     if was_clamped {
         eprintln!(
-            "[ramsharedd] WARNING: requested VRAM allocation ({} MiB/slice) exceeds host safety ceiling. Clamping to {} MiB to preserve host reserve floor (Principle 11).",
+            "[ramsharedd] WARNING: requested VRAM allocation ({} MiB/slice) exceeds live safe headroom. Clamping to {} MiB to preserve the display reserve, canary, and runtime buffer.",
             slice_bytes >> 20,
             effective_slice_bytes >> 20
         );
@@ -4973,6 +5194,8 @@ where
     let total = (slices as u64)
         .checked_mul(slice_bytes)
         .ok_or("--slices * --slice-mb: overflow")?;
+    let total_len = usize::try_from(total)
+        .map_err(|_| "--slices * --slice-mb exceeds addressable allocation size")?;
 
     // The provider has already been initialized by the production shell. The
     // lifecycle below remains generic over VramProvider/VramMemory (RF-G1).
@@ -4982,7 +5205,7 @@ where
         free >> 20,
         total_vram >> 20
     );
-    let mut mem = provider.alloc(total as usize)?;
+    let mut mem = provider.alloc(total_len)?;
     mem.zero()?;
     // Lock only mappings that already exist. The canary and any later GPU/DXG
     // mappings must never inherit a process-wide MCL_FUTURE obligation.
@@ -4998,7 +5221,13 @@ where
     );
 
     // Residency canary (§9.4): separated region, not addressable by NBD.
-    let canary_region = provider.alloc(CANARY_BYTES)?;
+    let canary_region = match provider.alloc(CANARY_BYTES) {
+        Ok(memory) => memory,
+        Err(error) => {
+            backend.zero()?;
+            return Err(error.into());
+        }
+    };
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
@@ -5748,7 +5977,9 @@ mod tests {
         assert_eq!(provider.0.get(), 0, "constructor must allocate no VRAM");
         drop(cache);
 
-        struct OriginStarter;
+        struct OriginStarter {
+            published_origin_status: Option<(bool, &'static str, &'static str)>,
+        }
         impl NbdRuntimeStarter for OriginStarter {
             fn lock_memory(
                 &mut self,
@@ -5788,6 +6019,11 @@ mod tests {
                 _reason: &Option<String>,
                 _in_progress: bool,
             ) {
+            }
+
+            fn publish_origin_cache(&mut self, status: &OriginCacheStatus) {
+                self.published_origin_status =
+                    Some((status.ok, status.origin_state, status.cache_state));
             }
 
             fn elapsed_us(&mut self, _started: Instant) -> u64 {
@@ -5848,6 +6084,9 @@ mod tests {
             .unwrap();
         origin_file.set_len(GIB).unwrap();
         let socket = root.join("daemon.sock");
+        let mut starter = OriginStarter {
+            published_origin_status: None,
+        };
         run_nbd_with_startup(
             provider,
             Some(FileOrigin::from_file(origin_file)),
@@ -5856,9 +6095,14 @@ mod tests {
             false,
             "/dev/ramshared-test-nbd".into(),
             true,
-            &mut OriginStarter,
+            &mut starter,
         )
         .expect("tempfile origin mode must compose without a GPU or NBD device");
+        assert_eq!(
+            starter.published_origin_status,
+            Some((true, "READY", "UNAVAILABLE")),
+            "origin readiness must be published before the serving loop can idle or shut down"
+        );
         assert!(!socket.exists());
         std::fs::remove_dir_all(root).unwrap();
 
@@ -6028,6 +6272,7 @@ mod tests {
             logical_capacity_kib: backend.size_bytes() >> 10,
             vram_cached_kib: backend.cached_bytes() >> 10,
             gpu_headroom_kib: None,
+            gpu_budget: None,
             ssd_origin_written_kib: backend.telemetry().origin_written_bytes >> 10,
             cache_fallback_reads: backend.telemetry().fallback_reads,
             cache_invalidations: backend.telemetry().invalidations,
@@ -8607,6 +8852,63 @@ mod tests {
     }
 
     #[test]
+    fn daemon_broker_canary_allocation_failure_zeroes_main_allocation() {
+        struct FailCanaryProvider {
+            calls: std::sync::atomic::AtomicUsize,
+            zeroed: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+        }
+
+        impl VramProvider for FailCanaryProvider {
+            type Mem<'a>
+                = ZeroRecordingMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                    return Err(ramshared_vram::VramError::OutOfMemory);
+                }
+                Ok(ZeroRecordingMemory {
+                    bytes,
+                    zeroed: std::sync::Arc::clone(&self.zeroed),
+                })
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * GIB, 8 * GIB))
+            }
+        }
+
+        let zeroed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let result = run_broker_with_setup(
+            FailCanaryProvider {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                zeroed: std::sync::Arc::clone(&zeroed),
+            },
+            4096,
+            1,
+            std::env::temp_dir()
+                .join(format!(
+                    "ramshared-daemon-canary-refusal-{}.sock",
+                    std::process::id()
+                ))
+                .to_string_lossy()
+                .into_owned(),
+            false,
+            |_force, _future| Ok(()),
+            || panic!("broker setup must not run when canary allocation fails"),
+            Duration::from_millis(1),
+        );
+
+        assert!(result.is_err(), "canary allocation failure must propagate");
+        assert_eq!(
+            *zeroed.lock().expect("test zero record lock"),
+            vec![4096, 4096],
+            "the main allocation must be wiped after canary allocation fails"
+        );
+    }
+
+    #[test]
     fn gpu_base_mapping_precedes_current_only_lock_and_future_lock_is_refused() {
         struct OrderProvider {
             calls: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
@@ -10447,6 +10749,32 @@ mod tests {
     }
 
     #[test]
+    fn daemon_gpu_legacy_broker_refuses_before_backend_initialization() {
+        for backend in ["auto", "vram", "vulkan"] {
+            let args = AppArgs::parse_from(&daemon_argv(&[
+                "ramsharedd",
+                "--backend",
+                backend,
+                "--slices",
+                "1",
+                "--slice-mb",
+                "64",
+                "--arbiter-listen",
+                "127.0.0.1:7777",
+            ]))
+            .expect("legacy broker argv is syntactically valid");
+            let error = match select_daemon_action(args) {
+                Ok(_) => panic!("direct GPU broker must refuse before loading a GPU provider"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("--origin-manifest"),
+                "backend {backend} refusal should route GPU caching through the authoritative-origin path: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn daemon_ublk_vulkan_refuses_before_device_mutation() {
         let args = AppArgs::parse_from(&daemon_argv(&[
             "ramsharedd",
@@ -10519,6 +10847,28 @@ mod tests {
         std::fs::create_dir(&dir).expect("create isolated temporary refusal directory");
         let sock = dir.join("owned-by-test-regular-file");
         std::fs::write(&sock, b"do-not-replace").expect("create regular preflight file");
+        let gpu_broker = runner.execute(DaemonAction::Broker(AppArgs {
+            size: DEFAULT_SIZE,
+            origin: None,
+            sock: sock.to_string_lossy().into_owned(),
+            force: false,
+            nbd_dev: "/dev/ramshared-test-nbd".into(),
+            transport: Transport::Nbd,
+            queue_depth: 1,
+            backend: BackendKind::Vram,
+            slices: 1,
+            slice_bytes: BLOCK_SIZE as u64,
+            listen_nbd_addr: None,
+            arbiter_addr: Some("127.0.0.1:7777".parse().expect("loopback arbiter address")),
+            advertise_tcp: None,
+            telemetry_jsonl: None,
+        }));
+        assert!(
+            gpu_broker
+                .expect_err("direct runner must refuse GPU broker before provider load")
+                .to_string()
+                .contains("--origin-manifest")
+        );
         let broker = runner.execute(DaemonAction::Broker(AppArgs {
             size: DEFAULT_SIZE,
             origin: None,
@@ -10958,85 +11308,6 @@ Filename Type Size Used Priority
         let _ = std::fs::remove_file(&path);
     }
 
-    struct FailingVramMemory {
-        len: usize,
-        fail_reads: std::sync::atomic::AtomicBool,
-        fail_writes: std::sync::atomic::AtomicBool,
-    }
-
-    impl VramMemory for FailingVramMemory {
-        fn len(&self) -> usize {
-            self.len
-        }
-
-        fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
-            Ok(())
-        }
-
-        fn read_at(&self, _off: u64, _dst: &mut [u8]) -> Result<(), ramshared_vram::VramError> {
-            if self.fail_reads.load(Ordering::SeqCst) {
-                return Err(ramshared_vram::VramError::Provider(
-                    "injected VRAM read error".into(),
-                ));
-            }
-            Ok(())
-        }
-
-        fn write_at(&mut self, _off: u64, _src: &[u8]) -> Result<(), ramshared_vram::VramError> {
-            if self.fail_writes.load(Ordering::SeqCst) {
-                return Err(ramshared_vram::VramError::Provider(
-                    "injected VRAM write error".into(),
-                ));
-            }
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn resilient_backend_hot_swaps_to_ram_on_vram_failure() {
-        let mem = FailingVramMemory {
-            len: 4096,
-            fail_reads: std::sync::atomic::AtomicBool::new(false),
-            fail_writes: std::sync::atomic::AtomicBool::new(false),
-        };
-        let vram = VramBackend::new(mem, 4096);
-        let mut resilient = ResilientBackend::new(vram, 4096);
-
-        // 1. Initial write to VRAM (and RAM mirror)
-        let payload = [0x42u8; 512];
-        resilient
-            .write_at(0, &payload)
-            .expect("initial write succeeds");
-        assert!(!resilient.is_failed_over());
-
-        // 2. Inject VRAM failure on write
-        if let Some(ref mut v) = resilient.vram {
-            v.mem_mut().fail_writes.store(true, Ordering::SeqCst);
-        }
-        let payload2 = [0x99u8; 512];
-        // Must succeed without returning IoError because RAM buffer absorbed the write!
-        resilient
-            .write_at(512, &payload2)
-            .expect("failover write succeeds");
-        assert!(
-            resilient.is_failed_over(),
-            "failover must be active after VRAM write failure"
-        );
-
-        // 3. Reads must succeed from RAM mirror
-        let mut read_buf1 = [0u8; 512];
-        resilient
-            .read_at(0, &mut read_buf1)
-            .expect("read initial data");
-        assert_eq!(read_buf1, payload);
-
-        let mut read_buf2 = [0u8; 512];
-        resilient
-            .read_at(512, &mut read_buf2)
-            .expect("read failover data");
-        assert_eq!(read_buf2, payload2);
-    }
-
     #[test]
     fn daemon_args_parse_auto_backend() {
         let args = AppArgs::parse_from(&daemon_argv(&[
@@ -11056,79 +11327,6 @@ Filename Type Size Used Priority
         ]))
         .expect("auto backend must parse");
         assert!(matches!(args.backend, BackendKind::Auto));
-    }
-
-    #[test]
-    fn test_host_vram_clamping_rtx2060() {
-        // RTX 2060: 6144 MiB total, 5000 MiB free (headroom 768 MiB preserves >= 904 MiB)
-        let total_vram = 6144 * 1024 * 1024;
-        let free_vram = 5000 * 1024 * 1024;
-        let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
-        let (safe_slice, clamped) =
-            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(
-            !clamped,
-            "4096 MiB allocation on 6GB GPU must be granted when free VRAM leaves >= 768 MiB headroom"
-        );
-        assert_eq!(safe_slice, requested_slice);
-    }
-
-    #[test]
-    fn test_host_vram_clamping_rtx2060_live_pressure() {
-        // RTX 2060: 6144 MiB total, 4581 MiB free (observed live during DWM activity)
-        let total_vram = 6144 * 1024 * 1024;
-        let free_vram = 4581 * 1024 * 1024;
-        let requested_slice = 4096 * 1024 * 1024;
-        let (safe_slice, clamped) =
-            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(
-            clamped,
-            "allocation must clamp to preserve 768 MiB headroom under live pressure"
-        );
-        // (4581 - 768 = 3813 MiB) aligned to 128 MiB boundary -> 3712 MiB
-        assert_eq!(safe_slice, 3712 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_host_vram_clamping_rtx2060_over_request() {
-        // RTX 2060: 6144 MiB total, 6144 MiB free
-        let total_vram = 6144 * 1024 * 1024;
-        let free_vram = 6144 * 1024 * 1024;
-        let requested_slice = 5120 * 1024 * 1024; // 5120 MiB requested (> 4608 max safe)
-        let (safe_slice, clamped) =
-            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(
-            clamped,
-            "allocation exceeding host reserve floor must be clamped"
-        );
-        assert_eq!(safe_slice, 4608 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_host_vram_clamping_unconstrained() {
-        // RTX 4090: 24576 MiB total, 20000 MiB free
-        let total_vram = 24576 * 1024 * 1024;
-        let free_vram = 20000 * 1024 * 1024;
-        let requested_slice = 4096 * 1024 * 1024; // 4096 MiB requested
-        let (safe_slice, clamped) =
-            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(!clamped, "RTX 4090 with ample headroom must not be clamped");
-        assert_eq!(safe_slice, requested_slice);
-    }
-
-    #[test]
-    fn test_host_vram_clamping_mock_small() {
-        // Mock provider: 64 MiB total
-        let total_vram = 64 * 1024 * 1024;
-        let free_vram = 64 * 1024 * 1024;
-        let requested_slice = 32 * 1024 * 1024;
-        let (safe_slice, clamped) =
-            calculate_safe_vram_slice(requested_slice, 1, total_vram, free_vram);
-        assert!(
-            !clamped,
-            "Mock environment under 2048 MiB must not be clamped"
-        );
-        assert_eq!(safe_slice, requested_slice);
     }
 
     #[test]
@@ -11159,7 +11357,7 @@ Filename Type Size Used Priority
             .unwrap();
 
         let mut supervisor = IsolatedWorkerSupervisor {
-            child: WorkerChildHandle::Process(child),
+            child: Some(WorkerChildHandle::Process(ChildWorkerProcess::new(child))),
         };
 
         let client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 4 * 1024 * 1024);
@@ -11176,10 +11374,14 @@ Filename Type Size Used Priority
         backend.write_at(0, &write_data).unwrap();
 
         // Abruptly kill the worker child process (SIGKILL)
-        match &mut supervisor.child {
-            WorkerChildHandle::Process(child) => {
-                let _ = child.kill();
-                let _ = child.wait();
+        match supervisor.child.as_mut() {
+            Some(WorkerChildHandle::Process(child)) => {
+                let _ = WorkerProcessControl::kill(child);
+                assert!(wait_for_worker_exit(
+                    child,
+                    Duration::from_secs(2),
+                    Duration::from_millis(10)
+                ));
             }
             #[cfg(test)]
             _ => {}
@@ -11209,6 +11411,56 @@ Filename Type Size Used Priority
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    struct UnresponsiveWorkerProcess {
+        kill_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reaper_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl WorkerProcessControl for UnresponsiveWorkerProcess {
+        fn id(&self) -> u32 {
+            42
+        }
+
+        fn try_wait(&mut self) -> std::io::Result<bool> {
+            Ok(false)
+        }
+
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.kill_requested.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn reap_in_background(&mut self) -> std::io::Result<()> {
+            self.reaper_started.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn isolated_worker_shutdown_stays_bounded_when_kill_is_not_observed() {
+        let kill_requested = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let reaper_started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut process = UnresponsiveWorkerProcess {
+            kill_requested: std::sync::Arc::clone(&kill_requested),
+            reaper_started: std::sync::Arc::clone(&reaper_started),
+        };
+        let started = Instant::now();
+        let outcome = stop_worker_process(
+            &mut process,
+            Duration::from_millis(10),
+            Duration::from_millis(10),
+            Duration::from_millis(1),
+        );
+
+        assert_eq!(outcome, WorkerStopOutcome::ReaperStarted);
+        assert!(kill_requested.load(Ordering::SeqCst));
+        assert!(reaper_started.load(Ordering::SeqCst));
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "worker shutdown must not wait indefinitely after kill"
+        );
+    }
+
     #[test]
     fn daemon_publishes_live_worker_telemetry() {
         let root =
@@ -11227,6 +11479,20 @@ Filename Type Size Used Priority
             logical_capacity_kib: 4194304,
             vram_cached_kib: 131072,
             gpu_headroom_kib: Some(524288),
+            gpu_budget: Some(GpuBudgetTelemetry {
+                schema_version: 1,
+                adapter: Some(ramshared_vram::GpuAdapterIdentity {
+                    backend: "vulkan".into(),
+                    key: "uuid:test".into(),
+                    luid: None,
+                }),
+                total_bytes: Some(6 * GIB),
+                budget_bytes: GIB,
+                used_bytes: 512 * 1024 * 1024,
+                available_bytes: 512 * 1024 * 1024,
+                source: ramshared_vram::GpuBudgetSource::DriverReported,
+                sampled_at_unix_ms: 1234567890,
+            }),
             ssd_origin_written_kib: 8192,
             cache_fallback_reads: 3,
             cache_invalidations: 0,
@@ -11247,6 +11513,8 @@ Filename Type Size Used Priority
         assert_eq!(parsed["cache_state"], "ACTIVE");
         assert_eq!(parsed["logical_capacity_kib"], 4194304);
         assert_eq!(parsed["vram_cached_kib"], 131072);
+        assert_eq!(parsed["gpu_budget"]["adapter"]["backend"], "vulkan");
+        assert_eq!(parsed["gpu_budget"]["available_bytes"], 512 * 1024 * 1024);
         assert_eq!(parsed["cache_target_kib"], 262144);
         assert_eq!(parsed["cache_fallback_reads"], 3);
 

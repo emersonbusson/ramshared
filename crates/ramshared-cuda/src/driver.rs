@@ -12,6 +12,8 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt;
 
+use ramshared_vram::{GpuAdapterIdentity, format_luid};
+
 use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
 
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
@@ -136,6 +138,8 @@ impl Cuda {
                 device_get_count: load_sym(handle, c"cuDeviceGetCount")?,
                 device_get: load_sym(handle, c"cuDeviceGet")?,
                 device_get_name: load_sym(handle, c"cuDeviceGetName")?,
+                device_get_uuid: load_sym_opt(handle, c"cuDeviceGetUuid"),
+                device_get_luid: load_sym_opt(handle, c"cuDeviceGetLuid"),
                 ctx_create: load_sym(handle, c"cuCtxCreate_v2")?,
                 ctx_destroy: load_sym(handle, c"cuCtxDestroy_v2")?,
                 ctx_synchronize: load_sym(handle, c"cuCtxSynchronize")?,
@@ -189,7 +193,27 @@ impl Cuda {
             .to_string_lossy()
             .into_owned();
 
-        Ok(Device { raw, name, ordinal })
+        let uuid = self.syms.device_get_uuid.and_then(|get_uuid| {
+            let mut uuid = [0_i8; 16];
+            // SAFETY: uuid is a writable 16-byte CUDA UUID buffer and raw is a valid device.
+            (unsafe { get_uuid(&mut uuid, raw) } == CUDA_SUCCESS).then_some(uuid)
+        });
+        let luid = self.syms.device_get_luid.and_then(|get_luid| {
+            let mut luid = [0_i8; 8];
+            let mut node_mask = 0_u32;
+            // SAFETY: luid and node_mask are writable outputs and raw is a valid device.
+            (unsafe { get_luid(luid.as_mut_ptr(), &mut node_mask, raw) } == CUDA_SUCCESS)
+                .then(|| format_luid(luid.map(|byte| byte as u8)))
+                .flatten()
+        });
+
+        Ok(Device {
+            raw,
+            name,
+            ordinal,
+            uuid,
+            luid,
+        })
     }
 
     /// Creates a CUDA context on the specified device (becomes current on the calling thread).
@@ -198,7 +222,11 @@ impl Cuda {
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
-        Ok(Context { cuda: self, raw })
+        Ok(Context {
+            cuda: self,
+            raw,
+            adapter: cuda_adapter_identity(device.uuid, device.luid.clone()),
+        })
     }
 }
 
@@ -208,6 +236,8 @@ pub struct Device {
     raw: CuDevice,
     name: String,
     ordinal: i32,
+    uuid: Option<[i8; 16]>,
+    luid: Option<String>,
 }
 
 impl Device {
@@ -230,9 +260,33 @@ impl Device {
 pub struct Context<'a> {
     cuda: &'a Cuda,
     raw: CuContext,
+    adapter: Option<GpuAdapterIdentity>,
+}
+
+fn cuda_adapter_identity(
+    uuid: Option<[i8; 16]>,
+    luid: Option<String>,
+) -> Option<GpuAdapterIdentity> {
+    let uuid_key = uuid
+        .filter(|uuid| uuid.iter().any(|byte| *byte != 0))
+        .map(|uuid| {
+            uuid.iter()
+                .map(|byte| format!("{:02x}", *byte as u8))
+                .collect::<String>()
+        });
+    let key = uuid_key.or_else(|| luid.as_ref().map(|luid| format!("luid:{luid}")))?;
+    Some(GpuAdapterIdentity {
+        backend: "cuda".into(),
+        key,
+        luid,
+    })
 }
 
 impl<'a> Context<'a> {
+    pub fn adapter_identity(&self) -> Option<&GpuAdapterIdentity> {
+        self.adapter.as_ref()
+    }
+
     /// Returns the free and total VRAM capacities in bytes (`cuMemGetInfo`).
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
         let (mut free, mut total) = (0_usize, 0_usize);
@@ -506,6 +560,26 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn cuda_adapter_identity_requires_nonzero_driver_uuid() {
+        assert!(cuda_adapter_identity(None, None).is_none());
+        assert!(cuda_adapter_identity(Some([0; 16]), None).is_none());
+        assert_eq!(
+            cuda_adapter_identity(None, Some("aabbccdd:00001122".into()))
+                .expect("LUID is a stable CUDA identity")
+                .key,
+            "luid:aabbccdd:00001122"
+        );
+        let mut uuid = [0; 16];
+        uuid[0] = 0x12;
+        uuid[15] = -1;
+        let identity = cuda_adapter_identity(Some(uuid), Some("aabbccdd:00001122".into()))
+            .expect("nonzero CUDA UUID is identity");
+        assert_eq!(identity.backend, "cuda");
+        assert_eq!(identity.key, "120000000000000000000000000000ff");
+        assert_eq!(identity.luid.as_deref(), Some("aabbccdd:00001122"));
+    }
+
     // Mock CUDA callbacks execute synchronously on the calling test thread.
     // A global counter races when the test harness runs these tests in parallel.
     thread_local! {
@@ -595,6 +669,8 @@ mod tests {
                 device_get_count: success_device_count,
                 device_get: success_device,
                 device_get_name: success_device_name,
+                device_get_uuid: None,
+                device_get_luid: None,
                 ctx_create: success_context,
                 ctx_destroy: success_context_drop,
                 ctx_synchronize: success_synchronize,

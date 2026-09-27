@@ -57,6 +57,39 @@ fn pick_memory_type(
     })
 }
 
+fn largest_device_local_heap_index(props: &vk::PhysicalDeviceMemoryProperties) -> Option<u32> {
+    (0..props.memory_heap_count)
+        .filter(|&index| {
+            props.memory_heaps[index as usize]
+                .flags
+                .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+        })
+        .max_by_key(|&index| props.memory_heaps[index as usize].size)
+}
+
+fn pick_memory_type_on_heap(
+    props: &vk::PhysicalDeviceMemoryProperties,
+    type_bits: u32,
+    want: vk::MemoryPropertyFlags,
+    heap_index: u32,
+) -> Option<u32> {
+    (0..props.memory_type_count).find(|&index| {
+        (type_bits & (1 << index)) != 0
+            && props.memory_types[index as usize].heap_index == heap_index
+            && props.memory_types[index as usize]
+                .property_flags
+                .contains(want)
+    })
+}
+
+fn rounded_buffer_size(bytes: usize) -> Result<u64, VramError> {
+    u64::try_from(bytes)
+        .ok()
+        .and_then(|requested| requested.max(1).checked_add(3))
+        .map(|rounded| rounded & !3)
+        .ok_or_else(|| VramError::Provider("requested Vulkan allocation size overflow".into()))
+}
+
 /// Logical device resources created in `open` (loaded into `VulkanProvider` on success).
 struct DeviceBits {
     device: ash::Device,
@@ -301,21 +334,15 @@ impl VulkanProvider {
         &self.name
     }
 
-    /// Size of the largest heap `DEVICE_LOCAL` (bytes) — base of the `total` in `mem_info` (DT-10). Fallback
-    /// to the largest heap if there is no DEVICE_LOCAL (case of software/unified memory).
+    /// Size of the largest `DEVICE_LOCAL` heap, which is also the heap used by allocations.
     pub fn device_local_total(&self) -> u64 {
         // SAFETY: `phys` valid.
         let mp = unsafe {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
         };
-        let heaps = &mp.memory_heaps[..mp.memory_heap_count as usize];
-        heaps
-            .iter()
-            .filter(|h| h.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL))
-            .map(|h| h.size)
-            .max()
-            .or_else(|| heaps.iter().map(|h| h.size).max())
+        largest_device_local_heap_index(&mp)
+            .map(|index| mp.memory_heaps[index as usize].size)
             .unwrap_or(0)
     }
 
@@ -487,7 +514,7 @@ impl VramProvider for VulkanProvider {
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
         // Rounds buffer size to a multiple of 4 (requirement for vkCmdFillBuffer with WHOLE_SIZE
         // in zero); the logical len remains `bytes`.
-        let buf_size = ((bytes as u64).max(1) + 3) & !3;
+        let buf_size = rounded_buffer_size(bytes)?;
         let buf_ci = vk::BufferCreateInfo::default()
             .size(buf_size)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
@@ -503,10 +530,18 @@ impl VramProvider for VulkanProvider {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
         };
-        let mt = match pick_memory_type(
+        let Some(heap_index) = largest_device_local_heap_index(&mprops) else {
+            // SAFETY: buffer was created above and is destroyed before returning.
+            unsafe { self.device.destroy_buffer(buffer, None) };
+            return Err(VramError::Provider(
+                "no DEVICE_LOCAL memory heap available for the buffer".into(),
+            ));
+        };
+        let mt = match pick_memory_type_on_heap(
             &mprops,
             req.memory_type_bits,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            heap_index,
         ) {
             Some(i) => i,
             None => {
@@ -549,7 +584,8 @@ impl VramProvider for VulkanProvider {
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
         let budget = self.budget_snapshot()?;
-        Ok((budget.available_bytes(), budget.total_bytes.unwrap_or(0)))
+        let total = budget.total_bytes.unwrap_or(0);
+        Ok((budget.available_bytes().min(total), total))
     }
 
     fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
@@ -563,14 +599,8 @@ impl VramProvider for VulkanProvider {
                     .get_physical_device_memory_properties2(self.phys, &mut memory_props)
             };
             let props = memory_props.memory_properties;
-            let heap_index = (0..props.memory_heap_count as usize)
-                .filter(|index| {
-                    props.memory_heaps[*index]
-                        .flags
-                        .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-                })
-                .max_by_key(|index| props.memory_heaps[*index].size);
-            if let Some(index) = heap_index {
+            if let Some(index) = largest_device_local_heap_index(&props) {
+                let index = index as usize;
                 let budget_bytes = budget_props.heap_budget[index];
                 if budget_bytes > 0 {
                     return Ok(GpuBudgetSnapshot {
@@ -813,29 +843,50 @@ mod tests {
 
     #[test]
     fn device_local_allocation_matches_the_largest_reported_budget_heap() {
-        let mut properties = vk::PhysicalDeviceMemoryProperties::default();
-        properties.memory_heap_count = 2;
-        properties.memory_heaps[0] = vk::MemoryHeap::default()
+        let defaults = vk::PhysicalDeviceMemoryProperties::default();
+        let mut memory_heaps = defaults.memory_heaps;
+        memory_heaps[0] = vk::MemoryHeap::default()
             .size(4_000)
             .flags(vk::MemoryHeapFlags::DEVICE_LOCAL);
-        properties.memory_heaps[1] = vk::MemoryHeap::default()
+        memory_heaps[1] = vk::MemoryHeap::default()
             .size(8_000)
             .flags(vk::MemoryHeapFlags::DEVICE_LOCAL);
-        properties.memory_type_count = 2;
-        properties.memory_types[0] = vk::MemoryType::default()
+        let mut memory_types = defaults.memory_types;
+        memory_types[0] = vk::MemoryType::default()
             .heap_index(0)
             .property_flags(vk::MemoryPropertyFlags::DEVICE_LOCAL);
-        properties.memory_types[1] = vk::MemoryType::default()
+        memory_types[1] = vk::MemoryType::default()
             .heap_index(1)
             .property_flags(vk::MemoryPropertyFlags::DEVICE_LOCAL);
+        let properties = vk::PhysicalDeviceMemoryProperties {
+            memory_heap_count: 2,
+            memory_heaps,
+            memory_type_count: 2,
+            memory_types,
+        };
 
+        assert_eq!(largest_device_local_heap_index(&properties), Some(1));
         assert_eq!(
-            pick_memory_type(
-                &properties,
-                0b11,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ),
+            pick_memory_type_on_heap(&properties, 0b11, vk::MemoryPropertyFlags::DEVICE_LOCAL, 1,),
             Some(1)
         );
+        assert_eq!(
+            pick_memory_type_on_heap(&properties, 0b01, vk::MemoryPropertyFlags::DEVICE_LOCAL, 1,),
+            None,
+            "allocation requirements that exclude the reported heap must fail closed"
+        );
+    }
+
+    #[test]
+    fn buffer_size_rounding_rejects_overflow() {
+        assert_eq!(
+            rounded_buffer_size(0).expect("zero rounds to minimal buffer"),
+            4
+        );
+        assert_eq!(
+            rounded_buffer_size(5).expect("rounds up to four-byte boundary"),
+            8
+        );
+        assert!(rounded_buffer_size(usize::MAX).is_err());
     }
 }
