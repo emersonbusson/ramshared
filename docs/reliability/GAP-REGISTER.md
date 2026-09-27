@@ -98,6 +98,16 @@ pages at unregister is unsafe. It has not been built or installed. Keep the
 exact freeze cause and corrected kernel deployment `PARTIAL`; stress remains
 off.
 
+EVD-0098, taken before the next WSL start, confirms the `gradual` setting is
+still inactive. During this no-pressure sample, guest availability was about
+9.04 GiB, swap use was about 56.5 MiB, and PSI was zero; Windows had 4,812 MiB
+physical headroom and `vmmemWSL` working set was 14,585 MiB. Compared with
+EVD-0097's 16:11 sample, the working set fell by about 1,031 MiB while guest
+page cache rose by about 255 MiB and Windows headroom rose by about 365 MiB.
+This does not prove the reason for that change and shows why the staged reclaim
+setting cannot be credited before a fresh VM start. The exact freeze cause,
+Build #6 source, UIO VMA lifetime, and GPADL reclamation remain unresolved.
+
 ## Closed In This Session
 
 All run IDs, commands, VM names, and `SANITIZED_*` values below are retained

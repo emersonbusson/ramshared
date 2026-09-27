@@ -7573,3 +7573,59 @@ installed.
 **Verdict:** 🟡 `PARTIAL` — host-side cache reclaim is staged for the next WSL
 start; freeze cause and safe GPADL/UIO reclamation remain unresolved. Keep
 stress off and do not install the unbuilt source diff.
+
+## 2026-09-27 16:27–16:28 -03 — Reclaim-setting activation and paired memory recheck
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0098`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T19:27:27Z`.
+**Verified at:** `2026-09-27T19:28:24Z`.
+**Source revision:** `4efa5fe605f74a54e02ef06e2244f24ca823c8ca`.
+**Source state:** Read-only guest and Windows memory samples, current boot
+time, active swap devices, process list, kernel release, and `.wslconfig`.
+The host setting had already been edited to `autoMemoryReclaim=gradual`, but
+the current WSL boot predates that edit. No WSL restart, stress, build, or
+kernel installation was performed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0096 and EVD-0097.
+**Freshness:** Guest sample at 16:27:27 -03; Windows sample at 16:28:24 -03;
+current VM boot began at 15:47:21 -03.
+**Category:** `reliability / memory / host-guest / WSL2 / reclaim-activation`.
+**How to measure:** Compare `/proc/meminfo`, `/proc/swaps`, memory PSI, process
+and kernel state with Windows physical availability and `vmmemWSL` working-set
+and private-byte counters. Compare config modification time with current VM
+boot time before attributing a reclaim setting to live behavior.
+
+**What:** Verify whether the staged WSL reclaim setting is active and capture
+a fresh no-pressure host/guest memory pair before any new development load.
+
+**Guest sample:** The active kernel remained
+`6.18.40.1-microsoft-standard-WSL2+ #6`. `MemAvailable` was 9,484,188 KiB
+(about 9.04 GiB), `Cached` was 9,251,932 KiB (about 8.82 GiB), and 57,808 KiB
+(about 56.5 MiB) of the 4 GiB swap was used. Memory PSI `some` and `full`
+avg10/avg60/avg300 were zero. `/proc/swaps` showed only the default WSL
+fallback device; no `ramsharedd` process was present.
+
+**Windows sample:** Physical RAM totaled 32,670 MiB, with 4,812 MiB available.
+`vmmemWSL` had a 14,585 MiB working set and 15,969 MiB private bytes. Relative
+to EVD-0097's 16:11 sample, its working set had fallen by about 1,031 MiB and
+Windows physical headroom had risen by about 365 MiB. Guest cache instead rose
+by roughly 255 MiB; swap use and PSI remained low.
+
+**Reclaim activation:** `.wslconfig` was modified at 16:14:37 -03, while the
+current WSL VM had started at 15:47:21 -03. Therefore
+`autoMemoryReclaim=gradual` was not active during either sample. The decrease
+in `vmmemWSL` working set cannot be credited to that setting; it shows that
+working-set and physical-headroom changes are not a simple one-to-one cache
+series. The earlier host-footprint concern remains, but the proposed
+host-cache mitigation has not yet been tested after a WSL start.
+
+**Assessment:** The guest was healthy and not in the pre-freeze swapping
+condition during this sample. It does not explain the previous freeze, assign
+the I: reads, match Build #6 to source, or validate the GPADL/UIO patch. This
+is a no-pressure observation only.
+
+**Verdict:** 🟡 `PARTIAL` — confirms the staged reclaim setting is inactive and
+the current guest has low pressure; freeze cause, cache-mitigation efficacy,
+and safe kernel correction remain open. Do not enable stress.
