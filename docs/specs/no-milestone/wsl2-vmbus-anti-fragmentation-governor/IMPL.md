@@ -10,7 +10,7 @@ Partial · buddyinfo governor requirements remain implemented; RF-6 Tier 3-only 
 
 | Path | ITEM/RF | Change |
 | --- | --- | --- |
-| `crates/ramshared-cli/src/stress.rs` | ITEM-1, ITEM-2, ITEM-5, ITEM-6 / RF-1..4, RF-6 | Buddyinfo order-7 parser, elevated headroom floor (1024 MB), anti-fragmentation interlock, GPU-independent Tier 3-only mode, active-cache-derived full-profile target, and no cross-adapter NVIDIA admission probe. |
+| `crates/ramshared-cli/src/stress.rs` | ITEM-1, ITEM-2, ITEM-5, ITEM-6 / RF-1..4, RF-6 | Buddyinfo order-7 parser, elevated headroom floor (1024 MB), anti-fragmentation interlock, GPU-independent Tier 3-only mode, active-cache-derived full-profile target, coherent same-sample physical-cache evidence for simultaneous tiers, and no cross-adapter NVIDIA admission probe. |
 | `crates/ramshared-vram/src/lib.rs` | GPU budget contract | Added adapter identity, normalized Windows LUID matching across APIs, budget source, freshness, and fail-closed admission policy. |
 | `crates/ramshared-vulkan/src/lib.rs` | GPU budget contract | Queries `VK_EXT_memory_budget`, reports physical-device UUID and valid Windows LUID when exposed, and marks fallback estimates ineligible for automatic cache admission. |
 | `crates/ramshared-cuda/src/driver.rs`, `crates/ramshared-cuda/src/vram_impl.rs` | GPU budget contract | Loads optional CUDA UUID and LUID queries; reports driver free/total with adapter-bound identity when available. |
@@ -25,10 +25,11 @@ Partial · buddyinfo governor requirements remain implemented; RF-6 Tier 3-only 
 ## Validation
 
 - Targeted tests: `cargo test -p ramshared-cli tier3_only` and `cargo test -p ramshared-cli full_profile` passed.
-- Full CLI suite: `cargo test -p ramshared-cli` passed (331 unit tests + 10 dispatch tests).
+- Full CLI suite: `cargo test -p ramshared-cli -j 2` passed (341 unit tests + 10 dispatch tests).
+- The Windows full-tier wrapper derives its physical-cache target from the sealed cap plus live worker telemetry. Eight PowerShell cases cover the below-cap legitimate path, wrong tier targets, over-cap refusal, missing or short same-sample cache proof, malformed telemetry, and a worker target that falls below the startup-admitted value.
 - Strict Clippy passed: `cargo clippy -p ramshared-cli --all-targets -- -D warnings`.
 - Monitor tests cover active adapter budget rendering and reject stale, local-only, malformed, or unidentified telemetry; an absent GPU sample does not change the host status. Unmeasured tier throughput, latency, and link data render as unavailable instead of hardware estimates.
-- Slice coverage passed at 80.9%: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/stress.rs --min 80`.
+- Slice coverage passed at 80.1%: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/stress.rs --min 80`.
 - `cargo fmt --check`, `git diff --check`, and `./scripts/docs-check.sh` passed.
 - No live Tier 3 stress, GPU allocation, or host qualification was performed; existing host external-swap pressure makes a live campaign unsafe to start now.
 
@@ -50,4 +51,4 @@ Revert changes if buddyinfo parsing causes panics on non-standard kernel zone la
 | RF-3 | ITEM-2 | `6b4a6901`, `3a1b75eb` |
 | RF-4 | ITEM-2 | `6b4a6901`, `3a1b75eb` |
 | RF-5 | ITEM-3 | `3a1b75eb` |
-| RF-6 | ITEM-5, ITEM-6 | working tree (uncommitted) |
+| RF-6 | ITEM-5, ITEM-6 | `90fedeb7` |

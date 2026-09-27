@@ -6585,3 +6585,70 @@ occurred.
 memory use is bounded in this window; immutable deployment, the 20 GiB
 physical gate, the historical freeze cause, and live tier qualification remain
 open.
+
+## 2026-09-27 07:18 -03 — Coherent worker-admitted cache target evidence
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0085`.
+**Owner role:** `hardware-researcher / runtime`.
+**Observed at:** `2026-09-27T09:38:12Z`.
+**Verified at:** `2026-09-27T10:26:59Z`.
+**Source revision:** `90fedeb763fa08f619694e7b915c433469529fb4`.
+**Source state:** Rust stress telemetry, Windows supervisor, and static tests are committed locally and not installed. No GPU allocation or stress run occurred.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0083/EVD-0084 and the dynamic GPU budget SPECs.
+**Freshness:** Static test and plan-only host sample completed on 2026-09-27; GPU and guest observations are read-only point samples.
+**Category:** `reliability / ci-gate`.
+**How to measure:** From WSL, run `cargo test -p ramshared-cli -j 2`, `cargo clippy -p ramshared-cli --all-targets -- -D warnings`, and `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/stress.rs --min 80`. Set `winroot=$(wslpath -w "$PWD")`; run `scripts/windows/Test-RamSharedThreeTierStressStatic.ps1` and `scripts/windows/Invoke-RamSharedThreeTierStress.ps1` with Windows PowerShell 5.1, omitting `-Run` for the plan-only preflight.
+
+**What:** The Windows full-tier wrapper previously required exactly 4,096 MiB
+of physical GPU cache even though Rust derives the full-profile target from
+the active worker. Rust also retained the maximum physical residency and
+maximum worker target as separate peaks, so the outer wrapper could not prove
+that they coincided while all three tiers were full. The sealed 4,096 MiB
+manifest value is now only a cap and is passed to `ramshared up` as the
+maximum logical request. The full profile retains its startup-admitted worker
+target as the minimum, and `full_tier_snapshot` returns the cache sample only
+when the tier targets and cache criteria pass in the same qualification
+cycle. The report records that sample's target and resident MiB in
+`simultaneous_physical_cache_target_mib` and
+`simultaneous_physical_cache_mib`, separately from peak values. The Windows
+validator now requires metric version 2, targets of 100% ZRAM, 100% logical
+NBD, and 99% SSD, positive cache samples, a valid startup target, and a paired
+same-cycle cache target/residency under the sealed cap. Peak metrics cannot
+substitute for a missing or short paired sample.
+
+**Verification:** The final `Test-RamSharedThreeTierStressStatic.ps1`
+PowerShell 5.1 run exited 0 with eight named cases: a valid below-cap target
+passes; wrong tier targets, an over-cap target, independent peak values that
+hide a short same-cycle cache sample, missing paired telemetry, fractional
+fields, residency below target, and a worker target below the startup-admitted
+target all refuse. Rust's stress-module tests passed 34/34; the complete CLI
+suite passed 341 unit tests and 10 dispatch tests. Strict Clippy and the
+per-file coverage gate passed; `stress.rs` reached 80.1% line coverage. The
+complete Windows static suite passed all 27 named harnesses on the preceding
+wrapper revision, and the final targeted Windows stress harness passed after
+the added metric/tier checks. The generated guest script passed `bash -n`,
+`cargo fmt --check -p ramshared-cli`, `git diff --check`,
+`node tools/ci/check-validation-schema.mjs --all`, and `./scripts/docs-check.sh`
+all passed.
+
+**Current admission sample:** The latest plan-only invocation exited 0 and
+emitted the worker-target policy with `physical_cache_cap_mib=4096` and
+`physical_cache_target_mib=null`; it performed no activation. Its three
+Windows samples ranged from `11,432` to `11,535 MiB` physical headroom and
+`28,100` to `28,244 MiB` commit headroom, against `20,480 MiB` required for
+each. The physical gate therefore refused the full profile. Guardian health
+was fresh. A near-time guest read-only sample reported about `3,151 MiB`
+`MemAvailable`, `3,877 MiB` `SwapFree`, and `0.00%` PSI avg10 some/full; the
+1,024 MiB guest reserves passed. The actual worker-admitted GPU target was
+not observed because no cache allocation was made.
+
+**Conclusion:** The source now qualifies cache residency with the exact
+worker-reported target from a cycle that also satisfies the three tier
+thresholds, while keeping the sealed 4 GiB cap. The full campaign remains
+blocked by current Windows physical headroom. No GPU allocation, ZRAM/NBD/SSD
+pressure, installation, or WSL termination was performed. Cross-vendor live
+allocation and full three-tier qualification remain open.
+**Verdict:** 🟡 `PARTIAL` — source-level target selection and evidence checks
+pass; the live worker target and hardware qualification remain unproven.
