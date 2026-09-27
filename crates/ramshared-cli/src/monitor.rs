@@ -2133,6 +2133,131 @@ mod tests {
         (root, path)
     }
 
+    fn benchmark_evidence_fixture() -> Value {
+        serde_json::json!({
+            "schema_version": "ramshared-evidence/v1",
+            "source": {
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "dirty": false,
+                "dirty_entry_count": 0
+            },
+            "workload": { "runs": 3 },
+            "comparison": { "qualified": true },
+            "lifecycle": {
+                "binary_match": true,
+                "cleanup": { "complete": true },
+                "residue": 0
+            },
+            "artifacts": [{
+                "path": "docs/benchmarks/evidence/qualified-run.json",
+                "bytes": 1,
+                "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }],
+            "decision": { "verdict": "PASS", "promotable": true },
+            "metrics": {
+                "reclaim_speed_gbs": {
+                    "unit": "GB/s", "samples": [11.0, 12.0, 13.0], "n": 3, "median": 12.0
+                },
+                "reclaim_duration_ms": {
+                    "unit": "ms", "samples": [20.0, 22.0, 24.0], "n": 3, "median": 22.0
+                },
+                "p50_cycle_latency_ms": {
+                    "unit": "ms", "samples": [0.2, 0.3, 0.4], "n": 3, "median": 0.3
+                },
+                "p99_cycle_latency_ms": {
+                    "unit": "ms", "samples": [1.0, 1.1, 1.2], "n": 3, "p99_nearest_rank": 1.2
+                }
+            }
+        })
+    }
+
+    fn monitor_benchmark_path(name: &str, contents: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-monitor-benchmark-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("evidence.json");
+        fs::write(&path, contents).unwrap();
+        (root, path)
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_rejects_legacy_unqualified_status
+    fn monitor_benchmark_rejects_legacy_unqualified_status() {
+        let legacy = serde_json::json!({
+            "status": "PASS_ZERO_PANIC",
+            "reclaim_speed_gbs": 14.4,
+            "reclaim_duration_ms": 1127.0,
+            "p50_cycle_latency_ms": 0.0005,
+            "p99_cycle_latency_ms": 0.0023
+        })
+        .to_string();
+        let (root, path) = monitor_benchmark_path("legacy", &legacy);
+
+        assert_eq!(
+            read_benchmark_qualification(&path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_accepts_promotable_v1_evidence
+    fn monitor_benchmark_accepts_promotable_v1_evidence() {
+        let evidence = benchmark_evidence_fixture().to_string();
+        let (root, path) = monitor_benchmark_path("qualified", &evidence);
+
+        assert_eq!(
+            read_benchmark_qualification(&path),
+            (12.0, 22.0, 0.3, 1.2, "PASS".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_rejects_nonpromotable_evidence
+    fn monitor_benchmark_rejects_nonpromotable_evidence() {
+        let mut evidence = benchmark_evidence_fixture();
+        evidence["comparison"]["qualified"] = Value::Bool(false);
+        evidence["decision"]["verdict"] = Value::String("BASELINE".to_string());
+        evidence["decision"]["promotable"] = Value::Bool(false);
+        let contents = evidence.to_string();
+        let (root, path) = monitor_benchmark_path("baseline", &contents);
+
+        assert_eq!(
+            read_benchmark_qualification(&path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_rejects_dirty_or_incomplete_evidence
+    fn monitor_benchmark_rejects_dirty_or_incomplete_evidence() {
+        let mut dirty = benchmark_evidence_fixture();
+        dirty["source"]["dirty"] = Value::Bool(true);
+        let dirty_contents = dirty.to_string();
+        let (dirty_root, dirty_path) = monitor_benchmark_path("dirty", &dirty_contents);
+        assert_eq!(
+            read_benchmark_qualification(&dirty_path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(dirty_root).unwrap();
+
+        let mut incomplete = benchmark_evidence_fixture();
+        incomplete["metrics"]["reclaim_speed_gbs"] = Value::Null;
+        let incomplete_contents = incomplete.to_string();
+        let (incomplete_root, incomplete_path) =
+            monitor_benchmark_path("incomplete", &incomplete_contents);
+        assert_eq!(
+            read_benchmark_qualification(&incomplete_path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(incomplete_root).unwrap();
+    }
+
     #[test]
     // TestName: monitor_telemetry_refuses_missing_reservation_ledger
     fn monitor_telemetry_refuses_missing_reservation_ledger() {
