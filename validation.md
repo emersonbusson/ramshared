@@ -6531,3 +6531,57 @@ No full-tier stress or upstream/CoCo/GPADL/UIO qualification ran.
 **Verdict:** 🟡 `PARTIAL` — the Windows static suite now passes locally and the
 current refusal conditions are measured; installation, live pressure, GPU,
 VM/CoCo, and historical freeze attribution remain open.
+
+## 2026-09-27 06:01 -03 — Guardian health republished after bounded restart
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0084`.
+**Owner role:** `reliability / runtime`.
+**Observed at:** `2026-09-27T09:01:35Z`.
+**Verified at:** `2026-09-27T09:08:38Z`.
+**Source revision:** `e4b87ac8b2699aa37b521a44ff0c95880810d3a2`.
+**Source state:** Clean committed checkout; the already-enabled Guardian scheduled task was started once after read-only policy/dependency checks; no RamShared install or stress.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0076 through EVD-0083.
+**Freshness:** Three 15-second Windows samples completed while the same Guardian task remained running.
+**Category:** `reliability / fail-safe`.
+**How to measure:** Read `Get-ScheduledTask -TaskName RamSharedWslGuardian.v1`, `C:\ProgramData\RamShared\guardian-state\Ubuntu-24.04.health.json`, Windows `GetPerformanceInfo`, and guest `/proc/meminfo`, `/proc/swaps`, and `/proc/pressure/memory`.
+
+**What:** A read-only readiness sample immediately before the task start
+showed the Windows-to-WSL `boot_id` probe exiting 0, `vmcompute` `Running`,
+and `wsl.exe --status` exiting 0. The existing task was enabled and `Ready`,
+configured with `RunLevel=Highest`, one `PowerShell.exe -Action watch -Run`
+action, the exact guardian termination approval,
+`MultipleInstances=IgnoreNew`, and an unlimited task duration. Its script
+checks the task XML seal before watching. After it started, a fresh
+`HEALTHY/watching` publication confirms that the task observed a non-stale
+heartbeat and a valid boot ID. No WSL termination occurred.
+
+**Result:** The task entered `Running`; the health file changed from stale
+`BLOCKED/boot_identity_unavailable` to fresh `HEALTHY/watching`, with
+`timestamp_utc=2026-09-27T09:01:34.5456081Z`. In three samples 15 seconds
+apart, Guardian stayed `HEALTHY`; total physical headroom was `12,766`–`12,774
+MiB` and commit headroom `28,411`–`28,439 MiB`. At a follow-up 10 minutes
+after task start, physical headroom was `12,472 MiB` and commit headroom
+`28,142 MiB`. The full pressure profile still requires `20,480 MiB` physical
+headroom, so it remains refused. Three PowerShell processes together used
+`191.5`–`276 MiB` private bytes during the first minute; at the 10-minute
+sample, two processes used `191.1 MiB` total. The follow-up guest sample had
+`6,307 MiB` `MemAvailable`, `4,030 MiB` `SwapFree`, and `0.00%` memory PSI;
+`/proc/swaps` contained only the fallback device, and the RamShared supervisor
+remained inactive.
+
+**Conclusion:** Restarting the existing Guardian cleared its stale health
+publication without starting the memory campaign. The ordinary watcher did
+not reproduce the earlier multi-GiB PowerShell reading over 10 minutes;
+EVD-0068 traces that spike to a separate one-shot Guardian-status diagnostic
+that queried ScheduledTasks, but the PowerShell engine/provider cause remains
+unknown. The task still runs from a mutable checkout rather than an immutable
+release package, the installed monitor is unchanged, and physical headroom
+still blocks full stress. Only the Guardian task was started and left running;
+no GPU allocation, tier activation, RamShared install, or WSL termination
+occurred.
+**Verdict:** 🟡 `PARTIAL` — current Guardian health is fresh and its observed
+memory use is bounded in this window; immutable deployment, the 20 GiB
+physical gate, the historical freeze cause, and live tier qualification remain
+open.
