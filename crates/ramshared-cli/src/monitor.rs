@@ -252,6 +252,8 @@ pub struct TierIoStats {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ControlPlaneObservation {
+    #[serde(default)]
+    pub memory_psi_available: bool,
     pub memory_psi_some_avg10: f64,
     pub memory_psi_some_avg60: f64,
     pub memory_psi_some_avg300: f64,
@@ -503,9 +505,12 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
         read_hyperv_balloon_file(Path::new("/sys/kernel/debug/hv-balloon"));
     let events = fs::read_to_string("/sys/fs/cgroup/ramshared-workloads.slice/memory.events")
         .unwrap_or_default();
-    let errors = Vec::new();
     let gpu = gpu_observation_from_status(&status_map, unix_epoch_ms());
     let mut control_plane = parse_memory_pressure(&pressure);
+    let mut errors = Vec::new();
+    if !control_plane.memory_psi_available {
+        errors.push("memory_psi_unavailable".to_string());
+    }
     let (swap_in_pages, swap_out_pages, pgfault_total, pgmajfault_total) = parse_vmstat(&vmstat);
     let (swap_read_bytes, swap_write_bytes) = parse_swap_diskstats(&diskstats);
     let (zram_io, vram_io, disk_io) = parse_per_tier_diskstats(&diskstats);
@@ -703,26 +708,70 @@ fn collect_cgroup_memory(root: &Path) -> CgroupMemoryObservation {
 }
 
 fn parse_memory_pressure(text: &str) -> ControlPlaneObservation {
-    fn average(line: Option<&str>, name: &str) -> f64 {
-        line.and_then(|line| {
-            line.split_whitespace().find_map(|field| {
-                field
-                    .strip_prefix(name)
-                    .and_then(|value| value.parse::<f64>().ok())
-            })
-        })
-        .unwrap_or(0.0)
+    fn averages(line: Option<&str>) -> Option<[f64; 3]> {
+        let line = line?;
+        let mut values = [None; 3];
+        for field in line.split_whitespace().skip(1) {
+            for (index, name) in ["avg10=", "avg60=", "avg300="].iter().enumerate() {
+                if let Some(raw) = field.strip_prefix(name) {
+                    if values[index].is_some() {
+                        return None;
+                    }
+                    let value = raw.parse::<f64>().ok()?;
+                    if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                        return None;
+                    }
+                    values[index] = Some(value);
+                }
+            }
+        }
+        Some([values[0]?, values[1]?, values[2]?])
     }
-    let some = text.lines().find(|line| line.starts_with("some "));
-    let full = text.lines().find(|line| line.starts_with("full "));
+
+    let some = averages(text.lines().find(|line| line.starts_with("some ")));
+    let full = averages(text.lines().find(|line| line.starts_with("full ")));
+    let some_values = some.unwrap_or([0.0; 3]);
+    let full_values = full.unwrap_or([0.0; 3]);
     ControlPlaneObservation {
-        memory_psi_some_avg10: average(some, "avg10="),
-        memory_psi_some_avg60: average(some, "avg60="),
-        memory_psi_some_avg300: average(some, "avg300="),
-        memory_psi_full_avg10: average(full, "avg10="),
-        memory_psi_full_avg60: average(full, "avg60="),
-        memory_psi_full_avg300: average(full, "avg300="),
+        memory_psi_available: some.is_some() && full.is_some(),
+        memory_psi_some_avg10: some_values[0],
+        memory_psi_some_avg60: some_values[1],
+        memory_psi_some_avg300: some_values[2],
+        memory_psi_full_avg10: full_values[0],
+        memory_psi_full_avg60: full_values[1],
+        memory_psi_full_avg300: full_values[2],
         ..ControlPlaneObservation::default()
+    }
+}
+
+fn observation_sample_is_stale(observation: &Observation) -> bool {
+    observation
+        .errors
+        .iter()
+        .any(|error| error == "sample_refresh_failed")
+}
+
+fn format_memory_pressure(control_plane: &ControlPlaneObservation, sample_stale: bool) -> String {
+    if sample_stale {
+        return "Pressure: sample stale".to_string();
+    }
+    if !control_plane.memory_psi_available {
+        return "Pressure: PSI unavailable".to_string();
+    }
+    format!(
+        "Pressure: PSI some={:.2}% full={:.2}%",
+        control_plane.memory_psi_some_avg10, control_plane.memory_psi_full_avg10
+    )
+}
+
+fn mark_observation_refresh_failed(observation: &mut Observation, age: Duration) {
+    observation.sample_age_ms = age.as_millis().min(u128::from(u64::MAX)) as u64;
+    if !observation
+        .errors
+        .iter()
+        .any(|error| error == "sample_refresh_failed")
+    {
+        observation.errors.push("sample_refresh_failed".to_string());
     }
 }
 
@@ -1087,12 +1136,17 @@ fn run_compact(options: &MonitorOptions) -> Result<(), MonitorError> {
                 .and_then(Value::as_u64)
                 .map_or_else(|| "unknown".into(), |value| format!("{} MiB", value / 1024))
         };
+        let memory_pressure = if observation.control_plane.memory_psi_available {
+            format!("{:.2}%", observation.control_plane.memory_psi_full_avg10)
+        } else {
+            "unavailable".to_string()
+        };
         println!(
-            "VRAM cached: {} | GPU reserve: {} | SSD authoritative: {} | memory pressure: {:.2}% | state: {}",
+            "VRAM cached: {} | GPU reserve: {} | SSD authoritative: {} | memory pressure: {} | state: {}",
             number("vram_cached_kib"),
             number("gpu_headroom_kib"),
             number("ssd_origin_written_kib"),
-            observation.control_plane.memory_psi_full_avg10,
+            memory_pressure,
             observation.string("overall_state")
         );
         if options.once {
@@ -1349,6 +1403,7 @@ fn tui_loop(
     let interval = Duration::from_millis(options.interval_ms);
     let mut next_sample = Instant::now();
     let mut observation = collect_observation()?;
+    let mut last_successful_sample = Instant::now();
     let mut last_io_sample = Some((
         observation.control_plane.swap_read_bytes,
         observation.control_plane.swap_write_bytes,
@@ -1377,121 +1432,135 @@ fn tui_loop(
 
     loop {
         if Instant::now() >= next_sample {
-            if let Ok(new_obs) = collect_observation() {
-                observation = new_obs;
-            }
-            let now = Instant::now();
-            if let Some((
-                last_rb,
-                last_wb,
-                last_z_rb,
-                last_z_wb,
-                last_v_rb,
-                last_v_wb,
-                last_d_rb,
-                last_d_wb,
-                last_t,
-            )) = last_io_sample
-            {
-                let dt = now.duration_since(last_t).as_secs_f64();
-                if (0.05..=10.0).contains(&dt) {
-                    let divisor = dt * 1_048_576.0;
-                    let cp = &mut observation.control_plane;
-                    cp.swap_read_mbs =
-                        (cp.swap_read_bytes.saturating_sub(last_rb) as f64) / divisor;
-                    cp.swap_write_mbs =
-                        (cp.swap_write_bytes.saturating_sub(last_wb) as f64) / divisor;
+            let refreshed = match collect_observation() {
+                Ok(new_observation) => {
+                    observation = new_observation;
+                    last_successful_sample = Instant::now();
+                    true
+                }
+                Err(_) => false,
+            };
+            if refreshed {
+                let now = Instant::now();
+                if let Some((
+                    last_rb,
+                    last_wb,
+                    last_z_rb,
+                    last_z_wb,
+                    last_v_rb,
+                    last_v_wb,
+                    last_d_rb,
+                    last_d_wb,
+                    last_t,
+                )) = last_io_sample
+                {
+                    let dt = now.duration_since(last_t).as_secs_f64();
+                    if (0.05..=10.0).contains(&dt) {
+                        let divisor = dt * 1_048_576.0;
+                        let cp = &mut observation.control_plane;
+                        cp.swap_read_mbs =
+                            (cp.swap_read_bytes.saturating_sub(last_rb) as f64) / divisor;
+                        cp.swap_write_mbs =
+                            (cp.swap_write_bytes.saturating_sub(last_wb) as f64) / divisor;
 
-                    cp.zram_io.read_mbs =
-                        (cp.zram_io.read_bytes.saturating_sub(last_z_rb) as f64) / divisor;
-                    cp.zram_io.write_mbs =
-                        (cp.zram_io.write_bytes.saturating_sub(last_z_wb) as f64) / divisor;
+                        cp.zram_io.read_mbs =
+                            (cp.zram_io.read_bytes.saturating_sub(last_z_rb) as f64) / divisor;
+                        cp.zram_io.write_mbs =
+                            (cp.zram_io.write_bytes.saturating_sub(last_z_wb) as f64) / divisor;
 
-                    cp.vram_io.read_mbs =
-                        (cp.vram_io.read_bytes.saturating_sub(last_v_rb) as f64) / divisor;
-                    cp.vram_io.write_mbs =
-                        (cp.vram_io.write_bytes.saturating_sub(last_v_wb) as f64) / divisor;
+                        cp.vram_io.read_mbs =
+                            (cp.vram_io.read_bytes.saturating_sub(last_v_rb) as f64) / divisor;
+                        cp.vram_io.write_mbs =
+                            (cp.vram_io.write_bytes.saturating_sub(last_v_wb) as f64) / divisor;
 
-                    cp.disk_io.read_mbs =
-                        (cp.disk_io.read_bytes.saturating_sub(last_d_rb) as f64) / divisor;
-                    cp.disk_io.write_mbs =
-                        (cp.disk_io.write_bytes.saturating_sub(last_d_wb) as f64) / divisor;
+                        cp.disk_io.read_mbs =
+                            (cp.disk_io.read_bytes.saturating_sub(last_d_rb) as f64) / divisor;
+                        cp.disk_io.write_mbs =
+                            (cp.disk_io.write_bytes.saturating_sub(last_d_wb) as f64) / divisor;
 
-                    let total_swap_speed = cp.swap_read_mbs + cp.swap_write_mbs;
-                    swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
-                    swap_read_peak_mbs = swap_read_peak_mbs.max(cp.swap_read_mbs);
-                    swap_write_peak_mbs = swap_write_peak_mbs.max(cp.swap_write_mbs);
-                    cp.swap_peak_mbs = swap_peak_mbs;
-                    cp.swap_read_peak_mbs = swap_read_peak_mbs;
-                    cp.swap_write_peak_mbs = swap_write_peak_mbs;
+                        let total_swap_speed = cp.swap_read_mbs + cp.swap_write_mbs;
+                        swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
+                        swap_read_peak_mbs = swap_read_peak_mbs.max(cp.swap_read_mbs);
+                        swap_write_peak_mbs = swap_write_peak_mbs.max(cp.swap_write_mbs);
+                        cp.swap_peak_mbs = swap_peak_mbs;
+                        cp.swap_read_peak_mbs = swap_read_peak_mbs;
+                        cp.swap_write_peak_mbs = swap_write_peak_mbs;
 
-                    zram_acc.record(cp.zram_io.read_mbs, cp.zram_io.write_mbs);
-                    zram_acc.apply_to_plane_io(&mut cp.zram_io);
+                        zram_acc.record(cp.zram_io.read_mbs, cp.zram_io.write_mbs);
+                        zram_acc.apply_to_plane_io(&mut cp.zram_io);
 
-                    vram_acc.record(cp.vram_io.read_mbs, cp.vram_io.write_mbs);
-                    vram_acc.apply_to_plane_io(&mut cp.vram_io);
+                        vram_acc.record(cp.vram_io.read_mbs, cp.vram_io.write_mbs);
+                        vram_acc.apply_to_plane_io(&mut cp.vram_io);
 
-                    disk_acc.record(cp.disk_io.read_mbs, cp.disk_io.write_mbs);
-                    disk_acc.apply_to_plane_io(&mut cp.disk_io);
+                        disk_acc.record(cp.disk_io.read_mbs, cp.disk_io.write_mbs);
+                        disk_acc.apply_to_plane_io(&mut cp.disk_io);
 
-                    if let Some((last_pf, last_mpf)) = last_faults_sample {
-                        cp.pgfault_per_sec =
-                            (cp.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
-                        cp.pgmajfault_per_sec =
-                            (cp.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
+                        if let Some((last_pf, last_mpf)) = last_faults_sample {
+                            cp.pgfault_per_sec =
+                                (cp.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
+                            cp.pgmajfault_per_sec =
+                                (cp.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
+                        }
                     }
                 }
-            }
 
-            if let Some(tiers) = observation.value("tiers").and_then(Value::as_object) {
-                if let Some(t) = tiers.get("zram").and_then(Value::as_object) {
-                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
-                    zram_peak_used_mb = zram_peak_used_mb.max((u + 512) / 1024);
+                if let Some(tiers) = observation.value("tiers").and_then(Value::as_object) {
+                    if let Some(t) = tiers.get("zram").and_then(Value::as_object) {
+                        let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                        zram_peak_used_mb = zram_peak_used_mb.max((u + 512) / 1024);
+                    }
+                    if let Some(t) = tiers.get("vram").and_then(Value::as_object) {
+                        let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                        vram_peak_used_mb = vram_peak_used_mb.max((u + 512) / 1024);
+                    }
+                    if let Some(t) = tiers.get("disk").and_then(Value::as_object) {
+                        let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                        disk_peak_used_mb = disk_peak_used_mb.max((u + 512) / 1024);
+                    }
                 }
-                if let Some(t) = tiers.get("vram").and_then(Value::as_object) {
-                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
-                    vram_peak_used_mb = vram_peak_used_mb.max((u + 512) / 1024);
+
+                let cp = &mut observation.control_plane;
+                cp.swap_peak_mbs = swap_peak_mbs;
+                cp.swap_read_peak_mbs = swap_read_peak_mbs;
+                cp.swap_write_peak_mbs = swap_write_peak_mbs;
+                cp.zram_peak_used_mb = zram_peak_used_mb;
+                cp.vram_peak_used_mb = vram_peak_used_mb;
+                cp.disk_peak_used_mb = disk_peak_used_mb;
+                zram_acc.apply_to_plane_io(&mut cp.zram_io);
+                vram_acc.apply_to_plane_io(&mut cp.vram_io);
+                disk_acc.apply_to_plane_io(&mut cp.disk_io);
+
+                update_tier_latencies(cp, zram_acc.count, vram_acc.count, disk_acc.count);
+
+                last_io_sample = Some((
+                    cp.swap_read_bytes,
+                    cp.swap_write_bytes,
+                    cp.zram_io.read_bytes,
+                    cp.zram_io.write_bytes,
+                    cp.vram_io.read_bytes,
+                    cp.vram_io.write_bytes,
+                    cp.disk_io.read_bytes,
+                    cp.disk_io.write_bytes,
+                    now,
+                ));
+                last_faults_sample = Some((cp.pgfault_total, cp.pgmajfault_total));
+                if let Ok(flight_line) = serde_json::to_string(&observation) {
+                    let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
                 }
-                if let Some(t) = tiers.get("disk").and_then(Value::as_object) {
-                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
-                    disk_peak_used_mb = disk_peak_used_mb.max((u + 512) / 1024);
+                history.push_back(memory_used_pct(&observation.mem));
+                while history.len() > history_limit {
+                    history.pop_front();
                 }
+                next_sample = Instant::now() + interval;
+            } else {
+                mark_observation_refresh_failed(&mut observation, last_successful_sample.elapsed());
+                next_sample = Instant::now() + interval;
             }
-
-            let cp = &mut observation.control_plane;
-            cp.swap_peak_mbs = swap_peak_mbs;
-            cp.swap_read_peak_mbs = swap_read_peak_mbs;
-            cp.swap_write_peak_mbs = swap_write_peak_mbs;
-            cp.zram_peak_used_mb = zram_peak_used_mb;
-            cp.vram_peak_used_mb = vram_peak_used_mb;
-            cp.disk_peak_used_mb = disk_peak_used_mb;
-            zram_acc.apply_to_plane_io(&mut cp.zram_io);
-            vram_acc.apply_to_plane_io(&mut cp.vram_io);
-            disk_acc.apply_to_plane_io(&mut cp.disk_io);
-
-            update_tier_latencies(cp, zram_acc.count, vram_acc.count, disk_acc.count);
-
-            last_io_sample = Some((
-                cp.swap_read_bytes,
-                cp.swap_write_bytes,
-                cp.zram_io.read_bytes,
-                cp.zram_io.write_bytes,
-                cp.vram_io.read_bytes,
-                cp.vram_io.write_bytes,
-                cp.disk_io.read_bytes,
-                cp.disk_io.write_bytes,
-                now,
-            ));
-            last_faults_sample = Some((cp.pgfault_total, cp.pgmajfault_total));
-            if let Ok(flight_line) = serde_json::to_string(&observation) {
-                let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
-            }
-            history.push_back(memory_used_pct(&observation.mem));
-            while history.len() > history_limit {
-                history.pop_front();
-            }
-            next_sample = Instant::now() + interval;
         }
+        observation.sample_age_ms = last_successful_sample
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
         if Instant::now() >= next_identity_refresh {
             dashboard_metadata = DashboardMetadata::current(
                 identity_cache,
@@ -2636,11 +2705,17 @@ fn draw_memory(
     let swap_used_mib_text = format_grouped_number(swap_used_mib);
     let swap_total_mib_text = format_grouped_number(swap_total_mib);
     let swap_bar = make_bar(swap_pct, bar_len);
+    let sample_stale = observation_sample_is_stale(observation);
+    let pressure_text = format_memory_pressure(&observation.control_plane, sample_stale);
+    let ram_label = if sample_stale {
+        format!("{} (stale)", observation.memory_scope.ram_label())
+    } else {
+        observation.memory_scope.ram_label().to_string()
+    };
     let text = format!(
-        " {ram_label}:  {bar} {used_pct:>2}% ({used_mib_text} / {total_mib_text} MiB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used_mib_text} / {swap_total_mib_text} MiB)\n Pressure:   Light Stall (Some): {psi_some:.2}% │ Severe Stall (Full): {psi_full:.2}%",
-        ram_label = observation.memory_scope.ram_label(),
-        psi_some = observation.control_plane.memory_psi_some_avg10,
-        psi_full = observation.control_plane.memory_psi_full_avg10,
+        " {ram_label}:  {bar} {used_pct:>2}% ({used_mib_text} / {total_mib_text} MiB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used_mib_text} / {swap_total_mib_text} MiB)\n {pressure_text}",
+        ram_label = ram_label,
+        pressure_text = pressure_text,
     );
     frame.render_widget(
         Paragraph::new(text).block(
@@ -3092,11 +3167,21 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     } else {
         format!("{}", observation.errors.len())
     };
+    let sample_age_ms = observation.sample_age_ms;
 
     let swap_in = observation.control_plane.swap_in_pages;
     let swap_out = observation.control_plane.swap_out_pages;
-    let read_mbs = observation.control_plane.swap_read_mbs;
-    let write_mbs = observation.control_plane.swap_write_mbs;
+    let sample_stale = observation_sample_is_stale(observation);
+    let read_mbs = if sample_stale {
+        "stale".to_string()
+    } else {
+        format!("{:.1}", observation.control_plane.swap_read_mbs)
+    };
+    let write_mbs = if sample_stale {
+        "stale".to_string()
+    } else {
+        format!("{:.1}", observation.control_plane.swap_write_mbs)
+    };
     let peak_mbs = observation.control_plane.swap_peak_mbs;
     let pgfault_rate = observation.control_plane.pgfault_per_sec;
     let pgmajfault_rate = observation.control_plane.pgmajfault_per_sec;
@@ -3107,7 +3192,11 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
     let swap_read_peak = observation.control_plane.swap_read_peak_mbs;
     let swap_write_peak = observation.control_plane.swap_write_peak_mbs;
-    let speed_state = if read_mbs < 0.1 && write_mbs < 0.1 {
+    let speed_state = if sample_stale {
+        "(⚠ Stale Sample)"
+    } else if observation.control_plane.swap_read_mbs < 0.1
+        && observation.control_plane.swap_write_mbs < 0.1
+    {
         "(💤 Standby)"
     } else {
         "(⚡ Active)"
@@ -3149,12 +3238,13 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         concat!(
             " Daemon Status:            {daemon_icon} {daemon_txt} (PID {pid})\n",
             " Boot Initialization:      ⏱️  {boot_info}\n",
+            " Telemetry Sample Age:     {sample_age_ms} ms\n",
             " Safety Guard:             🛡️  Fail-Closed (Zero Panic)\n",
             " Swap I/O Protocol:        ⚡ Synchronous Zero-Copy (.rw_page)\n",
             " Reclaim Performance:      {bench_info}\n",
             " Page Fault Latency:       {pf_lat_info}\n",
             " {sep}\n",
-            " Real-Time Speed:          Read: {read_mbs:>4.1} │ Write: {write_mbs:>4.1} MB/s {speed_state}\n",
+            " Real-Time Speed:          Read: {read_mbs:>5} │ Write: {write_mbs:>5} MB/s {speed_state}\n",
             " Peak Recorded Speed:      🚀 {peak_mbs:>5.1} MB/s (⬇️ {swap_read_peak:>4.0} │ ⬆️ {swap_write_peak:>4.0} MB/s)\n",
             " Cumulative Page I/O:      In: {swap_in} pgs ({swap_in_vol}) │ Out: {swap_out} pgs ({swap_out_vol})\n",
             " Page Faults Rate:         📊 {pgfault_rate}/s (Minor: {minor_faults}/s │ Major: {pgmajfault_rate}/s)\n",
@@ -3168,6 +3258,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
         pid = pid,
         boot_info = boot_info,
+        sample_age_ms = sample_age_ms,
         bench_info = bench_info,
         pf_lat_info = pf_lat_info,
         read_mbs = read_mbs,
@@ -4025,19 +4116,32 @@ mod tests {
     fn missing_or_malformed_psi_is_not_reported_as_zero_pressure() {
         let missing = parse_memory_pressure("");
         assert!(!missing.memory_psi_available);
-        assert_eq!(format_memory_pressure(&missing), "Pressure: PSI unavailable");
+        assert_eq!(
+            format_memory_pressure(&missing, false),
+            "Pressure: PSI unavailable"
+        );
 
         let malformed = parse_memory_pressure(
             "some avg10=NaN avg60=0 avg300=0 total=0\nfull avg10=101 avg60=0 avg300=0 total=0\n",
         );
         assert!(!malformed.memory_psi_available);
-        assert_eq!(format_memory_pressure(&malformed), "Pressure: PSI unavailable");
+        assert_eq!(
+            format_memory_pressure(&malformed, false),
+            "Pressure: PSI unavailable"
+        );
 
         let valid_zero = parse_memory_pressure(
             "some avg10=0 avg60=0 avg300=0 total=0\nfull avg10=0 avg60=0 avg300=0 total=0\n",
         );
         assert!(valid_zero.memory_psi_available);
-        assert_eq!(format_memory_pressure(&valid_zero), "Pressure: PSI some=0.00% full=0.00%");
+        assert_eq!(
+            format_memory_pressure(&valid_zero, true),
+            "Pressure: sample stale"
+        );
+        assert_eq!(
+            format_memory_pressure(&valid_zero, false),
+            "Pressure: PSI some=0.00% full=0.00%"
+        );
     }
 
     #[test]
@@ -4046,7 +4150,12 @@ mod tests {
         mark_observation_refresh_failed(&mut sample, Duration::from_millis(1250));
 
         assert_eq!(sample.sample_age_ms, 1250);
-        assert!(sample.errors.iter().any(|error| error == "sample_refresh_failed"));
+        assert!(
+            sample
+                .errors
+                .iter()
+                .any(|error| error == "sample_refresh_failed")
+        );
     }
 
     #[test]
@@ -4375,6 +4484,35 @@ mod tests {
         assert!(rendered.contains("STATUS: BLOCKED"));
         assert!(rendered.contains("Protection: BLOCKED"));
         assert!(!rendered.contains("Protection: ACTIVE"));
+    }
+
+    #[test]
+    fn dashboard_marks_failed_refresh_values_as_stale() {
+        let mut sample = observation(false, false);
+        sample.control_plane.memory_psi_available = true;
+        sample.control_plane.swap_read_mbs = 12.3;
+        sample.control_plane.swap_write_mbs = 4.5;
+        mark_observation_refresh_failed(&mut sample, Duration::from_millis(1250));
+
+        let backend = TestBackend::new(220, 50);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Pressure: sample stale"));
+        assert!(rendered.contains("Read: stale"));
+        assert!(rendered.contains("Write: stale"));
+        assert!(rendered.contains("Telemetry Sample Age:     1250 ms"));
+        assert!(!rendered.contains("Read: 12.3"));
+        assert!(!rendered.contains("Write: 4.5"));
     }
 
     #[test]
