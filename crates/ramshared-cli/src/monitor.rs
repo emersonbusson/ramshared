@@ -4022,6 +4022,34 @@ mod tests {
     }
 
     #[test]
+    fn missing_or_malformed_psi_is_not_reported_as_zero_pressure() {
+        let missing = parse_memory_pressure("");
+        assert!(!missing.memory_psi_available);
+        assert_eq!(format_memory_pressure(&missing), "Pressure: PSI unavailable");
+
+        let malformed = parse_memory_pressure(
+            "some avg10=NaN avg60=0 avg300=0 total=0\nfull avg10=101 avg60=0 avg300=0 total=0\n",
+        );
+        assert!(!malformed.memory_psi_available);
+        assert_eq!(format_memory_pressure(&malformed), "Pressure: PSI unavailable");
+
+        let valid_zero = parse_memory_pressure(
+            "some avg10=0 avg60=0 avg300=0 total=0\nfull avg10=0 avg60=0 avg300=0 total=0\n",
+        );
+        assert!(valid_zero.memory_psi_available);
+        assert_eq!(format_memory_pressure(&valid_zero), "Pressure: PSI some=0.00% full=0.00%");
+    }
+
+    #[test]
+    fn failed_refresh_marks_the_last_observation_stale() {
+        let mut sample = observation(false, false);
+        mark_observation_refresh_failed(&mut sample, Duration::from_millis(1250));
+
+        assert_eq!(sample.sample_age_ms, 1250);
+        assert!(sample.errors.iter().any(|error| error == "sample_refresh_failed"));
+    }
+
+    #[test]
     // TestName: monitor_memory_diagnostics_capture_kernel_categories
     fn memory_diagnostics_capture_kernel_categories_without_inventing_missing_values() {
         let memory = parse_meminfo(
