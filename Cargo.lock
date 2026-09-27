@@ -966,6 +966,7 @@ dependencies = [
  "libc",
  "ramshared-cuda",
  "ramshared-tier",
+ "ramshared-vram",
  "ratatui",
  "rustix 1.1.4",
  "serde",
@@ -997,6 +998,7 @@ name = "ramshared-dxg"
 version = "0.14.1"
 dependencies = [
  "libc",
+ "ramshared-vram",
 ]
 
 [[package]]
@@ -1007,9 +1009,11 @@ version = "0.14.1"
 name = "ramshared-ipc"
 version = "0.14.1"
 dependencies = [
+ "libc",
  "serde",
  "serde_json",
  "sha2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
