@@ -12,6 +12,7 @@
 //! Mounts tiers by `swapon` priority and unmounts in reverse order.
 
 use ramshared_tier::TierPriorities;
+use ramshared_vram::GpuBudgetTelemetry;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -1318,20 +1319,38 @@ fn supervisor_status_matches_current_daemon(
             })
 }
 
+#[cfg(test)]
 fn control_plane_status_is_current(
     cache_status: &serde_json::Value,
     supervisor_status: &serde_json::Value,
     daemon_instance_id: &str,
     now_unix_ms: u64,
 ) -> bool {
-    cache_status_shape_is_valid(cache_status)
-        && supervisor_status_shape_is_valid(supervisor_status)
-        && cache_status_matches_current_daemon(cache_status, daemon_instance_id, now_unix_ms)
-        && supervisor_status_matches_current_daemon(
-            supervisor_status,
-            daemon_instance_id,
-            now_unix_ms,
-        )
+    let (cache_current, supervisor_current) = control_plane_status_freshness(
+        Some(cache_status),
+        Some(supervisor_status),
+        daemon_instance_id,
+        now_unix_ms,
+    );
+    cache_current && supervisor_current
+}
+
+fn control_plane_status_freshness(
+    cache_status: Option<&serde_json::Value>,
+    supervisor_status: Option<&serde_json::Value>,
+    daemon_instance_id: &str,
+    now_unix_ms: u64,
+) -> (bool, bool) {
+    let cache_current = cache_status.is_some_and(|status| {
+        cache_status_shape_is_valid(status)
+            && cache_status_matches_current_daemon(status, daemon_instance_id, now_unix_ms)
+    });
+    let supervisor_current = supervisor_status.is_some_and(|status| {
+        supervisor_status_shape_is_valid(status)
+            && supervisor_status_matches_current_daemon(status, daemon_instance_id, now_unix_ms)
+    });
+
+    (cache_current, supervisor_current)
 }
 
 fn guardian_state_from_files(
@@ -1405,6 +1424,16 @@ use lifecycle::{
 };
 
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
+fn trusted_gpu_budget_from_status(
+    status: &serde_json::Value,
+    now_unix_ms: Option<u64>,
+) -> Option<GpuBudgetTelemetry> {
+    let budget =
+        serde_json::from_value::<GpuBudgetTelemetry>(status.get("gpu_budget")?.clone()).ok()?;
+    let now = now_unix_ms?;
+    budget.trusted_available_at(now, 5_000).map(|_| budget)
+}
+
 pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let pairs: Vec<(&str, u64, u64, i32)> = entries
         .iter()
@@ -1426,23 +1455,21 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
     let daemon_instance_id = daemon_pid.and_then(daemon_instance_id_from_pid);
-    let control_plane_current = daemon_instance_id
+    let (cache_status_current, supervisor_status_current) = daemon_instance_id
         .as_deref()
         .zip(unix_time_ms())
-        .zip(cache_status.as_ref())
-        .zip(supervisor_status.as_ref())
-        .is_some_and(
-            |(((daemon_instance_id, now_unix_ms), cache_status), supervisor_status)| {
-                control_plane_status_is_current(
-                    cache_status,
-                    supervisor_status,
-                    daemon_instance_id,
-                    now_unix_ms,
-                )
-            },
-        );
-    let cache_status = control_plane_current.then_some(cache_status).flatten();
-    let supervisor_status = control_plane_current.then_some(supervisor_status).flatten();
+        .map_or((false, false), |(daemon_instance_id, now_unix_ms)| {
+            control_plane_status_freshness(
+                cache_status.as_ref(),
+                supervisor_status.as_ref(),
+                daemon_instance_id,
+                now_unix_ms,
+            )
+        });
+    let cache_status = cache_status_current.then_some(cache_status).flatten();
+    let supervisor_status = supervisor_status_current
+        .then_some(supervisor_status)
+        .flatten();
     let status_text = |key: &str| {
         cache_status
             .as_ref()
@@ -1455,6 +1482,17 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
             .and_then(|value| value.get(key))
             .and_then(serde_json::Value::as_u64)
     };
+    let gpu_budget_reported = cache_status
+        .as_ref()
+        .is_some_and(|value| value.get("gpu_budget").is_some());
+    let gpu_budget = cache_status
+        .as_ref()
+        .and_then(|value| trusted_gpu_budget_from_status(value, unix_time_ms()));
+    let gpu_headroom_kib = gpu_budget.as_ref().and_then(|budget| {
+        unix_time_ms()
+            .and_then(|now| budget.trusted_available_at(now, 5_000))
+            .map(|available| available >> 10)
+    });
     let cache_status_ok = cache_status
         .as_ref()
         .and_then(|value| value.get("ok"))
@@ -1498,10 +1536,13 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     if vram.present && daemon_identity_unreadable {
         measurement_errors.push("daemon_identity_unreadable".to_string());
     }
-    if product_active && !control_plane_current {
+    if product_active && !cache_status_current {
         measurement_errors.push("cache_status_not_current".to_string());
     }
-    if product_active && !control_plane_current {
+    if product_active && gpu_budget_reported && gpu_budget.is_none() {
+        measurement_errors.push("gpu_budget_telemetry_invalid_or_stale".to_string());
+    }
+    if product_active && !supervisor_status_current {
         measurement_errors.push("supervisor_status_not_current".to_string());
     }
     if let Some(error) = guardian_error {
@@ -1526,7 +1567,8 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         guardian_state,
         logical_capacity_kib: capacity_field_u64("logical_capacity_kib"),
         vram_cached_kib: status_number("vram_cached_kib"),
-        gpu_headroom_kib: status_number("gpu_headroom_kib"),
+        gpu_headroom_kib,
+        gpu_budget,
         ssd_origin_written_kib: status_number("ssd_origin_written_kib"),
         fallback_swap_used_kib: Some(fallback_swap_used_kib),
         measurement_errors,
@@ -1784,6 +1826,36 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
+    #[test]
+    fn gpu_budget_status_requires_fresh_driver_bound_telemetry() {
+        let status = serde_json::json!({
+            "gpu_budget": {
+                "schema_version": 1,
+                "adapter": {
+                    "backend": "vulkan",
+                    "key": "uuid:fixture",
+                    "luid": "aabbccdd:00001122"
+                },
+                "total_bytes": 8000,
+                "budget_bytes": 6000,
+                "used_bytes": 2000,
+                "available_bytes": 4000,
+                "source": "driver_reported",
+                "sampled_at_unix_ms": 1000
+            }
+        });
+        assert!(trusted_gpu_budget_from_status(&status, Some(5000)).is_some());
+        assert!(trusted_gpu_budget_from_status(&status, Some(6001)).is_none());
+        assert!(trusted_gpu_budget_from_status(&status, Some(999)).is_none());
+
+        let mut local_only = status.clone();
+        local_only["gpu_budget"]["source"] = serde_json::json!("provider_local_estimate");
+        assert!(trusted_gpu_budget_from_status(&local_only, Some(5000)).is_none());
+
+        let malformed = serde_json::json!({"gpu_budget": {"available_bytes": 4000}});
+        assert!(trusted_gpu_budget_from_status(&malformed, Some(5000)).is_none());
+    }
+
     fn parse_proc_swaps(text: &str) -> Vec<SwapEntry> {
         super::parse_proc_swaps(text).expect("strict /proc/swaps fixture")
     }
@@ -1848,6 +1920,7 @@ mod tests {
             logical_capacity_kib: Some(1024),
             vram_cached_kib: Some(256),
             gpu_headroom_kib: Some(768),
+            gpu_budget: None,
             ssd_origin_written_kib: Some(0),
             fallback_swap_used_kib: Some(0),
             measurement_errors: Vec::new(),
@@ -2436,6 +2509,30 @@ Filename Type Size Used Priority
                 "stale, foreign, or malformed status was accepted"
             );
         }
+    }
+
+    #[test]
+    fn cache_and_supervisor_freshness_are_reported_independently() {
+        let fresh_cache = serde_json::json!({
+            "schema_version": 1,
+            "daemon_instance_id": "daemon-1",
+            "written_at_unix_ms": 1_000,
+            "ok": true,
+            "origin_state": "READY",
+            "cache_state": "ACTIVE",
+        });
+        let fresh_supervisor = valid_supervisor_status_v3();
+
+        assert_eq!(
+            control_plane_status_freshness(Some(&fresh_cache), None, "daemon-1", 1_001,),
+            (true, false),
+            "fresh cache telemetry must remain visible when supervisor telemetry is absent",
+        );
+        assert_eq!(
+            control_plane_status_freshness(None, Some(&fresh_supervisor), "daemon-1", 1_001,),
+            (false, true),
+            "fresh supervisor telemetry must remain visible when cache telemetry is absent",
+        );
     }
 
     #[test]

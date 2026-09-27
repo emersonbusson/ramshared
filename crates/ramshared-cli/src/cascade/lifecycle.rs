@@ -4,6 +4,8 @@
 
 use std::env;
 
+use ramshared_vram::GpuBudgetTelemetry;
+
 use super::{is_nbd_device_path, is_ublk_device_path, is_zram_device_path};
 
 /// Default active-use threshold (KiB). Residual nbd under this still counts as Armed.
@@ -186,6 +188,7 @@ pub struct CascadeSnapshot {
     pub logical_capacity_kib: Option<u64>,
     pub vram_cached_kib: Option<u64>,
     pub gpu_headroom_kib: Option<u64>,
+    pub gpu_budget: Option<GpuBudgetTelemetry>,
     pub ssd_origin_written_kib: Option<u64>,
     pub fallback_swap_used_kib: Option<u64>,
     pub measurement_errors: Vec<String>,
@@ -548,6 +551,11 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
             .collect::<Vec<_>>()
             .join(",")
     );
+    let gpu_budget_json = snap
+        .gpu_budget
+        .as_ref()
+        .and_then(|budget| serde_json::to_string(budget).ok())
+        .unwrap_or_else(|| "null".to_string());
     format!(
         "{{\"schema_version\":4,\"phase\":{phase},\"phase_reason\":{reason},\
 \"protection_state\":{protection},\"protection_reason\":{protection_reason},\
@@ -564,6 +572,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
 \"daemon\":{{\"alive\":{alive},\"pid\":{pid}}},\
 \"demote\":{{\"total\":{dt},\"last_reason\":{dr},\"in_progress\":{di}}},\
 \"thresholds_kib\":{{\"active\":{thr}}},\
+\"gpu_budget\":{gpu_budget},\
 \"ts\":{ts}}}",
         phase = json_escape(view.phase.as_str()),
         reason = json_escape(view.phase_reason),
@@ -584,6 +593,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
         logical_capacity_kib = number_or_null(snap.logical_capacity_kib),
         vram_cached_kib = number_or_null(snap.vram_cached_kib),
         gpu_headroom_kib = number_or_null(snap.gpu_headroom_kib),
+        gpu_budget = gpu_budget_json,
         ssd_origin_written_kib = number_or_null(snap.ssd_origin_written_kib),
         fallback_swap_used_kib = number_or_null(snap.fallback_swap_used_kib),
         activation_active = if activation_active { "true" } else { "false" },
@@ -648,6 +658,7 @@ mod tests {
             logical_capacity_kib: Some(2_097_148),
             vram_cached_kib: Some(0),
             gpu_headroom_kib: Some(2_097_152),
+            gpu_budget: None,
             ssd_origin_written_kib: Some(0),
             fallback_swap_used_kib: Some(0),
             measurement_errors: Vec::new(),
@@ -675,6 +686,7 @@ mod tests {
             logical_capacity_kib: None,
             vram_cached_kib: None,
             gpu_headroom_kib: None,
+            gpu_budget: None,
             ssd_origin_written_kib: None,
             fallback_swap_used_kib: Some(5_000),
             measurement_errors: Vec::new(),
@@ -930,6 +942,34 @@ mod tests {
         assert!(json.contains("\"control_state\":\"CRITICAL\""));
         assert!(json.contains("\"overall_state\":\"CRITICAL\""));
         assert!(json.contains("\"ok\":false"));
+    }
+
+    #[test]
+    fn status_json_publishes_adapter_bound_gpu_budget() {
+        let mut snapshot = base();
+        snapshot.gpu_budget = Some(GpuBudgetTelemetry {
+            schema_version: 1,
+            adapter: Some(ramshared_vram::GpuAdapterIdentity {
+                backend: "vulkan".into(),
+                key: "uuid:fixture".into(),
+                luid: Some("aabbccdd:00001122".into()),
+            }),
+            total_bytes: Some(8_000),
+            budget_bytes: 6_000,
+            used_bytes: 2_000,
+            available_bytes: 4_000,
+            source: ramshared_vram::GpuBudgetSource::DriverReported,
+            sampled_at_unix_ms: 1_000,
+        });
+        let json = render_status_json(
+            &derive_lifecycle(&snapshot),
+            &snapshot,
+            "2026-08-20T00:00:00Z",
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid status JSON");
+        assert_eq!(parsed["gpu_budget"]["adapter"]["backend"], "vulkan");
+        assert_eq!(parsed["gpu_budget"]["adapter"]["luid"], "aabbccdd:00001122");
+        assert_eq!(parsed["gpu_budget"]["available_bytes"], 4_000);
     }
 
     #[test]
