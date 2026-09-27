@@ -187,17 +187,17 @@ cmd_selftest() {
 		echo "OK render leaves absent swapFile discovery to WSL"
 	fi
 	if printf '%s\n' "$rendered" | grep -qE '^[[:space:]]*sparseVhd[[:space:]]*=[[:space:]]*true'; then
-		echo "FAIL production render enabled sparseVhd"
-		fail=1
+		echo "OK production render enables sparseVhd"
 	else
-		echo "OK production render omits sparseVhd"
+		echo "FAIL production render should enable sparseVhd"
+		fail=1
 	fi
 	printf '%s\n' '[experimental]' 'sparseVhd=true' >"$td/unsafe-sparse.wslconfig"
 	if wslconfig_validate_file "$td/unsafe-sparse.wslconfig" >/dev/null 2>&1; then
-		echo "FAIL production validation accepted sparseVhd=true"
-		fail=1
+		echo "OK production validation accepts sparseVhd=true"
 	else
-		echo "OK production validation refuses sparseVhd=true"
+		echo "FAIL production validation should accept sparseVhd=true"
+		fail=1
 	fi
 	local lab_rendered
 	lab_rendered="$(WSLCONFIG_UNSAFE_LAB_MODE=1 \

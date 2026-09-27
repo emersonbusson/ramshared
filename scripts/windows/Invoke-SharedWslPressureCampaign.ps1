@@ -28,6 +28,7 @@ param(
     [ValidateRange(0, 120)][int]$ExternalWorkloadDelaySec = 4,
     [ValidateRange(0, 600)][int]$PostCampaignObserveSec = 120,
     [ValidateRange(4096, 2147483647)][int]$HostCommitReserveMiB = 4096,
+    [ValidateRange(4096, 2147483647)][int]$HostPhysicalReserveMiB = 4096,
     [string[]]$HostDiskLetters = @()
 )
 
@@ -36,9 +37,13 @@ Import-Module (Join-Path $PSScriptRoot "SharedWslHostMemoryGate.psm1") -Force
 $hostMemoryGateOk = $false
 $hostCommitHeadroomMiB = $null
 $hostCommitRequiredMiB = $null
+$hostPhysicalHeadroomMiB = $null
+$hostPhysicalRequiredMiB = $null
 $hostMemoryGuardianFired = $false
 $hostMemoryTelemetryOk = $false
 $SealedDistro = "Ubuntu-24.04"
+$GuestMemAvailableReserveMiB = 1024
+$GuestSwapFreeReserveMiB = 1024
 
 if ([string]::IsNullOrWhiteSpace($WslRepo)) {
     throw "Set -WslRepo or RAMSHARED_WSL_REPO to the repository path inside the selected distro."
@@ -655,6 +660,9 @@ function Write-Summary {
         host_commit_headroom_mib = $hostCommitHeadroomMiB
         host_commit_required_mib = $hostCommitRequiredMiB
         host_commit_reserve_mib = $HostCommitReserveMiB
+        host_physical_headroom_mib = $hostPhysicalHeadroomMiB
+        host_physical_required_mib = $hostPhysicalRequiredMiB
+        host_physical_reserve_mib = $HostPhysicalReserveMiB
         host_memory_guardian_fired = [bool]$hostMemoryGuardianFired
         host_memory_telemetry_ok = [bool]$hostMemoryTelemetryOk
     }
@@ -681,8 +689,10 @@ try {
 }
 $hostMemoryJsonl = Join-Path $artifactDir "host-memory.jsonl"
 $hostMemoryAdmissionPath = Join-Path $artifactDir "host-memory-admission.json"
-$hostCommitRequiredMiB = Get-SharedWslHostCommitRequiredMiB `
-    -PressureAllocGiB $PressureAllocGiB -HostCommitReserveMiB $HostCommitReserveMiB
+$hostCommitRequiredMiB = Get-SharedWslHostRequiredHeadroomMiB `
+    -PressureAllocGiB $PressureAllocGiB -ReserveMiB $HostCommitReserveMiB
+$hostPhysicalRequiredMiB = Get-SharedWslHostRequiredHeadroomMiB `
+    -PressureAllocGiB $PressureAllocGiB -ReserveMiB $HostPhysicalReserveMiB
 $admissionSamples = @()
 for ($sampleIndex = 0; $sampleIndex -lt 3; $sampleIndex++) {
     $sample = Get-SharedWslHostMemorySample
@@ -693,15 +703,19 @@ for ($sampleIndex = 0; $sampleIndex -lt 3; $sampleIndex++) {
     }
 }
 $hostMemoryAdmission = Test-SharedWslHostMemoryAdmission -Samples $admissionSamples `
-    -RequiredMiB $hostCommitRequiredMiB
+    -RequiredCommitMiB $hostCommitRequiredMiB -RequiredPhysicalMiB $hostPhysicalRequiredMiB
 $hostMemoryGateOk = [bool]$hostMemoryAdmission.ok
 $hostCommitHeadroomMiB = $hostMemoryAdmission.commit_headroom_mib
+$hostPhysicalHeadroomMiB = $hostMemoryAdmission.physical_headroom_mib
 [ordered]@{
     host_memory_gate_ok = [bool]$hostMemoryAdmission.ok
     reason = $hostMemoryAdmission.reason
     host_commit_headroom_mib = $hostMemoryAdmission.commit_headroom_mib
     host_commit_required_mib = $hostCommitRequiredMiB
     host_commit_reserve_mib = $HostCommitReserveMiB
+    host_physical_headroom_mib = $hostMemoryAdmission.physical_headroom_mib
+    host_physical_required_mib = $hostPhysicalRequiredMiB
+    host_physical_reserve_mib = $HostPhysicalReserveMiB
     samples = @($admissionSamples)
 } | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath $hostMemoryAdmissionPath
 if (-not $hostMemoryAdmission.ok) {
@@ -710,6 +724,9 @@ if (-not $hostMemoryAdmission.ok) {
         host_commit_headroom_mib = $hostMemoryAdmission.commit_headroom_mib
         host_commit_required_mib = $hostCommitRequiredMiB
         host_commit_reserve_mib = $HostCommitReserveMiB
+        host_physical_headroom_mib = $hostMemoryAdmission.physical_headroom_mib
+        host_physical_required_mib = $hostPhysicalRequiredMiB
+        host_physical_reserve_mib = $HostPhysicalReserveMiB
         host_memory_guardian_fired = $false
     }
     exit 2
@@ -738,6 +755,14 @@ set -euo pipefail
 cd "$WslRepo"
 artifact="$artifactWsl"
 mkdir -p "`$artifact"
+guest_admission_rc=0
+bash ./scripts/safety/ramshared-guest-memory-admission.sh /proc/meminfo \
+  "$GuestMemAvailableReserveMiB" "$GuestSwapFreeReserveMiB" \
+  >"`$artifact/guest-memory-admission.json" 2>"`$artifact/guest-memory-admission.err" || guest_admission_rc=`$?
+if [ "`$guest_admission_rc" -ne 0 ]; then
+  printf 'guest_memory_admission_refused exit=%s\n' "`$guest_admission_rc" >"`$artifact/guest-memory-admission-refused.txt"
+  exit "`$guest_admission_rc"
+fi
 health_pid=""
 cleanup() {
   rc=`$?
@@ -853,10 +878,14 @@ while ($true) {
     }
     $runtimeGuard = Test-SharedWslHostMemoryGuardian -Sample $runtimeSample `
         -HostCommitReserveMiB $HostCommitReserveMiB `
+        -HostPhysicalReserveMiB $HostPhysicalReserveMiB `
         -InvalidSampleCount $hostMemoryInvalidSampleCount
     $hostMemoryInvalidSampleCount = $runtimeGuard.invalid_sample_count
     if ($null -ne $runtimeGuard.commit_headroom_mib) {
         $hostCommitHeadroomMiB = [int]$runtimeGuard.commit_headroom_mib
+    }
+    if ($null -ne $runtimeGuard.physical_headroom_mib) {
+        $hostPhysicalHeadroomMiB = [int]$runtimeGuard.physical_headroom_mib
     }
     if ($runtimeGuard.trip) {
         $hostMemoryGuardianFired = $true
@@ -1026,6 +1055,9 @@ if ($null -ne $postLaunchReason) {
         host_commit_headroom_mib = $hostCommitHeadroomMiB
         host_commit_required_mib = $hostCommitRequiredMiB
         host_commit_reserve_mib = $HostCommitReserveMiB
+        host_physical_headroom_mib = $hostPhysicalHeadroomMiB
+        host_physical_required_mib = $hostPhysicalRequiredMiB
+        host_physical_reserve_mib = $HostPhysicalReserveMiB
         host_memory_guardian_fired = [bool]$hostMemoryGuardianFired
         host_memory_telemetry_ok = [bool]$hostMemoryTelemetryOk
         termination_proven = [bool]($null -ne $terminationContainment -and $terminationContainment.contained)

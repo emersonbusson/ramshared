@@ -29,6 +29,8 @@ foreach ($required in @(
     'Invoke-GuestProbe',
     'Invoke-IndependentHostProbe',
     'Invoke-HostSnapshot',
+    'Test-HcsServiceRunning',
+    '$HcsServiceStatusQuery',
     'safe-mode',
     'host-resume-lease.json',
     'guardian-config.json',
@@ -54,7 +56,11 @@ foreach ($required in @(
     'WaitForExit',
     'guardian-events.jsonl',
     'windows-telemetry.jsonl',
+    'Get-SharedWslHostMemorySample',
     'physical_memory_total_kib',
+    'physical_memory_available_kib',
+    'commit_used_kib',
+    'commit_available_kib',
     'pagefile_used_mib',
     'vmmem_wsl',
     'origin_volume',
@@ -75,6 +81,11 @@ foreach ($required in @(
     '-Action watch -Run'
 )) {
     Require-GuardianContract -Text $required
+}
+if (-not $source.Contains('Get-SharedWslHostMemorySample') -or
+    -not $source.Contains('commit_available_kib') -or
+    $source.Contains('FreeVirtualMemory')) {
+    throw 'ramshared_wsl_guardian: host commit telemetry must use exact performance counters'
 }
 if ($source.Contains('Get-Volume -DriveLetter I') -or $source.Contains('drive_letter = "I"')) {
     throw 'ramshared_wsl_guardian: origin telemetry must discover the manifest physical volume'
@@ -163,6 +174,8 @@ foreach ($required in @(
     'PASS boot_bound_healthy_proof_required_before_publish'
     'PASS guardian_activation_is_explicit_and_staging_remains_disabled'
     'PASS guardian_wsl_arguments_are_scheduler_safe'
+    'PASS guardian_hcs_status_accepts_serialized_running_enum'
+    'PASS guardian_hcs_status_json_is_normalized'
     'PASS guardian_boot_probe_summary_is_sanitized'
     'PASS guardian_boot_probe_event_payload_is_flat'
 )) {

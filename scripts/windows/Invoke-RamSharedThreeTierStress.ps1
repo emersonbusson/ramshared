@@ -13,7 +13,8 @@ param(
     [string]$Distro = "Ubuntu-24.04",
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
     [ValidateRange(120, 7200)][int]$TimeoutSec = 1800,
-    [ValidateRange(4096, 32768)][int]$HostCommitReserveMiB = 4096
+    [ValidateRange(4096, 32768)][int]$HostCommitReserveMiB = 4096,
+    [ValidateRange(4096, 32768)][int]$HostPhysicalReserveMiB = 4096
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,13 +25,15 @@ if ($ArtifactRoot -notmatch '^[A-Za-z]:\\') { throw "ArtifactRoot must be an abs
 $manifestPath = "C:\ProgramData\RamShared\ramshared-origin-manifest.json"
 $guardianPath = "C:\ProgramData\RamShared\guardian-state\$Distro.health.json"
 $releasePath = "/opt/ramshared/current"
-$requiredMiB = Get-SharedWslHostCommitRequiredMiB -PressureAllocGiB 16 -HostCommitReserveMiB $HostCommitReserveMiB
+$requiredCommitMiB = Get-SharedWslHostRequiredHeadroomMiB -PressureAllocGiB 16 -ReserveMiB $HostCommitReserveMiB
+$requiredPhysicalMiB = Get-SharedWslHostRequiredHeadroomMiB -PressureAllocGiB 16 -ReserveMiB $HostPhysicalReserveMiB
+$guestMemAvailableReserveMiB = 1024
+$guestSwapFreeReserveMiB = 1024
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 if ([int]$manifest.schema_version -ne 3 -or [int]$manifest.logical_capacity_mib -ne 4096 -or
     [int]$manifest.physical_cache_cap_mib -ne 4096) { throw "exact 4096 MiB sealed origin is unavailable" }
 $guardian = Get-Content -Raw -LiteralPath $guardianPath | ConvertFrom-Json
-if ($guardian.state -cne "HEALTHY" -or
-    ([DateTime]::UtcNow - [DateTime]::Parse($guardian.timestamp_utc).ToUniversalTime()).TotalSeconds -gt 15) {
+if (-not (Test-SharedWslGuardianFresh -Guardian $guardian -MaximumAgeSeconds 15)) {
     throw "Windows WSL guardian is unavailable or stale"
 }
 
@@ -39,7 +42,8 @@ for ($i = 0; $i -lt 3; $i++) {
     $samples += Get-SharedWslHostMemorySample
     if ($i -lt 2) { Start-Sleep -Seconds 1 }
 }
-$admission = Test-SharedWslHostMemoryAdmission -Samples $samples -RequiredMiB $requiredMiB
+$admission = Test-SharedWslHostMemoryAdmission -Samples $samples `
+    -RequiredCommitMiB $requiredCommitMiB -RequiredPhysicalMiB $requiredPhysicalMiB
 $plan = [ordered]@{
     profile = "full-three-tier"
     distro = $Distro
@@ -49,9 +53,16 @@ $plan = [ordered]@{
     nbd_logical_target_pct = 100
     ssd_target_pct = 99
     timeout_sec = $TimeoutSec
-    host_commit_required_mib = $requiredMiB
+    host_commit_required_mib = $requiredCommitMiB
     host_commit_headroom_mib = $admission.commit_headroom_mib
+    host_commit_reserve_mib = $HostCommitReserveMiB
+    host_physical_required_mib = $requiredPhysicalMiB
+    host_physical_headroom_mib = $admission.physical_headroom_mib
+    host_physical_reserve_mib = $HostPhysicalReserveMiB
+    guest_mem_available_reserve_mib = $guestMemAvailableReserveMiB
+    guest_swap_free_reserve_mib = $guestSwapFreeReserveMiB
     host_memory_gate_ok = [bool]$admission.ok
+    host_memory_gate_reason = [string]$admission.reason
     host_memory_samples = $samples
 }
 if (-not $Run) { $plan | ConvertTo-Json -Depth 6; return }
@@ -63,14 +74,19 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $plan | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $dir "admission.json") -Encoding UTF8
 $guestDir = "/mnt/" + $dir.Substring(0, 1).ToLowerInvariant() + ($dir.Substring(2) -replace '\\', '/')
 $scriptPath = Join-Path $dir "guest-stress.sh"
+$guestAdmissionSource = Join-Path $PSScriptRoot "..\safety\ramshared-guest-memory-admission.sh"
+Copy-Item -LiteralPath $guestAdmissionSource -Destination (Join-Path $dir "guest-memory-admission.sh") -ErrorAction Stop
 $guestScript = @'
 #!/usr/bin/env bash
 set -euo pipefail
 artifact=$1
+guest_mem_available_reserve_mib=$2
+guest_swap_free_reserve_mib=$3
 release=/opt/ramshared/current
 bin="$release/bin/ramshared"
 daemon="$release/bin/ramsharedd"
 monitor_pid=""
+bash "$artifact/guest-memory-admission.sh" /proc/meminfo "$guest_mem_available_reserve_mib" "$guest_swap_free_reserve_mib" >"$artifact/guest-memory-admission.json"
 cleanup() {
   rc=$?
   "$bin" down >"$artifact/down.out" 2>"$artifact/down.err" || rc=1
@@ -122,19 +138,23 @@ $start = [Diagnostics.Stopwatch]::StartNew()
 $memoryLog = Join-Path $dir "host-memory.jsonl"
 try {
     $guestScriptPath = "$guestDir/guest-stress.sh"
-    $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @("-d", $Distro, "-u", "root", "--", "bash", $guestScriptPath, $guestDir) `
+    $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @(
+        "-d", $Distro, "-u", "root", "--", "bash", $guestScriptPath, $guestDir,
+        [string]$guestMemAvailableReserveMiB, [string]$guestSwapFreeReserveMiB
+    ) `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
     while ($true) {
         $proc.Refresh()
         if ($proc.HasExited) { break }
         $sample = Get-SharedWslHostMemorySample
         ($sample | ConvertTo-Json -Compress) | Add-Content -LiteralPath $memoryLog -Encoding UTF8
-        $guard = Test-SharedWslHostMemoryGuardian -Sample $sample -HostCommitReserveMiB $HostCommitReserveMiB -InvalidSampleCount $invalidSamples
+        $guard = Test-SharedWslHostMemoryGuardian -Sample $sample `
+            -HostCommitReserveMiB $HostCommitReserveMiB -HostPhysicalReserveMiB $HostPhysicalReserveMiB `
+            -InvalidSampleCount $invalidSamples
         $invalidSamples = $guard.invalid_sample_count
         if ($guard.trip) { $reason = $guard.reason; break }
         $guardian = Get-Content -Raw -LiteralPath $guardianPath | ConvertFrom-Json
-        if ($guardian.state -cne "HEALTHY" -or
-            ([DateTime]::UtcNow - [DateTime]::Parse($guardian.timestamp_utc).ToUniversalTime()).TotalSeconds -gt 15) {
+        if (-not (Test-SharedWslGuardianFresh -Guardian $guardian -MaximumAgeSeconds 15)) {
             $reason = "windows_guardian_unhealthy"; break
         }
         if ($start.Elapsed.TotalSeconds -ge $TimeoutSec) { $reason = "outer_timeout"; break }

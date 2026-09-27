@@ -701,7 +701,7 @@ fn print_usage(stderr: &mut dyn Write) {
     );
     let _ = writeln!(
         stderr,
-        "  ramshared stress [--full-three-tier] [--tier1-target-pct %] [--tier2-target-pct %] [--tier3-target-pct %] [--physical-cache-target-mib N] [--json]"
+        "  ramshared stress [--tier3-only --tier3-target-pct %] [--full-three-tier] [--tier1-target-pct %] [--tier2-target-pct %] [--tier3-target-pct %] [--physical-cache-target-mib N] [--json]"
     );
     let _ = writeln!(
         stderr,

@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 const SHORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const SWAPOFF_TIMEOUT: Duration = Duration::from_secs(120);
+const ORIGIN_DAEMON_READINESS_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const LIFECYCLE_BINDING_SCHEMA: u32 = 1;
 const LIFECYCLE_BINDING_MAX_BYTES: u64 = 64 * 1024;
@@ -2678,7 +2679,7 @@ fn setup_new_cascade<R: CommandRunner>(
             &args.swap_dev,
             &args.origin_path,
             paths,
-            Duration::from_secs(6),
+            ORIGIN_DAEMON_READINESS_TIMEOUT,
         )?;
         connect_nbd_with(
             runner,

@@ -129,6 +129,7 @@ function Invoke-WindowsCiStaticSuite {
         @{ Name = "Test-GuestPsDirectDeadlineStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-SharedWslPressureCampaignMemoryGate.ps1"; Arguments = @{} },
         @{ Name = "Test-SharedWslPressureCampaignStatic.ps1"; Arguments = @{} },
+        @{ Name = "Test-RamSharedThreeTierStressStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-Win11WslRuntimeProbeStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-Win11Wsl2LabOfflineAccessStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-RamSharedWslStatusStatic.ps1"; Arguments = @{} },

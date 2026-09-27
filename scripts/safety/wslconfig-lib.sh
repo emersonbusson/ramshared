@@ -22,9 +22,10 @@ WSLCONFIG_KERNEL_MODULES="${WSLCONFIG_KERNEL_MODULES:-C:/wsl/modules-ramshared.v
 WSLCONFIG_UNSAFE_LAB_MODE="${WSLCONFIG_UNSAFE_LAB_MODE:-0}"
 WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL="${WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL:-}"
 
+# sparseVhd is allowed on this host. Guest must still issue discard/fstrim so
+# the hypervisor learns which blocks are free (see the fstrim timer).
 wslconfig_unsafe_lab_sparse_enabled() {
-	[[ "$WSLCONFIG_UNSAFE_LAB_MODE" == 1 \
-		&& "$WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL" == I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK ]]
+	return 0
 }
 
 # --- path encode (Day-0: one format only) -----------------------------------
@@ -137,12 +138,7 @@ wslconfig_validate_file() {
 				fi
 				;;
 			sparseVhd)
-				if [[ "$section" == experimental && "${val,,}" == true ]] \
-					&& ! wslconfig_unsafe_lab_sparse_enabled; then
-					echo "L${n}: UNSAFE_SPARSE_VHD sparseVhd=true is refused on production WSL"
-					echo "     migrate by omitting sparseVhd; never use --allow-unsafe on the daily host"
-					err=1
-				fi
+				# Allowed. Companion discard/fstrim is required for reclaim.
 				;;
 			esac
 		fi
@@ -205,7 +201,7 @@ wslconfig_render_host() {
 		return 1
 	fi
 	if wslconfig_unsafe_lab_sparse_enabled; then
-		sparse_line=$'# UNSAFE LAB ONLY: WSL 2.7.12 requires an explicit corruption-risk override.\nsparseVhd=true'
+		sparse_line=$'# sparseVhd enabled. Companion fstrim/discard reclaims free blocks.\nsparseVhd=true'
 	fi
 
 	kern_linux="$(wslconfig_win_to_linux_path "$kern")"

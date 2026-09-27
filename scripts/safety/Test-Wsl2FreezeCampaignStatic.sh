@@ -33,6 +33,7 @@ required=(
   "RAMSHARED_SHARED_HOST_APPROVAL"
   "I_ACCEPT_WSL_TERMINATION"
   "RAMSHARED_WINDOWS_WATCHDOG_ARMED"
+  "RAMSHARED_PRESSURE_PROBE_ADMITTED=1"
   "missing_shared_host_ack_token"
   "windows_watchdog_not_armed"
   "shared-daily-host-complete.txt"
@@ -43,6 +44,7 @@ required=(
   "action_cleanup_timeout"
   "RAMSHARED_PRESSURE_ALLOC_GIB"
   "RAMSHARED_PRESSURE_MEM_MAX"
+  "RAMSHARED_PRESSURE_PROBE_ADMITTED=1"
   "--alloc-gib"
   "--mem-max"
 )

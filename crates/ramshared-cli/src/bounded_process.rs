@@ -82,10 +82,6 @@ impl ProcessSpawnError {
         }
     }
 
-    pub(crate) fn is_not_found(&self) -> bool {
-        matches!(self, ProcessSpawnError::BinaryNotFound { .. })
-    }
-
     fn fatal(detail: impl Into<String>) -> Self {
         ProcessSpawnError::FatalContainment {
             detail: detail.into(),

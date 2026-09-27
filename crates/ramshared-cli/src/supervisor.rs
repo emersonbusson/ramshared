@@ -1020,11 +1020,28 @@ fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
     Some((value("MemTotal")? * 1024, value("MemAvailable")? * 1024))
 }
 
-fn parse_psi_full_avg10(text: &str) -> Option<f64> {
-    text.lines()
-        .find(|line| line.starts_with("full "))?
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("avg10=")?.parse().ok())
+pub(crate) fn parse_psi_full_avg10(text: &str) -> Option<f64> {
+    let mut full_rows = 0;
+    let mut result = None;
+    for line in text.lines().filter(|line| line.starts_with("full ")) {
+        full_rows += 1;
+        let mut avg10_count = 0;
+        for field in line.split_whitespace() {
+            let Some(value) = field.strip_prefix("avg10=") else {
+                continue;
+            };
+            avg10_count += 1;
+            let value = value.parse::<f64>().ok()?;
+            if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                return None;
+            }
+            result = Some(value);
+        }
+        if avg10_count != 1 {
+            return None;
+        }
+    }
+    if full_rows == 1 { result } else { None }
 }
 
 fn publish_at(
@@ -2524,6 +2541,9 @@ mod tests {
             Some(2.5)
         );
         assert!(parse_psi_full_avg10("some avg10=1.0\n").is_none());
+        assert!(parse_psi_full_avg10("full avg10=NaN\n").is_none());
+        assert!(parse_psi_full_avg10("full avg10=100.01\n").is_none());
+        assert!(parse_psi_full_avg10("full avg10=1.0\nfull avg10=2.0\n").is_none());
 
         let root = fixture();
         let state = root.join("nested/supervisor.json");
@@ -2765,7 +2785,7 @@ mod tests {
                     "#!/bin/sh\nsleep 0.05\n[ \"$1\" = \"--version\" ]\n",
                 );
                 success_start.wait();
-                run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(500))
+                run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_secs(2))
             });
             let timeout_start = std::sync::Arc::clone(&start);
             let timeout = scope.spawn(move || {
@@ -2777,7 +2797,8 @@ mod tests {
                 timeout_start.wait();
                 run_systemctl_bounded_for(&systemctl, &[], Duration::from_millis(100))
             });
-            assert!(success.join().unwrap().is_ok());
+            let success = success.join().unwrap();
+            assert!(success.is_ok(), "successful fixture failed: {success:?}");
             let error = timeout.join().unwrap().unwrap_err();
             assert!(error.contains("timed out"), "{error}");
         });

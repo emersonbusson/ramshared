@@ -35,6 +35,7 @@ $required = @(
     "ExternalWorkloadMiB",
     "PostCampaignObserveSec",
     "HostCommitReserveMiB",
+    "HostPhysicalReserveMiB",
     "HostDiskLetters",
     "Resolve-CampaignHostDiskLetters",
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss",
@@ -44,7 +45,7 @@ $required = @(
     "SharedWslHostMemoryGate.psm1",
     "host-memory-admission.json",
     "host-memory.jsonl",
-    "Get-SharedWslHostCommitRequiredMiB",
+    "Get-SharedWslHostRequiredHeadroomMiB",
     "Get-SharedWslHostMemorySample",
     "Test-SharedWslHostMemoryAdmission",
     "Test-SharedWslHostMemoryGuardian",
@@ -52,7 +53,16 @@ $required = @(
     "host_commit_headroom_mib",
     "host_commit_required_mib",
     "host_commit_reserve_mib",
+    "host_physical_headroom_mib",
+    "host_physical_required_mib",
+    "host_physical_reserve_mib",
     "host_memory_guardian_fired",
+    '$GuestMemAvailableReserveMiB = 1024',
+    '$GuestSwapFreeReserveMiB = 1024',
+    "ramshared-guest-memory-admission.sh",
+    "guest-memory-admission.json",
+    "guest-memory-admission.err",
+    "guest-memory-admission-refused.txt",
     "Invoke-SelectedDistroTermination",
     "Test-SelectedDistroTerminationContainment",
     "targeted_termination_unproven",
@@ -122,6 +132,25 @@ foreach ($needle in $required) {
     }
 }
 
+$guestScriptMatch = [regex]::Match($text, '(?s)\$guestScript\s*=\s*@"\r?\n(.*?)\r?\n"@')
+if (-not $guestScriptMatch.Success) {
+    throw "shared pressure campaign guest script here-string is missing"
+}
+$guestBody = $guestScriptMatch.Groups[1].Value
+$guestAdmission = $guestBody.IndexOf('bash ./scripts/safety/ramshared-guest-memory-admission.sh /proc/meminfo')
+$guestRefusalExit = $guestBody.IndexOf('exit "`$guest_admission_rc"')
+$cleanupTrap = $guestBody.IndexOf('trap cleanup EXIT INT TERM')
+$ramsharedDown = $guestBody.IndexOf('sudo -n ./target/release/ramshared down')
+$ramsharedUp = $guestBody.IndexOf('sudo -n env RAMSHARED_TRACE_PROBE=1 ./target/release/ramshared up')
+$pressureLaunch = $guestBody.IndexOf('./scripts/safety/wsl2-freeze-campaign.sh')
+if ($guestAdmission -lt 0 -or $guestRefusalExit -lt 0 -or $cleanupTrap -lt 0 -or $ramsharedDown -lt 0 -or
+    $ramsharedUp -lt 0 -or $pressureLaunch -lt 0 -or
+    $guestAdmission -gt $guestRefusalExit -or $guestRefusalExit -gt $cleanupTrap -or
+    $guestAdmission -gt $ramsharedDown -or
+    $guestAdmission -gt $ramsharedUp -or $guestAdmission -gt $pressureLaunch) {
+    throw "guest memory admission must refuse before cleanup, RamShared mutation, or pressure launch"
+}
+
 if ($text.Contains('>>"`$artifact/daemon.out"')) {
     throw "daemon wrapper must not depend on an unset runtime artifact variable"
 }
@@ -130,6 +159,14 @@ if ($text.Contains('$volumes = @(Get-Content -LiteralPath $VolumePath -Raw | Con
 }
 if ($text.Contains('[string[]]$HostDiskLetters = @("C", "I")')) {
     throw "pressure campaign must not default telemetry to C:/I:"
+}
+if (-not $text.Contains('[ValidateRange(0, 4096)][int]$ExternalWorkloadMiB = 0')) {
+    throw "the optional Windows CUDA VRAM workload must remain disabled by default"
+}
+$externalLaunchGate = $text.IndexOf('if ($ExternalWorkloadMiB -gt 0 -and $externalLaunchScheduled -and')
+$externalLaunch = $text.IndexOf('$externalProc = Start-Process -FilePath "powershell.exe"')
+if ($externalLaunchGate -lt 0 -or $externalLaunch -lt 0 -or $externalLaunchGate -gt $externalLaunch) {
+    throw "the Windows CUDA workload must require explicit nonzero VRAM approval"
 }
 
 Import-CampaignFunction 'Normalize-HostDiskLetters'
@@ -194,9 +231,12 @@ foreach ($needle in @(
     }
 }
 
-if (-not $moduleText.Contains('Invoke-SharedWslBoundedPowerShellQuery') -or
-    -not $moduleText.Contains('host_memory_query_deadline_exceeded')) {
-    throw 'host memory CIM telemetry must be queried by a bounded child deadline'
+if (-not $moduleText.Contains('GetPerformanceInfo') -or
+    -not $moduleText.Contains('$CommitLimitPages - $CommitTotalPages') -or
+    -not $moduleText.Contains('PhysicalAvailable') -or
+    $moduleText.Contains('FreeVirtualMemory') -or
+    $moduleText.Contains('Invoke-SharedWslBoundedPowerShellQuery')) {
+    throw 'host memory admission must use exact commit counters and available physical pages without a child PowerShell query'
 }
 # runtime_telemetry_write_failure_requests_cleanup
 # guardian_marker_write_failure_cannot_precede_cleanup
@@ -226,8 +266,10 @@ if ($cleanupBlock.IndexOf('Stop-OptionalExternalWorkload') -gt $cleanupBlock.Ind
 }
 foreach ($needle in @(
     "host_commit_headroom_insufficient",
+    "host_physical_headroom_insufficient",
     "host_memory_query_failed",
     "host_commit_reserve_breached",
+    "host_physical_reserve_breached",
     "host_memory_telemetry_stale"
 )) {
     if (-not $moduleText.Contains($needle)) {

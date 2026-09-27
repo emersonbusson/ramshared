@@ -29,6 +29,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+Import-Module (Join-Path $PSScriptRoot "SharedWslHostMemoryGate.psm1") -Force
 
 $TaskName = "RamSharedWslGuardian.v1"
 $ProgramDataRoot = "C:\ProgramData\RamShared"
@@ -46,6 +47,9 @@ $GuardianHealthPath = Join-Path $GuardianStateRoot ($Distro + ".health.json")
 $ResumeLeasePath = "/run/ramshared/host-resume-lease.json"
 $GuardianActionApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTION"
 $GuardianActivationApproval = "RAMSHARED_ATTENDED_GUARDIAN_ACTIVATION"
+# System.ServiceProcess.ServiceControllerStatus::Running serializes as enum value 4.
+$HcsServiceRunningValue = 4
+$HcsServiceStatusQuery = 'Get-Service -Name vmcompute | Select-Object Name, @{ Name = "Status"; Expression = { $_.Status.ToString() } } | ConvertTo-Json -Compress'
 $script:LastGuestBootProbe = $null
 
 function Resolve-GuardianTaskUserName {
@@ -309,24 +313,47 @@ function Get-GuestProbeFailureCount {
     return $failed
 }
 
+function Test-HcsServiceRunning {
+    param([AllowNull()][object]$Status)
+    if ($null -eq $Status) { return $false }
+
+    if ($Status -is [string]) {
+        $textStatus = $Status.Trim()
+        if ($textStatus -ieq "Running") { return $true }
+        $numericStatus = 0
+        if ([int]::TryParse($textStatus, [ref]$numericStatus)) {
+            return $numericStatus -eq $HcsServiceRunningValue
+        }
+        return $false
+    }
+
+    $statusType = $Status.GetType()
+    if ($statusType.IsEnum -or $Status -is [byte] -or $Status -is [sbyte] -or
+        $Status -is [int16] -or $Status -is [uint16] -or $Status -is [int32] -or
+        $Status -is [uint32] -or $Status -is [int64] -or $Status -is [uint64]) {
+        try { return ([long]$Status -eq $HcsServiceRunningValue) } catch { return $false }
+    }
+    return $false
+}
+
 function Invoke-IndependentHostProbe {
     $wsl = Invoke-BoundedProcess -FileName "wsl.exe" -Arguments "--status" -TimeoutSeconds $GuestCommandTimeoutSec
-    $hcs = Invoke-BoundedJsonQuery -Query 'Get-Service -Name vmcompute | Select-Object Name, Status | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
-    $hcsFailed = (-not $hcs.completed) -or $null -eq $hcs.data -or [string]$hcs.data.Status -ne "Running"
+    $hcs = Invoke-BoundedJsonQuery -Query $HcsServiceStatusQuery -TimeoutSeconds $GuestCommandTimeoutSec
+    $hcsFailed = (-not $hcs.completed) -or $null -eq $hcs.data -or -not (Test-HcsServiceRunning -Status $hcs.data.Status)
     $wslFailed = (-not $wsl.completed) -or $wsl.exit_code -ne 0
     return [ordered]@{ failed = ($wslFailed -and $hcsFailed); wsl_failed = $wslFailed; hcs_failed = $hcsFailed; wsl = $wsl; hcs = $hcs; hcs_status = if ($null -eq $hcs.data) { "missing" } else { [string]$hcs.data.Status } }
 }
 
 function Invoke-HostSnapshot {
     param([Parameter(Mandatory = $true)][string]$RunDirectory)
-    $vmcompute = Invoke-BoundedJsonQuery -Query 'Get-Service -Name vmcompute | Select-Object Name, Status | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
+    $vmcompute = Invoke-BoundedJsonQuery -Query $HcsServiceStatusQuery -TimeoutSeconds $GuestCommandTimeoutSec
     $snapshot = [ordered]@{ timestamp_utc = [DateTime]::UtcNow.ToString("o"); heartbeat = Get-HeartbeatState; vmcompute = $vmcompute; closed = [bool]$vmcompute.completed }
     Write-AtomicJson -Path (Join-Path $RunDirectory "host-snapshot.json") -Value $snapshot
     return $snapshot
 }
 
 function Get-HostTelemetry {
-    $osQuery = Invoke-BoundedJsonQuery -Query 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory, TotalVirtualMemorySize, FreeVirtualMemory | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
+    $hostMemory = Get-SharedWslHostMemorySample
     $pagefileQuery = Invoke-BoundedJsonQuery -Query '@(Get-CimInstance -ClassName Win32_PageFileUsage | Select-Object CurrentUsage) | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
     $vmmemQuery = Invoke-BoundedJsonQuery -Query '$p = Get-Process -Name vmmemWSL -ErrorAction SilentlyContinue | Select-Object -First 1; if ($null -eq $p) { [pscustomobject]@{ found = $false } } else { [pscustomobject]@{ found = $true; working_set_bytes = [uint64]$p.WorkingSet64; cpu_seconds = [double]$p.CPU; read_bytes = [uint64]$p.IOReadBytes; write_bytes = [uint64]$p.IOWriteBytes } } | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
     # Telemetry has no storage policy of its own. It resolves the physical
@@ -334,22 +361,23 @@ function Get-HostTelemetry {
     # origin placement remains owned by Manage-RamSharedOrigin.ps1.
     $volumeQuery = Invoke-BoundedJsonQuery -Query '$manifestPath = "C:\ProgramData\RamShared\ramshared-origin-manifest.json"; if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { [pscustomobject]@{ found = $false; reason = "origin_manifest_missing" } } else { $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json -ErrorAction Stop; if ([int]$manifest.schema_version -ne 3 -or [string]::IsNullOrWhiteSpace([string]$manifest.origin_vhdx) -or -not [IO.Path]::IsPathRooted([string]$manifest.origin_vhdx)) { throw "origin_manifest_invalid" }; $volumes = @(Get-Volume -FilePath ([string]$manifest.origin_vhdx) -ErrorAction Stop); if ($volumes.Count -ne 1) { throw "origin_physical_volume_ambiguous" }; $v = $volumes[0]; [pscustomobject]@{ found = $true; drive_letter = [string]$v.DriveLetter; volume_path = [string]$v.Path; volume_unique_id = [string]$v.UniqueId; file_system_label = [string]$v.FileSystemLabel; size_bytes = [uint64]$v.Size; free_bytes = [uint64]$v.SizeRemaining } } | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
     $gpuQuery = Invoke-BoundedJsonQuery -Query 'Get-Counter ''\GPU Adapter Memory(*)\Dedicated Usage'' | Select-Object -ExpandProperty CounterSamples | Select-Object InstanceName, CookedValue | ConvertTo-Json -Compress' -TimeoutSeconds $GuestCommandTimeoutSec
-    $os = $osQuery.data
     $pagefiles = @($pagefileQuery.data)
     $vmmem = $vmmemQuery.data
     $volume = $volumeQuery.data
     return [ordered]@{
-        schema_version = 2
+        schema_version = 3
         timestamp_utc = [DateTime]::UtcNow.ToString("o")
-        physical_memory_total_kib = if ($null -eq $os) { $null } else { [uint64]$os.TotalVisibleMemorySize }
-        physical_memory_free_kib = if ($null -eq $os) { $null } else { [uint64]$os.FreePhysicalMemory }
-        commit_limit_kib = if ($null -eq $os) { $null } else { [uint64]$os.TotalVirtualMemorySize }
-        commit_free_kib = if ($null -eq $os) { $null } else { [uint64]$os.FreeVirtualMemory }
+        physical_memory_total_kib = if ($hostMemory.ok) { [uint64]$hostMemory.total_physical_kib } else { $null }
+        physical_memory_available_kib = if ($hostMemory.ok) { [uint64]$hostMemory.physical_available_kib } else { $null }
+        commit_limit_kib = if ($hostMemory.ok) { [uint64]$hostMemory.commit_limit_kib } else { $null }
+        commit_used_kib = if ($hostMemory.ok) { [uint64]$hostMemory.commit_used_kib } else { $null }
+        commit_available_kib = if ($hostMemory.ok) { [uint64]$hostMemory.commit_headroom_kib } else { $null }
+        host_memory_query_error = if ($hostMemory.ok) { $null } else { [string]$hostMemory.detail }
         pagefile_used_mib = [uint64](($pagefiles | Measure-Object -Property CurrentUsage -Sum).Sum)
         vmmem_wsl = if ($null -eq $vmmem -or -not [bool]$vmmem.found) { $null } else { [ordered]@{ working_set_bytes = [uint64]$vmmem.working_set_bytes; cpu_seconds = [double]$vmmem.cpu_seconds; read_bytes = [uint64]$vmmem.read_bytes; write_bytes = [uint64]$vmmem.write_bytes } }
         gpu = $gpuQuery.data
         origin_volume = if ($null -eq $volume -or -not [bool]$volume.found) { $null } else { [ordered]@{ drive_letter = [string]$volume.drive_letter; volume_path = [string]$volume.volume_path; volume_unique_id = [string]$volume.volume_unique_id; file_system_label = [string]$volume.file_system_label; size_bytes = [uint64]$volume.size_bytes; free_bytes = [uint64]$volume.free_bytes } }
-        telemetry_queries_bounded = [bool]($osQuery.completed -and $pagefileQuery.completed -and $vmmemQuery.completed -and $volumeQuery.completed -and $gpuQuery.completed)
+        telemetry_queries_bounded = [bool]($hostMemory.ok -and $pagefileQuery.completed -and $vmmemQuery.completed -and $volumeQuery.completed -and $gpuQuery.completed)
         heartbeat = Get-HeartbeatState
     }
 }
@@ -1184,6 +1212,28 @@ switch ($Action) {
             throw "guardian WSL command prefix must preserve the validated distro name without quotes"
         }
         Write-Output "PASS guardian_wsl_arguments_are_scheduler_safe"
+        $hcsStatusCases = @(
+            @{ name = "serialized_running_enum"; status = 4; expected = $true },
+            @{ name = "running_name"; status = "Running"; expected = $true },
+            @{ name = "serialized_running_enum_text"; status = "4"; expected = $true },
+            @{ name = "stopped_enum"; status = 1; expected = $false },
+            @{ name = "stopped_name"; status = "Stopped"; expected = $false },
+            @{ name = "unknown_status"; status = "unknown"; expected = $false },
+            @{ name = "boolean_status"; status = $true; expected = $false },
+            @{ name = "fractional_status"; status = 4.5; expected = $false },
+            @{ name = "missing_status"; status = $null; expected = $false }
+        )
+        foreach ($case in $hcsStatusCases) {
+            $isRunning = Test-HcsServiceRunning -Status $case.status
+            if ([bool]$isRunning -ne [bool]$case.expected) {
+                throw ("manufactured HCS status classification failed: " + $case.name)
+            }
+        }
+        Write-Output "PASS guardian_hcs_status_accepts_serialized_running_enum"
+        if (-not $HcsServiceStatusQuery.Contains(".Status.ToString()")) {
+            throw "manufactured HCS query must normalize the service enum before JSON serialization"
+        }
+        Write-Output "PASS guardian_hcs_status_json_is_normalized"
         $taskArguments = Get-SealedGuardianTaskArguments
         foreach ($sealedArgument in @(
             ('-Action watch -Run'),
