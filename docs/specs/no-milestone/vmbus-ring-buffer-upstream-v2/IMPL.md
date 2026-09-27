@@ -6,6 +6,15 @@
 
 **PARTIAL — an earlier four-commit snapshot builds, boots, and passes ordinary x86_64 Hyper-V runtime tests in a disposable VM. The current public v2 draft has six patches and passes hosted x86_64/arm64 builds, WSL backport checks, and KUnit 14/14. Upstream submission remains blocked on live response/rescind and CoCo platform evidence.**
 
+The September 27 source review found an uncovered GPADL retention path and
+rejected an attempted cleanup helper: `channel->rescind` is also set by
+synthetic hibernation cleanup and local unload, partial GPADL establishment
+bypasses the teardown helper, and teardown metadata allocation can fail before
+the rescind check. The helper was removed. The tracked series still has six
+patches; the ignored local `0007` artifact is not part of the branch and has
+no lifecycle qualification. See `AUDIT-2.5.md` and EVD-0087. No source build,
+kernel install, or pressure test was performed for this audit.
+
 The versioned six-patch draft is based on Linux `v7.3-rc4`
 (`93f51579e7df248780214094418f205253383cc5`). The local draft at
 `docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` remains a working diff;

@@ -6740,3 +6740,67 @@ by host physical headroom and guest `MemAvailable`.
 **Verdict:** 🟡 `PARTIAL` — the source now refuses the unqualified benchmark
 record, but the host still runs the old dashboard binary; memory attribution
 and live stress qualification remain open.
+
+## 2026-09-27 11:29 -03 — Post-restart host and WSL memory snapshot
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0087`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T14:29:51Z`.
+**Verified at:** `2026-09-27T14:33:34Z`.
+**Source revision:** `c379f9b4b159a0e64e14106960bd10fbb716077c`.
+**Source state:** The RamShared checkout was clean when sampled. The separate
+kernel contribution checkout had an uncommitted GPADL-rescind helper; review
+found that helper incomplete and it was not built or installed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070, EVD-0071, EVD-0086, and the WSL2 freeze gap.
+**Freshness:** One read-only guest sample and a Windows sample 3 minutes 43
+seconds later; not a trend or a simultaneous pair.
+**Category:** `reliability / memory / attribution`.
+**How to measure:** Read selected `/proc/meminfo` and `/proc/pressure/memory`
+fields once from the active WSL guest; inspect process working sets with
+`Get-Process`; read Windows physical memory through `GlobalMemoryStatusEx`.
+`/proc/vmallocinfo` was attempted without elevation and denied access. No
+second guest read, build, stress, install, process termination, or additional
+WSL restart was performed during evidence collection.
+
+**What:** Capture one post-restart memory snapshot to determine whether the
+host or a PowerShell process was currently accumulating memory.
+
+**Guest:** The active kernel identified as
+`6.18.40.1-microsoft-standard-WSL2+`. `MemTotal` was 15,995 MiB,
+`MemAvailable` 6,210 MiB, `MemFree` 863 MiB, `Cached` 5,580 MiB, and
+`Buffers` 1,088 MiB. Of the configured 4,096 MiB swap, 4,086 MiB was free
+(about 10 MiB used). Memory PSI was near zero (`avg10=0.00`, `avg60=0.04`,
+`avg300=0.01` for `some` and `full`). `vmbus_alloc_buffer` map counts could
+not be collected because `/proc/vmallocinfo` returned `Permission denied`.
+
+**Windows:** At 11:33:34 -03, physical RAM totaled 32,670 MiB, with 10,643 MiB
+available and 67% in use. `VmmemWSL` (PID 8984) had a 10,809 MiB working set
+and 15,891 MiB private bytes; the latter is not a physical-residency measure.
+The combined private bytes for `powershell` and `pwsh` were 221 MiB. No
+multi-GiB PowerShell process was present in this sample.
+
+**Comparison:** Screenshot 106 at 10:10 showed Windows at 14.9/31.9 GiB in
+use and `VmmemWSL` near 2,922 MiB. The user then ran `wsl --shutdown`, so the
+later 10,809 MiB working set is a cross-restart comparison, not proof of
+monotonic growth. EVD-0086 at 08:37 reported 10,315 MiB physical headroom and
+12,969 MiB `VmmemWSL` working set; the current Windows sample has 328 MiB more
+headroom and 2,160 MiB less `VmmemWSL` working set than that earlier sample.
+The local `.wslconfig` still sets `autoMemoryReclaim=disabled`; that may allow
+guest cache to remain resident, but this sample does not identify which pages
+account for the `VmmemWSL` working set.
+
+**Assessment:** The current host is not near physical-memory exhaustion, and
+the guest is not currently swapping or showing material PSI pressure. The
+large WSL working set is real host residency, while the guest still reports
+6.2 GiB available. The earlier freeze remains consistent with severe guest
+memory depletion and swap thrashing documented in EVD-0070/0071. Source review
+also found GPADL cleanup paths that may retain backing pages after ambiguous
+failure; however, the proposed helper incorrectly treats every
+`channel->rescind` as terminal host revocation, misses partial establishment,
+and is not a validated fix. This is a plausible contributor, not a proven
+cause. No current map count or exact owner was available.
+
+**Verdict:** 🟡 `PARTIAL` — current WSL memory and host residency are measured;
+the initiating allocation and historical freeze cause remain unproven.

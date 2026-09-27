@@ -37,15 +37,21 @@ already contains Kameron Carr's `vmbus_alloc_buffer()` series.
 | DT-7 | Give the ring owner a page-pointer array for UIO/sysfs mapping, and expose UIO memory as virtual | A single physical range is no longer valid. |
 | DT-8 | Keep the WSL 6.18.40.1 backport in a separate source branch | The exact v7.3-rc4 series fails to apply to the WSL tree. |
 | DT-9 | Promote only a sealed kernel/modules/QEMU pair through `wsl-kernel.sh apply` | The host reports `NEED_ARM`; manual image replacement is not admitted. |
+| DT-10 | Distinguish a host-originated rescind from synthetic hibernation and local unload before reclaiming GPADL pages | The shared `channel->rescind` flag does not prove that Hyper-V dropped its reference. |
 
 ## Atomicity and rollback
 
 Allocation, GPADL messages, and `vmap`/`vunmap` run in sleepable process
 context. No spinlock is held across allocation or host response wait.
-The host-ownership frontier is successful GPADL establishment; before
-returning pages, teardown must be confirmed or channel rescind must be
-established according to the current VMBus contract. On ambiguity, leak and
-log. No userspace or persistent host state changes occur during patch
+The host-ownership frontier is successful GPADL establishment. Before
+returning pages, teardown must be confirmed or a host-originated VMBus rescind
+must be established. The generic `channel->rescind` flag alone is insufficient:
+local unload and synthetic hibernation also set it. Propagate message origin to
+the cleanup path and retain pages for synthetic or local rescind unless a
+separate host-release guarantee is proven. Apply the same rule when a partial
+GPADL post fails and before allocating teardown metadata. On ambiguity, leak
+and log. CoCo re-encryption failure remains an independent reason to retain
+the affected chunk. No userspace or persistent host state changes occur during patch
 preparation. A test kernel is rolled back only after a fresh boot proves the
 previous kernel identity. The attended host test must not enable swap, run
 memory pressure, or change RamShared lifecycle state.
@@ -56,6 +62,7 @@ memory pressure, or change RamShared lifecycle state.
 | --- | --- | --- | --- | --- |
 | ITEM-2 | #13 refusal/legitimate | Do both private and shared rings map through the correct page state? | Named KUnit allocation/mapping tests plus CoCo lab | Any decryption on `vmap` address |
 | ITEM-3 | #16 exhaustion | Does a high-order allocation failure fall to smaller chunks without exposing partial pages? | Fault-injection allocation test | Any freed page with unknown encryption state |
+| ITEM-3 / ITEM-5 | #13 refusal/legitimate | Which rescind source proves host GPADL revocation? | KUnit: host rescind reclaims, synthetic hibernation and local unload retain, partial-post rescind and teardown-allocation failure paths | Any generic `channel->rescind` path frees host-referenced pages |
 | ITEM-5 | #17 replay | Can close/error cleanup repeat without double free? | Named teardown/failure-injection test | Double free, host-visible free, or nonzero GPADL retained as safe |
 
 ## Security checklist
@@ -65,6 +72,9 @@ memory pressure, or change RamShared lifecycle state.
 - IRQ/atomic: all touched allocation and unmapping paths remain process-context.
 - Lifetime: one buffer owns backing pages, mapping, and GPADL state.
 - CoCo: direct-map decryption precedes virtual mapping; failed re-encryption leaks.
+- Host revocation: only confirmed teardown or host-originated rescind clears
+  GPADL ownership; local and synthetic rescind retain pages without separate
+  proof.
 - Host safety: one attended test promotion is allowed only after its immutable
   kernel/modules/QEMU pair passes pre-install gates; no pressure or RamShared
   swap activation is allowed on the daily WSL2 environment.
@@ -90,6 +100,7 @@ memory pressure, or change RamShared lifecycle state.
 | GPADL post failure | `vmbus_gpadl_post_failure_test`, `vmbus_gpadl_post_success_test`, `vmbus_gpadl_response_state_test`, `vmbus_gpadl_teardown_post_failure_test` | Callback-injected KUnit; prior five-patch hosted run passed | N/A — kernel slice; live host response/rescind interleaving remains required |
 | Confidential ring GPADL | `vmbus_ring_buffer_coco_decrypt_once` | KUnit / CoCo lab | N/A — kernel slice; CoCo evidence |
 | GPADL teardown and buffer free | `vmbus_buffer_failed_teardown_leaks` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
+| GPADL rescind ownership | `vmbus_gpadl_host_rescind_reclaims_test`, `vmbus_gpadl_synthetic_rescind_retains_test`, `vmbus_gpadl_unload_rescind_retains_test`, `vmbus_gpadl_partial_post_rescind_test`, `vmbus_gpadl_teardown_alloc_failure_test` | Callback-injected KUnit plus host-origin runtime trace | N/A — kernel slice; tests and runtime proof remain open |
 | Partial allocation | `vmbus_buffer_partial_allocation_cleanup` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
 | Netvsc buffer migration | `netvsc_buffer_lifecycle` | integration / Hyper-V lab | N/A — kernel slice; live drill |
 | UIO ring mapping | `uio_hv_ring_noncontiguous_mmap` | integration / Hyper-V lab | N/A — kernel slice; live drill |
