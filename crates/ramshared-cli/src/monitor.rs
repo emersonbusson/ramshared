@@ -27,6 +27,8 @@ const MAX_HISTORY_SECONDS: u64 = 3_600;
 const DEFAULT_MAX_LOG_BYTES: u64 = 50 * 1024 * 1024;
 const GPU_BUDGET_MAX_AGE_MS: u64 = 5_000;
 const MIB_BYTES: u64 = 1024 * 1024;
+const BENCHMARK_EVIDENCE_SCHEMA_V1: &str = "ramshared-evidence/v1";
+const BENCHMARK_MIN_SAMPLE_COUNT: usize = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MonitorOptions {
@@ -351,34 +353,125 @@ impl Observation {
 }
 
 fn read_benchmark_qualification(path: &Path) -> (f64, f64, f64, f64, String) {
-    if let Ok(content) = fs::read_to_string(path)
-        && let Ok(json) = serde_json::from_str::<Value>(&content)
-    {
-        let speed = json
-            .get("reclaim_speed_gbs")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let duration = json
-            .get("reclaim_duration_ms")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let p50 = json
-            .get("p50_cycle_latency_ms")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let p99 = json
-            .get("p99_cycle_latency_ms")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let status = json
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("UNKNOWN")
-            .to_string();
-        (speed, duration, p50, p99, status)
-    } else {
-        (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+    let awaiting = || (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string());
+    let Ok(content) = fs::read_to_string(path) else {
+        return awaiting();
+    };
+    let Ok(json) = serde_json::from_str::<Value>(&content) else {
+        return awaiting();
+    };
+    if !is_promotable_benchmark_evidence(&json) {
+        return awaiting();
     }
+
+    let Some(speed) = benchmark_metric_summary(&json, "reclaim_speed_gbs", "GB/s", "median") else {
+        return awaiting();
+    };
+    let Some(duration) = benchmark_metric_summary(&json, "reclaim_duration_ms", "ms", "median")
+    else {
+        return awaiting();
+    };
+    let Some(p50) = benchmark_metric_summary(&json, "p50_cycle_latency_ms", "ms", "median") else {
+        return awaiting();
+    };
+    let Some(p99) =
+        benchmark_metric_summary(&json, "p99_cycle_latency_ms", "ms", "p99_nearest_rank")
+    else {
+        return awaiting();
+    };
+
+    (speed, duration, p50, p99, "PASS".to_string())
+}
+
+fn is_promotable_benchmark_evidence(json: &Value) -> bool {
+    let source = &json["source"];
+    let workload = &json["workload"];
+    let comparison = &json["comparison"];
+    let lifecycle = &json["lifecycle"];
+    let decision = &json["decision"];
+    let artifacts = json["artifacts"].as_array();
+    let refusals = lifecycle["refusals"].as_array();
+
+    json["schema_version"].as_str() == Some(BENCHMARK_EVIDENCE_SCHEMA_V1)
+        && json["run_id"]
+            .as_str()
+            .is_some_and(|run_id| !run_id.is_empty())
+        && source["commit"]
+            .as_str()
+            .is_some_and(|commit| !commit.is_empty())
+        && source["dirty"].as_bool() == Some(false)
+        && source["dirty_entry_count"].as_u64() == Some(0)
+        && json["candidate"]
+            .as_object()
+            .is_some_and(|candidate| !candidate.is_empty())
+        && workload["runs"].as_u64().is_some_and(|runs| runs >= 3)
+        && comparison["qualified"].as_bool() == Some(true)
+        && lifecycle["binary_match"].as_bool() == Some(true)
+        && lifecycle["legitimate"]["verdict"].as_str() == Some("PASS")
+        && refusals.is_some_and(|entries| {
+            !entries.is_empty()
+                && entries
+                    .iter()
+                    .all(|entry| entry["verdict"].as_str() == Some("PASS"))
+        })
+        && lifecycle["cleanup"]["complete"].as_bool() == Some(true)
+        && lifecycle["residue"].as_u64() == Some(0)
+        && artifacts.is_some_and(|entries| !entries.is_empty())
+        && decision["verdict"].as_str() == Some("PASS")
+        && decision["promotable"].as_bool() == Some(true)
+}
+
+fn benchmark_metric_summary(
+    json: &Value,
+    metric_name: &str,
+    expected_unit: &str,
+    summary_key: &str,
+) -> Option<f64> {
+    let metric = json.get("metrics")?.get(metric_name)?;
+    if metric.get("unit")?.as_str()? != expected_unit {
+        return None;
+    }
+    let samples = metric.get("samples")?.as_array()?;
+    if samples.len() < BENCHMARK_MIN_SAMPLE_COUNT
+        || metric.get("n")?.as_u64()? != u64::try_from(samples.len()).ok()?
+    {
+        return None;
+    }
+
+    let mut values = samples
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<Vec<_>>>()?;
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+
+    let recomputed = match summary_key {
+        "median" => {
+            let middle = values.len() / 2;
+            if values.len() % 2 == 0 {
+                (values[middle - 1] + values[middle]) / 2.0
+            } else {
+                values[middle]
+            }
+        }
+        "p99_nearest_rank" => {
+            let rank = ((values.len() as f64) * 0.99).ceil() as usize;
+            values[rank.max(1).min(values.len()) - 1]
+        }
+        _ => return None,
+    };
+    let recorded = metric.get(summary_key)?.as_f64()?;
+    let tolerance = recomputed.abs().max(1.0) * 1.0e-9;
+    if !recorded.is_finite() || (recorded - recomputed).abs() > tolerance {
+        return None;
+    }
+
+    Some(recomputed)
 }
 
 pub fn collect_observation() -> Result<Observation, MonitorError> {
@@ -2136,15 +2229,20 @@ mod tests {
     fn benchmark_evidence_fixture() -> Value {
         serde_json::json!({
             "schema_version": "ramshared-evidence/v1",
+            "run_id": "wsl2-qualified-monitor-fixture-001",
             "source": {
                 "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "dirty": false,
-                "dirty_entry_count": 0
+                "dirty_entry_count": 0,
+                "harness_revision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             },
+            "candidate": { "binary_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" },
             "workload": { "runs": 3 },
             "comparison": { "qualified": true },
             "lifecycle": {
                 "binary_match": true,
+                "legitimate": { "verdict": "PASS" },
+                "refusals": [{ "name": "invalid_target_refused", "verdict": "PASS" }],
                 "cleanup": { "complete": true },
                 "residue": 0
             },
@@ -2256,6 +2354,16 @@ mod tests {
             (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
         );
         fs::remove_dir_all(incomplete_root).unwrap();
+
+        let mut forged = benchmark_evidence_fixture();
+        forged["metrics"]["reclaim_speed_gbs"]["median"] = Value::from(900.0);
+        let forged_contents = forged.to_string();
+        let (forged_root, forged_path) = monitor_benchmark_path("forged", &forged_contents);
+        assert_eq!(
+            read_benchmark_qualification(&forged_path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(forged_root).unwrap();
     }
 
     #[test]
