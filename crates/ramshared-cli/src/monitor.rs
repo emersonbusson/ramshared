@@ -51,6 +51,10 @@ impl Default for MonitorOptions {
     }
 }
 
+#[cfg(test)]
+#[path = "monitor_pressure_tests.rs"]
+mod pressure_classification_tests;
+
 impl MonitorOptions {
     pub fn parse(args: &[String]) -> Result<Self, ()> {
         let mut options = Self::default();
