@@ -9,7 +9,7 @@ issues: []
 
 ## 1. Summary
 
-Replace the script-based host-guest control plane (PowerShell + Task Scheduler on Windows, Bash + embedded Python on Linux, JSON file heartbeats over 9P/Drvfs) with a native dual-binary architecture communicating over Hyper-V Sockets (AF_HYPERV on Windows, AF_VSOCK on Linux). The existing `ramshared-winsvc` (Windows NT Service) and `ramshared-wsl2d` (Linux daemon) absorb all runtime logic currently scattered across scripts, eliminating `ramshared-host-gate.sh`, `Manage-RamSharedOrigin.ps1`, `Watch-RamSharedWsl.ps1`, Task Scheduler entries, and file-based heartbeat exchanges. VHDX origin attachment becomes a service-managed operation. Result: zero scripts at runtime, sub-millisecond heartbeat latency, fail-closed on socket disconnect, and full ETW/journald observability.
+Specify a future native host-guest control plane using Hyper-V Sockets (`AF_HYPERV` on Windows and `AF_VSOCK` on Linux). The current repository contains a shared protocol crate, gate helpers, and source-level transport adapters. The Windows listener and Linux client are not started by either product process; HMAC handshake, lease/manifest exchange, disconnect revocation, and service-managed VHDX lifecycle are not integrated. This PRD's zero-script, ≤1ms heartbeat, fail-closed, and observability goals are unqualified requirements, not current product behavior.
 
 ## Current boundary — staged design
 
@@ -17,15 +17,15 @@ This PRD defines the transport, protocol, and lifecycle for the native control p
 
 ## 2. Technical context
 
-- **Confirmed in codebase:** `crates/ramshared-winsvc/` implements a full Windows NT Service (`RamSharedWinSvc`) with Named Pipe IPC (`pipe.rs`), binary framed protocol (`ipc.rs` — magic `0x52414D53`, versioned headers, `MAX_PAYLOAD_LEN` 1MB), heartbeat/lease system (`broker_tenant.rs`), ETW/EventLog integration, and TOML config (`config.rs`).
-- **Confirmed in codebase:** `crates/ramshared-winsvc/src/product_online.rs` runs a heartbeat loop (`last_heartbeat.elapsed() >= Duration::from_secs(1)`) and `HostGates` for identity validation.
-- **Confirmed in codebase:** `crates/ramshared-wsl2d/src/main.rs` implements the Linux daemon (`ramsharedd`) with Unix socket IPC, sealed origin manifest at `/etc/ramshared/origin.conf`, and host manifest path `/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json`.
+- **Confirmed in codebase:** `crates/ramshared-winsvc/` contains the Windows NT service and its existing Named Pipe / StorPort protocol. It does not currently start the new Hyper-V listener or exchange the `ramshared-ipc` protocol.
+- **Confirmed in codebase:** `crates/ramshared-winsvc/src/control_plane.rs` contains testable heartbeat and VHDX command helpers, but this module is not wired to the Windows service's host-guest socket path.
+- **Confirmed in codebase:** `crates/ramshared-wsl2d/src/main.rs` implements `ramsharedd` with Unix socket IPC and a sealed origin manifest at `/etc/ramshared/origin.conf`; it does not use the new AF_VSOCK client or host gate lease helpers.
 - **Confirmed in codebase:** `scripts/safety/ramshared-host-gate.sh` (Bash + embedded Python) validates origin manifest, guardian health, safe-mode gates, and leases — reading from `/mnt/c/ProgramData/RamShared/` (9P/Drvfs) and writing to `/run/ramshared/` and `/var/lib/ramshared/`.
 - **Confirmed in codebase:** `scripts/windows/Manage-RamSharedOrigin.ps1` handles VHDX origin attachment via `wsl.exe --mount`. `scripts/windows/` contains 23 PowerShell scripts. `scripts/safety/` contains 50+ Bash scripts (runtime + CI).
-- **Confirmed in codebase:** No AF_HYPERV, AF_VSOCK, or vsock code exists anywhere in the workspace. All host-guest communication uses file-based JSON over 9P/Drvfs.
+- **Confirmed in codebase:** `crates/ramshared-ipc/src/vsock.rs` now contains source adapters for Linux AF_VSOCK connect and Windows AF_HYPERV listen/accept. Linux unit tests and an x86_64 Windows target type-check cover those adapters; no live Windows↔WSL2 socket exchange has been recorded.
 - **Confirmed in codebase:** `crates/ramshared-winbroker/src/pipe.rs` implements Named Pipe with `CreateNamedPipeW`, `ConnectNamedPipe`, `ImpersonateNamedPipeClient` for Windows-local IPC.
 - **Confirmed in docs:** `docs/specs/no-milestone/windows-autonomous-broker-service/` exists with PRD/SPEC/IMPL/AUDIT. `docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/` exists (kernel-level, future).
-- **Inference:** AF_HYPERV/AF_VSOCK provides sub-millisecond latency vs ~10-50ms for file-based JSON over 9P/Drvfs, with instant disconnect detection on VM suspend/crash.
+- **Unverified target:** AF_HYPERV/AF_VSOCK should avoid IP and 9P/Drvfs transport overhead, but this repository has no paired host/guest RTT or suspend/crash measurement. Do not describe sub-millisecond latency or instant disconnect detection as qualified.
 
 ## 3. Recommended option
 
@@ -56,15 +56,15 @@ Extend the existing `ramshared-winsvc` and `ramshared-wsl2d` binaries with a new
 
 ### Discarded alternatives
 
-1. *Keep script-based file heartbeats (9P/Drvfs JSON):* Rejected. Latency ~10-50ms per heartbeat, disk I/O on every exchange, no instant disconnect detection on VM suspend, fragile file locking, and deadlocks when `wsl.exe` is called from inside WSL. This is the current state being replaced.
-2. *TCP sockets over WSL2 virtual network:* Rejected. Adds full TCP/IP stack overhead (~100-500µs), requires port management and firewall rules, and does not provide the instant-disconnect semantics of AF_HYPERV when the VM suspends or crashes.
+1. *Keep file state over 9P/Drvfs:* Rejected for the target control path because it couples authority updates to shared files and cannot provide a socket disconnect event. The current repository still uses file-based origin state; comparative latency and failure behavior have not been measured for the same workload.
+2. *TCP sockets over WSL2 virtual network:* Rejected for this control plane because it requires IP address, port, and firewall management. No comparative latency or suspend/crash behavior has been measured in this repository.
 3. *Shared memory (IVSHMEM) / virtio-vsock custom driver:* Rejected for Day-1. Requires kernel module or custom driver in the WSL2 guest kernel, which is outside the current upstreaming scope. AF_HYPERV/AF_VSOCK is natively available without custom drivers.
 4. *New separate `ramshared-guest-bridge` binary:* Rejected. Adds deployment complexity and version skew risk. Extending the existing daemon (`ramshared-wsl2d`) keeps a single guest binary with atomic updates.
 5. *Named Pipes over 9P (existing `ramshared-winbroker` transport):* Rejected for host-guest. Named Pipes are Windows-local IPC; the current file-based JSON over 9P is the slow path being eliminated. AF_HYPERV is the native cross-boundary transport.
 
 ## 4. Functional requirements (RF)
 
-- **RF-1 (Native Transport):** Host-guest communication must use AF_HYPERV (Windows) / AF_VSOCK (Linux) stream sockets with a well-known Hyper-V socket GUID. No file-based JSON, no 9P/Drvfs dependency for runtime control plane.
+- **RF-1 (Native Transport):** Integrated host-guest communication must use AF_HYPERV (Windows) / AF_VSOCK (Linux) stream sockets with a registered RamShared service GUID. The current adapters do not by themselves remove file-based control-plane state from either daemon.
 - **RF-2 (Shared Protocol):** Both sides must use a shared Rust protocol crate (`ramshared-ipc`) with binary framing (magic `0x52414D53`, versioned headers, bounded payloads ≤ 1MB). Protocol messages cover: Handshake, Heartbeat, LeaseRequest/Granted/Denied/Release, OriginManifest, SafeModeGate, GuardianHealth, VHDXAttach/Detach, Telemetry, Shutdown.
 - **RF-3 (Heartbeat & Lease):** The guest daemon sends heartbeat frames at a configurable interval (default 5s). The host service tracks liveness and revokes the lease if no heartbeat arrives within 3× the interval. Lease revocation triggers fail-closed origin-only mode in the guest.
 - **RF-4 (VHDX Lifecycle):** The host service manages VHDX origin attachment via `wsl.exe --mount --vhd <path> --bare` (or equivalent WSL2 API) invoked programmatically. The guest daemon validates PartUUID and seals the origin manifest upon attach notification. No user PowerShell required.
@@ -74,11 +74,11 @@ Extend the existing `ramshared-winsvc` and `ramshared-wsl2d` binaries with a new
 
 ## 5. Non-functional requirements (NFR)
 
-- **NFR-1 (Latency):** Heartbeat round-trip must complete in ≤ 1ms (vs ~10-50ms for file-based JSON over 9P). Disconnect detection must occur within 3× heartbeat interval (default 15s).
+- **NFR-1 (Latency):** Target heartbeat round-trip is ≤ 1ms and disconnect detection is ≤3× the configured heartbeat interval (default 15s). Both are unqualified until measured on a paired Windows host and WSL2 guest; the PRD makes no file-based latency comparison.
 - **NFR-2 (Zero Scripts at Runtime):** After migration, no `.ps1`, `.sh`, or Python process may execute in the host-guest control plane path. CI/build scripts are exempt.
 - **NFR-3 (Atomic Updates):** Guest daemon binary updates must be atomic (rename-based). Protocol version negotiation must support rolling upgrades (N and N-1).
 - **NFR-4 (Host Safety):** VHDX attach/detach operations must never corrupt existing host disk state. Operations are idempotent and bounded (≤ 10s timeout).
-- **NFR-5 (Security):** vsock connections must be authenticated via shared secret or GUID-based allowlisting. No unauthenticated origin authority minting. All frames bounded to 1MB.
+- **NFR-5 (Security):** Before exchanging an origin manifest or lease authority, both sides must authenticate a fresh HMAC-SHA256 challenge with a shared secret. The Hyper-V service GUID is routing metadata and is not guest identity; the host listener binds a wildcard VM ID. No unauthenticated origin authority is allowed. All frames are bounded to 1MB.
 
 ## 6. Execution flows
 
@@ -159,18 +159,18 @@ Extend the existing `ramshared-winsvc` and `ramshared-wsl2d` binaries with a new
 
 ## 8. Interfaces
 
-- **Host listener:** AF_HYPERV stream socket on RamShared well-known service GUID (redacted in public docs; stored in `winsvc.toml`).
-- **Guest client:** AF_VSOCK stream socket to VMADDR_CID_HOST (CID 2) on the service port.
-- **Protocol:** `ramshared-ipc` crate — shared between `ramshared-winsvc` and `ramshared-wsl2d`.
-- **Config:** `winsvc.toml` (host) and `/etc/ramshared/config.toml` (guest) — `vsock_guid`, `heartbeat_secs`, `lease_timeout_secs`.
+- **Host listener (planned integration):** AF_HYPERV stream socket on a registered RamShared service GUID. It currently exists only as a library adapter.
+- **Guest client (planned integration):** AF_VSOCK stream socket to VMADDR_CID_HOST (CID 2) on the service port. The adapter currently is not called by `ramsharedd`.
+- **Protocol:** `ramshared-ipc` crate. Neither product runtime currently depends on or uses it.
+- **Config (planned integration):** Host/guest config must provide the service GUID, heartbeat interval, lease timeout, and HMAC secret. These settings are not currently wired into the product configs.
 - **Telemetry:** ETW provider `RamShared-ControlPlane` (host), journald structured logs (guest).
 - **CLI:** `ramshared status --json` reads guest daemon status over Unix socket (unchanged).
 
 ## 9. Dependencies and risks
 
-- **Prerequisites:** Hyper-V socket support in WSL2 kernel (standard since WSL2 kernel 5.10+). `windows-rs` crate for AF_HYPERV. `vsock` crate (or raw `libc`) for AF_VSOCK.
+- **Prerequisites:** Windows Hyper-V socket support and guest kernel `CONFIG_VSOCKETS` plus `CONFIG_HYPERV_VSOCKETS`; host-side service GUID registration is required. The source uses `windows-sys` for AF_HYPERV and `libc` for Linux AF_VSOCK.
 - **Risks:**
-  - WSL2 kernel config may lack `CONFIG_VSOCKETS` / `CONFIG_VSOCKETS_DIAG`. *Mitigation:* runtime detection with fallback to file-based heartbeat (deprecated path).
+  - WSL2 kernel may lack `CONFIG_VSOCKETS` / `CONFIG_HYPERV_VSOCKETS`. The current code reports a typed transport failure; no heartbeat fallback is implemented. Do not start cache authority when transport or authentication fails.
   - AF_HYPERV GUID registration may conflict with other Hyper-V services. *Mitigation:* use RamShared-specific GUID, validate at startup.
   - Script absorption may miss edge cases in `ramshared-host-gate.sh` (Python manifest validation). *Mitigation:* port all validation logic to Rust with equivalent tests; run shadow comparison before cutover.
 - **Rollback trigger:** Any heartbeat RTT > 10ms sustained for > 60s, or any data loss on vsock stream, or any failure to detect disconnect within 3× heartbeat interval.

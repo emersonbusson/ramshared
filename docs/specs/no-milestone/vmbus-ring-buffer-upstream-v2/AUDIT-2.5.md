@@ -9,7 +9,7 @@
 | High | Test matrix | This host is an ordinary WSL2 guest, not CCA or no-paravisor TDX. | Keep status PARTIAL until suitable CoCo evidence exists; never claim the local host proves compatibility. |
 | Medium | ITEM-5 | Netvsc defers free to process context through RCU work. | Preserve that context boundary when changing the owner type. |
 | High | DT-7 | UIO maps rings as one physical extent and fails to compile after removing `ringbuffer_page`. | Use per-page virtual mapping for both UIO and sysfs, and test offset bounds. |
-| High | Install boundary | The booted WSL2 6.18.40.1 source lacks `vmbus_alloc_buffer()` and still uses `ringbuffer_page`; the v7.3-rc4 draft fails `git apply --check` in all seven touched files. | Treat a WSL2 6.18 backport as a separate specified change, then validate and boot it in an isolated guest before any host installation. |
+| High | Install boundary | The booted WSL2 6.18.40.1 source contains an earlier `vmbus_alloc_buffer()` backport, but the v7.3-rc4 series fails `git apply --check` in all seven touched files. Build #6 is active; `wsl-kernel.sh status` reports `NEED_ARM` because its immutable promotion receipt is missing. | Port the final safety fixes separately, build and seal a kernel/modules/QEMU pair, pass the attended promotion preflight, and prove rollback identity before host boot. |
 
 ## Open questions
 
@@ -20,5 +20,8 @@
 
 ## Verdict
 
-**GO for a local draft only. NO-GO for upstream submission or production
-kernel installation** until all named tests and platform gates pass.
+**GO for a separate WSL backport draft. NO-GO for host installation** until
+the WSL backport builds, passes static and failure tests, has a sealed
+kernel/modules/QEMU pair, and is admitted by the attended promotion gate. The
+upstream series remains unsendable until its Hyper-V and CoCo platform gates
+pass.

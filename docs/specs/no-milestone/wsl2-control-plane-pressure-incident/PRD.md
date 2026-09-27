@@ -101,7 +101,9 @@ guest-only watchdog recovery (same failure domain), and automatic host reboot
   `ramshared recover --resume` observes 60 healthy seconds and removes only the
   matching incident gates.
 - **RF-11:** Report large processes outside the managed hierarchy as
-  `UNMANAGED_PRESSURE`.
+  `UNMANAGED_MEMORY`. This is their observed RSS-plus-swap footprint and
+  ownership boundary, not a memory-pressure verdict. Use PSI and
+  `MemAvailable` to report current guest pressure.
 - **RF-12:** Classify postmortem evidence as independent facts:
   `guest_pressure_unresponsive`, `guest_oom`, `kernel_warning_at_boot`,
   `kernel_crash`, `host_reboot`, and `wsl_terminate`.

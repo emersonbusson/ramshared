@@ -381,11 +381,7 @@
         "registry_state": null
       },
       "documented_surface": {
-        "implementation_paths": [
-          "crates/ramshared-cuda/Cargo.toml",
-          "crates/ramshared-cuda/src/lib.rs",
-          "crates/ramshared-vram/src/lib.rs"
-        ],
+        "implementation_paths": [],
         "test_paths": []
       },
       "documents": {
@@ -900,6 +896,11 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-vram/src/lib.rs",
+          "crates/ramshared-wsl2d/src/gpu_budget.rs",
           "crates/ramshared-wsl2d/src/main.rs"
         ],
         "test_paths": []
@@ -1421,14 +1422,25 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/stress.rs",
+          "crates/ramshared-cli/src/supervisor.rs",
           "scripts/safety/Test-CascadePressureIntegrityWorker.sh",
+          "scripts/safety/Test-Wsl2FreezeCampaignStatic.sh",
+          "scripts/safety/cascade-pressure-probe.sh",
           "scripts/safety/cascade_pressure_integrity_worker.py",
+          "scripts/safety/guest-pressure-runtime-guard.sh",
+          "scripts/safety/ramshared-guest-memory-admission.sh",
+          "scripts/safety/test-cascade-pressure-probe-static.sh",
+          "scripts/safety/test-guest-pressure-runtime-guard.sh",
+          "scripts/safety/test-ramshared-guest-memory-admission.sh",
           "scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh",
           "scripts/safety/validate-wsl2-freeze-campaign-artifact.sh",
           "scripts/safety/wsl2-freeze-campaign.sh",
+          "scripts/windows/Invoke-RamSharedThreeTierStress.ps1",
           "scripts/windows/Invoke-SharedWslPressureCampaign.ps1",
           "scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1",
           "scripts/windows/SharedWslHostMemoryGate.psm1",
+          "scripts/windows/Test-RamSharedThreeTierStressStatic.ps1",
           "scripts/windows/Test-SharedWslPressureCampaignMemoryGate.ps1",
           "scripts/windows/Test-SharedWslPressureCampaignStatic.ps1",
           "scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1"
@@ -1461,7 +1473,9 @@
           "crates/ramshared-block/src/ipc_cache_client.rs",
           "crates/ramshared-block/src/isolated_origin.rs",
           "crates/ramshared-block/src/lib.rs",
-          "crates/ramshared-cli/src/stress.rs",
+          "crates/ramshared-dxg/src/lib.rs",
+          "crates/ramshared-vulkan/src/lib.rs",
+          "crates/ramshared-wsl2d/src/gpu_budget.rs",
           "crates/ramshared-wsl2d/src/main.rs",
           "scripts/docs-check.sh"
         ],
@@ -1763,7 +1777,19 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-cli/src/cascade/lifecycle.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-cli/src/monitor.rs",
           "crates/ramshared-cli/src/stress.rs",
+          "crates/ramshared-cuda/src/driver.rs",
+          "crates/ramshared-cuda/src/vram_impl.rs",
+          "crates/ramshared-dxg/src/lib.rs",
+          "crates/ramshared-vram/src/lib.rs",
+          "crates/ramshared-vulkan/src/lib.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
           "scripts/docs-check.sh"
         ],
         "test_paths": []

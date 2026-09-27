@@ -31,6 +31,11 @@ validation below and the operator separately approves sending it.
   allocation failure but requests the existing allocator for all rings,
   unified buffer/GPADL lifetime metadata, and a safe leak on uncertain
   teardown or re-encryption.
+- **Confirmed on September 24, 2026:** The daily WSL host runs Build #6 from
+  WSL 6.18.40.1 source. It already contains an earlier allocator backport,
+  but the exact mainline v7.3-rc4 series does not apply to that source. This
+  operator request adds a separately reviewed 6.18.40.1 backport and an
+  attended, rollbackable test installation to scope.
 
 ## Recommended option
 
@@ -91,12 +96,16 @@ daily host. Publish no email until those gates and manual review pass.
 
 ## Out of scope
 
-Changing the WSL2 global memory watermark, balloon policy, RamShared swap
-activation, or installing an unqualified kernel on the daily host.
+Changing the WSL2 global memory watermark, balloon policy, or RamShared swap
+activation. The requested kernel test is a single attended WSL promotion, not
+production qualification or automatic boot activation. It requires a sealed
+kernel/modules/QEMU manifest, successful pre-install gates, and a proved
+rollback path; memory-pressure stress remains out of scope on the daily host.
 
 ## Acceptance criteria
 
 No high-order-only ring allocation remains; all ownership/error paths are
-audited; static and build gates pass; isolated live normal and failure paths
-pass; CoCo evidence exists or the patch remains a draft rather than a
-sendable v2.
+audited; static and build gates pass; the WSL 6.18.40.1 backport passes its
+own build, QEMU and supervised host smoke gates; isolated live normal and
+failure paths pass; CoCo evidence exists or the mainline patch remains a draft
+rather than a sendable v2.

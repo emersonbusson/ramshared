@@ -4,11 +4,13 @@
 
 ## Status
 
-**PARTIAL — local design and source draft only. Not ready to send or install.**
+**PARTIAL — an earlier four-commit snapshot builds, boots, and passes ordinary x86_64 Hyper-V runtime tests in a disposable VM. The current public v2 draft has six patches and passes hosted x86_64/arm64 builds, WSL backport checks, and KUnit 14/14. Upstream submission remains blocked on live response/rescind and CoCo platform evidence.**
 
-The draft at `docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` is a
-working diff against Linux `v7.3-rc4` (`93f51579e7df248780214094418f205253383cc5`).
-It is not a replacement kernel, distribution backport, or upstream email.
+The versioned six-patch draft is based on Linux `v7.3-rc4`
+(`93f51579e7df248780214094418f205253383cc5`). The local draft at
+`docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` remains a working diff;
+the booted candidate was built from the versioned series in the public kernel
+fork. It is not a distribution backport or an upstream submission.
 
 ## Implemented draft
 
@@ -66,26 +68,193 @@ It is not a replacement kernel, distribution backport, or upstream email.
 
 ## Blocking gaps
 
-1. The SPEC's named functional/fault-injection tests have not been built or
-   run. Static source assertions do not substitute for them.
-2. The target objects compiled but the kernel has not been linked or booted.
-   The available WSL2 6.18 tree predates the accepted allocation API and is
-   not this patch's base; a separate backport and isolated-guest validation
-   would be required before even considering host installation.
-3. The draft marks a partially posted GPADL or failed teardown as unsafe to
-   free, but these branches still need real fault injection across every
-   header/body/response failure and rescind interleaving. The no-paravisor
-   TDX and CCA memory-state contracts remain unverified.
-4. CoCo memory-state tests, normal/rescind/close integration tests, UIO/sysfs
-   mmap tests, and a
-   matched performance run remain absent.
+1. Hosted run 36148296003 passed all six patches on x86_64 and arm64, the
+   WSL backport, and KUnit 14/14 (VMBus suite 10/10). Patch 6 injects failure
+   above order zero, performs and frees a real order-zero allocation, then
+   checks clean order-zero exhaustion. This does not simulate live allocator
+   fragmentation or host response/rescind interleaving.
+2. The exact v7.3-rc4 series has been linked and booted on ordinary x86_64
+   Hyper-V. This does not qualify the separate WSL backport or a CoCo platform.
+3. Normal GPADL create/teardown succeeded in Hyper-V. KUnit now injects
+   outgoing header/body/teardown post failures and tests response-state
+   mapping. Live host response/error delivery and rescind interleavings remain
+   untested.
+4. Ordinary Hyper-V UIO and sysfs ring mmap passed. CoCo memory-state tests for
+   SEV-SNP, TDX, and Arm CCA, plus a matched performance run, remain absent.
+
+## September 24 candidate update
+
+The reviewable, versioned diff and contribution dossier are maintained in the
+public kernel fork at
+[`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2),
+based on `93f51579e7df248780214094418f205253383cc5`. The local mainline
+checkout contains four individually compiling commits; the versioned patches
+and hosted workflow are maintained in the public kernel fork.
+
+The candidate checks the rounded `u32` allocation size before rounding and
+uses `cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)` alongside Hyper-V isolation
+to avoid sending arm64 CCA shared pages through `vzalloc()`. UIO's receive and
+send GPADL buffers now use `vmbus_alloc_buffer()` and aggregate teardown
+ownership. A failed teardown metadata allocation marks the buffer unsafe to
+free. These changes have not been built or tested on CCA, TDX, or SEV-SNP.
+
+Local `git diff --check`, reverse `git apply --check`, and Linux
+`checkpatch.pl --strict` passed. Hosted run 36040552037 passed the WSL
+VMBus/NetVSC/UIO Sparse build, separate DXG compile, per-commit x86_64/arm64
+builds, and all five named VMBus KUnit cases (nine KUnit cases passed in
+total). Runs 36038457091 and 36039517554 exposed and led to fixes for the WSL
+make target and DXG trace-only variables. The workflow pins the base and
+records series SHA, configurations, and logs. KUnit runs on x86_64 only.
+The versioned patch files remove an unsupported universal CoCo claim and
+carry descriptions, matching authors, and `Signed-off-by` trailers on all four
+commits. Hosted run 36046920733 passed against these exact files: WSL
+VMBus/NetVSC/UIO Sparse, separate DXG compile, per-commit x86_64/arm64 compile
+and Sparse, and all five named VMBus KUnit cases (nine total). The workflow
+builds Sparse from a pinned revision and fails if it is unavailable or
+silently disabled. CI does not cover GPADL stage fault injection, UIO mmap,
+or live Hyper-V/CoCo behavior; those runtime gates are recorded below.
+
+Run 36049418582 repeated these gates on public branch HEAD
+`59e6fbfb8f47238b9347cad2060923260bb9f2ad`; all three jobs passed.
+
+Run 36140064936 validated the four-patch series on the public fork: the WSL
+backport with W=1 and Sparse, and x86_64/arm64 patch application, checkpatch,
+Sparse, and builds passed. x86_64 KUnit ran all nine tests successfully; the
+arm64 KUnit step was skipped. The first GPADL test-patch attempt targeted an
+obsolete GPADL structure and was reverted before that run.
+
+Run 36143196834 passed the corrected five-patch series on the public fork.
+The WSL backport and x86_64/arm64 patch application, strict checkpatch, Sparse,
+and W=1 builds passed. x86_64 KUnit passed all 13 tests; the
+`hyperv-vmbus-buffer` suite passed all nine cases, including the four new
+callback-injected GPADL tests;
+arm64 KUnit remains skipped. The tests inject failures at the outgoing GPADL
+header, each of two body posts, and teardown post, and check response-state
+mapping. Live response/rescind interleaving and CoCo memory transitions remain
+unverified.
+
+## September 24, 2026 host smoke check
+
+The WSL host was already booted from `C:\wsl\kernel-ramshared-v5` as
+`6.18.40.1-microsoft-standard-WSL2+` Build #6. Its image SHA-256 was
+`46dba8cc9e2b0d9789917b329d2cdf4aaf5dc30ee982b4dd0f7d783cd41e4cc8`, and
+`vmbus_alloc_buffer` / `vmbus_free_buffer` appeared in the running kernel's
+symbol table. The existing `/mnt/c/wsl/Validate-KernelBuild6.sh` returned 7
+passes and one failure: `zram` was not loaded. Windows interop, a fresh
+`wsl.exe --exec` session, absence of an order-7 allocation failure, and
+absence of `accept4` failure passed. The host exposed 73 VMBus devices.
+
+This is smoke evidence for the already-installed WSL allocator backport. It
+does not identify the running image with the exact four-patch v7.3-rc4 series,
+and the fallback was not forced. `wsl-kernel.sh status` reports `NEED_ARM`
+because its immutable promotion receipt is missing. A read-only
+`git apply --check` of the exact series against the fork's WSL 6.18.40.1
+checkout failed in all seven touched source files. Do not claim this as an
+installation or runtime test of the exact upstream series.
+
+## WSL 6.18.40.1 backport draft
+
+A separate public-fork branch,
+[`vmbus-ring-buffer-wsl-backport-6.18.40.1`](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-wsl-backport-6.18.40.1),
+at commit `418653fde` ports the allocator safeguards onto the existing WSL
+API. It adds checked `u32` page rounding, a fallback-order helper with order-0 KUnit
+coverage, the `cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)` selection guard,
+and a null guard before `vunmap()` during partial-allocation cleanup. It also
+adds KUnit coverage for overflow, ownership refusal, and repeatable partial
+cleanup. `git diff --check` and strict `checkpatch.pl` pass. No compile, boot,
+fault injection, commit, or push has been performed for this branch.
+
+The backport has since been built with `W=1`, booted under QEMU, and exercised
+with KUnit and module loading in isolated QEMU guests. The running Build #6
+image and `.wslconfig` remain unchanged because the promotion receipt and
+module-to-VHDX provenance gate are still unresolved.
+
+The local WSL build has `CONFIG_KUNIT` unset, so its active kernel does not run
+the new KUnit cases. A separate temporary x86_64 KUnit build against the same
+backport source ran all five named `hyperv-vmbus-buffer-wsl` cases: 5 passed,
+0 failed. In another QEMU boot of the exact WSL image, `modprobe` loaded
+`zsmalloc`, `zram`, and `ublk_drv`; `/dev/zram0` and `/dev/ublk-control` were
+present. This closes the earlier initramfs packaging failure only. QEMU used
+a generic virtual machine, so this is not a Hyper-V VMBus, WSL integration,
+or CoCo memory-transition test. The live Build #6 smoke check still reports
+7 passes and one failure because `zram` is not loaded in the host.
+
+Sparse logs retain diagnostics in unchanged baseline source, including a
+VMBus driver context-imbalance warning and a flexible-array warning in the
+GPADL header declaration. Strict checkpatch reports zero warnings for the
+patches.
+
+The WSL 6.18 backport remains a separate tree with its own DXG GPADL
+consumer audit. The exact source candidate has not been booted there. The
+The initial series was unversioned: its cover is `[PATCH 0/2]` with
+`Message-ID` stem `20260918014017.2536753` with cover suffix `-1` and patch
+2/2 suffix `-3`. The archive headers
+confirm these were sent on September 17, 2026 (local time); the archive
+indexed them on September 18 UTC. Because this was the initial unversioned
+submission, a revised series must be labeled v2, not v3, if and when all gates
+pass. The exact IDs and subjects are preserved in the
+[linux-kernel archive](https://lists.openwall.net/linux-kernel/2026/09/18/276)
+and for patch 2/2 in the
+[patch archive](https://lists.openwall.net/linux-kernel/2026/09/18/265).
+No revised email has been sent.
+
+## Initial lab access audit — September 24, 2026
+
+At the time of this audit, the available test environment was an x86_64 WSL2 guest. Generic QEMU/KVM could
+boot the candidate kernel but does not provide a Hyper-V VMBus host, so it
+cannot run the GPADL protocol or bind `uio_hv_generic` to a synthetic device.
+The audit predates the disposable Hyper-V run below. The environment still
+exposes no SEV or TDX guest device and cannot run Arm CCA.
+
+## September 25, 2026 ordinary Hyper-V runtime
+
+The exact four-commit series was built from Linux `v7.3-rc4` base
+`93f51579e7df248780214094418f205253383cc5`, ending at
+`b38b9c3e30feed33224961a5f2834f7775ed8c52`. `make -j4 W=1 bzImage` linked
+successfully; the candidate booted as `7.3.0-rc4-ramshared-vmbus+` in an
+ordinary x86_64 Hyper-V guest. Only the UIO and Hyper-V storage modules needed
+for the lab were built and installed; the all-modules build was stopped to
+preserve the approved 16 GiB virtual-disk limit. Unrelated W=1 documentation
+and format warnings appeared in DRM, EFI, and TTM files.
+
+Boot-time KUnit ran `hyperv-vmbus-buffer`: 5 passed, 0 failed, 0 skipped,
+including rounding, overflow, order-zero fallback selection, failed-teardown
+ownership, and partial-allocation cleanup cases. A second Hyper-V synthetic
+NIC on a private switch was temporarily bound to `uio_hv_generic`; the primary
+NIC stayed on `hv_netvsc` for management access. The trace captured 9 GPADL
+headers, 656 body messages, and 9 teardowns, all with `ret 0`. Read-only
+`mmap()` passed for all five `/dev/uio0` maps (4 MiB, 4 KiB, 4 KiB, 31 MiB,
+and 16 MiB) and for the 4 MiB per-channel VMBus `ring` sysfs mapping. Closing
+the UIO descriptor and unbinding the driver completed teardown; the test NIC
+was restored to `hv_netvsc`. No BUG, Oops, KASAN, hung-task, or VMBus/GPADL
+error was logged. The kernel did print an SRSO mitigation notice for the
+virtual CPU.
+
+This proves the normal GPADL/UIO lifecycle on ordinary x86_64 Hyper-V only.
+It does not test live host error responses, force allocator fallback in a
+live allocation, test rescind races, or qualify SEV-SNP, TDX, or Arm CCA.
+Those gates remain open; do not claim universal architecture or CoCo support.
+
+## September 25, 2026 order-zero fallback candidate
+
+The public kernel fork now carries six ordered `[PATCH v2 n/6]` patches and a
+matching consolidated snapshot. Patch 6 factors the production allocation
+order-descent loop behind a private callback. Its KUnit test injects failure
+at every order above zero, then performs and frees a real order-zero page
+allocation; a second pass injects order-zero failure and checks clean
+exhaustion. The patch applies exactly after patches 1–5 and passes local strict
+checkpatch. Hosted run 36148296003 passed all six build stages on x86_64 and
+arm64, the WSL backport, and 14/14 x86_64 KUnit tests (10/10 in the VMBus
+suite). Artifacts record the pinned base and exact series SHA. The workflow
+requires all six patch stages and the new named case.
 
 ## Next gate
 
-First add real fault-injection tests for the GPADL establishment and teardown
-state machine. Then link and boot one isolated upstream kernel, run Hyper-V/WSL2 integration
-tests in a disposable guest, and qualify CCA plus no-paravisor TDX. Only after
-those results and operator review may the diff be formatted as a sendable v2.
+Exercise real host response/rescind interleavings and order-zero fallback
+during allocation. Obtain a suitable platform/lab for SEV-SNP, TDX, and Arm
+CCA memory-state tests. Keep the series unsent until those required gates pass and
+maintainers review it. The disposable ordinary Hyper-V runtime does not qualify
+the WSL backport or the actual WSL host kernel.
 
 ## Rollback trigger
 

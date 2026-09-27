@@ -1,14 +1,16 @@
 # SPEC — Fragmentation-resilient VMBus rings across confidential guests
 
-## Closed scope
+## Scope
 
-Prepare a locally testable upstream v2 against Linux v7.3-rc4. In scope:
-`drivers/hv/channel.c`, `drivers/hv/ring_buffer.c`,
-`drivers/hv/hyperv_vmbus.h`, `include/linux/hyperv.h`,
-`drivers/uio/uio_hv_generic.c`, and the netvsc
-buffer owner. Out of scope: balloon/watermark changes from the former 1/2
-patch, WSL deployment, and upstream transmission. The upstream tag already
-contains Kameron Carr's `vmbus_alloc_buffer()` series.
+Maintain the upstream v2 against Linux v7.3-rc4 and separately port its
+allocation, GPADL ownership, and UIO guarantees to the exact WSL 6.18.40.1
+source used by this host. The raw upstream patches are not expected to apply
+to the WSL tree. In scope: `drivers/hv/channel.c`,
+`drivers/hv/ring_buffer.c`, `drivers/hv/hyperv_vmbus.h`,
+`include/linux/hyperv.h`, `drivers/uio/uio_hv_generic.c`, the netvsc buffer
+owner, and WSL-specific DXG GPADL ownership. Out of scope: balloon/watermark
+changes from the former 1/2 patch and upstream transmission. The upstream tag
+already contains Kameron Carr's `vmbus_alloc_buffer()` series.
 
 ## Traceability
 
@@ -33,6 +35,8 @@ contains Kameron Carr's `vmbus_alloc_buffer()` series.
 | DT-5 | Failed teardown or unknown re-encryption retains backing pages; cleanup is idempotent | The host may still access them, or their private/shared state may be unknown. |
 | DT-6 | Keep exported legacy GPADL interfaces only where existing external consumers require them | Avoid an unrelated exported-API migration in this series. |
 | DT-7 | Give the ring owner a page-pointer array for UIO/sysfs mapping, and expose UIO memory as virtual | A single physical range is no longer valid. |
+| DT-8 | Keep the WSL 6.18.40.1 backport in a separate source branch | The exact v7.3-rc4 series fails to apply to the WSL tree. |
+| DT-9 | Promote only a sealed kernel/modules/QEMU pair through `wsl-kernel.sh apply` | The host reports `NEED_ARM`; manual image replacement is not admitted. |
 
 ## Atomicity and rollback
 
@@ -42,7 +46,9 @@ The host-ownership frontier is successful GPADL establishment; before
 returning pages, teardown must be confirmed or channel rescind must be
 established according to the current VMBus contract. On ambiguity, leak and
 log. No userspace or persistent host state changes occur during patch
-preparation. A test kernel is rolled back by rebooting the prior image.
+preparation. A test kernel is rolled back only after a fresh boot proves the
+previous kernel identity. The attended host test must not enable swap, run
+memory pressure, or change RamShared lifecycle state.
 
 ## Kahneman map
 
@@ -59,7 +65,9 @@ preparation. A test kernel is rolled back by rebooting the prior image.
 - IRQ/atomic: all touched allocation and unmapping paths remain process-context.
 - Lifetime: one buffer owns backing pages, mapping, and GPADL state.
 - CoCo: direct-map decryption precedes virtual mapping; failed re-encryption leaks.
-- Host safety: no pressure or kernel install on the daily WSL2 environment.
+- Host safety: one attended test promotion is allowed only after its immutable
+  kernel/modules/QEMU pair passes pre-install gates; no pressure or RamShared
+  swap activation is allowed on the daily WSL2 environment.
 - Replay: a cleaned buffer cannot be freed a second time.
 
 ## Files and implementation order
@@ -69,13 +77,17 @@ preparation. A test kernel is rolled back by rebooting the prior image.
 3. **ITEM-3:** Decouple GPADL layout from encryption state; retain host ownership on teardown uncertainty.
 4. **ITEM-4:** Update `drivers/hv/ring_buffer.c` and `drivers/hv/hyperv_vmbus.h` to map the virtual ring's backing pages.
 5. **ITEM-5:** Convert ring, netvsc, and UIO call sites and their failure unwinds to the aggregate lifecycle.
-6. **ITEM-6:** Run style/build/static/fault-injection and isolated live tests; write exact result in `IMPL.md`.
+6. **ITEM-6:** Port the final safety changes to WSL 6.18.40.1 as a separate
+   patch branch; run style/build/static/fault-injection and isolated live
+   tests; write exact result in `IMPL.md`.
 
 ## Required tests matrix
 
 | Production path | Named test | Kind | Cover |
 | --- | --- | --- | --- |
 | Ring allocation and mapping | `vmbus_ring_buffer_noncontiguous_pages` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
+| Allocation-order fallback | `vmbus_ring_fallback_order_zero_test`, `vmbus_buffer_order_zero_allocation_test` | KUnit helper plus injected allocation failures; patch 6 passed hosted KUnit run 36148296003 | N/A — kernel slice; live fragmentation drill still required |
+| GPADL post failure | `vmbus_gpadl_post_failure_test`, `vmbus_gpadl_post_success_test`, `vmbus_gpadl_response_state_test`, `vmbus_gpadl_teardown_post_failure_test` | Callback-injected KUnit; prior five-patch hosted run passed | N/A — kernel slice; live host response/rescind interleaving remains required |
 | Confidential ring GPADL | `vmbus_ring_buffer_coco_decrypt_once` | KUnit / CoCo lab | N/A — kernel slice; CoCo evidence |
 | GPADL teardown and buffer free | `vmbus_buffer_failed_teardown_leaks` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
 | Partial allocation | `vmbus_buffer_partial_allocation_cleanup` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |

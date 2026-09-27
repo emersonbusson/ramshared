@@ -2,10 +2,10 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 341,
+    "total": 340,
     "classified": 337,
     "excluded": 3,
-    "unclassified": 1,
+    "unclassified": 0,
     "ambiguous": 0
   },
   "entries": [
@@ -102,14 +102,6 @@
       },
       "owner": "release-engineering",
       "reason": "Review template is governed as repository process metadata."
-    },
-    {
-      "path": ".mimocode/plans/1790185959340-nimble-tiger.md",
-      "disposition": "unclassified",
-      "ruleId": null,
-      "verification": {
-        "state": "unverified"
-      }
     },
     {
       "path": "AGENTS.md",

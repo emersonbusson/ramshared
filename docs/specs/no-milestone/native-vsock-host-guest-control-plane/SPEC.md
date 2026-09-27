@@ -2,14 +2,16 @@
 
 > SSDV3 Step 2 · PRD: docs/specs/no-milestone/native-vsock-host-guest-control-plane/PRD.md
 
-## Closed scope
+## Scope and implementation status
 
-### In now
+### Present in source
 - Shared `ramshared-ipc` protocol crate (binary framing, message types, version negotiation).
-- AF_VSOCK client module in `ramshared-wsl2d` (guest-side transport).
-- AF_HYPERV listener module in `ramshared-winsvc` (host-side transport).
-- Absorbed origin manifest validation, guardian health, safe-mode gate, lease logic from `ramshared-host-gate.sh` into `ramshared-wsl2d`.
-- Absorbed VHDX lifecycle (`wsl.exe --mount`) and heartbeat monitoring from `Manage-RamSharedOrigin.ps1` / `Watch-RamSharedWsl.ps1` into `ramshared-winsvc`.
+- AF_VSOCK client adapter in `ramshared-ipc` (guest-side transport; not wired into `ramshared-wsl2d`).
+- AF_HYPERV listener adapter in `ramshared-ipc` (host-side transport; not wired into `ramshared-winsvc`).
+- `ramshared-wsl2d/src/host_gate.rs` contains source helpers for origin-manifest validation, guardian health, safe-mode gating, and lease evaluation; the daemon does not call them for product activation.
+- `ramshared-winsvc/src/control_plane.rs` contains testable heartbeat and bounded VHDX command helpers; the Windows service does not call them for this host-guest control plane.
+
+### Product integration still required
 - Heartbeat/lease over vsock replacing file-based JSON over 9P/Drvfs.
 - Fail-closed disconnect handling on both sides.
 - ETW events (host) and journald structured logs (guest) for all state transitions.
@@ -55,13 +57,13 @@
 
 | # | Decision | Why |
 | --- | --- | --- |
-| DT-1 | Host uses `AF_HYPERV` (34) `SOCK_STREAM`; guest uses `AF_VSOCK` (40) `SOCK_STREAM`. Both connect through the Hyper-V socket bus. Guest addresses `VMADDR_CID_HOST` (CID 2) on a configured port; host listens on a RamShared-specific well-known GUID. Connect timeout is 5s, after which DT-7 file-based fallback activates. | AF_HYPERV is the Windows-side API for Hyper-V sockets; AF_VSOCK is the Linux-side. Same underlying VMBus transport, sub-millisecond latency, instant disconnect on VM suspend/crash. |
+| DT-1 | Host uses `AF_HYPERV` (34) `SOCK_STREAM`; guest uses `AF_VSOCK` (40) `SOCK_STREAM`. Guest addresses `VMADDR_CID_HOST` (CID 2) on the configured port. For a Linux guest, the Windows service GUID must follow Microsoft's Linux guest service template, with the guest port in its first 32-bit field. The Windows host registers that GUID under `GuestCommunicationServices`, binds the zero VM ID, then listens. Linux connect is nonblocking and polls completion, checks `SO_ERROR`, and clamps the caller's timeout to 5s. Host `accept(timeout)` is nonblocking and deadline bounded. File fallback is a separate product decision and is not wired by this transport crate. | Microsoft documents the AF_HYPERV/AF_VSOCK pairing, Linux service GUID template, service registration, and zero VM ID listener semantics. This transport avoids IP networking; latency and disconnect behavior still require live WSL2 qualification. See [Hyper-V sockets](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/make-integration-service). |
 | DT-2 | Protocol lives in a new shared crate `crates/ramshared-ipc`. Extends `IpcMessageHeader` with `version = 3`, adds `correlation_id: u64` field after `flags`. Message types in `flags` lower 8 bits (1–21 as in PRD §7). Payloads are serde JSON for control messages with hard cap 4KB (exceeding cap → `PayloadTooLarge` at deserialization); raw bytes for OriginManifest ≤ 64KB. Version negotiation: guest sends `min_version..=max_version`, host picks highest mutual. | Reuses existing `IPC_MAGIC` and framing patterns. `correlation_id` enables request-response matching over a single stream. JSON for control messages keeps debuggability; raw bytes for manifest avoids double-encoding. Hard cap prevents resource abuse. |
-| DT-3 | Authentication: GUID-based allowlisting (host validates guest connects from expected WSL2 VM) + shared HMAC-SHA256 secret stored in `winsvc.toml` (host) and `/etc/ramshared/config.toml` (guest). Secret is file-permission-restricted (0600 root/SYSTEM) and may be sourced from environment variable override. Handshake includes `HMAC(boot_id + distro_id + nonce)`. No secret in logs or status JSON. No unauthenticated origin authority minting. | GUID allowlisting leverages Hyper-V socket isolation (only the paired VM can connect). HMAC provides cryptographic authentication without PKI complexity. File permissions prevent at-rest exposure. |
+| DT-3 | Authentication: the service GUID selects the host application endpoint; it does not identify a single guest because the listener binds the zero VM ID and accepts from all partitions. A shared HMAC-SHA256 challenge over `boot_id + distro_id + nonce` must authenticate before the host sends an origin manifest or grants a lease. Store the secret with SYSTEM/root-only access and never place it in logs or status JSON. No unauthenticated origin authority is allowed. This authentication handshake is not yet wired into either product process. | Hyper-V's wildcard listener is useful for dynamically identified WSL VMs, but it is not peer authentication. HMAC is the authority gate until a separate live-validated VM identity binding exists. |
 | DT-4 | VHDX attach via `CreateProcessW("wsl.exe", "--mount --vhd <path> --bare --type ext4")` with 10s timeout and idempotency check (`/dev/disk/by-partuuid/` already exists → skip). Detach via `wsl.exe --unmount`. Operations serialized through a mutex; concurrent requests are queued, not parallel. Not `virtdisk.dll` (that targets Hyper-V VMs, not WSL2 block devices). | WSL2 `wsl.exe --mount` is the supported API for attaching VHDX as bare block devices. Mutex serialization prevents concurrent mount races. |
 | DT-5 | Heartbeat is guest-initiated at `heartbeat_secs` (default 5s). Host tracks `last_heartbeat_at` and revokes lease when `now - last_heartbeat_at > 3 × heartbeat_secs` (default 15s). Guest also monitors its own lease deadline and enters safe mode proactively. In-flight writes complete or abort cleanly; lease expiry sets `origin_authoritative = false` before next I/O dispatch. | Guest-initiated avoids host polling overhead. 3× interval tolerance absorbs scheduling jitter without false positives. Dual-sided monitoring ensures fail-closed even if one side misses. Clean I/O boundary prevents mid-write corruption. |
 | DT-6 | Script absorption is phased: (1) transport layer, (2) gate logic into `ramshared-wsl2d`, (3) VHDX/heartbeat into `ramshared-winsvc`, (4) cutover + cleanup. Each phase is independently deployable and testable. | Incremental absorption allows shadow comparison and rollback at each phase. Avoids big-bang migration risk. |
-| DT-7 | File-based heartbeat over 9P/Drvfs remains as a deprecated fallback path, activated only when `AF_VSOCK` connection fails at startup (e.g., `CONFIG_VSOCKETS` missing). Fallback is marked deprecated, logs a warning, and will be removed after N+2 releases. | Graceful degradation for WSL2 kernels without vsock support. Explicit deprecation prevents permanent reliance. |
+| DT-7 | The file-based heartbeat fallback is not implemented in the current product path. A future fallback may be used only after explicit design and tests prove it preserves the same authentication and lease rules; a vsock connection failure must not silently grant origin authority or continue cache service. | The transport API reports typed failure, but product startup does not yet choose a fallback. Keeping this decision explicit avoids presenting the existing origin-manifest file as an authenticated heartbeat path. |
 | DT-8 | Observability: guest emits `tracing` structured events to journald (`tracing-journald` crate). Host emits ETW events via `windows-rs` `EventWrite`. Both sides expose `control_plane_state`, `heartbeat_rtt_us`, `lease_remaining_ms` in their status JSON. | Structured logging with machine-parseable fields. `heartbeat_rtt_us` is the key NFR-1 metric. |
 
 ---
@@ -70,12 +72,12 @@
 
 ### Atomicity frontier
 - **Origin Manifest (Authoritative):** Sealed at `/etc/ramshared/origin.conf` only after full validation. Atomic rename-based write. Guest origin backend operates independently of vsock after sealing.
-- **Lease (Ephemeral Authority):** Host-authoritative. Lease expiry revokes guest's origin authority but never corrupts disk state. In-flight writes complete or abort cleanly; lease expiry sets `origin_authoritative = false` before next I/O dispatch. Guest falls back to safe mode (origin-only, no cache).
-- **vsock Channel (Boundary):** Connection loss triggers fail-closed on both sides. No partial state persists after disconnect.
+- **Lease (Ephemeral Authority):** Intended invariant, not yet wired into the product daemon. Before activation, lease expiry must revoke cache/origin authority before the next I/O dispatch; the product must be tested for in-flight write behavior.
+- **vsock Channel (Boundary):** The transport owns and closes sockets on drop. Product-level disconnect detection and fail-closed lease revocation are not yet wired; no such behavior is claimed from transport tests.
 
 ### Rollback
-- **Userspace/guest (`ramshared-wsl2d`):** Revert to file-based heartbeat fallback (DT-7). Origin manifest stays sealed; cascade continues without vsock telemetry.
-- **Userspace/host (`ramshared-winsvc`):** Disable AF_HYPERV listener. Existing Named Pipe IPC (`ramshared-winbroker`) continues unaffected.
+- **Userspace/guest (`ramshared-wsl2d`):** The daemon remains on its current sealed-manifest path; the vsock client is not used by product startup.
+- **Userspace/host (`ramshared-winsvc`):** The listener is not started by the Windows service. If future wiring starts it, disabling that listener leaves existing Named Pipe IPC unaffected.
 - **Host/persistent:** No persistent state modified. `/proc/swaps`, NBD devices, VHDX files remain intact. Lease is in-memory only.
 - **Forward-only:** None — all changes are reversible.
 
@@ -85,7 +87,7 @@
 
 | ITEM / stage | # | Question | Min evidence | Abort |
 | --- | --- | --- | --- | --- |
-| ITEM-2 (vsock connect) | #15 | Can a hung Hyper-V socket `connect()` block the daemon indefinitely? | `cargo test -p ramshared-ipc vsock_connect_timeout_falls_back` | Connect exceeds 5s without fallback |
+| ITEM-2 (vsock connect) | #15 | Can a hung Hyper-V socket `connect()` block the daemon indefinitely? | `cargo test -p ramshared-ipc vsock_connect_finishes_within_deadline` plus injected deadline and socket-error cases | Any connection path exceeds its supplied timeout (capped at 5s) or reports refusal as timeout |
 | ITEM-3 (lease revocation) | #13 | If the lease expires mid-I/O, does the guest refuse origin authority without corrupting state? | `cargo test -p ramshared-wsl2d lease_expiry_revokes_origin_authority` | Guest serves origin write after lease expiry |
 | ITEM-4 (gate absorption) | #17 | Does the Rust gate logic produce identical decisions to `ramshared-host-gate.sh` on the same inputs? | `cargo test -p ramshared-wsl2d host_gate_shadow_comparison` | Any mismatch on 1000+ fixture inputs |
 | ITEM-5 (VHDX attach) | #16 | Can a hung `wsl.exe --mount` block the service beyond the 10s deadline? | `cargo test -p ramshared-winsvc vhdx_attach_timeout_is_bounded` | Attach exceeds 10s or leaves orphan mount |
@@ -94,13 +96,13 @@
 
 ## Security checklist (pre-impl)
 
-- [x] Privilege: host service runs as `NT AUTHORITY\SYSTEM`; guest daemon runs as root. vsock GUID allowlisting restricts connections to the paired WSL2 VM. HMAC secret never transmitted in plaintext.
+- [ ] Authentication: host service may run as `NT AUTHORITY\SYSTEM` and guest daemon as root, but the listener accepts any partition. Product handshake must verify HMAC before exchanging manifest or lease authority; it is not implemented or live-tested.
 - [x] User/host copy: all frames bounded to `MAX_PAYLOAD_LEN` (1MB). Manifest payloads capped at `ORIGIN_MANIFEST_MAX_BYTES` (64KB). Operate on owned copies after `read_exact`.
 - [x] Flags/IOCTL codes: unknown message types (flags lower 8 bits > 21) rejected with `IpcDeserializeError::UnsupportedVersion`. Unknown protocol versions rejected.
 - [x] Info-leak: no kernel addresses, no HMAC secrets, no host paths in default logs. Guest logs use `tracing` with redacted fields. Host ETW events use integer codes.
 - [x] IRQ/atomic: N/A — pure userspace.
-- [x] Lifetime: vsock socket ownership tracked by `ConnectionGuard` (Drop closes socket). Lease state cleaned on disconnect. VHDX detach on shutdown.
-- [x] Hot-unplug: vsock disconnect triggers fail-closed (DT-7). VHDX detach is idempotent. No UAF — all state behind `Arc<Mutex<>>`.
+- [x] Lifetime: listener and accepted socket handles have RAII cleanup in the transport.
+- [ ] Hot-unplug: transport surfaces EOF and errors; product-level disconnect handling, lease cleanup, and fail-closed cache transition remain unimplemented.
 - [x] Host safety: VHDX attach/detach bounded to 10s (DT-4). No GPU/VRAM pressure from control plane. Heartbeat RTT monitored (NFR-1).
 - [x] Shared-hardware cushion: N/A — control plane does not allocate shared VRAM/RAM.
 - [x] Bounded DMA: N/A — no DMA in control plane.
@@ -163,12 +165,12 @@
   ```rust
   pub struct VsockEndpoint { /* platform socket */ }
   pub fn connect_vsock(cid: u32, port: u32, timeout: Duration) -> Result<VsockStream, VsockError>;
-  pub fn listen_hyperv(guid: [u8; 16], timeout: Duration) -> Result<VsockListener, VsockError>;
+  pub fn listen_hyperv(guid: [u8; 16]) -> Result<VsockListener, VsockError>;
   pub struct VsockStream { /* Read + Write + set_read_timeout */ }
   ```
 - Reference pattern: `crates/ramshared-wsl2d/src/main.rs` `UnixStream` usage; `crates/ramshared-winbroker/src/pipe.rs` `PipeServer` pattern.
-- Required tests: `ramshared-ipc/src/vsock.rs` :: `vsock_connect_timeout_falls_back`, `vsock_stream_read_timeout_is_bounded`, `vsock_disconnect_detected_within_interval`.
-- `VsockEndpoint` wraps platform socket with `cid`, `port`, `guid` metadata for diagnostics.
+- Required tests: `ramshared-ipc/src/vsock.rs` :: `vsock_connect_finishes_within_deadline`, `connect_wait_enforces_deadline_when_waiter_returns_late`, `connect_wait_reports_socket_error_after_writable`, `vsock_accept_timeout_is_bounded`, `hyperv_guid_uses_canonical_uuid_byte_order`, `vsock_stream_read_timeout_is_bounded`, `vsock_disconnect_detected_within_interval`.
+- `VsockEndpoint` exposes `cid`, `port`, and canonical UUID byte-order `guid` metadata for diagnostics. A Windows listener validates the Linux service GUID template and nonzero port before opening a socket.
 - Cover target: ≥ 80%
 - Kahneman: #15 (bounded connect)
 
@@ -272,7 +274,13 @@
 | `crates/ramshared-ipc/src/lib.rs` | `tests::frame_rejects_oversized_payload` | unit | #13 | ≥ 80% |
 | `crates/ramshared-ipc/src/lib.rs` | `tests::version_negotiation_selects_highest_mutual` | unit | #9 | ≥ 80% |
 | `crates/ramshared-ipc/src/lib.rs` | `tests::handshake_hmac_validates` | unit | #13 | ≥ 80% |
-| `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_connect_timeout_falls_back` | unit | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_connect_finishes_within_deadline` | unit | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::connect_wait_enforces_deadline_when_waiter_returns_late` | unit | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::connect_wait_reports_socket_error_after_writable` | unit | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_connect_rejects_zero_port_before_socket_io` | unit | #13 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_accept_timeout_is_bounded` | unit | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_accept_propagates_socket_error` | unit | #13 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::hyperv_linux_service_guid_requires_the_port_template` | unit | #13 | ≥ 80% |
 | `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_stream_read_timeout_is_bounded` | unit | #16 | ≥ 80% |
 | `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_disconnect_detected_within_interval` | unit | #15 | ≥ 80% |
 | `crates/ramshared-wsl2d/src/host_gate.rs` | `tests::validate_origin_manifest_matches_script` | unit | #17 | ≥ 80% |
@@ -282,18 +290,26 @@
 | `crates/ramshared-wsl2d/src/host_gate.rs` | `tests::host_gate_shadow_comparison` | integration | #17 | ≥ 80% |
 | `crates/ramshared-wsl2d/src/main.rs` | `tests::lease_expiry_revokes_origin_authority` | integration | #13 | ≥ 80% |
 | `crates/ramshared-wsl2d/src/main.rs` | `tests::vsock_disconnect_triggers_safe_mode` | integration | #13 | ≥ 80% |
-| `crates/ramshared-winsvc/src/product_online.rs` | `tests::vhdx_attach_timeout_is_bounded` | unit | #16 | ≥ 80% |
-| `crates/ramshared-winsvc/src/product_online.rs` | `tests::vhdx_attach_is_idempotent` | unit | #17 | ≥ 80% |
-| `crates/ramshared-winsvc/src/product_online.rs` | `tests::heartbeat_deadline_revokes_lease` | unit | #13 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_timeout_is_bounded` | unit | #16 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_is_idempotent` | unit | #17 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_detach_is_bounded` | unit | #16 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::heartbeat_deadline_revokes_lease` | unit | #13 | ≥ 80% |
 
 ---
 
 ## Validation checklist
 
-- [ ] `cargo fmt --all --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test -p ramshared-ipc -p ramshared-wsl2d -p ramshared-winsvc`
-- [ ] Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-ipc,ramshared-wsl2d,ramshared-winsvc --files crates/ramshared-ipc/src/lib.rs,crates/ramshared-ipc/src/vsock.rs,crates/ramshared-wsl2d/src/host_gate.rs,crates/ramshared-winsvc/src/product_online.rs --min 80`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test -p ramshared-ipc -p ramshared-wsl2d -p ramshared-winsvc` (covered by the passing workspace suite on Linux)
+- [x] Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-ipc,ramshared-wsl2d,ramshared-winsvc --files crates/ramshared-ipc/src/lib.rs,crates/ramshared-ipc/src/vsock.rs,crates/ramshared-wsl2d/src/host_gate.rs,crates/ramshared-winsvc/src/control_plane.rs --min 80`
 - [ ] Live path: host-guest vsock connect → handshake → heartbeat RTT ≤ 1ms → `kill -STOP` → disconnect detection within 15s → resume → recovery
 - [ ] Every matrix row has a real test name
 - [ ] Kahneman critical rows have executable evidence
+
+The Linux coverage run passes for `ramshared-ipc/src/lib.rs` (90.0%),
+`ramshared-ipc/src/vsock.rs` (85.7%), `ramshared-wsl2d/src/host_gate.rs`
+(95.0%), and `ramshared-winsvc/src/control_plane.rs` (87.0%). The earlier
+matrix pointed the VHDX lease tests at `product_online.rs`, but those tests
+are actually in `control_plane.rs`; the paths above now match the source. The
+Windows-only product composition is covered by the separate Windows test job.

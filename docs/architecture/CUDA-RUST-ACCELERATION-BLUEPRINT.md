@@ -1,41 +1,54 @@
-# CUDA-Rust Acceleration Blueprint: Current State and Qualification Gates
+# GPU Cache Compression: Architecture and Qualification
 
 ## Status
 
-RamShared currently stores uncompressed pages in GPU memory through its own runtime-loaded CUDA Driver API wrapper in `crates/ramshared-cuda`. This is a working path, not a future prototype. `cuda-core` and `cuda-async` are optional entries in that crate's manifest, but no production source uses them. `cutile-rs` and `cuda-oxide` are not RamShared dependencies or installed RamShared backends. This blueprint describes possible work and must not be cited as a shipped feature or performance result.
+RamShared currently stores raw copies in its isolated, revocable VRAM cache. The SSD origin remains authoritative. There is no GPU compression implementation, compressed cache format, or qualified compression result.
 
-## Hardware and upstream boundary
+The proposed feature is cache-only and lossless. It does not change swap data, the SSD origin, the kernel interface, or persistent storage. Compression remains disabled by default and has not been implemented or qualified.
 
-| Surface | Local RTX 2060 (`sm_75`) | Separate `sm_80+` GPU |
-| :--- | :--- | :--- |
-| Existing RamShared CUDA Driver API | Working baseline; qualify each host binary | Working design; verify on target host |
-| `cuda-core` / `cuda-async` | Optional manifest dependencies only; runtime integration unimplemented | Same |
-| `cuda-oxide` SIMT kernels | Candidate requiring toolchain, artifact, and live tests | Candidate, not integrated |
-| `cutile-rs` Tile kernels | Unsupported by upstream Tile IR | Candidate requiring supported CUDA toolkit and GPU tests |
+## Recommended design
 
-The local host has an RTX 2060 (`sm_75`) and no `nvcc`. It cannot run `cutile` Tile kernels. Upstream Tile microbenchmarks do not establish swap throughput, compression ratio, or latency for RamShared. `cutile-rs` PRs [#278](https://github.com/NVlabs/cutile-rs/pull/278), [#279](https://github.com/NVlabs/cutile-rs/pull/279), and [#280](https://github.com/NVlabs/cutile-rs/pull/280) remain under review and are not dependencies or evidence of adopted functionality.
+- Keep compression inside the existing isolated GPU cache worker.
+- Preserve origin-first writes, bounded cache reads, reserve checks, cache revocation, and SSD fallback.
+- Add an optional provider-specific codec capability. The first NVIDIA candidate is nvCOMP LZ4, dynamically available only when its runtime and selected adapter qualify.
+- Retain compressed output in variable-size extents within on-demand VRAM slabs. Count full slab allocations, allocator slack, and retained workspace against physical GPU budget.
+- Store an extent raw when compression does not reduce allocator-rounded physical use. Use no CPU codec fallback. Providers without a qualified GPU codec remain raw-only.
+- Report logical cached bytes separately from physical VRAM bytes, scratch, metadata, and raw bypasses. Never label logical cache capacity as WSL or host RAM.
 
-### Upstream PR audit snapshot (2026-09-21)
+## Hardware and software boundary
 
-| PR | Current disposition for RamShared | Required upstream evidence before reconsideration |
-| :--- | :--- | :--- |
-| [#278](https://github.com/NVlabs/cutile-rs/pull/278) | Conflicts with current `main`; its stream synchronization is already present after merged [#275](https://github.com/NVlabs/cutile-rs/pull/275). Do not integrate a duplicate fix. | Rebase and retain only a regression case if it adds coverage; reproduce the original #252 failure on supported GPU/Compute Sanitizer. |
-| [#279](https://github.com/NVlabs/cutile-rs/pull/279) | Unsafe to depend on as-is: an unowned raw host pointer is exposed through safe mutable slices and unconditional `Send`/`Sync`, while GPU access may still be in flight; drop can unregister without a completion proof. | Own or borrow the backing allocation, enforce exclusive CPU/GPU access and completion ordering, handle context-binding failure during teardown, and replace the zeroed-context test with valid mocks plus live GPU tests. |
-| [#280](https://github.com/NVlabs/cutile-rs/pull/280) | Compiler-only tests assert the generic word `reduce`; they do not prove the distinct bitwise operations or runtime results. The proposed reduction output shape also needs verification against the API's dimension semantics. | Assert op-specific IR and integer-type constraints; test identities, axes, shapes, and numerical XOR/AND/OR results on supported GPU. |
+NVIDIA's current nvCOMP installation requirements list Volta sm70 or newer, CUDA Toolkit 12.0 or newer, and minimum driver versions. The local RTX 2060 is sm75 and therefore meets the documented architecture floor. The exact WSL package/runtime/driver path and end-to-end behavior still require a live test.
 
-These are source-review findings, not upstream maintainer verdicts. Pure `cutile-ir` tests can run locally, but they do not validate Tile compilation or execution on this `sm_75` host.
+nvCOMP exposes lossless LZ4 and batched encode/decode APIs. The caller owns chunking, length metadata, output bounds, status checks, and device workspace. The API guide recommends similarly sized chunks for load balancing. Its decoder documentation warns that malformed data receives limited validation, so RamShared must validate bounds and verify a stored-payload CRC32 while it remains in VRAM before decode, then check status, exact output length, and the uncompressed CRC32 before returning bytes. nvCOMP's GPU CRC32 path is the NVIDIA candidate; providers without a safe pre-decode checksum stay raw-only.
 
-## Safety model
+cuTile-rs is a Rust DSL for writing tiled GPU kernels, not a ready-made memory-compression library. It is not the first codec choice. Vulkan, AMD, Intel, and other providers remain raw-only until they implement and qualify the same optional capability contract.
 
-The current wrapper already ties device allocations to a CUDA context using Rust lifetimes and RAII. Replacing it with another wrapper requires a demonstrated improvement and must preserve context affinity, error handling, and allocation lifetime. A Rust Future can stop waiting or prevent queued work from starting; dropping it does not guarantee that an in-flight CUDA operation, `/dev/dxg` ioctl, or GPU kernel has stopped. Host and device buffers must remain owned until completion or a qualified teardown path is observed.
+Primary references:
 
-GPU compression is only a hypothesis. Four-kilobyte pages incur transfer, launch, metadata, decompression, and recovery costs. Compression ratio varies with workload; already-compressed or random pages may expand. A crash-consistent raw/compressed block map, bounded allocation, checksum, and uncompressed fallback are prerequisites. No universal `2 GiB` reserve applies: the broker/NBD reserve is `max(1536 MiB, 20%)` plus a separate 768 MiB runtime-free buffer; origin cache uses `max(2 GiB, 20%)`; StorPort uses `max(configuration, 512 MiB, 10%)`.
+- [nvCOMP installation](https://docs.nvidia.com/cuda/nvcomp/installation.html)
+- [nvCOMP overview and lossless algorithms](https://docs.nvidia.com/cuda/nvcomp/)
+- [nvCOMP batched API guide](https://docs.nvidia.com/cuda/nvcomp/samples/lowlevel_c_quickstart.html)
+- [nvCOMP C API reference](https://docs.nvidia.com/cuda/nvcomp/c_api.html)
+- [cuTile-rs](https://github.com/NVlabs/cutile-rs)
 
-## Staged qualification
+## Safety contract
 
-1. **Baseline**: Record hardware, transport, driver, kernel, active swap, binary identity, throughput, p50/p95/p99 latency, pressure/stalls, and integrity for the existing uncompressed CUDA path.
-2. **Optional runtime prototype**: Exercise `cuda-core` and `cuda-async` behind a reversible feature gate. Test refusal without CUDA, context affinity, failed allocations, queued cancellation, timeout while DMA is in flight, delayed completion, and buffer lifetime. Compare with the baseline before replacing any production path.
-3. **Kernel prototype**: Build reproducible `cuda-oxide` artifacts for `sm_75` or Tile kernels for `sm_80+` only. Prove round-trip and raw fallback on named compressible, incompressible, and adversarial workloads. Measure end-to-end benefit, not GPU memory bandwidth alone.
-4. **Integration and recovery**: Gate broker selection by device/toolkit capability. Test crash/restart, GPU reset, memory pressure, and swapoff-first recovery. Retain the old backend and exact installed artifact for rollback. Change host installation only after tests and a safe swap transition.
+A cache entry is volatile and disposable. It becomes visible only after compression status, lengths, bounds, and checksums have passed. Updates evict every overlapping entry before replacement. Reads require complete range coverage and verify the full result in a private buffer before returning it.
 
-The detailed proposed requirements and incomplete tests are tracked in [PRD.md](../specs/no-milestone/cuda-rust-native-tiering/PRD.md), [SPEC.md](../specs/no-milestone/cuda-rust-native-tiering/SPEC.md), and [IMPL.md](../specs/no-milestone/cuda-rust-native-tiering/IMPL.md).
+Missing codec support, non-beneficial compression, workspace refusal, decoder error, bad checksum, timeout, worker loss, or GPU pressure produces a raw-cache bypass, a cache miss, or cache revocation. The authoritative origin continues independently.
+
+All allocations use the current adapter-bound budget and reserve policy. Only one batch may be in flight; the proposal caps additional host codec staging at 4 MiB, GPU temporary allocations at min(64 MiB, 1% of latest available bytes after the existing reserve floor), metadata at the PRD's physical-target-derived ceiling, and a private cache response at 16 MiB. Transient GPU allocation is checked before every batch. No capacity multiplier is promised. An effective gain is measured only after slab allocation, workspace, metadata, allocator slack, and fragmentation are included.
+
+## Qualification stages
+
+1. Unit-test a fake codec and bounded allocator for exact bytes, corruption, partial updates, unsupported providers, pressure refusal, and idempotent teardown.
+2. Implement the optional cache path with compression disabled by default; keep raw entries as the permanent fallback.
+3. Test nvCOMP LZ4 on an exact NVIDIA adapter, including output bounds, per-item statuses, corruption refusal, context lifetime, and worker deadlines.
+4. Compare the raw and compressed cache in three fixed synthetic-data runs. Report logical bytes, physical slabs, scratch, metadata/RSS, throughput, p50/p95/p99, CPU time, origin fallback, timeouts, and integrity.
+5. Keep compression disabled if any integrity error or codec-induced timeout occurs, if the current headroom floor is crossed, if the declared workload mix gains less than 10% net logical capacity after all overhead, or if a paired foreground GPU run misses a deadline or regresses p95 latency by more than 5%.
+
+A successful source test or codec microbenchmark does not qualify the WSL2 cache worker. Hardware, live-worker, and product evidence remain separate gates.
+
+## Detailed requirements
+
+See the current [PRD](../specs/no-milestone/cuda-rust-native-tiering/PRD.md), [SPEC](../specs/no-milestone/cuda-rust-native-tiering/SPEC.md), and [AUDIT-2.5](../specs/no-milestone/cuda-rust-native-tiering/AUDIT-2.5.md). The existing [IMPL tracker](../specs/no-milestone/cuda-rust-native-tiering/IMPL.md) must be reconciled with the cache-only scope before Step 3. No implementation or hardware qualification is recorded here.

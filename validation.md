@@ -5740,3 +5740,738 @@ Rust topology residuals remain explicit.
 **Measured data:** Package checksum verification passed. Installed CLI SHA-256 matched local build (`4ce533aa...`); installed daemon matched local build (`cfff8749...`). Preflight progressed from `PRODUCT_OFF` to `READY` with `NBD_BINARY_MATCH=PASS`. Initial swaps had zero usage on managed ZRAM and NBD. Cache-status reported `origin_state=READY`, `cache_state=UNAVAILABLE`, `vram_cached_kib=0`, `cache_target_kib=0`; aggregate status reported `BLOCKED` with stale supervisor status. After controlled stop, the controller logged `STOPPED_CLEAN`; recovery status was `CLEAN`, with zero managed swaps, daemon, and attached NBD. No pressure run occurred.
 **Residual blockers:** A process-isolated GPU cache worker is absent from the product origin path. Supervisor and cache telemetry must be brought into a fresh consistent state; only then can a controlled physical-cache campaign be considered. The diagnostic release was built from a dirty tree and is not a merge or release artifact. VMBus v2 still lacks fallback fault-injection and CoCo tests.
 **Verdict:** ✅ `PASS` for bounded install/start/stop and runtime BINARY_MATCH; 🟡 `PARTIAL` for control-plane readiness; 🔴 `BLOCKED` for the claimed physical VRAM stress qualification.
+
+## 2026-09-24 18:53 -03 — VMBus WSL backport draft and Build #6 smoke audit
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0051`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-24T21:53:42Z`.
+**Verified at:** `2026-09-24T21:53:42Z`.
+**Source revision:** `290c06c5`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this record with the WSL backport source diff and its hosted-build artifacts when available.
+**Freshness:** Build #6 observations are current-boot only; revalidate after any kernel promotion or WSL restart.
+**Category:** `audit`.
+**What:** The host was already running WSL kernel Build #6 from `kernel-ramshared-v5`, with `vmbus_alloc_buffer` and `vmbus_free_buffer` in `/proc/kallsyms`. The existing validation script exercised Windows interop, a new `wsl.exe --exec` session, and log checks. Separately, a local kernel-fork branch `vmbus-ring-buffer-wsl-backport-6.18.40.1` adds checked size rounding, confidential-guest selection, a fallback-order helper, guarded partial `vunmap()`, and five KUnit cases. The exact v7.3-rc4 series still does not apply to the WSL 6.18.40.1 source.
+**How to measure:** `bash /mnt/c/wsl/Validate-KernelBuild6.sh`; inspect `uname -a`, `/proc/kallsyms`, `/sys/bus/vmbus/devices`, and `dmesg`; run read-only `git apply --check` on the exact upstream patch; run `git diff --check` and strict `scripts/checkpatch.pl` on the local WSL backport; inspect `wsl-kernel.sh status`.
+**Measured data:** The Build #6 script passed 7 checks and failed one because `zram` was not loaded. Windows interop and `wsl.exe --exec` passed; no order-7 allocation failure or `accept4` failure was present; 73 VMBus devices were enumerated. The exact series failed `git apply --check` in all seven touched files. The backport source passed `git diff --check` and strict checkpatch; its diff SHA-256 is `3ce5de11cbe449854fd9d6016ac7b5cb88133344682c42be50e8580baf13645e`. The promotion status is `NEED_ARM` because the immutable receipt is missing. No kernel build, source compilation, install, reboot, or memory-pressure run was performed.
+**Residual blockers:** Run the backport object/KUnit build; complete GPADL-stage failure injection and UIO mmap validation; build and seal a kernel/modules/QEMU pair; pass the attended promotion gate and prove rollback before installing. The smoke log does not force order-7 fallback and is not qualification of the exact series or of CoCo guests.
+**Verdict:** 🟡 `PARTIAL` — an earlier WSL allocator is active and the safety delta is drafted; the exact backport is unbuilt, uninstalled, and unqualified.
+
+
+## 2026-09-24 21:25 -03 — WSL VMBus backport build and QEMU boot
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0052`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-25T00:25:06Z`.
+**Verified at:** `2026-09-25T00:25:06Z`.
+**Source revision:** `290c06c5`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the local kernel fork branch and build artifacts until the WSL backport is either qualified or retired.
+**Freshness:** QEMU evidence binds the image SHA; host identity is valid only for the boot observed on 2026-09-24.
+**Category:** `qualification`.
+**What:** Built the local `vmbus-ring-buffer-wsl-backport-6.18.40.1` branch with `make -j4 W=1` after the WSL instance restarted during an earlier `-j8` build. The full build exited 0. QEMU booted the new image to userspace and reported the expected kernel release. The active host continued running Build #6; no install or config change was made.
+**How to measure:** `make -j4 W=1`; `make -s kernelrelease`; `sha256sum arch/x86/boot/bzImage`; `bash scripts/kernel/qemu-validate.sh <bzImage> <release> <zsmalloc.ko> <zram.ko> <ublk_drv.ko>`; `modinfo -F vermagic` for those modules; inspect `CONFIG_KUNIT` and `scripts/kernel/wsl-kernel.sh status`.
+**Measured data:** Release `6.18.40.1-microsoft-standard-WSL2+`; image size 15,377,408 bytes; image SHA-256 `2d6d8935eecf23afeef5b71e2d367130383edac54a4c52829a6e94ee18449de9`. QEMU returned `QEMU-VALIDATE: PASS` and `KTEST-UNAME` matched. The minimal BusyBox initramfs reported load failures for zsmalloc, zram, and ublk; that script treats module loading as best effort. All three module vermagic strings matched the kernel release. `CONFIG_KUNIT` is unset. After the WSL restart, the active Build #6 smoke check returned 7 PASS / 1 FAIL: interop, a new `wsl.exe --exec`, loaded `ublk_drv`, and clean order-7/`accept4` logs passed; `zram` remained unloaded. `wsl-kernel.sh status` is `NEED_ARM` because the promotion receipt is missing; the SPEC also refuses promotion while module-to-VHDX provenance remains unverified. No fallback fault injection, KUnit runtime, authoritative candidate module load, GPADL fault injection, UIO mmap, host install, or CoCo qualification was performed.
+**Residual blockers:** Resolve the module-to-VHDX provenance refusal under a reviewed SPEC before host promotion. Add an authoritative module-load test, enable/run KUnit in an admitted test kernel, force allocator fallback, inject GPADL failures, exercise UIO mmap, and qualify the declared Hyper-V/CoCo platforms. Do not describe this QEMU boot as a module or runtime qualification.
+**Verdict:** 🟡 `PARTIAL` — full kernel build and isolated kernel boot passed; module load and runtime safety gates remain open.
+
+## 2026-09-24 21:41 -03 — VMBus backport KUnit and QEMU module smoke
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0053`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-25T00:41:15Z`.
+**Verified at:** `2026-09-25T00:41:15Z`.
+**Source revision:** `290c06c5`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep this record with public fork commit `418653fde` and its isolated build evidence.
+**Freshness:** The QEMU runs bind to the candidate image; the Build #6 host smoke is current-boot only.
+**Category:** `qualification`.
+**What:** Ran the five new allocator KUnit cases in a temporary x86_64 KUnit kernel built from the same WSL backport source. Separately booted the exact WSL candidate image under generic QEMU with a corrected minimal initramfs and loaded the built modules using `modprobe`. Rechecked the actual WSL host, which remains on Build #6.
+**How to measure:** `kunit.py run --arch=x86_64 --jobs=4 --timeout=180 --build_dir=/tmp/vmbus-kunit-build --kunitconfig=/tmp/vmbus-kunit.config 'hyperv-vmbus-buffer-wsl*' --summary`; boot `arch/x86/boot/bzImage` with the candidate release and modules; inspect QEMU serial log; run `bash /mnt/c/wsl/Validate-KernelBuild6.sh` and compare `uname -r`/build stamp.
+**Measured data:** KUnit: 5 tests passed, 0 failed. Candidate image QEMU: `MODULE_LOAD_PASS=zsmalloc`, `MODULE_LOAD_PASS=zram`, and `MODULE_LOAD_PASS=ublk_drv`; `/dev/zram0` and `/dev/ublk-control` were present. Build #6 host still reports 7 checks passed and one failed because `zram` is not loaded. No host kernel, `.wslconfig`, or module installation was changed.
+**Residual blockers:** Generic QEMU does not provide Hyper-V VMBus or CoCo behavior. GPADL-stage failure injection, UIO mmap, forced order-7 fallback evidence, Hyper-V runtime, and SEV-SNP/TDX/Arm CCA memory-transition qualification remain open. Promotion remains blocked by missing immutable kernel/modules receipt and unverified module-to-VHDX provenance; the live host remains Build #6.
+**Verdict:** 🟡 `PARTIAL` — KUnit and candidate module-load smoke pass in isolated QEMU; no live host promotion or VMBus/CoCo qualification.
+
+## 2026-09-25 00:09 — Exact VMBus series on ordinary Hyper-V
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0054`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-25T03:09:01Z`.
+**Verified at:** `2026-09-25T03:09:01Z`.
+**Source revision:** `b38b9c3e30feed33224961a5f2834f7775ed8c52`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep this record with the VMBus upstream series dossier; the VM and temporary key are discarded after evidence capture.
+**Freshness:** Boot and runtime results bind to the exact series commit and Linux `v7.3-rc4` base `93f51579e7df248780214094418f205253383cc5`.
+**Category:** `qualification`.
+**What:** Built and booted the exact four-commit upstream series in a disposable ordinary x86_64 Hyper-V VM. Boot-time KUnit executed the `hyperv-vmbus-buffer` suite. A second synthetic NIC on a private Hyper-V switch was temporarily rebound from `hv_netvsc` to `uio_hv_generic`, exercised, and restored.
+**How to measure:** `make -j4 W=1 bzImage`; build only `uio.ko`, `uio_hv_generic.ko`, `scsi_transport_fc.ko`, and `hv_storvsc.ko` with `W=1`; boot `7.3.0-rc4-ramshared-vmbus+`; read KUnit results from `dmesg`; enable Hyper-V `vmbus_establish_gpadl_header`, `vmbus_establish_gpadl_body`, and `vmbus_teardown_gpadl` trace events; bind the isolated test NIC; read-only `mmap()` all five `/dev/uio0` maps and the channel's `ring` sysfs file; unbind and verify `hv_netvsc` restoration.
+**Measured data:** `bzImage` built and linked successfully (SHA-256 `f337861f04fd242eca4a323f842fd11496220fc72709240c1b1f5f5d21fa9bd4`). Boot-time KUnit: 5 passed, 0 failed, 0 skipped: size rounding, overflow, order-zero fallback selection, failed-teardown ownership, and partial-allocation cleanup. Final UIO/sysfs cycle: 9 GPADL headers, 656 body messages, and 9 teardowns; all traced returns were `0`. Read-only UIO maps 0–4 passed at 4 MiB, 4 KiB, 4 KiB, 31 MiB, and 16 MiB; the per-channel read-only sysfs ring mapping passed at 4 MiB. The test NIC returned to `hv_netvsc`. No BUG, Oops, KASAN, hung-task, or VMBus/GPADL error appeared; the guest logged an SRSO mitigation notice. The `W=1` build emitted unrelated baseline warnings in DRM, EFI, and TTM. The all-modules target was stopped before exhausting the approved disk budget; the linked kernel and only lab-required modules were installed. The dynamic VHDX had a 16 GiB virtual limit and reached 16,064,184,320 bytes (14.96 GiB) on C:. After the VM was shut down, its exact lab directory, ISO, VHDX, temporary SSH key, and guest files were removed; this freed 16,689,897,472 bytes (15.54 GiB) on C:, whose free space increased from 97,552,158,720 to 114,242,056,192 bytes.
+**Residual blockers:** This validates ordinary x86_64 Hyper-V normal-path GPADL/UIO behavior, not injected GPADL header/body/response failures, rescind races, or a forced live order-zero allocation fallback. The lab did not test SEV-SNP, TDX, or Arm CCA memory transitions; this host cannot provide those platforms. The series remains blocked from upstream submission pending those gates and maintainer review. The running WSL host kernel was not changed; the exact mainline series does not apply to its 6.18 WSL tree.
+**Verdict:** 🟡 `PARTIAL` — exact kernel linked, booted, passed KUnit, real Hyper-V GPADL create/teardown, all UIO maps, and sysfs ring mmap; GPADL fault injection and CoCo qualification remain open.
+
+
+## 2026-09-25 11:39 -03 — VMBus order-zero fallback hosted candidate
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0055`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-25T14:41:13Z`.
+**Verified at:** `2026-09-25T14:44:10Z`.
+**Source revision:** `dbec28671d5f7bb3c1017151574a7649019671aa`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep this record with the VMBus upstream dossier and hosted run artifacts, bound to the exact public series commit.
+**Freshness:** Applies only to the exact hosted series commit and pinned Linux base recorded here.
+**Category:** `qualification`.
+**What:** Published patch 6/6 of the v2 draft and updated the workflow to apply and build six stages and require `vmbus_buffer_order_zero_allocation_test`. The case injects failures above order zero, obtains and frees a real order-zero page, then checks clean order-zero exhaustion.
+**How to measure:** Verify exact-state patch application after patches 1–5, strict checkpatch output, six-patch snapshot equality, YAML lint, and GitHub Actions build and KUnit artifacts for run 36148296003.
+**Measured data:** Patch 6 applies to the exact prior state and its output matches the candidate source tree. Strict checkpatch reports zero errors, warnings, and checks; YAML lint, snapshot equality, and `git diff --check` pass. Hosted run 36148296003 completed successfully at series commit `dbec28671d5f7bb3c1017151574a7649019671aa`, pinned base `93f51579e7df248780214094418f205253383cc5`: all six stages built on x86_64 and arm64, WSL backport W=1/Sparse passed, and x86_64 KUnit passed 14/14 overall, including the `hyperv-vmbus-buffer` suite 10/10 and `vmbus_buffer_order_zero_allocation_test`. Arm64 KUnit was skipped.
+**Residual blockers:** KUnit proves deterministic fallback under injected failures, not live allocator fragmentation. Host response/rescind interleavings and CoCo memory transitions on SEV-SNP, TDX, and Arm CCA remain untested. Keep upstream submission blocked pending those runtime/platform gates and maintainer review.
+**Verdict:** 🟡 `PARTIAL` — six-patch hosted build/KUnit qualification passed; live fragmentation, host response/rescind, and CoCo qualification remain open.
+
+## 2026-09-25 12:25 -03 — Local Hyper-V and CoCo laboratory availability audit
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0056`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-25T15:25:42Z`.
+**Verified at:** `2026-09-25T15:25:42Z`.
+**Source revision:** `6c2591cbe959d6ff4c310da9818b1743829b23da`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep this read-only host-capability audit with the VMBus qualification dossier; recheck before using a future lab.
+**Freshness:** Describes the Windows host and Hyper-V inventory observed at the timestamps above.
+**Category:** `qualification`.
+**What:** Checked the local Windows Hyper-V host and VM inventory to identify an available ordinary Linux or CoCo guest for the remaining VMBus runtime tests. The audit did not start, stop, create, or modify any VM or disk.
+**How to measure:** Query Windows processor/OS and memory information, enumerate Hyper-V VMs and attached VHDX paths, and compare the host platform with the Linux Hyper-V CoCo hardware requirements.
+**Measured data:** Windows 11 Pro build 26200 reports an AMD Ryzen 5 3600 host with 33,453,888 KiB total visible memory and 6,969,564 KiB free at observation. No dedicated Linux kernel test VM is present. The only Ubuntu VM entry is saved and its configured backing VHDX is absent; it was left untouched. The remaining listed lab VMs are Windows guests. The host CPU is not an SEV-SNP or Intel TDX platform and cannot provide Arm CCA. Linux Hyper-V documentation requires CoCo-capable physical hardware and Hyper-V support; AMD documents SNP for EPYC 7003-series-and-newer processors ([Linux Hyper-V CoCo requirements](https://docs.kernel.org/virt/hyperv/coco.html), [AMD EPYC 7003 capabilities](https://www.amd.com/content/dam/amd/en/documents/developer/58207-using-sev-with-amd-epyc-processors.pdf)).
+**Residual blockers:** No suitable local Linux Hyper-V guest is available for another exact-series runtime drill, and this host cannot qualify SEV-SNP, TDX, or Arm CCA. A maintainer-provided CoCo lab or another explicitly available supported platform is required. No paid cloud VM was created.
+**Verdict:** 🟡 `PARTIAL` — host inventory is confirmed; the remaining live platform tests cannot be performed on this host.
+
+## 2026-09-25 13:33 -03 — Guarded local cascade teardown and bounded GPU monitor fix
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0057`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-09-25T13:33:50-03:00`.
+**Verified at:** `2026-09-25T13:33:51-03:00`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** The working tree contains uncommitted changes; this evidence does not identify a clean release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this record with the source diff and local cascade diagnostics; do not treat it as release qualification.
+**Freshness:** The runtime snapshot describes only this WSL boot and must be rechecked after restart or install.
+**Category:** `qualification`.
+**What:** Inspected the already-active RamShared cascade after its supervisor entered `CRITICAL`. The daemon reported cache `UNAVAILABLE`, zero cached VRAM, and supervisor telemetry reported that `freeze_discardable` failed because the reservation ledger was unavailable. NBD swap use was zero; ZRAM held 151,016 KiB; the unrelated WSL fallback swap held 3,470,652 KiB. Memory availability was below the supervisor's configured recovery reserve. The cascade was stopped with the product `down` path, which swapoff'd NBD then ZRAM before daemon teardown. The supervisor service, started manually for the prior observation, was stopped and remains disabled. Source review also found that `ramshared top` queried CUDA and created a context directly in the interactive observer before applying the existing process timeout. Changed GPU telemetry to use only the bounded external `nvidia-smi` query path and added a bounded-probe test. The local diagnostic source has not been installed; `/usr/local/bin/ramshared` remains a separate older executable.
+**How to measure:** Capture `ramshared status --json`, `ramshared check --json`, `/proc/swaps`, `/proc/meminfo`, supervisor/cache status, and filtered kernel logs before and after `sudo <built CLI> down`; run `cargo test -p ramshared-cli`, the focused GPU-query timeout tests, `cargo clippy -p ramshared-cli --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check`.
+**Measured data:** Teardown returned success after `[down] swapoff ok: managed NBD`, `[down] swapoff ok: managed ZRAM`, and daemon cleanup. Afterwards only the external WSL fallback swap remained active (3,469,076 KiB used), the RamShared daemon and supervisor were inactive, and status reported phase `Off`, cache/origin `OFF`, guardian `HEALTHY`, no measurement errors, and overall `GUARDED` because external fallback swap remained in use. `ramshared check --json` returned `decision=ready` with no blockers; the running kernel remained `6.18.40.1-microsoft-standard-WSL2+ #6`. Filtered `dmesg` contained no BUG, Oops, WARNING, hung-task, I/O, VMBus, or OOM signal. The targeted bounded-probe and descendant-timeout tests passed; the CLI suite passed 328 unit tests and 10 integration tests; Clippy, rustfmt, and `git diff --check` passed. One earlier `nvidia-smi` snapshot showed a process named `ramshared` using 3,274 MiB, but a subsequent compute-app query was empty; attribution of that transient reading is unresolved.
+**Residual blockers:** The cache worker did not allocate physical VRAM, the supervisor could not read an admission reservation ledger, and no pressure/stress test was run. Install and verify the bounded monitor change through a clean release package before relying on system-wide or product-managed binaries. Keep cache and 24-hour product qualification open until daemon-bound GPU allocation, valid ledger/control-plane evidence, pressure behavior, and teardown all pass on one exact installed release. This WSL host cannot prove VMBus CoCo behavior or SEV-SNP/TDX/Arm CCA transitions.
+**Verdict:** 🟡 `PARTIAL` — guarded state was safely dismantled and a blocking GPU-observer path was removed from source; physical cache, supervisor-ledger setup, clean installation, and sustained runtime qualification remain open.
+
+## 2026-09-25 14:24 -03 — GPU-independent Tier 3 stress and GPU architecture audit
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0058`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-25T17:24:39Z`.
+**Verified at:** `2026-09-25T17:34:12Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; this record qualifies source tests only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with the stress governor SPEC and source diff.
+**Freshness:** Applies to this CLI source revision and test environment only.
+**Category:** `qualification`.
+**What:** Added a `--tier3-only --tier3-target-pct 99` stress path that checks an active Tier 3 swap target, skips GPU/cache probes and cascade readiness, retains memory/PSI/watchdog/kernel-fault limits, requires actual allocation before accepting a preexisting target, and reports `PASS_TIER3_ONLY` with an explicit report flag. Full-profile physical cache target now derives from the active cache worker's target rather than a fixed 4096 MiB. Audited the GPU budget paths: stress/monitor remain NVIDIA-specific for free-memory probes; Vulkan ignores external memory budget and does not bind its telemetry to adapter identity; DXG/WDDM budget is not connected to CLI admission; multiple providers can select different adapters.
+**How to measure:** Run targeted `cargo test -p ramshared-cli tier3_only` and `cargo test -p ramshared-cli full_profile`, the complete `cargo test -p ramshared-cli`, `cargo clippy -p ramshared-cli --all-targets -- -D warnings`, the stress source slice coverage gate at 80%, `cargo fmt --check`, `git diff --check`, and `./scripts/docs-check.sh`.
+**Measured data:** Targeted tests passed. The complete CLI suite passed 331 unit tests and 10 dispatch tests. Clippy passed with warnings denied. `stress.rs` line coverage passed at 80.9% (1729/2137). Formatting, whitespace, and documentation governance passed. The capability-observations file was regenerated and validated as in sync.
+**Residual blockers:** No live Tier 3 saturation was run because the host still has substantial external fallback swap in use and limited memory headroom. This source validation does not qualify a 99% run, physical VRAM allocation, or vendor compatibility. Cross-vendor budget identity remains PARTIAL pending a shared adapter-bound budget contract and NVIDIA/AMD/Intel hardware evidence. The full three-tier campaign remains blocked as recorded in the gap register.
+**Verdict:** 🟡 `PARTIAL` — GPU-independent Tier 3 mode and current-target selection pass source validation; live saturation and cross-vendor physical GPU admission remain unqualified.
+
+## 2026-09-25 18:20 -03 — Shared GPU adapter identity and budget contract
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0059`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-25T21:20:15Z`.
+**Verified at:** `2026-09-25T21:20:15Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; this record qualifies source tests only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with the shared GPU budget contract and stress governor evidence.
+**Freshness:** Applies to the current source diff and test environment only.
+**Category:** `qualification`.
+**What:** Added normalized Windows LUID identity to the shared GPU contract. CUDA queries optional device UUID/LUID, Vulkan queries UUID and valid LUID, and DXG exposes its WDDM LUID. Cross-API identity matching requires the shared LUID; same-backend matching uses that backend's stable key. CUDA/Vulkan can still use a valid LUID as the stable identity if UUID is absent. The worker remains fail-closed unless it has a fresh driver-reported budget bound to its own provider identity.
+**How to measure:** Run `cargo test -p ramshared-vram -p ramshared-cuda -p ramshared-vulkan -p ramshared-dxg -p ramshared-block`, strict Clippy for those crates and `ramshared-cli`, `cargo test -p ramshared-cli`, lavapipe ignored Vulkan tests, the `stress.rs` 80% coverage gate, `cargo fmt --all`, and `git diff --check`.
+**Measured data:** GPU/cache package tests passed (111 block, 17 CUDA plus one hardware test ignored, 12 DXG, 5 shared VRAM, Vulkan tests passed in the normal suite as ignored hardware tests). CLI passed 329 unit and 10 dispatch tests. Clippy passed with warnings denied. Lavapipe passed both Vulkan integration tests and reported `llvmpipe`, driver-reported memory budget, and its device UUID. Stress slice coverage passed at 80.5% (1658/2060). Formatting passed.
+**Residual blockers:** No NVIDIA/AMD/Intel physical campaign ran. The WDDM budget is not yet combined with the active CUDA/Vulkan allocation provider in daemon admission or CLI telemetry; the dashboard retains NVIDIA-specific observation. `EVD-0058` predates these changes and its GPU audit statements are superseded by this record. No Tier 3 saturation or host install was performed.
+**Verdict:** 🟡 `PARTIAL` — shared identity and admission primitives pass source validation; provider telemetry integration and physical cross-vendor qualification remain open.
+
+## 2026-09-25 18:58 -03 — Active GPU budget telemetry through daemon and CLI
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0060`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-25T21:58:13Z`.
+**Verified at:** `2026-09-25T21:58:13Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; this record qualifies source tests only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with the shared GPU budget contract and daemon telemetry tests.
+**Freshness:** Applies to the current source diff and test environment only.
+**Category:** `qualification`.
+**What:** Added a bounded worker-heartbeat payload carrying the active adapter identity, budget, usage, available bytes, source, and sample time. The daemon publishes the snapshot in `cache-status.json`; `ramshared status --json` validates the schema, arithmetic, provider, and five-second freshness before exposing headroom. Missing, stale, or malformed snapshots remain unknown and add a measurement error when reported by an active daemon.
+**How to measure:** Run `cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli`, strict Clippy for those packages with `-D warnings`, `cargo fmt --all -- --check`, `git diff --check`, and `./scripts/docs-check.sh`.
+**Measured data:** The four-package test command passed. `ramshared-block` passed 111 tests; `ramshared-vram` passed 6; the CLI passed 331 unit and 10 dispatch tests; all `ramshared-wsl2d` unit and integration tests passed, with hardware/root-only cases remaining explicitly ignored. Clippy passed with warnings denied. The IPC integration test verified a real fake-provider heartbeat round-trips the selected adapter and driver-reported headroom; status tests verify JSON publication and reject stale, future-dated, local-only, and malformed telemetry.
+**Residual blockers:** This is source-level IPC/status validation. No physical GPU allocation or NVIDIA/AMD/Intel campaign ran. The WDDM budget still is not joined to the active CUDA/Vulkan allocator; the interactive dashboard retains an NVIDIA-specific probe. No Tier 3 saturation or host install was performed.
+**Verdict:** 🟡 `PARTIAL` — worker-bound GPU budget now reaches daemon and CLI telemetry under freshness checks; cross-provider WDDM composition and physical vendor qualification remain open.
+
+## 2026-09-25 19:28 -03 — Generic active-worker GPU dashboard telemetry
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0061`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-25T22:28:36Z`.
+**Verified at:** `2026-09-25T22:28:36Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; source tests only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0060 and the shared GPU budget contract.
+**Freshness:** Applies to the current source diff and test environment only.
+**Category:** `qualification`.
+**What:** Replaced the `ramshared top` NVIDIA-only external probe with the fresh, adapter-bound budget already published by the active cache worker. The dashboard omits the GPU sample when telemetry is absent, stale, locally estimated, malformed, or unidentified. Removed hard-coded PCIe generation/bandwidth and idle throughput/latency claims; unmeasured tier values now say they are awaiting measurements, and GPU budget usage is relative to the worker's actual budget.
+**How to measure:** Run `cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli`, strict Clippy for those packages with `-D warnings`, `cargo fmt --all -- --check`, `git diff --check`, and `./scripts/docs-check.sh`. The monitor tests use fixed JSON fixtures to cover fresh, stale, local-only, malformed, and unidentified telemetry.
+**Measured data:** The four-package test command passed; CLI passed 330 unit and 10 dispatch tests, block passed 111 tests, VRAM passed 6, and WSL daemon unit/integration suites passed with documented hardware/root-only cases ignored. Strict Clippy passed. Targeted monitor tests passed for fresh identity-bound budgets and fail-closed omission; monitor slice coverage passed at 85.3% (1547/1814 lines). The dashboard rendering tests verify active adapter identity, budget display, unavailable telemetry, and removal of the guessed PCIe line. No hardware probe or GPU allocation was invoked by this change.
+**Residual blockers:** WDDM budget composition with the active CUDA/Vulkan allocator and physical NVIDIA/AMD/Intel campaigns remain open. No live GPU cache run, Tier 3 saturation, or host installation was performed.
+**Verdict:** 🟡 `PARTIAL` — the dashboard is now vendor-neutral at the observation layer; cross-provider composition and physical vendor qualification remain unproven.
+
+## 2026-09-25 22:33 -03 — Exact-LUID WDDM budget guard for isolated GPU worker
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0062`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T01:33:44Z`.
+**Verified at:** `2026-09-26T01:33:44Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; source tests only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0061 and the shared GPU budget contract.
+**Freshness:** Applies to this source diff and test environment only.
+**Category:** `qualification`.
+
+**What:** The isolated worker now intersects its selected CUDA/Vulkan allocator headroom with the WDDM budget only when both identify the same normalized Windows LUID. Effective headroom is the lower of driver allocator availability and WDDM availability/reservation headroom. Stale/future snapshots, arithmetic inconsistency, LUID mismatch, or WDDM query errors after guard activation prevent allocations. If DXG or a usable LUID is unavailable during setup, the worker keeps the selected provider's driver-reported budget contract. Fatal guard errors are written to the worker's stderr before it exits. The policy was isolated in `crates/ramshared-wsl2d/src/gpu_budget.rs` so coverage measures this business-logic slice independently from the large daemon entry point.
+
+**Validation:** Focused policy tests passed (7); the coverage gate passed at 93.0% (359/386 lines) with `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/gpu_budget.rs --min 80`. An initial exploratory gate over all of `main.rs` measured 78.8% (6708/8516); this was not the SPEC business-logic slice and prompted the extraction, not a lowered threshold. Final `cargo test -p ramshared-dxg -p ramshared-wsl2d -- --quiet` passed: DXG 13, WSL library 149, daemon binary 101, plus 27 applicable integration tests; 19 root/hardware integration cases were ignored. Strict Clippy passed for both crates, `cargo fmt --all -- --check` passed, `git diff --check` passed, and `./scripts/docs-check.sh` passed. Named tests cover minimum headroom, adapter mismatch, stale/future samples, malformed allocator arithmetic, startup fallback, provider errors, and a failing WDDM provider blocking worker allocation.
+
+**Open gate:** No physical `/dev/dxg` query, CUDA/Vulkan allocation, multi-adapter test, NVIDIA/AMD/Intel campaign, Tier 3 saturation, or host installation was performed. This is source-level partial evidence only; broad GPU support remains unqualified.
+**Verdict:** 🟡 `PARTIAL` — exact-LUID WDDM budget composition passes source tests and coverage; live and cross-vendor qualification remain unproven.
+
+## 2026-09-25 23:24 -03 — Safe multi-adapter GPU cache selection
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0063`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T02:24:37Z`.
+**Verified at:** `2026-09-26T02:38:12Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; source tests only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0062 and the shared GPU budget contract.
+**Freshness:** Applies to the current source diff and sampled host state only.
+**Category:** `qualification`.
+
+**What:** The isolated worker now enumerates CUDA and Vulkan candidates and ranks them by the real reserve-adjusted, exact-LUID WDDM-constrained target. It opens the exact Vulkan device ordinal, revalidates identity and fresh budget immediately before use, and gives the client a zero-target origin-only handshake when revalidation fails. Vulkan enables `VK_EXT_memory_budget` on the logical device when available; providers with only a local estimate cannot authorize automatic cache admission.
+
+**Validation:** `CARGO_BUILD_JOBS=2 cargo test -p ramshared-vulkan -p ramshared-wsl2d -- --quiet` passed: WSL library 151, daemon binary 101, applicable broker/NBD/ublk suites passed; GPU/root-dependent tests remain ignored. Strict Clippy passed for both packages. `gpu_budget.rs` slice coverage passed at 93.9% (447/476 lines). `cargo fmt --all -- --check`, `git diff --check`, and `./scripts/docs-check.sh` passed after the evidence and gap-register updates. New policy tests cover reserve, request cap, stale/future rejection, largest safe target, and deterministic ties.
+
+**Host observation:** `/dev/dxg` exists. At the sample, `nvidia-smi` reported one RTX 2060, 6,144 MiB total, 979 MiB used, 4,976 MiB free, 6% utilization, 53°C, and 21.65 W. WSL reported 16,379,368 KiB total memory, 1,011,748 KiB available, and 4,193,160/4,194,304 KiB fallback swap used. Installed `ramshared status --json` was initially `phase=Off`, `cache_state=OFF`, `guardian_state=BLOCKED`, `overall_state=BLOCKED`, reason `guardian_state_stale`. One identified headless automation process tree from another workspace was stopped with SIGTERM; afterward swap free rose to 352,464 KiB but available memory remained near 1 GiB. The sealed `RamSharedWslGuardian.v1` task had last result `0xC000013A` and state `Ready`; after confirming a fresh guest heartbeat and reviewing its proof gates, the existing task was started. It now remains `Running` and publishes `HEALTHY` with the current boot ID; cascade remains `Off`. Windows reported 16,966 MiB free physical memory and 24,246 MiB free pagefile/commit. Guardian host telemetry still reports `vmmem_wsl=null` and `telemetry_queries_bounded=false`. Current WSL sample reads 1,038,812 KiB available and 4,119,492/4,194,304 KiB fallback swap used (74,812 KiB free). Windows WMI listed LG ULTRAWIDE and DP2HDMI as active and the recent Display/NVIDIA/DXG event query returned no entries.
+
+**Open gate:** No release build/install, worker allocation, physical multi-adapter test, GPU stress, Tier 3 saturation, or memory-pressure run was performed. The guardian is fresh now, but the guest remains near its 4 GiB swap limit, the telemetry cannot measure WSL VM memory, and the cache/origin are off; host readiness for installation and stress is not established. The Windows monitor observation does not establish a causal link; this source/test session made no physical GPU allocation or install.
+**Verdict:** 🟡 `PARTIAL` — source selection and policy gates pass; host installation and all physical qualification remain blocked by measured host readiness.
+
+## 2026-09-25 23:57 -03 — Windows stress preflight portability and host admission
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0064`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T02:52:59Z`.
+**Verified at:** `2026-09-26T03:01:45Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; PowerShell source tests and plan-mode preflight only, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0063 and the three-tier qualification incident records.
+**Freshness:** Applies to this PowerShell source diff and the sampled host/guest state.
+**Category:** `qualification`.
+
+**What:** Fixed two failures in the Windows three-tier stress preflight. Guardian timestamps are now checked in a culture-invariant way whether PowerShell's JSON parser returns ISO text, `DateTime`, or `DateTimeOffset`; bounded memory queries select `pwsh.exe` under PowerShell Core and `powershell.exe` under Windows PowerShell. The guardian task was running and health was fresh.
+
+**Validation:** `Test-SharedWslPressureCampaignMemoryGate.ps1` passed under both PowerShell Core and Windows PowerShell, including a live bounded Win32 commit-counter sample and fresh/stale/future/malformed/localized timestamp cases. `Test-SharedWslPressureCampaignStatic.ps1` passed all nine assertions. Plan-only `Invoke-RamSharedThreeTierStress.ps1` passed under both shells. PowerShell Core sampled 24,308, 24,377, and 24,332 MiB; Windows PowerShell sampled 24,317, 24,483, and 24,555 MiB, all against the 20,480 MiB requirement (`host_memory_gate_ok=true`). Plan mode did not launch WSL stress or activate tiers.
+
+**Metric correction:** Those historical headroom values came from WMI `FreeVirtualMemory`. EVD-0069 establishes that this counter is available virtual memory (free physical memory plus free paging-file space), not exact commit headroom. Do not treat the EVD-0064 figures as Windows commit-limit margin.
+
+**Host state:** Installed `ramshared check --json` reports kernel `6.18.40.1-microsoft-standard-WSL2+`, CUDA ready, RTX 2060, and `decision=ready`. The installed status remains `phase=Off`, guardian `HEALTHY`, cache/origin `OFF`. At 23:57 local, WSL had 806,284 KiB memory available and 8,520 KiB free of 4,194,304 KiB swap. A later sample at 00:04 local still had guardian `HEALTHY`, but only 413,748 KiB memory available and 0 KiB free swap. The host commit plan gate passes, but guest pressure is exhausted.
+
+**Open gate:** No release build/install, BINARY_MATCH for the current source, physical cache allocation, GPU stress, Tier 3 saturation, or memory-pressure run was performed. Do not start the full campaign until guest memory and swap recover and the exact current worker is built and installed under the bounded Windows supervisor.
+**Verdict:** 🟡 `PARTIAL` — the Windows preflight now works in the current locale/runtime and host commit admission passes; guest readiness and physical qualification remain open.
+
+## 2026-09-26 12:26 -03 — Safe WSL origin volume placement
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0065`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T15:36:39Z`.
+**Verified at:** `2026-09-26T15:36:39Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; PowerShell source/manufactured checks and read-only host planning only.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with `docs/specs/no-milestone/wsl2-origin-capacity-policy/` and the WSL origin qualification records.
+**Freshness:** Applies to this PowerShell source diff and this host plan only.
+**Category:** `qualification`.
+
+**What:** New origin placement prefers the volume containing the registered WSL distro `BasePath` when it has at least the fixed VHDX size plus 10 GiB free, then tries C: under the same bound. If the distro path cannot be resolved, C: is the only automatic candidate; the script does not infer distro placement from `.wslconfig`'s separate fallback swap path. Existing sealed manifest paths remain authoritative. Explicit new-origin paths get the same read-only reserve preflight, and installation rechecks the reserve after staging allocation before proof, promotion, or manifest publication. Manufactured tests bypass live host discovery.
+
+**Validation:** `Manage-RamSharedOrigin.ps1 -Action test -Run` passed **17 named checks**. The low-space refusal reports `required_free_bytes=16106127360`, with both 14 GiB candidates observed at `15032385536`; the post-allocation refusal reports required `10737418240` and available `10737418239` bytes. Other cases passed for distro-volume preference, C: fallback, a single C: volume at exactly 15 GiB free, removable/unsupported-filesystem refusal, sealed-path replay, and conflicting explicit-path refusal. `Test-RamSharedOriginStatic.ps1` passed and checked unique local-volume/filesystem gates, host-discovery isolation, explicit-path preflight, and ordering of reserve checks before promotion and manifest publication. Read-only `-Action plan` exited 0. `./scripts/docs-check.sh` exited 0; `git diff --check` exited 0.
+
+**Host observation:** Plan selected `C:\ProgramData\RamShared\ramshared-origin.vhdx` from the existing sealed manifest (`fixed_size_bytes=5368709120`); it also reported the independent fallback swap at `C:\wsl\swap.vhdx`. The existing manifest means this plan did not execute new-origin volume selection or sample available free bytes.
+
+**Open gate:** No VHDX was created, replaced, attached, or removed. No new-origin allocation was observed on an actual single-volume C: machine, and no full-distro-volume fallback was exercised on Windows. The host plan did not qualify the reserve under a new allocation. Do not mark this extension fully host-qualified until a disposable attended lab run covers those effects without replacing the sealed production origin.
+**Verdict:** 🟡 `PARTIAL` — policy tests and read-only host resolution pass; real new-origin allocation remains unproven.
+
+## 2026-09-26 13:09 -03 — Disposable host qualification of origin volume placement
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0066`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T16:09:49Z`.
+**Verified at:** `2026-09-26T16:09:49Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; elevated host drill used a disposable copy of the current PowerShell manager, not a release artifact.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with `docs/specs/no-milestone/wsl2-origin-capacity-policy/`.
+**Freshness:** Applies to the current manager source and this Windows host's C:/I: volumes.
+**Category:** `qualification`.
+
+**What:** Exercised automatic placement and the reversible fixed-VHDX lifecycle without touching the sealed production origin. The temporary manager template's SHA-256 matched `scripts/windows/Manage-RamSharedOrigin.ps1` (`827344c8e7372717f95a5036b1ed5e854c97382a9d2fdbf8a08e2f86dff37725`); per-case copies changed only manifest and backup roots. The C: fallback case used an unregistered disposable distro, making C: the only automatic candidate. The second case used the registered `Ubuntu-24.04` distro on I:.
+
+**How to measure:** `Manage-RamSharedOrigin.ps1 -Action test -Run`; `Test-RamSharedOriginStatic.ps1`; elevated Windows PowerShell disposable install/configure/uninstall drill for C: and I:; read-only plan checks for 64 GiB sizing and an explicit C: path; final cleanup verification.
+
+**Measured data:** The 5 GiB C: case selected `c_default` with `115876167680` bytes free before creation and a required reserve of `16106127360`; the fixed VHDX was `5368709120` bytes, post-allocation free space was `110502268928`, `configure` returned `VERIFIED`, and exact-path uninstall removed the target and manifest, leaving `115875147776` bytes free. The I: case selected `distro_basepath` with `61655785472` bytes free; after the same fixed allocation it retained `56281833472`, returned `VERIFIED`, and cleanup removed the target and manifest, leaving `61654736896` bytes free. Both cases passed. A 64 GiB request required `79456894976` bytes: I: was below that bound, so the read-only plan selected C: with `115879870464` bytes free. Explicit C: planning passed with required `16106127360` bytes. Manufactured tests separately cover the literal single-volume C: boundary.
+
+**Before/after and cleanup:** The elevated runner completed with `Overall=PASS`. Final verification found both lab VHDX paths and manifests absent, zero backup files, and the production manifest unchanged at `C:\ProgramData\RamShared\ramshared-origin.vhdx` (`5368709120` bytes). `.wslconfig` remained `swapFile=C:/wsl/swap.vhdx`. The temporary lab runner and logs were removed after recording these measurements.
+
+**Residual blockers:** The C: case was not performed on a physically single-volume PC; it tested the C-only selector condition through the unregistered-distro path, with the policy's single-volume case covered by a manufactured test. The new VHDX was not attached to WSL; the guest host gate, cascade activation, stress, and CoCo platforms were not exercised. Do not treat this as full PRD live acceptance or kernel/CoCo qualification.
+
+**Verdict:** 🟡 `PARTIAL` — live Windows origin placement, fixed allocation, identity proof, 10 GiB reserve, and rollback passed on C: and I: in disposable isolation; guest attachment and cascade acceptance remain open.
+
+## 2026-09-26 14:20 -03 — Disposable WSL guest origin gate
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0067`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T16:46:55Z`.
+**Verified at:** `2026-09-26T17:20:26Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted changes; a temporary copy of the current origin manager redirected only manifest and backup paths to disposable state.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with `docs/specs/no-milestone/wsl2-origin-capacity-policy/`.
+**Freshness:** Applies to the current origin manager and this disposable WSL attachment.
+**Category:** `qualification`.
+
+**What:** Attached a 5 GiB fixed VHDX on the registered distro volume I: to Ubuntu-24.04, using its real PARTUUID and disk GUID. The guest host gate accepted the current guardian proof and refused a copied proof aged beyond its freshness limit. A path-isolated provisioning script wrote the expected 4 GiB swap signature and an immediate replay returned `ALREADY_PROVISIONED`.
+
+**Validation:** Guest summary recorded `PASS`, partition dev_t `8:50`, parent dev_t `8:48`, the expected PARTUUID and swap UUID, `active_swap_changed=false`, and `production_origin_config_sha256_unchanged=true`. The root `/etc/ramshared/origin.conf` hash remained `18736ad6943b60f672dd074e11f89c1098d94327e1e9fbc55e4484a93bb83280`. `ramshared status --json` remained `phase=Off`, daemon false, guardian healthy, and no managed tiers active. The disposable partition never appeared in `/proc/swaps`.
+
+**Cleanup:** Detached the exact lab VHDX and used the manager's ownership-checked uninstall. The lab VHDX and manifest are absent, the test PARTUUID is absent from `lsblk`, and `/proc/swaps` still contains only the 4 GiB C:-backed fallback swap. Production manifest still names `C:\\ProgramData\\RamShared\\ramshared-origin.vhdx`; `.wslconfig` still sets `memory=17179869184` and `swapFile=C:/wsl/swap.vhdx`. I: returned to `61564293120` bytes free.
+
+**Open gate:** No `ramshared up`, physical GPU allocation, bounded stress, swapoff-first cascade teardown, release build/install, or CoCo test ran. At verification the guest reported `MemAvailable=889300 KiB` and `SwapFree=2764028 KiB`; keep the pressure campaign closed until guest and host admission are freshly qualified.
+**Verdict:** 🟡 `PARTIAL` — disposable guest attachment, live identity gate, stale-proof refusal, provisioning replay, and exact cleanup passed; cascade acceptance remains open.
+
+## 2026-09-26 14:20 -03 — RAM scope label and host-query runaway
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0068`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T16:52:34Z`.
+**Verified at:** `2026-09-26T17:20:26Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted monitor and stress-label corrections; source was tested but not rebuilt or installed as a release.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with the memory-observability and WSL stress qualification records.
+**Freshness:** Applies to this dashboard source correction and the sampled host/guest state.
+**Category:** `reliability`.
+
+**What:** `ramshared top` reads `/proc/meminfo` from its Linux process. This WSL2 guest reported `MemTotal=16379360 KiB` (15,995 MiB), matching the dashboard denominator, so the prior “Host RAM” caption incorrectly implied Windows physical RAM. The dashboard now reports `WSL2 RAM` and `WSL2 RAM & Swap` for WSL2, `WSL RAM` under WSL interop, and `Host RAM` on native Linux. The stress preamble now uses the same WSL2/native distinction. JSON observations include `memory_scope`.
+
+**Validation:** `memory_scope_distinguishes_wsl2_wsl1_and_native_linux`, `dashboard_renders_active_and_unavailable_gpu_planes`, and `formats_stress_telemetry_without_live_pressure` passed. `cargo fmt --all -- --check` and `git diff --check` passed. The Windows campaign source places its actual `ramshared stress` command inside the guest script; the Windows PowerShell controller samples host memory and supervises the guest but does not allocate the planned guest pressure itself.
+
+**Host observation:** A PowerShell child launched by our Guardian-status diagnostic had grown to about 14,427 MiB of private memory; at that sample Windows had 4,340 MiB of physical memory free. We verified its PID and command line, terminated only that diagnostic process, and Windows free physical memory rose to 18,596 MiB. This was not the Guardian or a stress process. The runaway was caused by the diagnostic invocation involving ScheduledTasks queries; the available process evidence does not isolate whether the PowerShell engine, module, or provider caused the growth. The process is gone and was not relaunched.
+
+**Open gate:** No stress or cascade was started. At verification WSL reported `MemAvailable=889300 KiB`, `SwapFree=2764028 KiB`, and memory PSI avg10 `some=0.00`, `full=0.00`; RamShared remained `Off`. The WSL dashboard correction is source-only; rebuilding/installing it and running any pressure campaign remain gated on fresh readiness.
+**Verdict:** 🟡 `PARTIAL` — RAM scope is identified correctly and the source labels are tested; host-query root cause and release installation remain unqualified, and no pressure campaign ran.
+
+## 2026-09-26 17:07 -03 — Exact host and guest memory admission
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0069`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T20:07:50Z`.
+**Verified at:** `2026-09-26T20:18:21Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted monitor and stress-admission changes; no new release build or install.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0068 and the three-tier stress qualification records.
+**Freshness:** Host/guest counters are a single post-restart sample and apply only to this observation.
+**Category:** `reliability`.
+
+**What:** The former Windows `FreeVirtualMemory` proxy combined free physical memory and paging-file space and was not exact commit headroom. The shared gate now uses `GetPerformanceInfo` for `PhysicalAvailable` and `CommitLimit - CommitTotal` from one snapshot. The three-tier wrapper separately checks guest `MemAvailable` and `SwapFree` before any guest activation or allocator command. These checks are admission gates; they do not reserve memory.
+
+**Validation:** `Test-SharedWslPressureCampaignMemoryGate.ps1`, `Test-SharedWslPressureCampaignStatic.ps1`, `Test-RamSharedThreeTierStressStatic.ps1`, and `Test-RamSharedWslWatchdogStatic.ps1` passed under Windows PowerShell. `test-ramshared-guest-memory-admission.sh` passed all five cases: adequate reserves pass; low memory, low swap, malformed telemetry, and attempts to lower the reserve refuse. No campaign or plan command ran.
+
+**Measured data:** After the user's WSL restart, one live host sample reported 19,579 MiB physical headroom against 20,480 MiB required (901 MiB short), and 41,519 MiB exact commit headroom against the same requirement. The guest reported about 12 GiB `MemAvailable`, 4 GiB free fallback swap, and zero memory PSI. The physical-memory gate therefore still refuses the full 16 GiB pressure profile even though commit and the current guest sample pass.
+
+**Residual blockers:** A single post-restart sample is not a multi-sample campaign admission. No stress, release installation, GPU allocation, or tier activation was performed. See EVD-0070 for the prior-boot freeze investigation.
+**Verdict:** 🟡 `PARTIAL` — exact host counters and fail-closed guest gates pass their tests; current physical headroom remains below the full-campaign threshold.
+
+## 2026-09-26 17:11 -03 — WSL2 memory-pressure freeze review
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0070`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T20:11:38Z`.
+**Verified at:** `2026-09-26T20:18:21Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Working tree contains uncommitted monitor and stress-admission changes; no release build or install.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0068 and EVD-0069.
+**Freshness:** The prior-boot evidence explains the observed incident only; it is not a current stress qualification.
+**Category:** `reliability`.
+
+**What:** The user observed the WSL2 guest becoming unresponsive while `ramshared top` showed 92% (14,840/15,995 MiB). The denominator matches guest `/proc/meminfo` (`MemTotal=16,379,360 KiB`), not Windows physical RAM or the `vmmemWSL` working set. The prior boot's last RamShared status sample was `phase=Off`, daemon false, cache/origin off, and only the independent 4 GiB fallback swap active.
+
+**Prior-boot evidence:** At 15:47:37 -03, `MemAvailable=108,560 KiB`, fallback `SwapFree=897,032 KiB`, fallback swap used `3,291,364/4,194,304 KiB`, memory PSI avg10 some/full `22.72/22.48`, and cgroup `oom`/`oom_kill` were zero. One unmanaged process accounted for `1,938,800 KiB` combined RSS and swap; this is the largest recorded contributor, not proof of the first allocation. The journal contains 143 `Under memory pressure, flushing caches` messages between 15:30:17 and 15:55:42 -03. Its final retained record is at 15:55:42; the next boot begins at 16:18:38.
+
+**Kernel and recovery evidence:** The retained prior-boot kernel journal has no `BUG`, Oops, panic, soft/hard lockup, hung-task, or OOM-killer signature. The user restarted WSL; the same custom `6.18.40.1-microsoft-standard-WSL2+` kernel is active after restart. The guest then reported about 12 GiB available, 0 swap used, and zero PSI; a Windows `vmmemWSL` sample was about 5,170 MiB working set. Hyper-V Compute event access was denied, and the final 23 minutes before the new boot have no retained guest records. No stock-kernel A/B test was performed.
+
+**Assessment:** Severe guest memory and fallback-swap thrashing is the most likely immediate freeze mechanism. The largest process footprint in the last saved status is a plausible contributor, but the exact initiating allocation is not proven. The incident does not meet the repository's kernel-CRASH definition; it also does not exonerate the custom kernel because the final interval is unobserved and no baseline comparison exists. A repository documentation check had been attempted during this constrained period and was interrupted without a result; its incremental effect cannot be measured. No RamShared stress or activation was started.
+
+**Verdict:** 🟡 `PARTIAL` — guest thrashing is strongly evidenced with RamShared off; exact process causality and any custom-kernel contribution remain unresolved.
+
+## 2026-09-26 18:25 -03 — Cross-correlated WSL freeze timeline
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0071`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T21:24:43Z`.
+**Verified at:** `2026-09-26T21:24:43Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Read-only analysis of retained guest health, journal, Windows telemetry, and Guardian records; no pressure run or release installation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0068 through EVD-0070 and the freeze incident evidence.
+**Freshness:** Retrospective analysis of the September 26 prior boot; not a current readiness sample.
+**Category:** `reliability`.
+
+**What:** A second pass over 13,000 retained `cascade-health.jsonl` samples, Windows host telemetry, and Guardian events narrows the unresponsive interval and corrects EVD-0070's process inference. Guest `MemAvailable` fell from about 8,543 MiB at 10:45 to 106 MiB at 15:47 while fallback swap rose from zero to about 3,220 MiB. RamShared remained `Off` with no managed ZRAM, VRAM, or origin tier. The top-ten process samples are insufficient to account for total guest memory; they omit aggregate processes and the kernel memory categories needed to distinguish anonymous memory, shared memory, unreclaimable slab, dirty pages, and ballooned pages.
+
+**Swap and responsiveness:** Between 15:25 and 15:47, the fallback swap-device read counter rose from 15.90 to 127.20 GiB, about 111.30 GiB in 22 minutes. Major faults rose from 71,108 to 1,983,827; PSI full avg10 reached 56.76% at 15:32. The Guardian logged intermittent guest probe failures from 15:31 and persistent dual probe timeouts from about 15:48 through 16:15 while the Windows WSL/HCS service probes still completed. Guest journald continued writing memory-pressure messages through 15:55. This supports severe swap-driven loss of guest responsiveness rather than a proven kernel crash. The journal-only 15:55–16:18 gap in EVD-0070 is partially covered by those independent host probes, but lacks guest process and kernel state.
+
+**Process correction:** `rust-analyzer` stayed near 1,880–1,910 MiB combined RSS plus swap across the sampled afternoon. Its RSS fell from about 1,883 MiB at 13:00 to under 1 MiB at 15:47 as its swap grew to about 1,893 MiB. It was heavily paginated; the stable combined footprint does not support EVD-0070's suggestion that it caused the progressive memory loss. The top-ten combined footprint was about 3,293 MiB at 13:00 and 2,779 MiB at 15:47. This does not exclude many smaller processes or a kernel-side category because only ten processes were retained. The zero OOM counters in the health JSON refer only to `ramshared-workloads.slice`, not the entire guest.
+
+**Dynamic-memory hypothesis:** The host `.wslconfig` sets a 16 GiB WSL limit, 4 GiB swap, and `autoMemoryReclaim=disabled`. The prior guest boot log confirms `hv_balloon` negotiated Dynamic Memory protocol 2.0 and logged a 16,384 MiB maximum. Between 10:45 and 13:30, Windows physical memory free rose from about 12,796 to 14,748 MiB while guest `MemAvailable` fell from about 8,593 to 1,904 MiB. This does not fit simple exhaustion of Windows physical RAM. Host-directed ballooning could contribute to the guest/host accounting mismatch, but the old boot did not preserve `nr_balloon_pages`; the current boot's value of zero cannot establish the prior value. The host telemetry's `vmmem_wsl` field was null during the prior run, so there is no contemporaneous WSL VM working-set series. The [WSL configuration reference](https://learn.microsoft.com/windows/wsl/wsl-config) describes `autoMemoryReclaim` as cache reclamation; its disabled value does not prove the Hyper-V balloon was inactive. The [Linux Hyper-V balloon driver](https://github.com/torvalds/linux/blob/master/drivers/hv/hv_balloon.c) documents host balloon requests that ask the guest to allocate pages.
+
+**Host separation:** Windows telemetry showed about 17,028 MiB physical memory free and 29,335 MiB commit free at 15:30, and about 18,549 MiB physical memory free at 15:48. The earlier diagnostic PowerShell private-memory spike occurred around 13:42–13:52; host physical free had recovered to about 18,493 MiB by 14:00. Guest availability had already fallen below 2 GiB before that process started, and the continuous guest timeouts began over 100 minutes after host recovery. The PowerShell incident was harmful to host headroom but is not evidenced as the initiating guest allocator or the immediate 15:48 stall.
+
+**Remaining attribution gap:** The retained records do not contain the prior boot's `AnonPages`, `Shmem`, `Slab`, `SUnreclaim`, `Dirty`, `Writeback`, `nr_balloon_pages`, full process RSS/swap totals, or per-cgroup memory usage. The current boot's `nr_balloon_pages=0` cannot establish the previous boot's value. Hyper-V Compute/Worker event queries returned access denied. The exact memory owner and any custom-kernel contribution therefore remain unproven; no stock-kernel comparison was run.
+**Verdict:** 🟡 `PARTIAL` — fallback-swap thrashing explains the observed loss of responsiveness with high confidence, while the source of the progressive guest memory depletion remains unidentified.
+
+## 2026-09-26 18:48 -03 — Hyper-V balloon counter investigation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0072`.
+**Owner role:** `hardware-researcher`.
+**Observed at:** `2026-09-26T21:48:27Z`.
+**Verified at:** `2026-09-26T21:48:27Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Read-only investigation; no stress, tracing activation, kernel change, or release installation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0071 and the freeze incident evidence.
+**Freshness:** The live counters describe only the boot after the user's restart.
+**Category:** `reliability`.
+
+**What:** Checked the Hyper-V balloon driver's live debugfs counters and tracepoint, then searched the saved guest and Windows records for an incident-time balloon measurement.
+
+**Direct driver evidence:** The active custom kernel exposes `/sys/kernel/debug/hv-balloon` as a read-only file. Its `capabilities` include `enabled hot_add`; the driver's own source defines `pages_ballooned` as pages given back to the host. Five one-second reads in the current boot reported `pages_ballooned=0`, `pages_added=0`, `pages_onlined=0`, and `/proc/vmstat nr_balloon_pages=0`, with about 10.0 GiB `MemAvailable`. The `hyperv/balloon_status` tracepoint exists but was disabled, so it contains no retrospective trace. `total_pages_committed` varied around 1.95 million pages; it is the driver's guest commitment estimate, not a measurement of Windows process working set.
+
+**Retrospective limit:** All 11,203 saved pre-rotation guest health samples from 10:40–14:52 reported the same `MemTotal=16,379,360 KiB`; the later file retained that total across the pre-restart interval. A constant `MemTotal` does not exclude ballooned pages because ballooning can reduce available pages while preserving the guest's installed-memory total. Neither health file saved `pages_ballooned` or `nr_balloon_pages`; the prior boot's journal has only driver registration/protocol messages, and no incident-time WSL crash dump was found. The available Windows telemetry also has no incident-time `vmmemWSL` process readings. The disabled `Microsoft-Windows-Kernel-Memory/Analytic` channel and inaccessible Hyper-V Compute/Worker logs provide no historical substitute.
+
+**Conclusion:** Host ballooning is supported as a kernel capability but is neither demonstrated nor ruled out for the freeze. The observed fallback-swap thrashing remains established; attributing the earlier memory decline to ballooning, a user process, or the custom kernel requires contemporaneous category and balloon counters. A future bounded, low-overhead monitor should record the read-only debugfs counter alongside `/proc/meminfo`, `/proc/vmstat`, process totals, and host `vmmemWSL` measurements before any pressure experiment.
+**Verdict:** 🟡 `PARTIAL` — the driver exposes a usable balloon counter, but the incident-time value was not retained.
+
+## 2026-09-26 19:09 -03 — Freeze telemetry capture added to monitor source
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0073`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-26T22:09:25Z`.
+**Verified at:** `2026-09-26T22:09:25Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Uncommitted source change in the working tree; no release build or installation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070 through EVD-0072.
+**Freshness:** Code-level validation only; the installed host collector still uses its previous binary.
+**Category:** `reliability`.
+
+**What:** Extended the read-only `ramshared top` observation so future JSONL samples preserve the memory evidence missing from the freeze: `AnonPages`, `Shmem`, `Slab`, `SUnreclaim`, `Dirty`, and `Writeback`; `/proc/vmstat nr_balloon_pages`; `/sys/kernel/debug/hv-balloon` state and balloon counters when readable; root cgroup `memory.current` and `memory.events` when available; and count plus summed RSS/swap for all processes whose `/proc` status could be read, before the detailed top-ten list is truncated. Missing sources serialize as `null` or an absent optional object, never as a measured zero. Process RSS totals can count shared pages more than once, so they are an ownership clue rather than a physical-memory identity.
+
+**Validation:** `cargo test -p ramshared-cli` passed 335 unit tests and 10 CLI tests. The added end-to-end JSONL observation test passed again after asserting the new fields. `cargo clippy -p ramshared-cli --all-targets -- -D warnings`, `cargo fmt --all -- --check`, `git diff --check`, and `./scripts/docs-check.sh` passed. No stress, tracepoint activation, kernel change, or host installation occurred.
+
+**Remaining limit:** The new collector source is not in the installed release, so it has not produced a deployed incident series. This change cannot reconstruct the missing balloon count from the previous boot or identify the initiating allocation. Close this gap only after a provenance-matched build is installed and a normal, non-pressure JSONL sample is correlated with Windows `vmmemWSL` telemetry; compare the same workload on a stock kernel if the freeze recurs.
+**Verdict:** 🟡 `PARTIAL` — source-level capture is implemented and tested; host deployment and paired live evidence remain open.
+
+## 2026-09-26 19:42 -03 — Read-only memory telemetry sample after restart
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0074`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-26T22:42:37Z`.
+**Verified at:** `2026-09-26T22:55:18Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** One-shot execution of the local debug binary built from the uncommitted working tree; not the installed release.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070 through EVD-0073.
+**Freshness:** Single post-restart sample; applies only to this healthy observation.
+**Category:** `reliability`.
+
+**What:** Ran `target/debug/ramshared monitor --jsonl --once`, immediately paired with a read-only Windows `Get-Process vmmemWSL` sample. RamShared reported `phase=Off`. The guest had `MemTotal=16,379,360 KiB`, `MemAvailable=10,033,788 KiB` (about 9,798 MiB), all `4,194,304 KiB` of fallback swap free, zero memory PSI, and no swap I/O during the sample. The collector read 135 process status records: combined RSS was `4,221,308 KiB` and combined process swap was zero. Guest memory categories included `AnonPages=2,547,960 KiB`, `Shmem=5,156 KiB`, `Slab=591,328 KiB`, `SUnreclaim=121,180 KiB`, `Dirty=960 KiB`, and `Writeback=0 KiB`.
+
+**Balloon and accounting visibility:** `/proc/vmstat` reported `nr_balloon_pages=0`. The unprivileged monitor could not read `/sys/kernel/debug/hv-balloon` (`debugfs_status=permission_denied`), so detailed `pages_ballooned` and driver state were unavailable; the collector now reports that access state explicitly. The cgroup v2 root exposed no `memory.current`; ten immediate subgroups reported a combined `12,159,422,464` bytes, while 162 processes remained directly in the root cgroup. The output labels this `partial`, keeps root `current_bytes` null, and does not present the subgroup sum as total guest memory. Windows `vmmemWSL` working set was `5,043,982,336` bytes (about 4,810 MiB). The process working set is the host resident sample; no private-byte value was used as physical RAM.
+
+**Conclusion:** This healthy sample demonstrates that the unprivileged monitor can record memory categories, guest process totals, the `/proc` balloon page count, and a properly scoped Windows working set. It also exposes the current limits: debugfs details require elevated access, and cgroup accounting is partial. The zero balloon count describes this post-restart sample only and does not resolve the prior freeze. No stress, tracing activation, kernel change, or release installation occurred.
+**Verdict:** 🟡 `PARTIAL` — paired source-built telemetry is captured for a healthy boot; incident-time cause and installed-release parity remain open.
+
+## 2026-09-26 20:09 -03 — Privileged freeze telemetry sample
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0075`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-26T23:09:44Z`.
+**Verified at:** `2026-09-26T23:10:15Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** One-shot root execution of the local debug binary from the uncommitted working tree; paired with Windows process and free-memory telemetry; no release installation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070 through EVD-0074.
+**Freshness:** Describes only the healthy boot after restart.
+**Category:** `reliability`.
+
+**What:** Ran `sudo -n target/debug/ramshared monitor --jsonl --once`. The monitor exited successfully and reported `memory_scope=wsl2`, `phase=Off`, `MemTotal=16,379,360 KiB`, `MemAvailable=9,918,132 KiB`, `SwapFree=4,194,304 KiB`, and zero process swap. Guest categories included `AnonPages=2,541,052 KiB`, `Shmem=5,168 KiB`, `Slab=608,236 KiB`, and `SUnreclaim=122,496 KiB`.
+
+**Balloon and cgroup evidence:** With root access, `/sys/kernel/debug/hv-balloon` was readable. The driver reported `pages_ballooned=0`, `pages_added=0`, `pages_onlined=0`, state `Initialized`, and `/proc/vmstat nr_balloon_pages=0`. The cgroup collector still reported `partial`: root `memory.current` was unavailable, ten subgroups summed to `12,256,874,496` bytes, and 163 processes were directly in the root cgroup. This subgroup sum is not guest total memory. The process collector read 136 process status records with combined RSS `4,215,284 KiB` and zero process swap; shared mappings can be counted more than once.
+
+**Windows pairing:** A read-only sample 31 seconds later reported `vmmemWSL` working set `3,853 MiB`, private bytes `14,884 MiB`, and Windows physical memory free `15,727 MiB`. The private-bytes figure is committed private memory, not physical RAM. These healthy-boot samples do not establish the guest's balloon state or memory owner during the prior freeze.
+
+**Conclusion:** Detailed balloon counters are available to this collector when it runs with sufficient privilege; the earlier `permission_denied` was an unprivileged-read limitation. Current evidence shows no ballooned pages, no swap use, and no pressure. It cannot reconstruct the missing prior-boot state. No stress, tier activation, tracepoint enablement, kernel change, release build, or installation occurred.
+**Verdict:** 🟡 `PARTIAL` — root-level source telemetry and near-time Windows data are captured; prior-boot attribution and installed-release parity remain open.
+
+## 2026-09-26 20:13 -03 — Installed monitor and Guardian publication state
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0076`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-26T23:13:43Z`.
+**Verified at:** `2026-09-26T23:30:48Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Read-only installed-binary and host-state audit; no task start/stop, stress, tier activation, or kernel action.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0071 through EVD-0075 and the host-freeze records.
+**Freshness:** Installed binary sample and Guardian state describe the current post-restart WSL session.
+**Category:** `reliability`.
+
+**What:** Audited the installed monitor and Guardian publication state using read-only commands after the source-built telemetry sample.
+
+**Installed binary:** `/usr/local/bin/ramshared` reports version `0.14.1` and SHA-256 `49f5a770c1aefcb386ca99a7bb89b8913929ca2fc5fba18da28fee60ea41b89`. Its read-only `monitor --jsonl --once` reported `phase=Off`, no active daemon or managed tiers, about `9,717 MiB` guest `MemAvailable`, all `4,096 MiB` of fallback swap free, and zero PSI or swap-in/out during the sample. The top process was `rust-analyzer` at `1,569,028 KiB` RSS; this did not coincide with guest pressure in that sample. The installed schema does not emit `memory_scope`, memory categories, process totals, or balloon counters, so EVD-0073/0075 telemetry is not deployed. The command reported `guardian_state=BLOCKED` and `measurement_errors=["guardian_state_stale"]`; `ok=false` correctly prevents this observation from qualifying as ready.
+
+**Guardian cross-check:** The host health file's last write was `2026-09-26 15:48:03 -03` and its published reason was `boot_identity_unavailable`. The heartbeat file was fresh at `20:16:54 -03`; `ramshared-cascade-health.service` was active and enabled. The exact guest identity command used by the Guardian, `wsl.exe -d Ubuntu-24.04 -u root -- cat /proc/sys/kernel/random/boot_id`, completed successfully in 106 ms during this audit. `schtasks.exe` reported the Guardian task enabled but `Ready` (not running), next run `N/A`, last result `-1073741510`; the installed task XML has only a logon trigger and its action loads `Watch-RamSharedWsl.ps1` directly from the mutable repository checkout. These readings explain why the current status remains fail-closed, but do not establish who or what ended the prior task.
+
+**Conclusion:** The stale Guardian indicator is not evidence that WSL is currently frozen: guest probes work, the heartbeat monitor is active, and guest memory/swap are healthy. The Guardian publisher itself is not running, while the installed CLI still lacks the forensic capture and corrected RAM scope. Do not use this state to admit a stress campaign. Requalification requires immutable deployed inputs, a fresh Guardian health record for this boot, exact binary parity, and a paired Windows/guest sample. The task was not started because its action points into the modified, uncommitted tree. No source was installed and no stress ran.
+**Verdict:** 🟡 `PARTIAL` — current fail-closed state and installed/source parity gap are identified; the cause of the Guardian task's prior exit and the original freeze remain unresolved.
+
+## 2026-09-26 20:55 -03 — Guardian HCS status serialization regression
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0077`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-26T23:55:55Z`.
+**Verified at:** `2026-09-26T23:59:04Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Local uncommitted Guardian/test changes; Windows commands were read-only; source was not installed and the scheduled task was not started or stopped.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0071 and EVD-0076.
+**Freshness:** Serialization result was reproduced against the current `vmcompute` service; Task Scheduler channel state is current at verification.
+**Category:** `reliability`.
+
+**What:** On Windows PowerShell 5.1, `Get-Service -Name vmcompute | Select-Object Name, Status | ConvertTo-Json -Compress` returned `{"Name":"vmcompute","Status":4}`. `ConvertFrom-Json` restored `Status` as `System.Int32`; the original Guardian compared that number with the text `Running` and classified the healthy service as failed. A read-only query using `Status.ToString()` returned `{"Name":"vmcompute","Status":"Running"}`. The Guardian now normalizes this query and its status predicate also accepts legacy numeric JSON while rejecting stopped, missing, boolean, and fractional values.
+
+**Effect and incident boundary:** The Guardian combined `wsl.exe --status` and HCS with an AND condition. A false HCS failure could therefore supply false host corroboration if the WSL status probe failed at the same time as both guest probes. In the recorded freeze, however, `wsl.exe --status` continued to succeed, so this serialization bug did not make the host probe fail and does not explain the WSL memory pressure or restart.
+
+**Verification:** The manufactured Guardian suite passed, including numeric/string status and fail-closed cases; `Test-RamSharedWslWatchdogStatic.ps1` exited 0. The Windows Task Scheduler Operational log is disabled (`IsEnabled=false`, no records), so no event history was available to identify who ended the task. `Get-ScheduledTaskInfo` still reports result `0xC000013A` (`3221225786`); this status does not identify the actor. The installed Guardian task still points into the modified checkout, so the fix is not deployed.
+
+**Conclusion:** The HCS serialization fault is reproduced and corrected in source, with direct regression coverage. It is a real Guardian corroboration bug, but it is not evidence for the original WSL freeze cause. Immutable deployment, task-exit attribution, and incident-time memory ownership remain unresolved. No Guardian action, stress, tier activation, kernel change, build, or installation occurred.
+**Verdict:** 🟡 `PARTIAL` — source regression is fixed and tested; runtime deployment and the prior incident's cause remain unproven.
+
+## 2026-09-26 21:11 -03 — Guardian refusal and task-exit audit
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0078`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-27T00:11:50Z`.
+**Verified at:** `2026-09-27T00:17:15Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Read-only artifact, task metadata, source-flow, and elevated Windows audit inspection; no task, distro, service, or kernel mutation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070, EVD-0071, EVD-0076, and EVD-0077.
+**Freshness:** Historical task/event data from the recorded 2026-09-26 run, paired with current audit-policy configuration.
+**Category:** `reliability`.
+
+**What:** The matching Guardian artifact set contains 222 event records. `Get-ScheduledTaskInfo` reports the task's `LastRunTime` as `2026-09-26T10:12:33-03:00`, matching the artifact start one second later. Its last event is `2026-09-26T19:15:42Z` (`16:15:42 -03`): both distinct guest probes timed out, while `wsl.exe --status` exited 0 and the HCS service query completed. The event reports `host.failed=false`, `wsl_failed=false`, `hcs_failed=true` (the numeric-serialization defect from EVD-0077), and decision `REFUSE` for `dual_wsl_hcs_corroboration_required`.
+
+**Exit audit:** `Invoke-GuardianWatch` handles every non-`TERMINATE` decision by recording the refusal, sleeping, and continuing its `while ($true)` loop. The refusal itself has no normal exit path. Task Scheduler reports result code `0xC000013A` (`3221225786`), but `LastRunTime` records the start, not the exit time. The Task Scheduler Operational channel is disabled. An elevated query of the Security log around the last event (16:00–16:45 -03) found no 4688/4689 process events; the Security log is enabled, but the current Process Termination audit policy says `No Auditing`. The actor and exact exit time therefore remain unknown. External interruption or an unrecorded process failure is an inference, not an established cause.
+
+**Incident boundary:** The recorded event confirms that WSL management and HCS still answered while commands inside the distro timed out. Along with EVD-0070's depleted guest memory, heavy fallback-swap reads, and elevated PSI, this supports a guest-side stall during memory thrashing; it does not identify the initiating process, prove a kernel crash, or attribute the freeze to the custom kernel. The HCS enum bug did not alter the recorded refusal because `wsl.exe --status` succeeded and `host.failed` remained false.
+
+**Conclusion:** The Guardian observed the stalled guest and repeatedly refused termination under its current dual host-failure gate, then stopped without an attributable exit record. The refusal matches the repository's current fail-closed policy; changing that termination gate would require a SPEC revision and isolated live qualification. This narrows the observed failure boundary to guest responsiveness while the Windows WSL/HCS control plane answered; it does not close the original freeze root cause. No policy change or recovery action was made.
+**Verdict:** 🟡 `PARTIAL` — refusal and task history are reconstructed; process-exit ownership and incident-time memory owner remain unknown.
+
+## 2026-09-26 21:36 -03 — Guest memory admission before shared pressure mutation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0079`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-27T00:36:44Z`.
+**Verified at:** `2026-09-27T00:45:58Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Uncommitted source and regression-test changes in an already modified working tree; not built or installed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0069, EVD-0070, and EVD-0078.
+**Freshness:** Source-level checks only; the live campaign was not started.
+**Category:** `reliability`.
+
+**What:** The shared WSL pressure campaign already checked Windows commit and physical-memory headroom, but could issue `ramshared down/up` before checking the selected guest's current memory and swap reserves. It now runs the existing guest admission helper against `/proc/meminfo` before registering cleanup or making any RamShared change. The fixed minimums are 1024 MiB each for `MemAvailable` and `SwapFree`; failure writes structured admission output and exits before activation or the pressure probe. The allocator and freeze probe remain guest-side. A separate optional Windows CUDA VRAM workload remains disabled by default and is not the WSL RAM allocator.
+
+**Verification:** The regression was first run against the old source and failed because the guest admission constants and gate were absent. After the fix, `Test-SharedWslPressureCampaignStatic.ps1`, `Test-RamSharedThreeTierStressStatic.ps1`, `test-ramshared-guest-memory-admission.sh` (all five cases), and `Test-SharedWslPressureCampaignMemoryGate.ps1` passed. `git diff --check`, the validation schema check, and `./scripts/docs-check.sh` passed; the docs record now covers both shared-host pressure paths and the optional CUDA workload. The host-memory test only read current performance counters. No campaign, pressure allocation, tier activation, release build, or installation occurred.
+
+**Remaining limit:** These checks establish ordering and guest-gate behavior at source level. They do not prove that an installed immutable package refuses a live low-memory guest, dynamically measure guest headroom throughout the pressure phase, qualify all three tiers, or explain the earlier WSL freeze. Those live gates remain closed.
+**Verdict:** 🟡 `PARTIAL` — guest entry admission is implemented and tested in source; deployed and live pressure qualification remain open.
+
+## 2026-09-26 23:17 -03 — Fail-closed guest runtime pressure limits
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0080`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-27T02:16:26Z`.
+**Verified at:** `2026-09-27T02:17:45Z`.
+**Source revision:** `290c06c586b149af8056abced5835235f5ad5228`.
+**Source state:** Uncommitted source and regression-test changes in an already modified working tree; no release build or installation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0069, EVD-0070, and EVD-0079.
+**Freshness:** Source-level helper and static checks only; no live cgroup or pressure run.
+**Category:** `reliability`.
+
+**What:** Rust stress telemetry no longer interprets missing or malformed memory PSI as zero pressure. The shared PSI parser rejects missing/duplicate `full` rows, duplicate `avg10`, non-finite values, and values outside 0–100. WSL2 and cascade stress profiles require valid PSI before work and recheck it in the ramp, recovery wait, and hold phase. If `/proc/sys/vm/min_free_kbytes` is absent or invalid, the stress floor assumes zero known reserved pages instead of a fabricated 512 MiB; this preserves the 600 MiB WSL2 `MemAvailable` floor.
+
+The freeze probe now samples guest `MemAvailable`, `SwapFree`, and PSI before creating its worker. It uses a unique cgroup and finite `memory.max` and `memory.swap.max` values bounded by the configured memory cap and guest headroom above 600 MiB and 1 GiB reserves. The limits are recalculated each second using current guest samples and cgroup memory/swap use. Malformed or missing samples, PSI full avg10 >=10%, unavailable cgroup counters, and failed limit writes stop the worker. A FIFO start gate prevents the allocator from running before its process enters the cgroup. Direct invocation refuses without an admission marker; only the gated isolated/shared campaign launch sites set it. The script removes only the cgroup and start gate it created and restores the parent memory controller when it can prove it enabled that controller. The source comment also states that WSL2 guest cgroup limits do not isolate Windows physical RAM.
+
+**Verification:** TDD regressions were observed before implementation: Rust compile-time failures named the missing fail-closed PSI/min-free helpers; the shell helper test failed because dynamic cgroup limit functions did not yet exist; the probe static test failed because no guest runtime guard was integrated. After the changes, `cargo fmt --all -- --check`, `CARGO_BUILD_JOBS=2 cargo test -p ramshared-cli stress::tests::` (34 passed), the supervisor parser test (1 passed), and `CARGO_BUILD_JOBS=2 cargo clippy -p ramshared-cli --all-targets -- -D warnings` passed. `bash -n`, `test-guest-pressure-runtime-guard.sh`, `test-cascade-pressure-probe-static.sh` (including direct invocation refusal and campaign marker ordering), `test-ramshared-guest-memory-admission.sh` (5 cases), `test-wsl2-freeze-campaign-artifact-static.sh`, `Test-Wsl2FreezeCampaignStatic.sh`, and `git diff --check` passed. `actionlint` v1.7.7 passed on the edited CI workflow; the local documentation, validation-schema, and ephemeral-blocklist checks passed, and the workflow now runs the safe shell tests. No live worker, cgroup mutation, pressure allocation, tier activation, campaign, release build, or host installation was run.
+
+**Remaining limit:** Helper fixtures and static ordering checks do not exercise a real kernel cgroup controller, process cleanup, or host/guest pressure interaction. This source is not installed, and the host's current admission state was not sampled in this turn. The separate Windows supervisor is still required for a shared-host campaign because WSL guest allocations consume host physical RAM. Do not claim live qualification or completion of the earlier freeze investigation from these source tests.
+**Verdict:** 🟡 `PARTIAL` — the missing runtime guard paths are implemented and tested at source level; installed-binary parity and supervised live qualification remain open.
+
+## 2026-09-27 00:17 -03 — Separate unmanaged process footprint from memory pressure
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0081`.
+**Owner role:** `reliability / hang auditor`.
+**Observed at:** `2026-09-26T23:48:50-03:00`.
+**Verified at:** `2026-09-27T00:17:05-03:00`.
+**Source revision:** `97e60e76a282ced1b5a5c057f2b400f5d24d79c6`.
+**Source state:** The classification fix is committed; the wider worktree remains dirty and the fix has not been rebuilt or installed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0070, EVD-0073, EVD-0078, and EVD-0080.
+**Freshness:** Read-only live telemetry plus unit regression tests; no pressure or tier activation.
+**Category:** `reliability`.
+
+**What:** The monitor's legacy `unmanaged_pressure_state` value was set to
+`UNMANAGED_PRESSURE` whenever a process outside the managed hierarchy had at
+least 512 MiB of RSS plus swap. The sample had a `rust-analyzer` process with
+`1,726,428 KiB` RSS and zero swap, while guest `MemAvailable` was `8,655,124
+KiB`, `SwapFree` was `4,190,212 KiB`, and memory PSI some/full avg10 were both
+`0.00%`. The process used guest memory, but this sample did not show active
+memory pressure. Source now reports `UNMANAGED_MEMORY`, keeps the schema-v4 JSON
+keys for compatibility, and uses PSI plus `MemAvailable` as the pressure
+signals. This does not attribute the earlier WSL freeze to that process.
+
+**Verification:** The new named monitor tests first failed at compile time
+because `classify_unmanaged_memory_usage` did not exist. After the fix,
+`CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli pressure_classification_tests
+-- --nocapture` passed all 3 cases: large external footprint, managed process,
+and below-threshold external footprint. The changed code does not alter stress
+admission or allocate memory.
+
+**Deployment boundary:** The active monitor log and the old interactive
+dashboard still come from pre-fix binaries. No new build or installation
+occurred, and neither running process was restarted. The campaign remains
+closed because the paired Windows sample had `14,739 MiB` physical headroom
+against the full campaign's `20,480 MiB` requirement, and the RamShared
+guardian reported `BLOCKED`.
+
+**Verdict:** 🟡 `PARTIAL` — source classification and unit cases are corrected;
+deployment and the WSL freeze ownership investigation remain open.
+
+## 2026-09-27 05:07 -03 — IPC bounds and cross-target source gates
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0082`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T08:07:39Z`.
+**Verified at:** `2026-09-27T08:07:39Z`.
+**Source revision:** `af7aa108a39a7c09db9667cacf8c383c75bdd321`.
+**Source state:** Source/test changes are committed through `af7aa108`; this evidence record is in the pending documentation commit. No release build, host install, or stress run.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0079 through EVD-0081 and the GPU worker SPEC evidence.
+**Freshness:** Linux and Windows-target source checks from the current worktree on 2026-09-27.
+**Category:** `reliability`.
+
+**What:** Parent GPU-cache reads, handshakes, and heartbeats use one absolute
+monotonic deadline across partial I/O. Cache `Update` and `Promote` requests use
+one nonblocking frame write with a 64 KiB mutation payload cap; oversized,
+partial, or backpressured writes revoke the cache and shut down the socket.
+Oversized cache reads are misses, and the worker rejects payloads above 16 MiB.
+The origin remains authoritative. Cross-target compilation also found that the
+Unix-stream worker modules in `ramshared-block` were exported on Windows; these
+modules are now Unix-only. Windows-target Clippy additionally exposed an
+unused service-probe import and a test module placed before later items; both
+were corrected. The native-vsock test matrix pointed VHDX lease tests at the
+wrong source file, so it now names `control_plane.rs`.
+
+**Verification:** `CARGO_BUILD_JOBS=2 cargo test --workspace -- --quiet` passed
+with zero failures; hardware/root-only tests were ignored. Workspace Clippy
+with `-D warnings`, formatting, and `./scripts/docs-check.sh` passed. Windows
+target checks passed for `ramshared-ipc` and `ramshared-winsvc` with
+`--all-targets`; Windows-target Clippy also passed with `-D warnings`. Slice
+coverage passed at 93.4% for `gpu_cache_worker.rs`, 84.2% for
+`ipc_cache_client.rs`, 93.2% for `gpu_budget.rs`, 94.8% for
+`ramshared-vram/src/lib.rs`, 96.0% for `isolated_origin.rs`, 90.0% for
+`ramshared-ipc/src/lib.rs`, 85.7% for `vsock.rs`, 95.0% for `host_gate.rs`,
+and 87.0% for `ramshared-winsvc/src/control_plane.rs`. The three guest-pressure
+shell fixtures and Bash syntax checks passed. No source was installed; no GPU
+allocation, live WSL campaign, memory pressure, or host mutation occurred.
+
+**Remaining limit:** This environment has no PowerShell runtime, so the changed
+`.ps1` tests were not executed here. The Windows static workflow now includes
+the three-tier static test, but that workflow has not run for these local
+commits. Cross-target Clippy is not a Windows runtime test; the live AF_HYPERV
+listener, Windows orchestration, WSL GPU worker, physical adapter behavior,
+and three-tier host stress remain unqualified. CoCo, GPADL/UIO, and
+maintainers' upstream review also remain external gates.
+
+**Verdict:** 🟡 `PARTIAL` — source and hosted-runner checks pass; live Windows,
+GPU/WSL, CoCo, and upstream qualification remain open.

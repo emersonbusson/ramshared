@@ -1,5 +1,31 @@
 # AUDIT-2.5 — cuda-rust-native-tiering
 
+## Findings
+
+| Sev | SPEC § | Issue | Required fix |
+| :--- | :--- | :--- | :--- |
+| High | Codec operation lifecycle; Atomicity and rollback | The design now refuses bad compressed checksums before decode and keeps uncertain buffers owned, but source review does not prove that the current supervisor can confirm worker exit and prevent overlapping GPU workers after a stalled driver call. | Before any hardware enablement, inject a delayed/in-flight operation and prove client fallback, worker revocation, confirmed process exit, no buffer reuse, and no replacement worker racing the old operation. Keep compression default-off until then. |
+| Medium | DT-2; Required tests | The local RTX 2060's sm75 meets nvCOMP's documented architecture floor, but the exact WSL nvCOMP package, CUDA driver/runtime, exported C symbols, and end-to-end codec path are not qualified. All named tests in SPEC are planned, not present or run. | Implement only behind the test-only opt-in. Run the exact-adapter LZ4 and checksum refusal drill before enabling the backend; missing or unqualified capability must remain raw-only. |
+| Medium | DT-2; DT-10; PRD NFR-6 | VRAM headroom does not report GPU compute contention, and the current provider contract has no vendor-neutral busy/idle signal. Compression can compete with foreground GPU work even when memory admission passes; the proposed 5% p95 threshold is not empirical yet. | Keep the feature explicitly opt-in. Run paired foreground co-load qualification with zero missed deadlines and at most 5% p95 regression; if runtime suppression is later required, design a provider-specific signal and fail closed when it is unavailable. |
+| Medium | DT-4; DT-5; PRD NFR-2 | The 4 MiB host staging, dynamic GPU temporary ceiling, 2 MiB slabs, metadata cap, and 16 MiB cache-read ceiling are explicit engineering bounds, not measurements from this workload. | Preserve them as hard ceilings for the first prototype; measure peak worker RSS, device workspace, fragmentation, and latency before changing a ceiling or considering enablement. |
+| Medium | Existing IMPL.md; SPEC §1 | The existing tracking document still describes swap-page compression and async backend work, which this cache-only SPEC explicitly rejects. It is historical planning, not an implementation record for this SPEC. | Rewrite the tracking document to mark the old items superseded and derive any Step 3 checklist from this SPEC before implementation begins. |
+
+## Open questions
+
+- Which exact nvCOMP release and dynamically loaded LZ4/CRC32 C API will be used with the WSL CUDA driver on sm75?
+- Can the existing isolated-worker supervisor confirm old-process exit and prevent a replacement worker from racing unresolved GPU work?
+- On the declared synthetic workload mix, do end-to-end reads meet the existing 50 ms cache deadline and exceed the 10% net-capacity usefulness gate after all slab and workspace costs?
+- Is there a reliable provider-specific compute-busy signal that should defer codec work on a shared interactive GPU, or is test-only opt-in plus the co-load qualification gate sufficient?
+- Are the proposed host staging, device workspace, metadata, and slab ceilings appropriate after observing peak RSS and VRAM on the exact adapter?
+
+## Verdict
+
+**go** for an isolated, opt-in Step 3 prototype only, after the stale IMPL tracking record is reconciled. Production enablement, host activation, a 2:1 claim, or universal GPU support remain no-go until every hardware, lifecycle, integrity, performance, and live-worker gate above passes. No implementation or runtime qualification was performed for this audit.
+
+## Historical audit record (2026-09-21)
+
+The following CUDA/cutile findings are preserved as historical research. They are not current requirements for this cache-compression SPEC unless repeated in the findings above.
+
 ## Audit scope and evidence
 
 This is the September 2026 re-audit of [PRD.md](PRD.md) and [SPEC.md](SPEC.md)

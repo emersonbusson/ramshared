@@ -45,6 +45,7 @@ This PRD establishes a two-layer defense against physical fragmentation:
 - **`RF-3`**: **Elevated WSL2 Headroom Floor**. On WSL2, `WSL2_MIN_PHYSICAL_HEADROOM_MB` must be raised from 600 MB to 1024 MB, ensuring sufficient physical page cushions for kernel compaction threads.
 - **`RF-4`**: **Proactive Memory Compaction Trigger**. When order-7 chunks drop below 16 during multi-tier testing, the governor must issue a non-blocking compact trigger to `/proc/sys/vm/compact_memory` before continuing.
 - **`RF-5`**: **Upstream Kernel Ring Buffer Fallback Patch**. Formulate patch `0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch` for `microsoft/WSL2-Linux-Kernel` adding `vzalloc` fallback to `drivers/hv/ring_buffer.c`.
+- **`RF-6`**: **GPU-independent Tier 3 stress**. `ramshared stress --tier3-only --tier3-target-pct 99` must exercise a configured storage-backed swap tier without requiring CUDA, Vulkan, a physical-cache worker, or a vendor GPU telemetry tool. It must preserve the PSI, memory-headroom, signal, and kernel-fault interlocks and report the result as Tier 3-only rather than full-cascade qualification.
 
 ## 5. Non-Functional Requirements (NFR-N)
 
@@ -64,6 +65,12 @@ This PRD establishes a two-layer defense against physical fragmentation:
 6. Governor triggers `[🛡️ VMBUS BUDDY INTERLOCK]` and halts allocation at safe peak.
 7. Hyper-V VMBus incoming connection finds $\ge 7$ order-7 blocks remaining and succeeds immediately.
 8. Stress holds for 5 seconds and reclaims cleanly with zero host hang.
+
+### Storage-only Tier 3 qualification
+1. Operator invokes `ramshared stress --tier3-only --tier3-target-pct 99` with a storage-backed swap device already enabled.
+2. Preflight confirms a nonzero Tier 3 capacity and readable swap/memory/kernel telemetry; it does not require a GPU or RamShared cache worker.
+3. The same bounded allocation ramp stops at 99% Tier 3 use, or earlier on any existing safety interlock.
+4. The report identifies `tier3_only=true`; it does not claim simultaneous ZRAM/VRAM/SSD saturation.
 
 ## 7. Data / State Model
 
@@ -118,6 +125,7 @@ impl BuddyinfoSnapshot {
 
 - `AC-1`: Governor correctly parses `/proc/buddyinfo` and detects order 7 through 10 counts.
 - `AC-2`: Governor refuses further memory allocation when order-7 count $< 8$.
+- `AC-6`: The storage-only mode reaches or safely refuses a requested Tier 3 target without GPU tools or cache telemetry, and the full profile derives its physical cache target from current cache telemetry instead of assuming 4096 MiB.
 - `AC-3`: `WSL2_MIN_PHYSICAL_HEADROOM_MB` enforced at $\ge 1024\text{ MB}$.
 - `AC-4`: Upstream patch `0002-hv-vmbus-...` formatted and documented.
 - `AC-5`: 100% test pass on `ramshared-cli`, slice coverage $\ge 80\%$, and docs-check exit 0.

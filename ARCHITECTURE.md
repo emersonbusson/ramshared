@@ -7,7 +7,7 @@ RamShared models **idle GPU memory** as a clean, revocable cache for an SSD-auth
 RamShared enforces deterministic fail-closed execution boundaries and strict identity bindings:
 - **Write-Through Invariant:** Every acknowledged write is persisted to the authoritative SSD origin before cache mutation. VRAM eviction or reclamation affects performance, not data integrity.
 - **Ordered Teardown:** Swapoff-first ordering guarantees that devices are never detached while active in the kernel swap table.
-- **Surface-Specific Headroom Protection:** Broker/NBD capacity reserves `max(1536 MiB, 20% of total VRAM)` and also retains a separate `768 MiB` runtime free buffer when live telemetry is available. The origin cache reserves `max(2 GiB, 20%)`; StorPort reserves `max(configured reserve, 512 MiB, 10%)`.
+- **Surface-Specific Headroom Protection:** Broker/NBD preserves `max(1536 MiB, 20% of budget capacity)` from current free headroom, plus its `768 MiB` runtime buffer and canary. The isolated origin cache preserves `max(configured reserve, 20% of budget capacity)` from live headroom plus its `640 MiB` runtime buffer; StorPort retains its independent `max(configured reserve, 512 MiB, 10%)` rule.
 - **Legacy Preallocation Sunset:** The legacy full-VRAM NBD source composition and `RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source and are no longer available or supported.
 
 | Track | Status | Deployment Architecture |
@@ -52,19 +52,25 @@ On WSL2, Windows WDDM/VidMm remains the memory authority. Standard WSL2 uses
 NBD as its baseline transport. `ublk`/`io_uring` is qualified on native Linux
 or WSL2 with a compatible custom kernel; it is not assumed on stock WSL2.
 
-The broker/NBD physical target is bounded by the logical request, measured
-capacity, `max(1536 MiB, 20% of total VRAM)` capacity reserve, and a separate
-`768 MiB` runtime free buffer. The origin cache instead applies
-`max(2 GiB, 20%)`, while StorPort applies
+The broker/NBD physical target preserves `max(1536 MiB, 20% of budget
+capacity)` from both total capacity and current available headroom, then keeps
+the separate `768 MiB` runtime buffer and canary available. Its direct broker
+path refreshes the driver budget before each allocation and intersects the
+matching WDDM budget when the selected adapter exposes an LUID. The isolated
+origin cache applies its configured reserve (default `max(1536 MiB, 20%)`)
+against current headroom and keeps a `640 MiB` runtime buffer. StorPort applies
 `max(configured reserve, 512 MiB, 10%)`. A capacity reserve limits admitted
-cache; a runtime buffer protects new allocations as external use changes.
+cache; the live-headroom check includes existing use so later allocations
+cannot spend the display reserve.
 
 ### Control-Plane Containment
 
 RamShared manages workloads within a dedicated `ramshared-workloads.slice` budget.
-Unmanaged memory allocations outside this hierarchy are monitored and flagged as `UNMANAGED_PRESSURE`
-to protect system responsiveness. Control units occupy `ramshared-control.slice` with protected
-memory and elevated CPU/I/O weights.
+An unmanaged process with at least 512 MiB of RSS plus swap is reported as
+`UNMANAGED_MEMORY`. This records its footprint and ownership boundary; it does
+not claim that the system is under memory pressure. The monitor reports current
+pressure separately through PSI and `MemAvailable`. Control units occupy
+`ramshared-control.slice` with protected memory and elevated CPU/I/O weights.
 
 The supervisor's policy closes admission in `GUARDED`,
 shrinks cache and manages discardable scopes in `CRITICAL`,

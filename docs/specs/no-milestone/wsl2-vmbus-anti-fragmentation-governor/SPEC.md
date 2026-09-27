@@ -10,6 +10,7 @@
   - Update `WSL2_MIN_PHYSICAL_HEADROOM_MB` from 600 MB to 1024 MB.
   - Standalone kernel patch `docs/upstream/patches/0002-hv-vmbus-dedicated-ring-pool-and-virtual-fallback.patch` for `microsoft/WSL2-Linux-Kernel`.
   - Unit tests covering buddyinfo parsing, refusal on depleted chunks, and elevated headroom.
+  - Explicit `--tier3-only` mode for GPU-independent storage-tier saturation and a dynamic physical-cache target for full-profile stress.
 - **Out Now**:
   - Recompiling or replacing the active Windows kernel driver on the host during this step.
   - Modifying closed-source Windows hypervisor binaries.
@@ -26,6 +27,7 @@
 | `RF-3` | `ITEM-2` |
 | `RF-4` | `ITEM-2` |
 | `RF-5` | `ITEM-4` |
+| `RF-6` | `ITEM-5`, `ITEM-6` |
 | `NFR-1..4` | `ITEM-1`, `ITEM-2`, `ITEM-3`, `ITEM-4` |
 
 ## 3. Technical Decisions
@@ -36,6 +38,8 @@
 | `DT-2` | **Interlock trip point set to $< 8$ chunks** | 8 chunks equals 4 MiB of contiguous reserve. This leaves sufficient margin for incoming VMBus sockets (`hvs_probe`) without prematurely halting normal test ramps. |
 | `DT-3` | **Raise `WSL2_MIN_PHYSICAL_HEADROOM_MB` to 1024 MB** | Previous 600 MB headroom only gave 88 MB margin above `min_free_kbytes` (512 MB). 1024 MB gives 512 MB of extra working headroom for kswapd memory compaction. |
 | `DT-4` | **Kernel patch: virtual fallback (`vzalloc`) in `vmbus_alloc_ring`** | Virtual memory allocation does not require contiguous physical pages; if `alloc_pages(..., 7)` fails, `vzalloc` succeeds even under 100% physical fragmentation. |
+| `DT-5` | **Tier 3-only is a separate stress mode** | A storage-backed swap target can be exercised without an active GPU cache; cache and vendor GPU telemetry are required only for full-cascade physical-cache qualification. |
+| `DT-6` | **Full-profile physical target comes from current cache telemetry** | Different GPUs and host budgets expose different safe cache targets; 4096 MiB is not a universal target. An explicit requested target must fit the active worker's current target. |
 
 ## 4. Atomicity and Rollback
 
@@ -52,6 +56,8 @@
 | Buddy parsing | #13 | Does parser reject empty/corrupted buddyinfo lines safely? | `cargo test -p ramshared-cli parse_buddyinfo` | Any panic on malformed lines. |
 | Interlock trigger | #16 | Does governor halt immediately when order-7 is exhausted? | `cargo test -p ramshared-cli order_7_interlock` | Continuation of allocation when chunks $< 8$. |
 | Headroom | #17 | Is total physical headroom guaranteed $\ge 1024\text{ MB}$? | `cargo test -p ramshared-cli wsl2_hard_floor` | Headroom $< 1024\text{ MB}$. |
+| Tier 3-only | #9/#16 | Can Tier 3-only reach or safely stop before its requested target with no GPU/cache dependency? | `cargo test -p ramshared-cli tier3_only` | GPU/cache probe occurs, missing Tier 3 is accepted, or memory/PSI/kernel interlock is bypassed. |
+| Dynamic cache target | #13 | Does full-profile stress use the active worker target and reject values above it? | `cargo test -p ramshared-cli full_profile_uses_active_cache_target` | A fixed vendor-specific cache size is reported or admitted. |
 
 ## 6. Security Checklist (Pre-Impl)
 
@@ -97,6 +103,9 @@
 | `crates/ramshared-cli/src/stress.rs` | `tests::test_buddyinfo_order_7_parsing` | unit | #13 | $\ge 80\%$ |
 | `crates/ramshared-cli/src/stress.rs` | `tests::test_buddyinfo_order_7_interlock_threshold` | unit | #16 | $\ge 80\%$ |
 | `crates/ramshared-cli/src/stress.rs` | `tests::test_wsl2_headroom_floor_enforces_1024_mb` | unit | #17 | $\ge 80\%$ |
+| `crates/ramshared-cli/src/stress.rs` | `tests::tier3_only_requires_storage_swap_but_not_gpu_cache` | unit | #16 | $\ge 80\%$ |
+| `crates/ramshared-cli/src/stress.rs` | `tests::tier3_only_target_ignores_gpu_and_higher_tier_fill` | unit | #9/#16 | $\ge 80\%$ |
+| `crates/ramshared-cli/src/stress.rs` | `tests::full_profile_uses_active_cache_target_not_fixed_size` | unit | #13 | $\ge 80\%$ |
 
 ## 10. Validation Checklist
 

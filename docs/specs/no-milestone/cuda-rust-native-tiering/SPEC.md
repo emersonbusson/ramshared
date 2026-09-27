@@ -1,125 +1,345 @@
-# SPEC - Native CUDA-Rust Acceleration, In-GPU Page Compression, and Async Cancellation
+# SPEC — Lossless compression for the revocable VRAM cache
 
-## 1. Closed Scope
+> SSDV3 Step 2 · PRD: docs/specs/no-milestone/cuda-rust-native-tiering/PRD.md
 
-### In Scope for Investigation (Not Implemented)
-- Evaluate the declared-but-unused optional `cuda-core` and `cuda-async` dependencies against the working Driver API wrapper.
-- Design bounded asynchronous work with explicit GPU completion and buffer lifetime, without assuming that dropping a Future cancels driver work.
-- Prototype `cuda-oxide` on `sm_75` and `cutile-rs` Tile kernels only on `sm_80+` hardware with a compatible toolkit.
-- Qualify optional page compression with end-to-end latency, integrity, incompressible fallback, and recovery evidence.
+## Closed scope
 
-### Out Now
-- Kernel-space LKM changes (userspace daemon and GPU runtime scope).
-- Modification of Windows display driver internals.
+### In now
 
-### Available Baseline and Missing Gates
-- `crates/ramshared-cuda` and `crates/ramshared-vram` provide the existing uncompressed CUDA path.
-- `cuda-core` and `cuda-async` are optional manifest entries, not wired into runtime code; `cutile` and `cuda-oxide` are not RamShared dependencies.
-- The local RTX 2060 is `sm_75`, so it cannot execute `cutile` Tile kernels; no `nvcc` is installed locally. Tile validation requires a separate `sm_80+` host and supported CUDA toolkit.
+- Optional, lossless compression of cache entries inside the existing isolated GPU worker.
+- A provider-specific codec capability; first implementation candidate is NVIDIA nvCOMP LZ4.
+- Bounded VRAM slabs and variable-size extents, raw fallback, metadata bounds, integrity checks, and separate logical/physical telemetry.
+- Preservation of the SSD-authoritative origin, current write-before-cache ordering, current GPU reserve policy, existing worker isolation, IPC frame bounds, and cache-read deadline.
+- Compression is disabled by default. The first implementation is experimental and can only be enabled by test configuration.
 
----
+### Out now
 
-## 2. Traceability
+- Any compressed representation in the SSD origin, swap format, kernel block interface, persistent storage, Windows pagefile, or public ABI.
+- CPU codec fallback, lossy encoding, a custom codec kernel, cuTile-rs, cuda-oxide, and universal GPU codec claims.
+- Any alteration to the current worker deadline, headroom formulas, worker teardown policy, or host stress/install procedure.
 
-| PRD Requirement | Implementation / Decision Item | Covered By Test / Evidence |
-| :--- | :--- | :--- |
-| **RF-1** (`cuda-core` Context) | `ITEM-1`, `DT-1` | `test_cuda_core_context_lifecycle` |
-| **RF-2** (Async Cancellation) | `ITEM-2`, `DT-2` | `test_async_dma_cancellation_token` |
-| **RF-3** (In-GPU Compression) | `ITEM-3`, `DT-3` | `test_in_gpu_page_compression_roundtrip` |
-| **RF-4** (Architecture Detection) | `ITEM-4`, `DT-4` | `test_gpu_compute_capability_dispatch` |
-| **NFR-1** (Capacity) | `ITEM-3` | Physical/logical byte accounting by named workload |
-| **NFR-2** (Latency) | `ITEM-3` | End-to-end p50/p95/p99 against uncompressed baseline |
-| **NFR-3** (Host Safety) | `ITEM-2` | Pressure, timeout, completion, and swapoff-first recovery evidence |
+### Assumed-ready dependencies
 
----
+- AuthoritativeOriginBackend and BoundedCacheClient in crates/ramshared-block/src/isolated_origin.rs.
+- GpuCacheWorker, its existing adapter-bound allocation checks, and its isolated socket loop in crates/ramshared-block/src/gpu_cache_worker.rs.
+- VramProvider, VramMemory, and adapter-bound budget snapshots in crates/ramshared-vram/src/lib.rs.
+- CUDA and Vulkan provider selection in crates/ramshared-wsl2d/src/main.rs.
+- NVIDIA nvCOMP LZ4 runtime availability is not assumed; missing runtime means raw-only.
 
-## 3. Technical Decisions
+## Traceability
+
+| PRD | SPEC |
+| --- | --- |
+| RF-1 origin remains authoritative | ITEM-1, ITEM-2, DT-1, DT-6 |
+| RF-2 bounded lossless entry | ITEM-1, ITEM-2, DT-4, DT-7 |
+| RF-3 physical-size admission and raw bypass | ITEM-2, ITEM-3, DT-4, DT-5 |
+| RF-4 invalidation on overlapping writes | ITEM-2, DT-6 |
+| RF-5 verify before returning bytes | ITEM-1, ITEM-2, DT-7 |
+| RF-6 bounded scratch/slabs/metadata | ITEM-2, ITEM-3, DT-4, DT-5 |
+| RF-7 optional provider capability | ITEM-1, ITEM-3, DT-2 |
+| RF-8 separated telemetry | ITEM-4, DT-8 |
+| RF-9 default off and no public ABI | ITEM-2, ITEM-4, DT-9 |
+| NFR-1 exactness | ITEM-1, ITEM-2 |
+| NFR-2 host/device resource ceilings | ITEM-2, ITEM-3, DT-4, DT-5 |
+| NFR-3 bounded operations | ITEM-2, DT-4 |
+| NFR-4 existing read deadline | ITEM-3, DT-3 |
+| NFR-5 measured capacity gate | ITEM-5, DT-10 |
+| NFR-6 comparable measurements | ITEM-5 |
+| NFR-7 synthetic-only data | ITEM-1, ITEM-5 |
+
+## Technical decisions
 
 | # | Decision | Why |
-| :--- | :--- | :--- |
-| **DT-1** | **Compare backends before migration**: Prototype `cuda-core`/`cuda-async` behind an opt-in feature while preserving the existing Driver API path. | Manifest presence is not implementation; safe wrappers still require validated context, stream, and buffer lifetimes. |
-| **DT-2** | **Separate cancellation from completion**: A token may stop new work or report timeout; in-flight DMA retains its buffers until CUDA completion is observed. | Dropping a Future cannot guarantee abort of a foreign driver call or prevent a host stall. |
-| **DT-3** | **Hardware-gated kernel experiments**: Test `cuda-oxide` artifacts on `sm_75`; test `cutile-rs` Tile IR on `sm_80+` with a supported toolkit. | The local RTX 2060 cannot validate Tile execution. Neither compiler is integrated into RamShared today. |
-| **DT-4** | **Crash-consistent representation**: Model raw/compressed slot metadata, checksums, allocation bounds, and recovery before changing block mappings. | Variable-sized chunks add fragmentation and durability risks; no compression ratio is assumed. |
+| --- | --- | --- |
+| DT-1 | Compression is a cache representation, never an origin or swap representation. A successful origin write precedes cache mutation; every cache miss or fault uses the origin. | Keeps compression outside the durable data contract and preserves existing recovery semantics. |
+| DT-2 | Add an optional GpuCacheCodec capability tied to the selected provider. The first implementation is dynamically loaded nvCOMP LZ4 for NVIDIA CUDA; unsupported or unqualified providers use the existing raw cache. | Reuses a production lossless codec, allows backend-specific implementations, and avoids a CPU fallback. |
+| DT-3 | Preserve the existing cache read deadline, 50 ms by default. Do not retry or extend a possibly in-flight GPU operation after timeout. | The cache is optional and must not hold the origin path behind an unbounded GPU/driver operation. |
+| DT-4 | Split incoming cache mutations into exact logical extents no larger than 64 KiB. Keep at most one batch in flight, with at most 4 MiB logical input and at most 4 MiB of additional host codec staging. Cap all GPU codec temporary allocations at min(64 MiB, floor(fresh_admissible_headroom / 100)), where fresh_admissible_headroom = available_bytes.saturating_sub(reserve_floor_bytes) from the latest adapter-bound snapshot; include workspace, decoded output, pointer/status arrays, and temporary codec buffers. Query required workspace per batch and reduce a batch or refuse compression if it does not fit. A cache read over 16 MiB returns a miss before allocating its response buffer; an allowed private response is capped at 16 MiB separately from codec staging. | Bounds transient GPU and host use while allowing batch parallelism. These are engineering ceilings, not performance claims; the origin may serve a larger request. |
+| DT-5 | Use dynamically allocated 2 MiB backing slabs with a coalescing free-range allocator. Allocate no slab or metadata at startup when the physical target is zero. Otherwise cap host metadata at min(16 MiB, max(64 KiB, physical_target_bytes / 256)); include index and allocator overhead in the cap. Do not compact live extents in the first slice. | Shares compressed outputs without one device allocation per small item, preserves on-demand allocation, and bounds WSL metadata cost. Fragmentation may refuse cache admission. |
+| DT-6 | Cache records are non-overlapping logical extents. On update, invalidate every overlapping record before publishing updated bytes. On read, require complete contiguous coverage; assemble and verify the entire response privately before sending it. | Makes partial updates and range reads safe without in-place compressed mutation or exposing mixed/stale bytes. |
+| DT-7 | Every compressed entry records logical length, stored length, allocator-rounded allocation length, codec/format id, generation, CRC32 of the original bytes, and CRC32 of the stored compressed payload. Compute the original checksum over the already-present host input. Before decode, compute the stored-payload checksum on the provider while bytes remain in VRAM; a mismatch must refuse the entry without invoking the decoder. Then require per-item decoder status, exact output length, and a matching checksum over the host output before returning bytes. CRC32 detects accidental corruption, not malicious modification. | Prevents known-corrupt bytes from reaching nvCOMP, whose C API documents limited validation for malformed compressed input, and prevents silent wrong output from reaching a reader. The stream is worker-generated; no external compressed stream is accepted. |
+| DT-8 | Keep existing cached_bytes and target_bytes as physical accounting. Add a versioned telemetry envelope for logical bytes, slab bytes, workspace, payloads, metadata, bypasses, integrity failures, and timeouts. | Prevents logical cache capacity from being mistaken for WSL or host RAM and avoids overloading the GPU budget contract. |
+| DT-9 | Add an internal compression_enabled field to GpuWorkerConfig with default false. When disabled or when codec capability is absent, use the existing raw worker path. When enabled and supported, raw-bypass entries use the bounded slab allocator. Keep the raw path permanently as the unsupported-provider and rollback path; no public command or ABI is added. | Preserves Day-0 behavior and makes unsupported hardware safe. This is the documented Day-0 exception: reason is permanent fallback/rollback; removal date is none; rollback sets compression_enabled=false; evidence is the existing raw worker suite plus the new raw-only refusal tests. |
+| DT-10 | Keep compression only when actual allocated bytes are lower than raw allocation. Promote beyond experimental mode only if three paired runs show at least 10% net logical-capacity gain on the declared workload mix, no codec-induced read timeout, no missed foreground GPU deadlines, and at most 5% foreground p95 latency regression. | Requires a measured benefit after slabs, workspace, and fragmentation while bounding shared-GPU interference; no universal ratio is inferred. |
 
----
+### Provider codec contract
 
-## 4. Atomicity and Rollback
+The optional codec contract is implemented per provider and receives provider-owned memory, bounded host inputs/outputs, and queried scratch. It must report a maximum encoded length and required alignments before allocation. The following proposed shape defines the minimum operations; concrete CUDA/Vulkan types remain private to their provider.
 
-- **Required atomicity proof**: Define the exact point at which a block-map entry changes from raw to compressed, ensure the old representation remains readable until the new one is complete, and test interrupted writes/restart. CRC32 alone does not prove correct ordering or durability.
-- **Required lifetime proof**: On timeout, retain context, pinned host memory, and device buffers until the driver reports completion or a qualified teardown path succeeds.
-- **Rollback**: Preserve an opt-in feature and the existing uncompressed CUDA backend; no kernel-space change is proposed here. Host rollback still requires swapoff-first, artifact identity, and recovery checks.
+    pub struct VramSpan {
+        pub offset: u64,
+        pub stored_len: usize,
+        pub allocation_len: usize,
+    }
 
----
+    pub struct VramOutputReservation {
+        pub offset: u64,
+        pub capacity: usize,
+        pub allocation_len: usize,
+    }
 
-## 5. Kahneman Map (Critical Steps)
+    pub struct CodecAlignments {
+        pub compression_input: usize,
+        pub compression_output: usize,
+        pub decompression_input: usize,
+        pub decompression_output: usize,
+        pub workspace: usize,
+    }
 
-| ITEM / Stage | # | Question | Min Evidence | Abort |
-| :--- | :--- | :--- | :--- | :--- |
-| **ITEM-1** (Core) | **#13** (Refusal + Legitimate) | Does the optional backend refuse unsupported systems and match existing transfer/lifetime behavior? | Named unit tests plus a live CUDA probe after implementation | Panic, resource leak, or fallback regression |
-| **ITEM-2** (Cancellation) | **#15** (Transient Retry / Failover) | Are queued and in-flight operations distinguished under timeout and driver stalls? | Deterministic lifetime tests plus live pressure trace | Premature free, lost completion, or unbounded queue growth |
-| **ITEM-3** (Compression) | **#17** (Idempotency & Integrity) | Do raw/compressed pages survive random writes, restart, and swapoff-first? | Named GPU tests on supported hardware and recovery evidence | Any byte mismatch or unreadable block |
+    pub struct CodecChunkResult {
+        pub status: CodecStatus,
+        pub encoded_len: usize,
+    }
 
----
+    pub trait GpuCacheCodec<M: VramMemory> {
+        fn codec_id(&self) -> CodecId;
+        fn required_alignments(&self) -> CodecAlignments;
+        fn max_encoded_len(&self, logical_len: usize) -> Result<usize, VramError>;
+        fn workspace_bytes(
+            &self,
+            item_count: usize,
+            max_logical_len: usize,
+        ) -> Result<usize, VramError>;
+        fn compress_batch_into(
+            &self,
+            inputs: &[&[u8]],
+            slab: &mut M,
+            outputs: &[VramOutputReservation],
+            workspace: &mut M,
+        ) -> Result<Vec<CodecChunkResult>, VramError>;
+        fn checksum_batch(
+            &self,
+            slab: &M,
+            inputs: &[VramSpan],
+            workspace: &mut M,
+        ) -> Result<Vec<u32>, VramError>;
+        fn decompress_batch_from(
+            &self,
+            slab: &M,
+            inputs: &[VramSpan],
+            logical_lengths: &[usize],
+            outputs: &mut [Vec<u8>],
+            workspace: &mut M,
+        ) -> Result<Vec<CodecStatus>, VramError>;
+    }
 
-## 6. Security Checklist (Pre-Impl; Open Until Verified)
+VramProvider gains a default cache_codec method returning None. A provider may return its codec only when the optional runtime is loaded and the selected adapter supports it. The worker calls this method only when compression is explicitly enabled; an absent capability means raw-only operation.
 
-- [ ] **Privilege and platform**: Validate Linux/WSL2/Windows device access independently.
-- [ ] **Copy bounds**: Fuzz offsets, lengths, alignment, and allocation failure for both backends.
-- [ ] **Driver errors**: Propagate exact CUDA errors and refuse unsupported device/toolkit combinations.
-- [ ] **Information flow**: Prove that raw/compressed buffers and metadata do not expose stale bytes.
-- [ ] **Lifetime**: Prove context affinity and in-flight DMA ownership across timeout/drop.
-- [ ] **Shared-hardware reserve**: Respect each production policy rather than one universal 2 GiB floor: broker/NBD `max(1536 MiB, 20%)` plus a separate 768 MiB runtime-free buffer; origin cache `max(2 GiB, 20%)`; StorPort `max(configuration, 512 MiB, 10%)`.
-- [ ] **Recovery**: Test interrupted writes, GPU reset, swapoff-first, and rollback before host installation.
+    fn cache_codec(&self) -> Option<&dyn GpuCacheCodec<Self::Mem<'_>>> {
+        None
+    }
 
----
+The span carries both the exact stored length and its allocator-owned physical length; every offset-plus-length calculation is checked before provider calls. Output reservations carry a writable capacity and allocator-owned length, and the worker accepts only a reported encoded length within that capacity. The codec supplies the compressed-payload checksum before decode using a provider-side checksum operation over the exact stored length while bytes remain in VRAM; the worker checks the uncompressed checksum over the bounded host output after decode. For the NVIDIA candidate, the provider must use nvCOMP's documented GPU CRC32 operation or another documented safe mechanism; it must not read compressed bytes back merely to checksum them. If the provider cannot verify a checksum before decode, it must report no codec capability and remain raw-only. CRC32 detects accidental corruption, not malicious modification. Compressed input is created only by this worker and is never accepted as an externally supplied stream. Metadata and decoder sizes are validated at every read boundary. GPU operations return only after completion/status is observed. If completion is uncertain, the worker retains the associated memory and faults the codec path; it must not free an in-flight span. Decode batches are grouped by backing slab so each span is paired with the correct provider-owned allocation.
 
-## 7. Files to CREATE / MODIFY / DELETE
+### Codec operation lifecycle
+
+The worker uses a serialized lifecycle for each provider operation: ready, in flight, completed, or faulted. A cache-client deadline expiry returns a cache miss to the origin immediately; it is not treated as proof that the GPU operation was cancelled. If provider completion is uncertain, the worker stops accepting cache operations and does not free, recycle, or reuse involved memory. The isolated worker is terminated through its existing supervisor. Compression stays unavailable until that worker process is confirmed gone, a new provider is initialized for the same adapter, and a fresh budget snapshot passes. If process exit or provider recovery cannot be confirmed, the cache remains unavailable. No retry or new worker may race an operation whose ownership is unresolved.
+
+## Atomicity and rollback
+
+### Atomicity frontier
+
+- **Origin:** the existing origin write/sync completes before a cache update is sent. Compression never acknowledges origin data.
+- **Cache entry:** reserve provisional allocator spans; compress and validate output; calculate final allocated length; then publish the entry and range-index state in one worker-thread operation. On failure, return provisional spans and do not expose the record.
+- **Update:** because the origin has already accepted the new bytes, evict overlapping cache records first. If replacement compression/raw storage fails, the range remains a cache miss and the origin serves it.
+- **Read:** collect all needed extents into a private response buffer. No bytes are sent until every extent has passed bounds, codec status, length, and checksum checks.
+- **Restart/worker loss:** all records and slabs are volatile. Worker loss drops the cache only; there is no on-disk format or migration.
+
+### Rollback
+
+- **Userspace/daemon:** set compression mode off, release codec workspace and compressed slabs after observed completion, and retain the existing raw worker path. Any uncertain codec completion uses existing worker isolation/reap behavior and marks the worker unavailable; do not reuse possibly in-flight memory.
+- **Kernel/module:** N/A — no kernel code or ABI is changed.
+- **Host/persistent:** N/A — no host configuration, swap mapping, or origin format changes. If a later release has enabled this cache, disable/restart through the existing supervised RamShared lifecycle; never bypass its swapoff-first contract.
+- **Numeric rollback trigger:** one byte/checksum mismatch, one codec-induced read timeout, or one fresh budget observation below the existing required-free threshold disables compressed admission. Three runs below 10% net capacity gain keep the feature disabled.
+
+## Kahneman map (critical only)
+
+| ITEM / stage | Discipline | Question | Minimum executable evidence | Abort |
+| --- | --- | --- | --- | --- |
+| ITEM-1 / decode and publication | #17 — idempotency of replayable effects | Does replaying the same encoded entry or update twice leave one current exact cache representation, and does a bad compressed checksum refuse before decode? | gpu_cache_compression::compression_update_replay_is_idempotent; gpu_cache_compression::worker_compressed_crc_mismatch_refuses_before_decode; compressed round-trip tests | Any stale generation, duplicate visible extent, decoder call on a checksum mismatch, or byte mismatch. |
+| ITEM-2 / admission and reclaim | #16 — fail-safe default from exhaustion | At zero or stale GPU headroom, can any scratch, slab, or metadata allocation cross the existing reserve? | gpu_cache_worker::tests::compression_refuses_from_zero_or_stale_budget and scratch exhaustion test | Any allocation after refusal or free headroom below the existing floor. |
+| ITEM-2 / partial updates | #13 — refusal plus legitimate pass | Are overlaps invalidated while an unaffected exact cache read still succeeds? | gpu_cache_worker::tests::partial_update_invalidates_overlapping_compressed_entry plus legitimate non-overlap hit | Stale/mixed bytes or a false hit across a gap. |
+| ITEM-2 / cache read size | #13 — refusal plus legitimate pass | Is an over-limit request refused before response allocation while a normal request still hits? | gpu_cache_worker::tests::read_over_16_mib_refuses_before_allocation and a legitimate bounded read | Any oversized allocation or false refusal of a bounded request. |
+| ITEM-3 / worker timeout | #16 — fail-safe default | Does a stalled decoder fall back to the origin without extending the cache read deadline? | ipc_cache_client::tests::codec_timeout_falls_back_to_origin | Read exceeds the configured deadline or the origin is blocked. |
+| ITEM-5 / usefulness and co-load | #9 — number, not adjective | Does the complete compressed cache path add useful logical capacity without harming a representative foreground GPU workload? | Three paired raw/compressed runs on the same adapter, including a predeclared foreground GPU workload, complete metric envelope, and foreground deadline/p95 measurements | Less than 10% net gain, any timeout/integrity error, a missed foreground deadline, or more than 5% foreground p95 regression. |
+
+## Security checklist (pre-impl)
+
+- [x] Privilege: N/A — no new privilege, public device node, or user-facing capability.
+- [x] User/host copy: all IPC frame, requested read, input, output, and decoder lengths are checked and bounded; only one codec batch may be staged at once (4 MiB); the verified private response is capped at 16 MiB.
+- [x] Flags/IOCTL codes: N/A — no new ioctl or public flags.
+- [x] Information flow: telemetry contains lengths/counters only; never payloads, kernel pointers, host addresses, or user RAM samples.
+- [x] IRQ/atomic or IRQL: N/A — userspace worker only. The provider must not block the origin-serving thread on codec completion.
+- [x] Lifetime: provider retains slabs, scratch, contexts, and input buffers until GPU completion is observed. A timeout cannot free in-flight memory.
+- [x] Hot-unplug/device-gone: adapter loss faults compression, invalidates compressed entries, and produces a cache miss or raw-only worker state.
+- [x] Host safety: no unsupervised live WSL2 pressure, swap stress, install, or host activation in this planning task.
+- [x] Shared-hardware cushion: reuse the existing adapter-bound budget, reserve, runtime-free buffer, and per-allocation freshness checks; include scratch and slab allocations in the same accounting.
+- [x] Bounded DMA/foreign calls: the existing client deadline remains unchanged; no retry of uncertain in-flight work; a timed-out worker is revoked through its current supervisor. The client falls back to origin independently of codec cancellation; memory is never recycled until provider completion is observed or the isolated worker exits.
+- [x] Cooperative spillover: cache miss, codec refusal, corruption, and allocation failure all use the authoritative SSD origin.
+- [x] Replayable ops: overlapping update, eviction, and disable are idempotent; apply an update twice and observe one current range.
+
+## Files to CREATE / MODIFY / DELETE
 
 ### CREATE
-**`crates/ramshared-cuda/src/async_backend.rs`** (proposed)
-- **Purpose**: Bounded GPU I/O operations with explicit completion and ownership.
-- **Required Tests**: Queue refusal, cancellation-before-submit, timeout-while-in-flight, and delayed completion.
+
+**crates/ramshared-vram/src/codec.rs**
+- Purpose: Define optional codec identity, bounded spans, result/status types, and provider codec contract.
+- RF / DT: RF-2, RF-6, RF-7; DT-2, DT-4, DT-7.
+- Types / functions: CodecId, CodecStatus, VramSpan, VramOutputReservation, CodecAlignments, CodecChunkResult, GpuCacheCodec<M: VramMemory>.
+- Reference pattern: adapter-bound VramProvider contract in crates/ramshared-vram/src/lib.rs.
+- Required tests: codec::tests::codec_bounds_reject_overflow; codec::tests::unsupported_provider_is_raw_only.
+- Cover target: at least 80% on business logic.
+
+**crates/ramshared-block/src/compressed_cache.rs**
+- Purpose: Bounded extent index, slab/free-range allocation, metadata, overlap invalidation, admission, and raw/compressed publication.
+- RF / DT: RF-2 through RF-6; DT-4 through DT-7.
+- Types / functions: CacheEntry, CacheRepresentation, VramSlab, VramSpanAllocator, split_extent, invalidate_overlaps, read_coverage.
+- Reference pattern: existing LRU and valid-range logic in crates/ramshared-block/src/gpu_cache_worker.rs.
+- Required tests: compressed_cache::tests::extent_split_respects_maximum; compressed_cache::tests::allocator_coalesces_and_refuses_fragmented_request; compressed_cache::tests::overlap_invalidation_removes_only_affected_entries; compressed_cache::tests::metadata_budget_caps_entry_count; compressed_cache::tests::zero_physical_target_allocates_no_metadata.
+- Cover target: at least 80% on business logic.
+
+**crates/ramshared-block/tests/gpu_cache_compression.rs**
+- Purpose: Exercise the worker through its public cache behavior using a deterministic fake codec/provider.
+- RF / DT: RF-1 through RF-9; DT-1, DT-6 through DT-9.
+- Required tests: worker_compression_roundtrip_is_byte_exact; worker_raw_fallback_when_encoded_allocation_is_not_smaller; worker_corrupt_entry_returns_origin_bytes; worker_partial_update_never_returns_stale_bytes; worker_compression_disable_is_idempotent.
+- Required test: worker_compressed_crc_mismatch_refuses_before_decode; assert the fake decoder invocation count remains zero and the exact origin bytes are returned.
+- Cover target: N/A — integration tests; production business logic is covered per source file.
+
+**crates/ramshared-cuda/src/nvcomp.rs**
+- Purpose: Optional dynamically loaded nvCOMP LZ4 adapter; no change to the existing raw CUDA path when library/capability is unavailable.
+- RF / DT: RF-2, RF-5, RF-7; DT-2, DT-7.
+- Types / functions: NvcompLz4Codec, bounded library loader, queried workspace/output bounds, per-item status conversion.
+- Reference pattern: existing dynamic CUDA Driver API loader in crates/ramshared-cuda/src/lib.rs.
+- Required tests: nvcomp::tests::missing_runtime_returns_unsupported; nvcomp::tests::reported_bounds_reject_truncation; nvcomp::tests::status_and_lengths_are_checked.
+- Cover target: at least 80% on non-hardware business logic.
+
+**crates/ramshared-cuda/tests/nvcomp_cache_codec.rs**
+- Purpose: Optional exact-adapter integration test for nvCOMP LZ4; ignored unless the runtime, supported adapter, and fresh budget are present.
+- RF / DT: RF-2, RF-5, RF-7; DT-2, DT-7.
+- Required tests: nvcomp_lz4_sm75_roundtrip_and_corruption_refusal.
+- Cover target: N/A — hardware integration.
 
 ### MODIFY
-**`crates/ramshared-cuda/Cargo.toml`**
-- **Purpose**: Keep optional dependencies isolated until a backend is implemented and validated; entries already exist.
 
----
+**crates/ramshared-vram/src/lib.rs**
+- What/how/why: export the optional codec contract and default cache_codec method without adding compression methods to raw VramMemory. Preserve existing providers that do not implement the capability. Required refusal and budget tests remain.
+- RF / DT: RF-6, RF-7; DT-2, DT-4.
+- Required tests: codec capability absent on raw-only provider; fresh adapter budget still gates allocation.
+- Cover: existing business logic stays at or above 80%.
 
-## 8. Observability
+**crates/ramshared-block/src/gpu_cache_worker.rs**
+- What/how/why: add compression_enabled=false to GpuWorkerConfig by default; retain the existing raw behavior when compression is disabled or unsupported; optionally use the codec and bounded extent allocator; keep target/cached_bytes physical; invalidate overlap before update publication; reject cache reads above 16 MiB before allocating; decode only into private response buffers.
+- RF / DT: RF-1 through RF-9; DT-1, DT-3 through DT-9.
+- Required tests: worker_compression_respects_physical_budget; worker_decode_error_returns_miss; worker_compression_refuses_from_zero_or_stale_budget; worker_evicts_compressed_lru_extent; worker_teardown_waits_for_codec_completion; read_over_16_mib_refuses_before_allocation.
+- Cover target: at least 80%.
 
-| Signal | Where | Level / Type |
-| :--- | :--- | :--- |
-| `gpu_compression_ratio` | `telemetry.jsonl` | INFO / Float metric |
-| `gpu_async_cancellation` | `stderr` + `telemetry.jsonl` | WARN / Structured JSON |
+**crates/ramshared-block/src/ipc_cache_client.rs**
+- What/how/why: parse a bounded, versioned worker-cache telemetry envelope while retaining the existing budget validation, physical cached_bytes field, and timeout behavior. Return a cache miss without sending a read request above 16 MiB.
+- RF / DT: RF-8, RF-9; DT-3, DT-8, DT-9.
+- Required tests: telemetry_envelope_rejects_unknown_version_or_oversize; codec_timeout_falls_back_to_origin; oversized_cache_read_is_miss_before_frame_send; logical_bytes_never_replace_physical_cached_bytes.
+- Cover target: at least 80%.
 
----
+**crates/ramshared-wsl2d/src/main.rs**
+- What/how/why: pass an optional codec only for a provider that explicitly advertises it; keep missing nvCOMP and unsupported adapters in raw-only mode. Continue exact adapter identity and fresh budget revalidation.
+- RF / DT: RF-6 through RF-9; DT-2, DT-5, DT-8, DT-9.
+- Required tests: selected_provider_without_codec_starts_raw_only; selected_codec_provider_revalidates_exact_adapter.
+- Cover target: at least 80% on extracted business logic; do not widen main.rs coverage by unrelated lines.
 
-## 9. Implementation Order
+**crates/ramshared-cli/src/monitor.rs**
+- What/how/why: display logical cache bytes, physical VRAM slab bytes, workspace, and codec status with explicit VRAM/cache labels. Do not merge these counters with guest/host RAM.
+- RF / DT: RF-8; DT-8.
+- Required tests: monitor_labels_logical_cache_separately_from_ram; monitor_omits_stale_codec_telemetry.
+- Cover target: at least 80% on touched business logic.
 
-- **ITEM-1**: Test an isolated `cuda-core`/`cuda-async` backend against the existing Driver API behavior, including negative paths; do not switch production by manifest change alone.
-- **ITEM-2**: Specify queue bounds, timeout semantics, completion observation, context affinity, and in-flight buffer ownership; then implement and test them.
-- **ITEM-3**: Prototype optional compression with raw fallback, crash-consistent mapping, and integrity tests. Validate `cuda-oxide` on `sm_75` and `cutile` only on `sm_80+`.
-- **ITEM-4**: Wire the qualified backend into the broker with telemetry and a reversible feature gate; perform live pressure, swapoff-first, and binary-match checks before any host replacement.
+**docs/architecture/CUDA-RUST-ACCELERATION-BLUEPRINT.md; docs/specs/README.md; docs/reliability/DEGRADATION-MATRIX.md**
+- What/how/why: reflect cache-only authority, optional codec, corruption/timeout degradation, and backend qualification before merge.
+- RF / DT: RF-1, RF-7, RF-8; DT-1, DT-2, DT-7 through DT-10.
+- Required tests: docs-check and generated-index check.
+- Cover target: N/A — documentation.
 
----
+### DELETE
 
-## 10. Required Tests Matrix
+None. The raw cache and existing uncompressed CUDA/Vulkan providers remain supported fallbacks.
 
-| Production Path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
-| :--- | :--- | :--- | :--- | :--- |
-| Proposed context backend | `test_cuda_core_context_lifecycle` (to create) | unit + live | #13 | ≥80% after implementation |
-| Proposed async backend | `test_async_dma_cancellation_token` (to create) | unit + live | #15 | ≥80% after implementation |
-| Proposed GPU compression | `test_in_gpu_page_compression_roundtrip` (to create) | GPU + recovery | #17 | ≥80% after implementation |
-| Proposed architecture dispatch | `test_gpu_compute_capability_dispatch` (to create) | unit + GPU | #13 | ≥80% after implementation |
+## Observability
 
----
+| Signal | Where | Level / type |
+| --- | --- | --- |
+| codec capability/state and bounded refusal reason | worker telemetry envelope and status JSON | enum/string, no payload |
+| logical_cached_bytes | worker telemetry and status | bytes |
+| physical_cache_slab_bytes | worker telemetry and status | bytes |
+| codec_workspace_bytes | worker telemetry and status | bytes |
+| compressed_payload_bytes/raw_payload_bytes | worker telemetry and status | bytes |
+| metadata_bytes/raw_bypass_bytes | worker telemetry and status | bytes |
+| codec_integrity_errors/decode_errors/timeouts | worker telemetry and status | counters |
+| adapter identity, budget, available bytes, sample time | existing GPU budget telemetry | existing schema; do not conflate with cache occupancy |
 
-## 11. Validation Checklist
+The telemetry envelope is versioned, no larger than the existing 4 KiB GPU-budget payload limit, fresh at each worker heartbeat, and omitted when malformed or stale. No input/output bytes, file contents, addresses, or private workload labels are recorded.
 
-- [ ] `cargo fmt` / `cargo clippy -p ramshared-cuda -- -D warnings` / `cargo test -p ramshared-cuda`
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/async_backend.rs --min 80`
-- [ ] Live path for each supported backend (`sm_75` existing CUDA; `sm_80+` Tile on a separate host)
-- [ ] Every matrix row has an implemented test, not only a proposed name
-- [ ] Kahneman critical rows have executable evidence
+## Living docs
+
+| Document | Action |
+| --- | --- |
+| docs/architecture/CUDA-RUST-ACCELERATION-BLUEPRINT.md | Alter in this Step 2.5 update. |
+| docs/specs/README.md and generated docs/INDEX.md | Alter in this Step 2.5 update. |
+| docs/reliability/DEGRADATION-MATRIX.md | Update before implementation merge; this planning-only task does not alter the already-dirty matrix. |
+| validation.md | Append only after exact-adapter worker validation. |
+| docs/BENCHMARKS.md and docs/benchmarks/results.jsonl | Update only after qualified measurements. |
+| Existing IMPL.md | Reconcile its prior swap-page task list with this SPEC before Step 3. Do not infer implementation from this planning update. |
+
+## Implementation order
+
+- **ITEM-1:** Define codec contract, span/result bounds, fake codec, exact-byte/checksum tests, and refusal behavior. No CUDA runtime call yet.
+- **ITEM-2:** Implement extent splitting, bounded metadata, slab allocator, publication/invalidation ordering, raw bypass, and private full-range reads. The current raw path remains unchanged when compression is disabled or unsupported; the bounded allocator is used only in explicit compressed mode. Compression remains off by default.
+- **ITEM-3:** Implement optional NVIDIA nvCOMP LZ4 loading and bounded batch encode/decode. Prove the exact adapter/toolkit/driver combination; keep Vulkan and other unsupported providers raw-only.
+- **ITEM-4:** Add the versioned telemetry envelope and explicit UI labels; preserve physical meanings in existing status fields.
+- **ITEM-5:** Run fixed synthetic-data comparisons and exact isolated-worker E2E with a predeclared foreground GPU workload; decide whether the measured result passes the 10% usefulness gate and the proposed foreground deadline/5% p95-regression gate. Production enablement remains a separate decision.
+
+## Required tests matrix
+
+All names marked “to add” are planned tests, not tests already present.
+
+| Production path | Test (file :: name) | Kind | Kahneman | Cover |
+| --- | --- | --- | --- | --- |
+| Codec bounds | crates/ramshared-vram/src/codec.rs :: codec::tests::codec_bounds_reject_overflow | unit | #13 | at least 80% |
+| Raw-only refusal | crates/ramshared-vram/src/codec.rs :: codec::tests::unsupported_provider_is_raw_only | unit | #13 | at least 80% |
+| Extent splitting | crates/ramshared-block/src/compressed_cache.rs :: compressed_cache::tests::extent_split_respects_maximum | unit | #9 | at least 80% |
+| Slab allocator | crates/ramshared-block/src/compressed_cache.rs :: compressed_cache::tests::allocator_coalesces_and_refuses_fragmented_request | unit | #16 | at least 80% |
+| Overlap invalidation | crates/ramshared-block/src/compressed_cache.rs :: compressed_cache::tests::overlap_invalidation_removes_only_affected_entries | unit | #13 | at least 80% |
+| Metadata ceiling | crates/ramshared-block/src/compressed_cache.rs :: compressed_cache::tests::metadata_budget_caps_entry_count | unit | #16 | at least 80% |
+| Zero-target metadata | crates/ramshared-block/src/compressed_cache.rs :: compressed_cache::tests::zero_physical_target_allocates_no_metadata | unit | #16 | at least 80% |
+| Lossless cache read | crates/ramshared-block/tests/gpu_cache_compression.rs :: worker_compression_roundtrip_is_byte_exact | integration | #17 | N/A — integration |
+| No physical gain | crates/ramshared-block/tests/gpu_cache_compression.rs :: worker_raw_fallback_when_encoded_allocation_is_not_smaller | integration | #9 | N/A — integration |
+| Corrupt entry | crates/ramshared-block/tests/gpu_cache_compression.rs :: worker_corrupt_entry_returns_origin_bytes | integration | #13/#16 | N/A — integration |
+| Compressed CRC refusal | crates/ramshared-block/tests/gpu_cache_compression.rs :: worker_compressed_crc_mismatch_refuses_before_decode | integration | #13/#16 | N/A — integration |
+| Partial write | crates/ramshared-block/tests/gpu_cache_compression.rs :: worker_partial_update_never_returns_stale_bytes | integration | #13 | N/A — integration |
+| Repeated disable | crates/ramshared-block/tests/gpu_cache_compression.rs :: worker_compression_disable_is_idempotent | integration | #17 | N/A — integration |
+| Update replay | crates/ramshared-block/tests/gpu_cache_compression.rs :: compression_update_replay_is_idempotent | integration | #17 | N/A — integration |
+| Oversized cache read | crates/ramshared-block/src/gpu_cache_worker.rs :: read_over_16_mib_refuses_before_allocation | unit | #13 | at least 80% |
+| Zero/stale budget | crates/ramshared-block/src/gpu_cache_worker.rs :: worker_compression_refuses_from_zero_or_stale_budget | unit | #16 | at least 80% |
+| Decode error | crates/ramshared-block/src/gpu_cache_worker.rs :: worker_decode_error_returns_miss | unit | #16 | at least 80% |
+| In-flight cleanup | crates/ramshared-block/src/gpu_cache_worker.rs :: worker_teardown_waits_for_codec_completion | unit + worker drill | #17 | at least 80% |
+| IPC timeout | crates/ramshared-block/src/ipc_cache_client.rs :: codec_timeout_falls_back_to_origin | unit | #16 | at least 80% |
+| Oversized client read | crates/ramshared-block/src/ipc_cache_client.rs :: oversized_cache_read_is_miss_before_frame_send | unit | #13 | at least 80% |
+| Telemetry bounds | crates/ramshared-block/src/ipc_cache_client.rs :: telemetry_envelope_rejects_unknown_version_or_oversize | unit | #13 | at least 80% |
+| Telemetry semantics | crates/ramshared-block/src/ipc_cache_client.rs :: logical_bytes_never_replace_physical_cached_bytes | unit | #9 | at least 80% |
+| Missing nvCOMP | crates/ramshared-cuda/src/nvcomp.rs :: nvcomp::tests::missing_runtime_returns_unsupported | unit | #13 | at least 80% |
+| nvCOMP output bounds | crates/ramshared-cuda/src/nvcomp.rs :: nvcomp::tests::reported_bounds_reject_truncation | unit | #13 | at least 80% |
+| nvCOMP status | crates/ramshared-cuda/src/nvcomp.rs :: nvcomp::tests::status_and_lengths_are_checked | unit | #16 | at least 80% |
+| Exact NVIDIA hardware | crates/ramshared-cuda/tests/nvcomp_cache_codec.rs :: nvcomp_lz4_sm75_roundtrip_and_corruption_refusal | ignored hardware | #17 | hardware evidence |
+| Raw provider integration | crates/ramshared-wsl2d/src/main.rs :: selected_provider_without_codec_starts_raw_only | integration | #13 | at least 80% |
+| UI labels | crates/ramshared-cli/src/monitor.rs :: monitor_labels_logical_cache_separately_from_ram | unit | #9 | at least 80% |
+| Origin authority | crates/ramshared-block/src/isolated_origin.rs :: compressed_cache_fault_falls_back_to_origin | unit | #16 | existing source coverage gate |
+
+## Validation checklist
+
+- [ ] cargo fmt --all -- --check
+- [ ] cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings
+- [ ] cargo test -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli
+- [ ] Coverage for all touched Rust business-logic files: node tools/ci/check-rust-slice-coverage.mjs with the package/file list above and --min 80.
+- [ ] Every test matrix name exists and passes; hardware tests stay ignored unless exact prerequisites and fresh budget pass.
+- [ ] Exact NVIDIA test checks sm75+, nvCOMP runtime/toolkit/driver versions, adapter identity, codec statuses, corrupt-entry refusal, and exact bytes.
+- [ ] Live userspace path proves before/action/after on an isolated non-pressure canary origin; no forced cascade, kernel-module, WDK, or swap-stress test.
+- [ ] If ramsharedd is exercised, verify the running executable matches the tested binary. Do not claim a live product result from unit tests.
+- [ ] Before a performance claim, publish the four-category table plus Tier 3 origin metrics and PASS_ZERO_PANIC from a qualified lab campaign; include a paired foreground GPU workload with zero missed deadlines and at most 5% p95 regression.
+- [ ] Until hardware and live-worker gates pass, record the result as partial/proposal-only.

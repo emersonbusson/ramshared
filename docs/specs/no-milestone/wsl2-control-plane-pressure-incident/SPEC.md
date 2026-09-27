@@ -190,7 +190,7 @@ No production file is deleted.
 | pswpin/pswpout | monitor JSONL | pages |
 | memory.high/max/oom/oom_kill | monitor JSONL | counters |
 | managed reservations | monitor JSONL | count/bytes/class |
-| unmanaged pressure | monitor JSONL | sanitized top-N |
+| unmanaged process memory footprint | monitor JSONL | sanitized top-N; distinct from PSI pressure |
 | supervisor action results | state/status | ordered action+status+error records |
 
 ## Living docs
@@ -249,6 +249,7 @@ No production file is deleted.
 | `lifecycle.rs` | `using_vram_never_masks_critical_pressure` | unit | #13 | ≥80% via canonical lifecycle owner |
 | `lifecycle.rs` | `origin_failure_and_stuck_cache_are_never_green` | unit | #13/#16 | ≥80% via canonical lifecycle owner |
 | `monitor.rs` | `monitor_v4_records_full_pressure_and_sanitized_topn` | unit | #9 | ≥80% |
+| `monitor.rs` | `large_external_footprint_is_reported_as_usage` | unit | #9/#13 | ≥80% |
 | `monitor.rs` | `gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid` | process/timeout | #15/#16 | ≥80% |
 | `bounded_process.rs` | `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_reaps_successful_leader_and_all_stdio_redirected_descendant` | adversarial process/pipe | #15/#16 | ≥80% via canonical transport owner |

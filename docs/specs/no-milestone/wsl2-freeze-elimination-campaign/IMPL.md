@@ -2,18 +2,20 @@
 
 ## Status
 
-**PARTIAL.** Validator and manufactured source gates exist. The host commit
-admission/runtime guardian added in this slice has no live campaign evidence,
-so it cannot close or preserve a freeze-elimination claim by itself.
+**PARTIAL.** Validator and manufactured source gates exist. The host physical
+and commit admission/runtime guardians and guest memory/swap admission in both
+shared-host pressure paths have no live campaign evidence, so they cannot close
+or preserve a freeze-elimination claim by themselves.
 
 **Disabled staging boundary:** This implementation records source/static and
 historical evidence only. All manager definitions remain inert and disabled;
 no retained command, identity, topology, or historical result authorizes a
 current campaign, WSL lifecycle, VM, storage, swap, device, or pressure action.
 
-2026-08-21 source-only hardening: the shared-host harness now calculates
+Historical 2026-08-21 source-only hardening (superseded by the 2026-09-26
+native counter correction below): the shared-host harness calculated
 `ceil(PressureAllocGiB*1024)+HostCommitReserveMiB` (default reserve 4096 MiB),
-takes three one-second `Win32_OperatingSystem` CIM samples before any disk
+took three one-second `Win32_OperatingSystem` CIM samples before any disk
 telemetry, WSL launch, RamShared activation, or guest process, and refuses with
 `host_commit_headroom_insufficient` or `host_memory_query_failed`. It writes
 `host-memory-admission.json`, `host-memory.jsonl`, and additive summary fields
@@ -94,6 +96,76 @@ shared-host watchdog path closed this claim without creating another VM.
 - `scripts/windows/Test-SharedWslPressureCampaignStatic.ps1`
 - `scripts/windows/SharedWslHostMemoryGate.psm1`
 - `scripts/windows/Test-SharedWslPressureCampaignMemoryGate.ps1`
+- `scripts/safety/ramshared-guest-memory-admission.sh`
+- `scripts/safety/test-ramshared-guest-memory-admission.sh`
+- `scripts/safety/guest-pressure-runtime-guard.sh`
+- `scripts/safety/test-guest-pressure-runtime-guard.sh`
+- `scripts/safety/test-cascade-pressure-probe-static.sh`
+- `scripts/safety/cascade-pressure-probe.sh` (runtime cgroup containment)
+- `scripts/safety/wsl2-freeze-campaign.sh` (gated probe admission)
+- `scripts/safety/Test-Wsl2FreezeCampaignStatic.sh`
+- `scripts/windows/Test-RamSharedThreeTierStressStatic.ps1`
+
+2026-09-26 admission hardening: the Windows gate now requires both free
+available physical RAM and exact free commit headroom to cover the requested allocation plus
+separate 4096 MiB reserves, and continues checking both during the run. The
+three-tier script performs a guest `MemAvailable`/`SwapFree` gate before
+`ramshared check` or `ramshared up`; a refusal occurs before product cleanup is
+armed because no product state has yet changed. The full-profile stress command
+remains inside the WSL2 guest script; its Windows PowerShell process only
+supervises the guest and samples host telemetry. Guest allocations necessarily
+consume shared Windows physical RAM, which is why the host reserve remains
+active.
+
+The earlier WMI `FreeVirtualMemory` counter was not an exact commit-headroom
+measurement: it reports unused virtual memory, including free RAM and paging
+space. The gate and Guardian telemetry now use Windows `GetPerformanceInfo`:
+`CommitLimit - CommitTotal` pages gives commit headroom, and `PhysicalAvailable`
+pages gives reusable physical RAM. One native snapshot supplies both measures
+without launching a PowerShell child.
+
+The manufactured guest gate, PowerShell host-memory cases, and static wrapper
+checks pass under Bash, Windows PowerShell 5.1, and PowerShell 7. A read-only
+plan on 2026-09-26 refused admission: Windows physical headroom was 17158 MiB
+against 20480 MiB required, while commit headroom was 29316 MiB; the guest gate
+also refused at 397104 KiB `MemAvailable` against 1048576 KiB required, with
+2077768 KiB `SwapFree`. RamShared remained Off. No stress, activation, or tier
+allocation was started. See EVD-0069; live qualification remains PARTIAL.
+
+2026-09-26 campaign-entry hardening: the generic shared-host wrapper now runs
+the same fixed 1024 MiB guest `MemAvailable` and `SwapFree` admission before its
+cleanup trap, `ramshared down/up`, or bounded pressure probe. A refusal records
+the structured guest sample and exits before guest mutation. The static test
+also proves the optional Windows CUDA VRAM helper remains gated by explicit
+nonzero input and disabled by default. See EVD-0079; no live campaign was run.
+
+2026-09-26 runtime-pressure hardening: the Rust stress path now treats missing,
+malformed, duplicated, non-finite, or out-of-range PSI as unavailable and
+refuses before allocation on WSL2/cascade profiles; a missing
+`min_free_kbytes` sysctl no longer substitutes a 512 MiB reserve that lowers
+the WSL2 `MemAvailable` floor. The shell freeze probe now admits only valid
+guest `MemAvailable`, `SwapFree`, and PSI samples, creates a unique cgroup,
+sets finite memory and swap limits above protected reserves, and recalculates
+those limits each second from current guest telemetry plus cgroup usage. The
+worker waits on a private start gate until it is attached to the bounded
+cgroup. Cleanup releases only the worker and owned cgroup, restores the memory
+controller if this invocation enabled it, and reports any cleanup failure.
+The probe refuses direct invocation and only accepts an admission marker passed
+by the freeze campaign after its isolated-lab or shared-host gates succeed.
+Its comment now states that cgroup limits apply to the guest; WSL2 allocations
+still consume Windows host RAM. The hosted Linux CI runs the shell syntax,
+guest fixtures, probe ordering, and outer campaign refusal checks without
+invoking the worker or touching a cgroup.
+
+The runtime helper tests cover exact reserve boundaries, malformed and
+duplicate samples, PSI evaluator errors, unit conversion overflow, and
+headroom-aware limit calculations. Static probe checks cover admission and
+worker ordering, finite limits, per-second checks, and cleanup ownership. The
+Rust stress tests, supervisor parser test, and package clippy pass. These are source-level
+results only: no live pressure, cgroup, tier activation, host install, or
+campaign ran. A missing/stale guest probe or any breached runtime guard stops
+the run; installed-binary parity and supervised live qualification remain
+open. See EVD-0080; the campaign remains `PARTIAL`.
 
 ## Validation
 
@@ -106,6 +178,10 @@ the candidate remains disabled-staging only.
 - Static: `scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1`
 - Static: `scripts/windows/Test-SharedWslPressureCampaignStatic.ps1`
 - Manufactured: `scripts/windows/Test-SharedWslPressureCampaignMemoryGate.ps1`
+- Guest admission: `scripts/safety/test-ramshared-guest-memory-admission.sh`
+  and the ordering contract in `scripts/windows/Test-SharedWslPressureCampaignStatic.ps1`
+- Runtime guest guard: `scripts/safety/test-guest-pressure-runtime-guard.sh`
+  and `scripts/safety/test-cascade-pressure-probe-static.sh`.
 - Live: `scripts/windows/Invoke-SharedWslPressureCampaign.ps1 -ApproveSharedDailyHost`
   produced `SANITIZED_PATH_HOST_PRIVATE_ARTIFACT` with
   validator PASS.

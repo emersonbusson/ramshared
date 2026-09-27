@@ -49,9 +49,11 @@ TASK-0009 source checkpoint is recorded below.
   stuck state, critical pressure, and GPU measurement errors cannot be green.
 - Monitor JSONL records full PSI windows, memory availability, vmstat swap
   counters, memory events, managed/Docker totals, sanitized top-N, cache/origin
-  counters, and the supervisor's ordered action results once per second. Large work outside
-  the hierarchy is explicit `UNMANAGED_PRESSURE`; argv and private paths are
-  not retained.
+  counters, and the supervisor's ordered action results once per second. Large
+  work outside the hierarchy is explicit `UNMANAGED_MEMORY`; the v4 wire key
+  `unmanaged_pressure_state` is retained, but the value describes process
+  footprint rather than active pressure. PSI and `MemAvailable` remain the
+  current pressure signals. Argv and private paths are not retained.
 - Windows origin telemetry resolves the physical volume from the sealed VHDX
   manifest and reports path, unique volume ID, label, size, and free bytes. It
   contains no production drive-letter default and does not duplicate Guard's
