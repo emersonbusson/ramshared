@@ -183,8 +183,12 @@ pub struct ControlPlaneObservation {
     pub docker_memory_current_bytes: u64,
     pub managed_reservations: u64,
     pub managed_reserved_bytes: u64,
-    pub unmanaged_pressure_state: String,
-    pub unmanaged_pressure_kib: u64,
+    /// The v4 JSON key is retained for compatibility; the value describes
+    /// unmanaged process memory use, not measured system pressure.
+    #[serde(rename = "unmanaged_pressure_state")]
+    pub unmanaged_memory_state: String,
+    #[serde(rename = "unmanaged_pressure_kib")]
+    pub unmanaged_memory_kib: u64,
     pub unmanaged_processes: u64,
     pub reclaim_speed_gbs: f64,
     pub reclaim_duration_ms: f64,
@@ -336,9 +340,9 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     control_plane.benchmark_status = bench_status;
     let top_processes = collect_top_processes(Path::new("/proc"), 10);
     let (unmanaged_state, unmanaged_kib, unmanaged_count) =
-        classify_unmanaged_pressure(&top_processes);
-    control_plane.unmanaged_pressure_state = unmanaged_state.into();
-    control_plane.unmanaged_pressure_kib = unmanaged_kib;
+        classify_unmanaged_memory_usage(&top_processes);
+    control_plane.unmanaged_memory_state = unmanaged_state.into();
+    control_plane.unmanaged_memory_kib = unmanaged_kib;
     control_plane.unmanaged_processes = unmanaged_count;
 
     Ok(Observation {
@@ -692,7 +696,7 @@ fn collect_top_processes(proc_root: &Path, limit: usize) -> Vec<ProcessObservati
     processes
 }
 
-fn classify_unmanaged_pressure(processes: &[ProcessObservation]) -> (&'static str, u64, u64) {
+fn classify_unmanaged_memory_usage(processes: &[ProcessObservation]) -> (&'static str, u64, u64) {
     let mut count = 0u64;
     let mut kib = 0u64;
     for process in processes {
@@ -705,7 +709,7 @@ fn classify_unmanaged_pressure(processes: &[ProcessObservation]) -> (&'static st
     if count == 0 {
         ("NONE", 0, 0)
     } else {
-        ("UNMANAGED_PRESSURE", kib, count)
+        ("UNMANAGED_MEMORY", kib, count)
     }
 }
 
@@ -2253,10 +2257,10 @@ mod tests {
         outside.rss_kib = 600 * 1024;
         outside.swap_kib = 0;
         assert_eq!(
-            classify_unmanaged_pressure(&[outside]),
-            ("UNMANAGED_PRESSURE", 600 * 1024, 1)
+            classify_unmanaged_memory_usage(&[outside]),
+            ("UNMANAGED_MEMORY", 600 * 1024, 1)
         );
-        assert_eq!(classify_unmanaged_pressure(&top), ("NONE", 0, 0));
+        assert_eq!(classify_unmanaged_memory_usage(&top), ("NONE", 0, 0));
         let pressure = parse_memory_pressure(
             "some avg10=1 avg60=2 avg300=3 total=1\nfull avg10=4 avg60=5 avg300=6 total=2\n",
         );
