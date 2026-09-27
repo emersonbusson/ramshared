@@ -6475,3 +6475,59 @@ maintainers' upstream review also remain external gates.
 
 **Verdict:** 🟡 `PARTIAL` — source and hosted-runner checks pass; live Windows,
 GPU/WSL, CoCo, and upstream qualification remain open.
+
+## 2026-09-27 05:35 -03 — Windows static suite and current host admission
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0083`.
+**Owner role:** `reliability / runtime`.
+**Observed at:** `2026-09-27T08:35:59Z`.
+**Verified at:** `2026-09-27T08:38:03Z`.
+**Source revision:** `8fa9e9c14e93471b63975a8ac06875be32a53848`.
+**Source state:** Clean committed checkout; read-only Windows and WSL observations plus static tests; no install, service/task action, stress, or tier activation.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0069 through EVD-0082.
+**Freshness:** Host and guest memory samples are from 2026-09-27 05:35 -03; Guardian publication is stale and explicitly identified as such.
+**Category:** `reliability / ci-gate`.
+**How to measure:** From WSL, set `winroot=$(wslpath -w "$PWD")`, then run `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$winroot\scripts\windows\Test-WindowsCiStatic.ps1" -RepoRoot "$winroot"`.
+
+**What:** Windows PowerShell 5.1 is available through WSL interop even though
+it is not on the Linux `PATH`. The complete `Test-WindowsCiStatic.ps1` wrapper
+ran under PowerShell `5.1.26100.9444`; all 27 named harnesses completed with
+exit code 0. This includes `Test-RamSharedThreeTierStressStatic.ps1`,
+`Test-SharedWslPressureCampaignStatic.ps1`, and
+`Test-SharedWslPressureCampaignMemoryGate.ps1`. This corrects the execution
+limitation recorded contemporaneously in EVD-0082; it does not turn the
+hosted GitHub Actions job green or provide live Windows/GPU qualification.
+
+**Current admission sample:** `GetPerformanceInfo` reported total physical
+memory `32,669 MiB`, physical headroom `13,190 MiB`, and commit headroom
+`28,909 MiB`. The full profile requires `20,480 MiB` for each host gate
+(`16 GiB` planned pressure plus `4 GiB` reserve), so physical admission fails
+by `7,290 MiB`; commit admission passes. WSL reported `15,995 MiB`
+`MemTotal`, `6,741 MiB` `MemAvailable`, `4,096 MiB` swap total, `4,030 MiB`
+`SwapFree`, and memory PSI some/full avg10 `0.00%`. `/proc/swaps` listed only
+the 4 GiB fallback device, with `66 MiB` used. The cascade health service was
+active and the supervisor inactive.
+
+**Guardian and process observations:** Windows health JSON remains
+`BLOCKED/boot_identity_unavailable`, timestamped `2026-09-26T18:48:03Z`; its
+enabled scheduled task is `Ready`, last ran `2026-09-26T10:12:33-03:00`, and
+reports `3221225786` (`0xC000013A`). One PowerShell process measured
+`79 MiB` private bytes and `95.7 MiB` working set. No process or service named
+with `space`, current-user AppX package, classic uninstall entry, WSL dpkg
+package, or Snap package matching `space` was found. The all-users AppX and
+Hyper-V VM queries were denied for this non-elevated PowerShell token, so this
+does not prove absence from other Windows user profiles or establish VM
+availability. WMI identifies an `NVIDIA GeForce RTX 2060`, but no live VRAM
+budget or allocation was queried.
+
+**Conclusion:** The earlier multi-GiB PowerShell reading was not reproduced;
+its cause remains unknown. Guest memory and PSI currently look healthy, but
+the full stress is correctly refused by insufficient host physical headroom
+and stale Guardian health. The new Rust monitor, Guardian, and stress changes
+are not installed. No task, service, package, kernel, or GPU state was changed.
+No full-tier stress or upstream/CoCo/GPADL/UIO qualification ran.
+**Verdict:** 🟡 `PARTIAL` — the Windows static suite now passes locally and the
+current refusal conditions are measured; installation, live pressure, GPU,
+VM/CoCo, and historical freeze attribution remain open.
