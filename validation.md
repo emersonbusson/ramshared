@@ -6532,7 +6532,7 @@ No full-tier stress or upstream/CoCo/GPADL/UIO qualification ran.
 current refusal conditions are measured; installation, live pressure, GPU,
 VM/CoCo, and historical freeze attribution remain open.
 
-## 2026-09-27 06:01 -03 — Guardian health republished after bounded restart
+## 2026-09-27 06:01 -03 — Guardian health republished after one-time start
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0084`.
