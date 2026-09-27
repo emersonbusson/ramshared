@@ -948,6 +948,7 @@ name = "ramshared-block"
 version = "0.14.1"
 dependencies = [
  "ramshared-vram",
+ "serde_json",
 ]
 
 [[package]]

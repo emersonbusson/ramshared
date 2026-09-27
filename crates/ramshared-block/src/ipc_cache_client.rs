@@ -11,6 +11,7 @@ use crate::gpu_cache_worker::{
 };
 use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
 use crate::origin_cache::CacheState;
+use ramshared_vram::GpuBudgetTelemetry;
 
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// Handshake allows extra time for the worker to initialize CUDA/Vulkan
@@ -19,6 +20,7 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Disable/teardown uses a longer timeout to accommodate GPU context cleanup.
 /// SPEC: DT-5 (5s bounded supervisor teardown).
 pub const DISABLE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_GPU_BUDGET_PAYLOAD_BYTES: u32 = 4096;
 
 pub struct IpcCacheClient {
     socket: UnixStream,
@@ -26,6 +28,7 @@ pub struct IpcCacheClient {
     state: CacheState,
     cached_bytes: u64,
     target_bytes: u64,
+    gpu_budget: Option<GpuBudgetTelemetry>,
     seq: u64,
 }
 
@@ -39,6 +42,7 @@ impl IpcCacheClient {
             state: CacheState::Active,
             cached_bytes: 0,
             target_bytes,
+            gpu_budget: None,
             seq: 0,
         }
     }
@@ -85,6 +89,7 @@ impl IpcCacheClient {
         eprintln!("[ramsharedd] isolated GPU cache unavailable: {reason}");
         self.state = CacheState::Unavailable;
         self.cached_bytes = 0;
+        self.gpu_budget = None;
     }
 
     pub fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
@@ -117,7 +122,27 @@ impl IpcCacheClient {
             return Err("GPU cache worker heartbeat mismatched");
         }
         self.cached_bytes = (resp.aux as u64) << 10;
+        if resp.payload_len == 0 || resp.payload_len > MAX_GPU_BUDGET_PAYLOAD_BYTES {
+            self.gpu_budget = None;
+            if resp.payload_len > MAX_GPU_BUDGET_PAYLOAD_BYTES {
+                self.fail("heartbeat GPU telemetry exceeded its size limit");
+                return Err("GPU cache worker heartbeat telemetry exceeded its limit");
+            }
+        } else {
+            let mut payload = vec![0; resp.payload_len as usize];
+            if self.socket.read_exact(&mut payload).is_err() {
+                self.fail("heartbeat GPU telemetry was truncated");
+                return Err("GPU cache worker heartbeat telemetry was truncated");
+            }
+            self.gpu_budget = serde_json::from_slice::<GpuBudgetTelemetry>(&payload)
+                .ok()
+                .filter(|telemetry| telemetry.schema_version == 1);
+        }
         Ok(self.cached_bytes)
+    }
+
+    pub fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        self.gpu_budget.as_ref()
     }
 
     fn send_mutation_frame(&mut self, header: FrameHeader, payload: &[u8]) -> CacheMutation {
@@ -137,6 +162,7 @@ impl IpcCacheClient {
             Ok(()) => {
                 // Accepted bytes are queued, not evidence of GPU allocation.
                 self.cached_bytes = 0;
+                self.gpu_budget = None;
                 CacheMutation::Accepted
             }
             Err(_) => {
@@ -284,6 +310,10 @@ impl BestEffortCache for IpcCacheClient {
 
     fn target_bytes(&self) -> u64 {
         self.target_bytes
+    }
+
+    fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        IpcCacheClient::gpu_budget_telemetry(self)
     }
 }
 

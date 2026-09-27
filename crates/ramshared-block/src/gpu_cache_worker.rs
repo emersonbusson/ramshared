@@ -6,9 +6,11 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use ramshared_vram::{VramError, VramMemory, VramProvider};
+use ramshared_vram::{
+    GpuBudgetSnapshot, GpuBudgetTelemetry, VramError, VramMemory, VramProvider,
+};
 
 pub const FRAME_HEADER_LEN: usize = 32;
 
@@ -28,6 +30,26 @@ pub const STATUS_MISS: u8 = 1;
 pub const STATUS_ERROR: u8 = 2;
 const RUNTIME_FREE_BUFFER_BYTES: u64 = 640 * 1024 * 1024;
 const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 896 * 1024 * 1024;
+const MAX_GPU_BUDGET_PAYLOAD_BYTES: usize = 4096;
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or_default()
+}
+
+fn effective_target_from_budget(budget: &GpuBudgetSnapshot, config: GpuWorkerConfig) -> u64 {
+    if !budget.can_admit(0) {
+        return 0;
+    }
+    let capacity = budget
+        .total_bytes
+        .unwrap_or(budget.budget_bytes)
+        .min(budget.budget_bytes);
+    let reserve = config.reserve_floor_bytes.max(capacity.div_ceil(5));
+    capacity.saturating_sub(reserve).min(config.target_bytes)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameHeader {
@@ -131,14 +153,8 @@ pub struct GpuCacheWorker<'p, P: VramProvider + 'p> {
 
 impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
     pub fn new(provider: &'p P, config: GpuWorkerConfig) -> Self {
-        let effective_target = match provider.mem_info() {
-            Ok((_free, total)) => {
-                let twenty_percent = total.div_ceil(5);
-                let effective_reserve = config.reserve_floor_bytes.max(twenty_percent);
-                total
-                    .saturating_sub(effective_reserve)
-                    .min(config.target_bytes)
-            }
+        let effective_target = match provider.budget_snapshot() {
+            Ok(budget) => effective_target_from_budget(&budget, config),
             // No GPU measurement available: report zero target so the client
             // and telemetry correctly reflect that physical VRAM is absent
             // (SPEC RF-4, GAP-6).
@@ -235,7 +251,12 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
     pub fn reclaim_under_host_pressure(&mut self) -> Result<u64, VramError> {
         let mut released = 0u64;
         loop {
-            let (free, _) = self.provider.mem_info()?;
+            let budget = self.provider.budget_snapshot()?;
+            let free = if budget.can_admit(0) {
+                budget.available_bytes()
+            } else {
+                0
+            };
             if free >= RUNTIME_RECOVERY_BUFFER_BYTES {
                 self.pressure_constrained = false;
             }
@@ -262,8 +283,8 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         // protects the display and other GPU consumers at each allocation.
         if !self
             .provider
-            .mem_info()
-            .is_ok_and(|(free, _)| free >= needed.saturating_add(RUNTIME_FREE_BUFFER_BYTES))
+            .budget_snapshot()
+            .is_ok_and(|budget| budget.can_admit(needed.saturating_add(RUNTIME_FREE_BUFFER_BYTES)))
         {
             return;
         }
@@ -403,6 +424,20 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                 if worker.reclaim_under_host_pressure().is_err() {
                     worker.handle_disable();
                 }
+                let budget_payload = if worker.is_disabled() {
+                    Vec::new()
+                } else {
+                    worker
+                        .provider
+                        .budget_snapshot()
+                        .ok()
+                        .map(|snapshot| {
+                            GpuBudgetTelemetry::from_snapshot(&snapshot, unix_time_ms())
+                        })
+                        .and_then(|telemetry| serde_json::to_vec(&telemetry).ok())
+                        .filter(|payload| payload.len() <= MAX_GPU_BUDGET_PAYLOAD_BYTES)
+                        .unwrap_or_default()
+                };
                 let resp = FrameHeader {
                     msg_type: MSG_HEARTBEAT_RESP,
                     status: if worker.is_disabled() {
@@ -412,11 +447,16 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                     },
                     correlation_id: hdr.correlation_id,
                     offset: worker.target_bytes(),
-                    payload_len: 0,
+                    payload_len: budget_payload.len() as u32,
                     aux: (worker.cached_bytes() >> 10) as u32,
                 };
                 if let Err(e) = socket.write_all(&resp.encode()) {
                     return Err(format!("worker write heartbeat error: {e}"));
+                }
+                if let Err(e) = socket.write_all(&budget_payload) {
+                    return Err(format!(
+                        "worker write heartbeat budget telemetry error: {e}"
+                    ));
                 }
             }
             _ => {}
@@ -433,10 +473,77 @@ mod tests {
     use super::*;
     use crate::ipc_cache_client::IpcCacheClient;
     use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
-    use ramshared_vram::VramError;
+    use ramshared_vram::{GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetSource, VramError};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
+
+    fn trusted_test_budget(free: u64, total: u64) -> GpuBudgetSnapshot {
+        GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "test".into(),
+                key: "fake-adapter-0".into(),
+                luid: None,
+            }),
+            total_bytes: Some(total),
+            budget_bytes: total,
+            used_bytes: total.saturating_sub(free),
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn worker_budget_target_requires_external_adapter_bound_snapshot() {
+        let config = GpuWorkerConfig {
+            target_bytes: 4 * 1024,
+            chunk_bytes: 512,
+            reserve_floor_bytes: 1024,
+        };
+        let trusted = GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "test".into(),
+                key: "stable-id".into(),
+                luid: None,
+            }),
+            total_bytes: Some(8 * 1024),
+            budget_bytes: 5 * 1024,
+            used_bytes: 1024,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        };
+        assert_eq!(effective_target_from_budget(&trusted, config), 4 * 1024);
+
+        let unknown = GpuBudgetSnapshot {
+            adapter: None,
+            source: GpuBudgetSource::ProviderLocalEstimate,
+            ..trusted
+        };
+        assert_eq!(effective_target_from_budget(&unknown, config), 0);
+    }
+
+    #[test]
+    fn worker_budget_target_never_exceeds_current_available_headroom() {
+        let config = GpuWorkerConfig {
+            target_bytes: 4 * 1024,
+            chunk_bytes: 512,
+            reserve_floor_bytes: 1024,
+        };
+        let low_headroom = GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "test".into(),
+                key: "stable-id".into(),
+                luid: None,
+            }),
+            total_bytes: Some(8 * 1024),
+            budget_bytes: 5 * 1024,
+            used_bytes: 4 * 1024,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        };
+
+        assert_eq!(effective_target_from_budget(&low_headroom, config), 1024);
+    }
 
     struct FakeMem {
         data: Arc<Mutex<Vec<u8>>>,
@@ -526,6 +633,10 @@ mod tests {
         fn mem_info(&self) -> Result<(u64, u64), VramError> {
             Ok((self.free, self.total))
         }
+
+        fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
+            Ok(trusted_test_budget(self.free, self.total))
+        }
     }
 
     struct PressureProvider {
@@ -558,6 +669,11 @@ mod tests {
                 .saturating_sub(self.external.load(Ordering::SeqCst))
                 .saturating_sub(cache_bytes);
             Ok((free, self.total))
+        }
+
+        fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
+            let (free, total) = self.mem_info()?;
+            Ok(trusted_test_budget(free, total))
         }
     }
 
@@ -912,6 +1028,22 @@ mod tests {
         let read_outcome = client.read(0, &mut read_buf);
         assert_eq!(read_outcome, CacheRead::Hit);
         assert_eq!(read_buf, promote_data);
+
+        client
+            .refresh_cached_bytes()
+            .expect("heartbeat reports cached bytes");
+        let budget = client
+            .gpu_budget_telemetry()
+            .expect("heartbeat publishes adapter budget");
+        assert_eq!(
+            budget.adapter.as_ref().map(|id| id.backend.as_str()),
+            Some("test")
+        );
+        assert_eq!(budget.source, GpuBudgetSource::DriverReported);
+        assert_eq!(
+            budget.trusted_available_at(unix_time_ms(), 5_000),
+            Some(6 * 1024 * 1024 * 1024)
+        );
 
         let disable_outcome = client.disable();
         assert_eq!(disable_outcome, CacheMutation::Accepted);
