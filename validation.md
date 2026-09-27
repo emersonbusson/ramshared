@@ -6652,3 +6652,91 @@ pressure, installation, or WSL termination was performed. Cross-vendor live
 allocation and full three-tier qualification remain open.
 **Verdict:** 🟡 `PARTIAL` — source-level target selection and evidence checks
 pass; the live worker target and hardware qualification remain unproven.
+
+## 2026-09-27 08:37 -03 — WSL memory attribution and benchmark display guard
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0086`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T11:37:45Z`.
+**Verified at:** `2026-09-27T11:41:49Z`.
+**Source revision:** `4ebc75fa306679103c87c0ca9a9bf97a1c4f4f18`.
+**Source state:** The fail-closed monitor change is committed in source but has
+not been built or installed. The long-running interactive dashboard still
+uses the installed 0.14.1 binary. The existing `target/debug/ramshared` monitor
+was used only for memory-scope and tier state; its benchmark field was excluded
+because it predates this parser change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0081, EVD-0085, and the benchmark evidence integrity
+SPEC.
+**Freshness:** The WSL and Windows samples were collected less than one second
+apart. The source tests completed on 2026-09-27; no build, install, pressure
+campaign, GPU allocation, or WSL restart occurred.
+**Category:** `reliability / memory / evidence-integrity`.
+**How to measure:** From WSL, read `/proc/meminfo`, `/proc/pressure/memory`,
+`/proc/swaps`, `uname -r`, and systemd unit state; run the existing monitor
+with `--jsonl --once` for typed memory-scope and tier observations. From
+Windows PowerShell, call `Get-SharedWslHostMemorySample` and inspect the
+working set and private bytes of `vmmemWSL` and `powershell` processes. Verify
+the source parser with `cargo test -p ramshared-cli -j 1 monitor_benchmark_`
+and the monitor slice coverage gate.
+
+**What:** The monitor previously trusted `status` and scalar metrics from
+`docs/benchmarks/history/latest.json`. That file is the historical Build #5
+record, which EVD-0047 and `docs/BENCHMARKS.md` classify as unqualified; it has
+no v1 evidence envelope, source/binary identity, or promotion decision. When
+run from the repository root, the old parser therefore displayed its
+`PASS_ZERO_PANIC` verdict and old reclaim numbers as current benchmark output.
+The source now accepts only a promotable `ramshared-evidence/v1` record with a
+clean source, qualified comparison, binary match, passing legitimate/refusal
+checks, complete cleanup, zero residue, and at least three internally
+consistent samples for every displayed metric. It recomputes the median and
+nearest-rank p99 from those samples. Legacy, baseline, dirty, incomplete, and
+forged-summary records return `AWAITING_QUALIFICATION`.
+
+**Verification:** The four named monitor tests first failed against the old
+parser; the legacy fixture reproduced the false green `PASS_ZERO_PANIC`. After
+the fix, all four passed. The full CLI suite passed 345 unit tests and 10
+dispatch tests; strict Clippy passed; `monitor.rs` coverage passed at 88.7%
+(2,033/2,292 lines); `cargo fmt --check -p ramshared-cli` and
+`git diff --check` passed. The test checkpoint is `5e4d8289`; the fix is
+`4ebc75fa`.
+
+**Paired host and guest observation:** The monitor identified `memory_scope=wsl2`
+and `MemTotal=16,379,360 KiB`. `MemAvailable` varied from `980,972` to
+`987,472 KiB` across samples collected within one second (about 958–964 MiB);
+`SwapFree` was `2,744,368 KiB` (2,680 MiB) out of a 4 GiB fallback swap, with
+`1,449,936 KiB` used. PSI `some` and `full` `avg10` were zero. RamShared was
+`Off`, the daemon was absent, ZRAM and VRAM tiers were absent, the Guardian was
+healthy, and `ramshared-supervisor.service` was inactive. Systemd was running.
+Guest process totals were `2,991,236 KiB` RSS and `1,432,556 KiB` swap; the
+largest visible process, `rust-analyzer`, had `837,944 KiB` RSS and
+`1,012,972 KiB` swap. Cgroup accounting was `partial`.
+
+Windows `GetPerformanceInfo` reported `10,315 MiB` physical headroom and
+`27,723 MiB` commit headroom. The `vmmemWSL` working set was `12,969.2 MiB`;
+its `16,142.4 MiB` private bytes are a commit measure, not physical RAM. Four
+PowerShell processes used `414.6 MiB` private bytes combined; the largest used
+`157.4 MiB`. No multi-GiB PowerShell process was observed. The full stress
+profile requires `20,480 MiB` physical headroom, and its guest reserve requires
+at least `1,024 MiB` `MemAvailable`; both gates would refuse at this sample.
+No stress preflight or pressure workload was started.
+
+**Installed dashboard:** The active `ramshared top` process still resolves to
+the installed `/usr/local/bin/ramshared` 0.14.1 binary. That binary contains
+only the `Host RAM` label strings; the source-built debug binary contains
+`WSL2 RAM` and `WSL2 RAM & Swap`. The installed panel therefore still needs a
+new build and installation before the corrected label and evidence display can
+appear on the host.
+
+**Conclusion:** The displayed 15.6 GiB `MemTotal` belongs to WSL2, not Windows
+physical RAM. Current WSL memory use is not evidence of an active RamShared
+stress run: all managed tiers are off and PSI is zero. The old PowerShell
+multi-GiB anomaly did not recur; current PowerShell private use is below
+158 MiB per process. The exact cause of the large `vmmemWSL` working set and
+the earlier freeze remains unresolved because guest cgroup accounting is
+partial and no current source build is installed. The stress remains blocked
+by host physical headroom and guest `MemAvailable`.
+**Verdict:** 🟡 `PARTIAL` — the source now refuses the unqualified benchmark
+record, but the host still runs the old dashboard binary; memory attribution
+and live stress qualification remain open.

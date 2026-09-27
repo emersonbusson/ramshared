@@ -29,6 +29,9 @@ a feature DONE or establish a regression baseline.
 - The exploratory Windows storage matrix could calculate RED/YELLOW rows but
   still return zero and print `STATUS=PASS`; it also did not persist the live
   hashes that it had verified.
+- The RamShared terminal monitor read `status` and performance numbers directly
+  from the legacy `docs/benchmarks/history/latest.json`. That Build #5 record is
+  explicitly unqualified, but the monitor displayed `PASS_ZERO_PANIC` anyway.
 - SSDV3 requires every named SPEC test and live evidence, but the repository
   has no general SPEC-to-test/evidence completeness checker.
 
@@ -68,6 +71,7 @@ Rejected alternatives:
 | RF-8 | Separate measurement validity from product acceptance. | A complete BASELINE may become a qualified comparator, but is not a regression PASS; env-bound evidence remains PARTIAL/yellow and never becomes index-quality DONE. |
 | RF-9 | Preserve failure and cleanup evidence. | Timeout, integrity error, BINARY_MATCH failure, residue, forced kill, unsafe recovery, or incomplete rollback is RED and retained with before/action/after state. |
 | RF-10 | Make stable journeys reusable. | Repeated physical or VM drills live under `scripts/safety`, `scripts/p0`, or `scripts/windows`, support plan-only mode where destructive, and emit the common evidence envelope. |
+| RF-11 | Keep the runtime benchmark display fail-closed. | The monitor displays metrics only from a clean, promotable `ramshared-evidence/v1` PASS with a qualified comparison, loaded-binary match, complete cleanup, no residue, and internally consistent samples; legacy or incomplete records show `AWAITING_QUALIFICATION`. |
 | NFR-1 | Remain product-specific. | Schema fields and documentation describe RamShared surfaces only; no foreign service names, narratives, or copied process templates. |
 | NFR-2 | Be deterministic and offline-verifiable. | Validators require no network and produce stable output for the same repository and artifact set. |
 | NFR-3 | Protect secrets and host identity. | Sanitization rejects tokens, passwords, KASLR addresses, and unnecessary personal identifiers before evidence can be committed. |
@@ -129,6 +133,8 @@ the same narrative across files:
 5. Add the validators to `scripts/docs-check.sh` and CI only after the current
    tree passes with honest legacy markers.
 6. Register new results only after their platform-specific live gates pass.
+7. Make the runtime monitor consume only promotable v1 evidence; never infer
+   qualification from a legacy `status` field.
 
 ## Acceptance criteria
 
@@ -144,6 +150,8 @@ the same narrative across files:
 - [ ] Windows, WSL2, and pure-userspace fixtures demonstrate the same envelope
       without erasing their platform-specific gates.
 - [ ] `scripts/docs-check.sh` and CI run the validators offline.
+- [ ] The monitor refuses legacy `PASS_ZERO_PANIC`, baseline, dirty, incomplete,
+      and forged-summary records while accepting a complete promotable v1 PASS.
 
 ## Risks and rollback
 

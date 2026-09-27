@@ -8,7 +8,8 @@
       "canonical_spec": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
       "implementation_paths": [
         "tools/ci/check-benchmark-evidence.mjs",
-        "tools/ci/check-spec-evidence.mjs"
+        "tools/ci/check-spec-evidence.mjs",
+        "crates/ramshared-cli/src/monitor.rs"
       ],
       "named_tests": [
         {
@@ -18,25 +19,41 @@
         {
           "path": "tools/ci/check-spec-evidence.test.mjs",
           "name": "complete_done_manifest_passes"
+        },
+        {
+          "path": "crates/ramshared-cli/src/monitor.rs",
+          "name": "monitor_benchmark_rejects_legacy_unqualified_status"
+        },
+        {
+          "path": "crates/ramshared-cli/src/monitor.rs",
+          "name": "monitor_benchmark_accepts_promotable_v1_evidence"
+        },
+        {
+          "path": "crates/ramshared-cli/src/monitor.rs",
+          "name": "monitor_benchmark_rejects_nonpromotable_evidence"
+        },
+        {
+          "path": "crates/ramshared-cli/src/monitor.rs",
+          "name": "monitor_benchmark_rejects_dirty_or_incomplete_evidence"
         }
       ],
       "cover": {
-        "mode": "N/A — Node named tests",
-        "minimum_percent": null,
-        "evidence_path": "docs/specs/no-milestone/benchmark-evidence-integrity/evidence/validation-summary.json"
+        "mode": "rust-line",
+        "minimum_percent": 80,
+        "evidence_path": "validation.md"
       },
       "validation": {
         "record_path": "validation.md",
         "verdict": "🟡",
-        "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
+        "source_commit": "4ebc75fa306679103c87c0ca9a9bf97a1c4f4f18",
         "evidence_paths": [
           "docs/specs/no-milestone/benchmark-evidence-integrity/evidence-manifest.json"
         ]
       },
-      "binary_match_required": false,
-      "environment_blocker": "The recorded source revision does not contain the canonical SPEC, declared evidence manifest, or checker closure referenced by this claim.",
-      "missing_gate": "same-revision benchmark-evidence claim closure",
-      "next_proof": "Create a fresh validation record on a revision that contains the SPEC, implementation, named tests, coverage evidence, and evidence manifest; then re-evaluate the claim without rewriting historical records.",
+      "binary_match_required": true,
+      "environment_blocker": "The installed dashboard is still 0.14.1.",
+      "missing_gate": "deployed runtime monitor BINARY_MATCH and legacy-record refusal",
+      "next_proof": "Build and install build and install the corrected source revision, verify BINARY_MATCH, and capture deployed output that refuses the legacy record.",
       "rollback_trigger": "one invalid evidence record or false DONE passes"
     },
     {

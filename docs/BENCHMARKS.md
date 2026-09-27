@@ -325,3 +325,7 @@ measures vector release time rather than physical reclaim. The reported
 integrity/kernel-log proof. EVD-0046 remains in the append-only validation log,
 but EVD-0047 supersedes its qualification verdict. Re-run the corrected metric
 schema on a clean host with three matched rounds before publishing a new claim.
+The runtime monitor now refuses this legacy summary and displays
+`AWAITING_QUALIFICATION`; it accepts metrics only from clean, promotable v1
+evidence. This source fix is recorded in EVD-0086 and has not been installed on
+the host.
