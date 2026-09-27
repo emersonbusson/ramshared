@@ -1490,13 +1490,21 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let (status_text, state_color) = if daemon_alive {
-        ("🟢 STATUS: OPERATIONAL & PROTECTED", Color::Green)
-    } else if observation.bool_value("ok") == Some(true) {
-        ("🟢 STATUS: OPERATIONAL", Color::Green)
-    } else {
-        ("🟡 STATUS: ARMED & READY", Color::Yellow)
-    };
+    let protection_state = observation.string("protection_state");
+    let status_ok = observation.bool_value("ok") == Some(true);
+    let (status_text, state_color, protection_text) =
+        match (protection_state, daemon_alive, status_ok) {
+            ("ACTIVE", true, true) => {
+                ("🟢 STATUS: OPERATIONAL & PROTECTED", Color::Green, "ACTIVE")
+            }
+            ("READY", true, true) => ("🟡 STATUS: ARMED & READY", Color::Yellow, "READY"),
+            ("OFF", _, _) => ("⚪ STATUS: OFF", Color::DarkGray, "OFF"),
+            ("AT_RISK", true, _) => ("🟠 STATUS: AT RISK", Color::Yellow, "AT RISK"),
+            ("BLOCKED", _, _) | ("AT_RISK", false, _) | ("ACTIVE" | "READY", _, _) => {
+                ("🔴 STATUS: BLOCKED", Color::Red, "BLOCKED")
+            }
+            _ => ("🟡 STATUS: UNKNOWN", Color::Yellow, "UNKNOWN"),
+        };
 
     let version = env!("CARGO_PKG_VERSION");
     let uptime = observation.control_plane.uptime_seconds;
@@ -1506,7 +1514,7 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         "⏱️ Live".to_string()
     };
     let header = Paragraph::new(Line::from(format!(
-        " RamShared v{version} │ {status_text} │ {live_uptime} │ Protection: ACTIVE",
+        " RamShared v{version} │ {status_text} │ {live_uptime} │ Protection: {protection_text}",
     )))
     .style(Style::default().fg(state_color))
     .block(
@@ -2649,6 +2657,13 @@ mod tests {
             assert!(rendered.contains("Diagnostics") || rendered.contains("Info"));
             assert!(rendered.contains("Priority Order") || rendered.contains("exit"));
             assert!(!rendered.contains("PCIe Hardware"));
+            if sample.bool_value("ok") == Some(true) {
+                assert!(rendered.contains("STATUS: OPERATIONAL & PROTECTED"));
+                assert!(rendered.contains("Protection: ACTIVE"));
+            } else {
+                assert!(rendered.contains("STATUS: OFF"));
+                assert!(rendered.contains("Protection: OFF"));
+            }
             if sample.gpu.is_some() {
                 assert!(rendered.contains("fixture-uuid"));
                 assert!(rendered.contains("6144 MiB"));
@@ -2656,6 +2671,54 @@ mod tests {
                 assert!(rendered.contains("Active worker GPU budget unavailable"));
             }
         }
+    }
+
+    #[test]
+    fn dashboard_reports_protection_off_when_cascade_is_disabled() {
+        let sample = observation(false, false);
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("STATUS: OFF"));
+        assert!(rendered.contains("Protection: OFF"));
+        assert!(rendered.contains("STOPPED"));
+        assert!(!rendered.contains("ARMED & READY"));
+        assert!(!rendered.contains("Protection: ACTIVE"));
+    }
+
+    #[test]
+    fn dashboard_blocks_stale_active_state_without_live_daemon() {
+        let mut sample = observation(false, false);
+        sample.status.insert(
+            "protection_state".to_string(),
+            Value::String("ACTIVE".to_string()),
+        );
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("STATUS: BLOCKED"));
+        assert!(rendered.contains("Protection: BLOCKED"));
+        assert!(!rendered.contains("Protection: ACTIVE"));
     }
 
     #[test]
