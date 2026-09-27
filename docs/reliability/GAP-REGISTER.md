@@ -43,7 +43,7 @@ their own live qualification before any automatic boot activation.
 
 ## Latest Evidence — 2026-09-27
 
-### WSL2 freeze memory ownership (EVD-0093–EVD-0096)
+### WSL2 freeze memory ownership (EVD-0093–EVD-0097)
 
 The active WSL guest's `vmbus_alloc_buffer` vmalloc entries grew from 27,661
 maps / 2,861,541 declared backing pages at 14:28 to 31,792 maps / 3,288,325
@@ -85,8 +85,18 @@ EVD-0096 also confirms the screenshot label bug is a deployment-parity gap:
 the current source already labels WSL2 memory correctly and its focused test
 passes, but the installed/local release binaries inspected here predate that
 change. The exact executable behind the screenshot was not captured. This
-display bug is independent of the freeze investigation. Keep both the exact
-freeze cause and corrected kernel deployment `PARTIAL`; stress remains off.
+display bug is independent of the freeze investigation. EVD-0097 pairs the
+post-restart host and guest: `vmmemWSL` reached about 15.6 GiB while Windows
+physical headroom fell below 4.4–4.8 GiB, even as the guest reported 8.6–11.8
+GiB available, near-empty swap, and zero PSI. The guest had about 8.6 GiB of
+page cache and `.wslconfig` had `autoMemoryReclaim=disabled`; the local setting
+has been changed to `gradual` but is not active until a future WSL start.
+This may mitigate host-side cache retention and does not explain the earlier
+guest freeze. The current GPADL diff retains uncertain owners without recovery;
+UIO `/dev/uio` VMAs are not accounted for, so freeing or re-encrypting their
+pages at unregister is unsafe. It has not been built or installed. Keep the
+exact freeze cause and corrected kernel deployment `PARTIAL`; stress remains
+off.
 
 ## Closed In This Session
 

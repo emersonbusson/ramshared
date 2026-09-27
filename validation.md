@@ -7475,3 +7475,101 @@ owners, GPADL causality, and a safe installed fix remain unproven.
 
 **Verdict:** 🟡 `PARTIAL` — freeze preceded by severe guest memory/swap stalls;
 exact trigger and safe kernel correction remain unresolved. Keep stress off.
+
+## 2026-09-27 15:49–16:15 -03 — Post-restart host/guest memory divergence
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0097`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T19:08:54Z`.
+**Verified at:** `2026-09-27T19:15:21Z`.
+**Source revision:** `362247cdf7d7c140b751e225c07113f931f479ec`.
+**Source state:** Paired read-only Windows and guest counters after the user
+restarted WSL; review of screenshots, `.wslconfig`, and the uncommitted VMBus
+source diff. After the samples, only `autoMemoryReclaim` was changed from
+`disabled` to `gradual`; the prior file was backed up. No WSL shutdown, build,
+kernel installation, or stress was performed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0091, EVD-0095, EVD-0096, and the VMBus source
+audit.
+**Freshness:** Post-restart host sample at 15:49:20; guest sample at 15:51:39;
+paired guest/host sample at 16:08:53–16:08:54; follow-up guest/host sample at
+16:11:43–16:12:06; fresh RamShared health sample at 16:15:21 -03.
+**Category:** `reliability / memory / host-guest / WSL2 / VMBus lifecycle`.
+**How to measure:** Pair Windows physical-memory and `vmmemWSL` counters with
+guest `/proc/meminfo`, `/proc/swaps`, memory PSI, and root-readable
+`/proc/vmallocinfo`; read the effective configuration file and latest
+RamShared health record. Keep resident bytes, private bytes, guest availability,
+and page-cache values separate.
+
+**What:** Determine whether the high Windows `vmmemWSL` working set after the
+restart represents the same condition as the freeze, whether the new memory
+reclaim setting addresses that host-side condition, and whether the current
+VMBus diff is safe to build or install.
+
+**Paired post-restart measurements:** At 16:08:53–16:08:54, the guest reported
+`MemAvailable=12,418,808 KiB` (about 11.84 GiB), only 2,440 KiB of the 4 GiB
+swap used, and zero memory PSI avg10. At the same time, Windows had
+4,897.2 MiB physical RAM available out of 32,669.8 MiB, system commit
+33,348.6/57,245.8 MiB, and `vmmemWSL` at 15,715.4 MiB working set
+and 16,042.7 MiB private bytes. Thus the host had low physical headroom while
+the guest still reported substantial availability; this was not the same
+guest-side swap-thrashing state as EVD-0096.
+
+At 16:11:43–16:12:06, guest `MemAvailable` was 9,060,656 KiB (about 8.64 GiB),
+`Cached` was 8,991,088 KiB (about 8.58 GiB), swap use was about 58 MiB, and
+PSI avg10 remained zero. `vmmemWSL` remained near 15.6 GiB working set; Windows
+physical headroom was 4,447 MiB. The guest had 1,289
+`vmbus_alloc_buffer` maps and 135,583 declared backing pages (about 530 MiB),
+far below the 31,792 maps / 3,288,325 pages recorded before the freeze in
+EVD-0095. Since the 15:49:20 host sample, `vmmemWSL` working set increased by
+about 10,803 MiB while physical headroom fell by about 9,460 MiB over roughly
+19 minutes. This demonstrates a host-resident WSL footprint increase, but
+does not identify which guest allocations or files own all those bytes.
+
+**Memory-reclaim configuration:** At review time, `.wslconfig` contained
+`autoMemoryReclaim=disabled`. Microsoft documents that `disabled` turns off
+automatic WSL memory reclamation, while `gradual` reclaims cached memory
+slowly and `dropCache` reclaims it immediately
+([WSL configuration](https://learn.microsoft.com/windows/wsl/wsl-config)).
+At 16:14:59 -03, the setting was changed to `gradual`; an exact copy of the
+previous file was retained for rollback. The change is not active in the
+already-running WSL VM and will require its next start. This is a reversible
+mitigation for possible host retention of guest cache, not a fix for the
+previous guest freeze. Verify it only after a naturally scheduled or otherwise
+authorized WSL restart by collecting paired host/guest values again. If guest
+cached pages fall by at least 1 GiB over a 10-minute low-activity window but
+Windows physical headroom does not improve by at least 512 MiB, restore the
+previous setting and reject this as an effective host-headroom mitigation.
+
+**RamShared state:** The screenshot during the freeze shows tiers off and the
+daemon stopped. At 16:15:21, the fresh health sample reported phase `Off`,
+`activation.active=false`, `daemon.alive=false`, `MemAvailable=9,483,844 KiB`,
+`SwapFree=4,133,520 KiB`, and zero PSI avg10. No stress or cache activation
+was running in the recorded current state.
+
+**Kernel correction review:** The active guest still runs
+`6.18.40.1-microsoft-standard-WSL2+ #6`; the current kernel checkout image is
+not the active image and has no receipt linking Build #6 to its source. The
+uncommitted VMBus diff now conservatively retains some buffers when GPADL
+ownership is uncertain, but does not yet provide a reclamation path. The
+review found that `uio_unregister_device()` does not account for or wait on
+open `/dev/uio` VMAs; releasing or re-encrypting their backing pages before
+the last mapping closes can leave userspace mappings referencing freed or
+re-encrypted memory. The speculative reclaimer was removed. The remaining
+diff passed `git diff --check`, but was not compiled, KUnit-tested, installed,
+or run on a Hyper-V/CoCo guest. It is not a safe installation candidate.
+
+**Assessment:** The freeze remains best explained by severe guest memory
+stalling and swap thrashing while the Windows host still had physical memory
+available. VMBus allocation growth remains a strong, unowned candidate for
+that guest accumulation. The high post-restart Windows `vmmemWSL` working set
+is a separate condition consistent with guest cache retention under
+`autoMemoryReclaim=disabled`; the measurements do not prove it accounts for
+all resident bytes. The I: read owner, allocation owners, Build #6 source,
+and causal connection to GPADL remain unknown. No kernel correction was
+installed.
+
+**Verdict:** 🟡 `PARTIAL` — host-side cache reclaim is staged for the next WSL
+start; freeze cause and safe GPADL/UIO reclamation remain unresolved. Keep
+stress off and do not install the unbuilt source diff.
