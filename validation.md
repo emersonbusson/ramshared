@@ -7138,3 +7138,340 @@ causality remain unresolved.
 **Verdict:** 🟡 `PARTIAL` — host physical headroom remained stable over the latest
 interval and above the earlier sample; this does not identify the owner or
 cause of guest-side VMBus growth or the prior freeze.
+
+## 2026-09-27 14:28 -03 — Paired guest pressure and Windows host sample
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0093`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T17:28:30Z`.
+**Verified at:** `2026-09-27T17:28:32Z`.
+**Source revision:** `e22fcd507d558230dc006836c05fe235c47677dc`.
+**Source state:** Read-only guest `/proc` and Windows telemetry from the
+already-running WSL instance; no WSL launch, stress, build/install, process
+termination, shutdown, or configuration change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0089 through EVD-0092 and the VMBus backport audit.
+**Freshness:** Guest sample at 14:28:30–14:28:32 and Windows sample at
+14:28:30.985–14:28:31.053 -03; the two measurements overlap within about two
+seconds. Both refer to the same prior pressured guest boot.
+**Category:** `reliability / memory / kernel-allocation`.
+**How to measure:** Read guest `/proc/meminfo`, `/proc/pressure/memory`,
+`/proc/swaps`, and `/proc/vmallocinfo` in the current guest. On Windows, read
+physical RAM with `GlobalMemoryStatusEx`, system commit with
+`GetPerformanceInfo`, and process residency/commit with `Get-Process`; do not
+launch another WSL instance.
+
+**What:** Check whether the guest-side allocator growth and memory pressure
+continued, and whether physical RAM use was simultaneously rising on Windows.
+
+**Guest:** Kernel `6.18.40.1-microsoft-standard-WSL2+ #6` reported
+`MemTotal=16,379,368 KiB`, `MemAvailable=1,449,216 KiB`, and
+`MemFree=1,009,416 KiB`. Swap had `1,116,520 KiB` free of `4,194,304 KiB`
+(3,077,784 KiB used, about 3,006 MiB). PSI `some` avg10/60/300 was
+`0.02/0.29/0.27`; `full` was `0.02/0.29/0.26`. Root read-only inspection found
+27,661 `vmbus_alloc_buffer` vmalloc entries totaling 11,834,171,392 bytes of
+area. There were 27,154 entries of 430,080 bytes with `pages=104`; all reported
+backing page counts summed to 2,861,541. Vmalloc area is not Windows resident
+RAM, and the entries do not identify their owners.
+
+**Comparison with EVD-0091 at 14:02:55:** Over about 25 minutes 35 seconds,
+the map count increased by 2,729 and summed vmalloc area by 1,166,315,520 bytes
+(about 1,112 MiB). `MemAvailable` fell by 738,800 KiB (about 721 MiB), and
+`SwapFree` fell by 660,776 KiB (about 645 MiB). PSI averages are non-zero but
+remain low at this sample; this does not show an active freeze.
+
+**Windows, sampled at the same time:** Physical RAM totaled 32,670 MiB with
+16,401 MiB available, 16,269 MiB used, and 49% load. System commit was
+30,958 MiB of a 57,246 MiB limit, leaving 26,288 MiB. `VmmemWSL` had a
+6,064.7 MiB working set and 16,121.7 MiB private bytes. Three PowerShell
+processes totaled 242.6 MiB private bytes. Since EVD-0092 at 14:19, physical
+headroom rose by 242 MiB and `VmmemWSL` working set fell by 417 MiB; its
+private bytes rose by 140.5 MiB. Private bytes and system commit are not
+resident physical RAM.
+
+**Assessment:** The paired sample confirms continued guest-side map growth,
+lower guest headroom, and increased guest swap use while Windows physical
+headroom remained ample and increased. The map/page trend supports a guest
+kernel-buffer accumulation candidate; it does not by itself prove a leak,
+identify an owner, match the Build #6 image to a source commit, or establish the
+cause of the earlier freeze. The proposed GPADL fix is still source-only and
+does not yet have a verified WSL image or installation pair.
+
+**Verdict:** 🟡 `PARTIAL` — the guest has materially reduced headroom and
+substantial swap use, but the Windows host is not running out of physical RAM.
+The exact buffer lifecycle and corrective host image remain unqualified.
+
+## 2026-09-27 14:50–14:51 -03 — Follow-up guest pressure and Windows process sample
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0094`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T17:50:56Z`.
+**Verified at:** `2026-09-27T17:51:50Z`.
+**Source revision:** `e22fcd507d558230dc006836c05fe235c47677dc`.
+**Source state:** Read-only guest `/proc` and Windows API/process snapshots;
+one identified background `git fetch --all` in the kernel repository was
+interrupted to stop an unnecessary full-history fetch. No stress, build,
+kernel install, WSL shutdown, or configuration change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0092 and EVD-0093 and the WSL freeze timeline.
+**Freshness:** Guest metrics at 14:51:08 -03; Windows physical/commit sample
+at 14:50:56 and process ranking at 14:51:50. All use the same active guest
+boot ID as EVD-0093; host/guest samples are within about 54 seconds.
+**Category:** `reliability / memory / host-telemetry`.
+**How to measure:** Read guest memory, swap, PSI, and allocator entries from
+the current guest. On Windows, use `GlobalMemoryStatusEx`, `GetPerformanceInfo`,
+and `Get-Process`; do not start a second WSL instance.
+
+**What:** Recheck whether the WSL guest was approaching the prior pressure
+pattern, determine whether Windows physical RAM was also being exhausted, and
+assess the impact of the long-running full-history fetch.
+
+**Guest at 14:51:08:** The active kernel was still
+`6.18.40.1-microsoft-standard-WSL2+` in the prior pressured guest boot.
+`MemAvailable` was 714,072 KiB
+(about 697 MiB), `MemFree` 914,924 KiB, and `SwapFree` 1,325,820 KiB of
+4,194,304 KiB total. PSI `some` avg10/60/300 was `1.83/1.37/2.14`; `full`
+was `1.83/1.35/2.07`. There were 30,058 `vmbus_alloc_buffer` map entries;
+29,510 reported 104 pages, and reported page counts summed to 3,109,189.
+The area-total parser did not recognize the `vmallocinfo` address format at
+this sample, so no current total area is claimed.
+
+**Comparison with EVD-0093:** In about 22 minutes, the map count rose by
+2,397 and `pages=104` entries by 2,356. `MemAvailable` fell by 735,144 KiB
+(about 718 MiB), while `SwapFree` rose by 209,300 KiB. The recent PSI was
+non-zero and had fluctuated: at 14:48 it was about 4.9% avg10, then about
+1.8% at 14:51. This is active but varying guest memory pressure, not proof
+that a freeze was imminent at either snapshot.
+
+**Windows at 14:50:56:** Physical RAM totaled 32,670 MiB with 14,775 MiB
+available, 17,894 MiB used, and 54% load. System commit was 33,125 MiB of a
+57,246 MiB limit, leaving 24,121 MiB. `VmmemWSL` had a 5,798.5 MiB working
+set and 15,999.5 MiB private bytes; two PowerShell processes totaled 189.1 MiB
+private bytes. Compared with EVD-0093 at 14:28, physical headroom fell by
+1,626 MiB, while `VmmemWSL` working set fell 266 MiB and private bytes fell
+122 MiB. The Windows process ranking about 54 seconds later showed 735 MiB
+working set for Memory Compression and 858 MiB private bytes for `obs64`, but
+there is no matching prior process ranking to attribute the host-memory
+change. Windows still had about 14.8 GiB physical headroom.
+
+**Background fetch:** The WSL process table showed `git fetch --all` in the
+kernel-contribution repository, fetching the Torvalds Linux remote, with an
+`index-pack` child using about 364 MiB RSS plus about 63 MiB for its fetch
+parent. This read-only background fetch had run for about 30 minutes and was
+interrupted at 14:49. The guest still had only about 763 MiB `MemAvailable`
+and PSI avg10 about 4.9% immediately after; subsequent guest and Windows
+samples did not show a recovery attributable to stopping it. It was extra
+resource use, but is not established as the source of the sustained VMBus
+growth or the earlier freeze.
+
+**Assessment:** The guest's reduced headroom and growing VMBus allocator map
+count continue to support a guest-side accumulation candidate. Windows
+physical use also rose during this separate interval, but `VmmemWSL` working
+set fell and 14.8 GiB remained available; process rankings do not explain the
+change. The `git fetch` was an unnecessary load and is now stopped. Exact
+allocator ownership, Build #6 source identity, and the freeze trigger remain
+unresolved. No corrected WSL kernel artifact is available to install.
+
+**Verdict:** 🟡 `PARTIAL` — guest pressure is now materially higher and needs
+prompt mitigation; host RAM remains available. The background fetch is stopped,
+but that did not resolve the guest pressure, and the kernel fix is not yet
+ported, built, or proven safe for this host.
+
+## 2026-09-27 15:02–15:09 -03 — VMBus map growth and host-memory follow-up
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0095`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T18:08:04Z`.
+**Verified at:** `2026-09-27T18:09:46Z`.
+**Source revision:** `e22fcd507d558230dc006836c05fe235c47677dc`.
+**Source state:** Read-only sample from the active WSL guest and Windows host.
+One identified VS Code `git fetch --all` in the kernel contribution repository
+was stopped after confirming its process tree. No stress, build, kernel
+installation, WSL shutdown, or configuration change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0089 through EVD-0094 and the WSL VMBus source audit.
+**Freshness:** Guest metrics at 15:08:04 -03; Windows physical/commit/process
+sample at 15:09:45 -03, about 101 seconds later. Both refer to the same prior
+pressured guest boot.
+**Category:** `reliability / memory / kernel-allocation`.
+**How to measure:** Read `/proc/meminfo`, `/proc/pressure/memory`, and
+`/proc/vmallocinfo` in the active guest; use `GlobalMemoryStatusEx`,
+`GetPerformanceInfo`, and `Get-Process` on Windows without launching another
+WSL instance.
+
+**What:** Recheck whether the guest-side VMBus allocation trend continued,
+whether Windows physical RAM was also being exhausted, and whether the
+background fetch accounted for the guest pressure.
+
+**Guest at 15:08:04:** Kernel `6.18.40.1-microsoft-standard-WSL2+ #6` reported
+`MemTotal=16,379,368 KiB`, `MemAvailable=524,192 KiB` (about 512 MiB), and
+`SwapFree=1,181,156 KiB` of 4,194,304 KiB (3,013,148 KiB used, about
+2,943 MiB). PSI `some` avg10/60/300 was `0.01/0.52/1.61`; `full` was
+`0.01/0.51/1.56`. Root read-only inspection counted 31,792
+`vmbus_alloc_buffer` vmalloc entries with 13,599,199,232 bytes of mapped area
+and 3,288,325 declared backing pages (about 12.54 GiB). Of these entries,
+31,214 report `pages=104`. `/proc/meminfo` reported `VmallocUsed=13,182,804
+KiB`. These mapping/backing-page totals describe guest kernel allocations;
+they are not a direct measurement of Windows resident physical RAM and do not
+identify buffer owners. The same snapshot found 89 VMBus device links; that is
+not a count of channels.
+
+**Trend since EVD-0093 at 14:28:** Over about 40 minutes, map count rose by
+4,131 and declared backing pages by 426,784 (about 1.63 GiB); `MemAvailable`
+fell by 925,024 KiB (about 903 MiB). `SwapFree` was 64,636 KiB higher than at
+14:28, so swap use did not rise monotonically across these two samples. The
+map/page growth and reduced guest headroom strengthen the guest-side
+accumulation hypothesis, without proving that all mapped pages were resident
+or that they caused the earlier freeze.
+
+**Background fetch:** At 15:02, a VS Code extension-host child was running
+`git fetch --all` in the kernel contribution checkout.
+The fetch had run for about 13 minutes and reached about 646 MiB RSS in one
+process sample; it was stopped at about 15:03, and all fetch children exited.
+At 15:05, guest `MemAvailable` was 441,808 KiB; by 15:08 it was 524,192 KiB,
+while the VMBus map count continued to 31,792. This fetch added avoidable
+memory load, but the samples do not show an immediate recovery attributable
+to stopping it or prove it was the source of the sustained VMBus growth.
+
+**Windows at 15:09:45:** Physical RAM totaled 32,670 MiB with 16,261 MiB
+available, 16,409 MiB used, and 50% load. System commit was 33,377 MiB of a
+57,246 MiB limit, leaving 23,869 MiB. `VmmemWSL` had a 3,845.5 MiB working
+set and 16,185.7 MiB private bytes. Compared with 15:00, physical headroom
+rose by 671 MiB, system commit use fell by 243 MiB, and `VmmemWSL` working
+set fell by 601 MiB. This does not show Windows physical RAM exhaustion.
+
+**Assessment:** Live evidence now strongly supports growing VMBus-backed
+guest allocations alongside low guest headroom, while Windows physical
+headroom increased. GPADL retention/rescind remains a plausible lifecycle
+mechanism, not a confirmed cause: the active Build #6 is not matched to an
+exact source commit, the VMBus entries do not identify owners, and the current
+host-rescind correction is only a source diff on the upstream branch. It is
+not yet ported to the WSL target, compiled, booted, or available as an
+installable image. The correction also cannot reclaim allocations already
+held by the running kernel before a matching kernel is activated.
+
+**Verdict:** 🟡 `PARTIAL` — guest headroom is low and the kernel map trend is
+material; current Windows RAM telemetry does not show host physical
+exhaustion. The active freeze mechanism and safe WSL correction remain
+unqualified. Do not claim that the new kernel is installed or that the
+source-only patch will lower current memory use.
+
+## 2026-09-27 15:37–15:54 -03 — WSL2 freeze and restart comparison
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0096`.
+**Owner role:** `runtime / reliability`.
+**Observed at:** `2026-09-27T18:37:12Z`.
+**Verified at:** `2026-09-27T18:54:58Z`.
+**Source revision:** `e22fcd507d558230dc006836c05fe235c47677dc`.
+**Source state:** Read-only review of the prior WSL journal, current guest
+metrics, Windows memory/event samples, and four user-provided screenshots.
+The user had already restarted
+WSL. No stress, kernel build/install, shutdown, or configuration change was
+performed during this evidence capture.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0091 through EVD-0095 and the VMBus source audit.
+**Freshness:** Prior-boot health sample at 15:37:12 -03; last persisted prior
+journal record at 15:41:47; screenshots file times 15:42:07–15:44:34; Windows
+post-restart sample at 15:49:20; current guest sample at 15:51:39; focused
+source test completed at 15:54.
+**Category:** `reliability / memory / freeze / dashboard-scope`.
+**How to measure:** Decode the RamShared journal payload and kernel journal
+for the prior pressured guest boot; compare screenshot counters;
+read current `/proc/meminfo`, `/proc/pressure/memory`, and `/proc/version`; use
+Windows physical-memory/process counters and available System events.
+
+**What:** Determine whether RamShared stress was active, whether the guest or
+Windows host was under memory pressure, and what the persisted evidence says
+about the freeze and recovery.
+
+**Prior guest at the last decodable health sample:** The prior pressured guest
+boot ran kernel
+`6.18.40.1-microsoft-standard-WSL2+ #6`. The RamShared health payload had
+`activation.active=false`, phase `Off`, daemon `alive=false`, and
+`memory_events.oom=0` / `oom_kill=0`. It reported `MemAvailable=184,860 KiB`
+(about 181 MiB), `SwapFree=727,400 KiB` of 4,194,304 KiB (3,477,636 KiB used,
+about 3.32 GiB), PSI `some` avg10 28.21% and `full` avg10 27.65%, cumulative
+swap reads 150.81 GiB, and 2,177,607 major faults. The health payload's
+timestamp was 15:36:34; the journal stored it at 15:37:12 -03. RamShared
+tiers and stress were off in this record and in Screenshot 108.
+
+**Freeze window:** The last persisted line from that boot is
+`systemd-journald: Under memory pressure, flushing caches.` at 15:41:47 -03.
+There is no later guest record explaining why execution stopped. The saved
+kernel journal contains no OOM-kill, panic/oops, hung-task, lockup,
+allocation-failure, or I/O-error signature. This absence does not identify
+the cause. Screenshot 108 around 15:42 shows guest memory at 99%
+(15,858/15,995 MiB), swap at 82% (3,376/4,096 MiB), PSI stalls around 26%,
+and tiers off. Screenshots 110–111 show disk I: at 100% active, about
+92–102 MB/s read and 0 KB/s write. The screenshots do not identify the reader
+or prove that the I: reads were caused by swap. `.wslconfig` places the WSL
+swap VHDX on C:, so I: activity cannot be attributed to that
+configured swap file from these counters alone.
+
+**Restart sequence:** Journal boot history shows the pressured boot ending
+at 15:41:47, a short boot from 15:44:32 to 15:45:17, and the current boot
+starting at 15:45:23. The Windows sample at 15:49:20 had 14,357 MiB physical
+RAM available and `VmmemWSL` working set 4,913 MiB. At 15:51:39, the current
+guest reported `MemAvailable=13,146,664 KiB` (about 12.54 GiB), all 4 GiB of
+swap free, zero memory PSI, and `VmallocUsed=228,612 KiB`. The same `#6`
+kernel version was active after restart. This before/after recovery supports
+guest-local pressure being cleared by restarting WSL; it does not isolate the
+allocator, VHDX, or kernel mechanism that caused it.
+
+At 15:49:24, the fresh boot had 330 `vmbus_alloc_buffer` maps and 37,567
+declared backing pages (about 0.14 GiB), compared with 31,792 maps and
+3,288,325 pages at 15:08 in EVD-0095. Restart resets guest allocations, so
+this shows the prior guest-side map population did not persist across boots;
+it does not identify the owning driver or prove a leak.
+
+**Kernel image provenance:** `.wslconfig` selects a custom kernel image on
+C:. That file's SHA-256 is
+`46dba8cc9e2b0d9789917b329d2cdf4aaf5dc30ee982b4dd0f7d783cd41e4cc8`; its
+embedded `#6` release/build stamp matches the running kernel's
+`6.18.40.1-microsoft-standard-WSL2+ #6`. The checkout's current
+`arch/x86/boot/bzImage` is a different `#8` image with SHA-256
+`2d6d8935eecf23afeef5b71e2d367130383edac54a4c52829a6e94ee18449de9`.
+There is no immutable build receipt tying the active `#6` image to a Git tree;
+the kernel repo's current HEAD and uncommitted source diff therefore cannot
+be treated as its source. The guest does not expose a hash of the image
+already loaded into memory, so the configured-file match is strong but not a
+cryptographic attestation of the in-memory image.
+
+**Windows evidence:** Screenshot 109 shows Windows memory at about 51% and
+`VmmemWSL` working set 3,215.5 MiB. The later post-restart host sample also
+had substantial physical and commit headroom. Guest `MemAvailable`, Windows
+physical RAM, `VmmemWSL` working set, and process private bytes measure
+different things; the screenshots do not support a claim that Windows ran
+out of physical RAM. Available System events show Hyper-V vNIC removal and
+recreation during the recovery sequence, but no Windows disk/resource
+exhaustion or unexpected-host-restart event. No enabled WSL/Lxss event channel
+was available to explain the guest stop.
+
+**Dashboard label:** The screenshot's `Host RAM` denominator (15,995 MiB)
+matches guest WSL memory, not the Windows host's 32,670 MiB physical total.
+Current source commit `2c3f1e35` distinguishes WSL2 memory as `WSL2 RAM`; the
+focused `monitor::tests::memory_scope_distinguishes_wsl2_wsl1_and_native_linux`
+test passed (1/1). Both inspected local release binaries predate that source
+change and contain `Host RAM` strings without the WSL2 label: the installed
+binary SHA-256 is `49f5a770c1aefcb386ca99a7bb89b8913929ca2fcf5bfa18da28fee60ea41b89`
+and the workspace release binary SHA-256 is
+`7190316d6d16816528b6f45c561789717efdcbccaf1ec2dddf5f55b8519d41c9`. The
+screenshot process executable was not captured, so its exact binary identity
+is unconfirmed. This display mismatch is not evidence for the freeze cause,
+and the corrected source has not yet been rebuilt and installed. After the
+focused test, guest `MemAvailable` was still 12.04 GiB, swap remained entirely
+free, and PSI remained zero.
+
+**Assessment:** The evidence confirms severe guest memory pressure and
+thrashing before WSL stopped responding; it does not confirm RamShared stress
+or Windows physical-memory exhaustion. The I: read burst is real but its
+owner is unknown. EVD-0095's growing VMBus maps remain a strong candidate for
+guest-side accumulation, while the active image's exact source, allocation
+owners, GPADL causality, and a safe installed fix remain unproven.
+
+**Verdict:** 🟡 `PARTIAL` — freeze preceded by severe guest memory/swap stalls;
+exact trigger and safe kernel correction remain unresolved. Keep stress off.

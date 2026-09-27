@@ -41,6 +41,53 @@ their own live qualification before any automatic boot activation.
 | Custom-kernel DXG/systemd promotion | BLOCKED | A prior `6.18.35.2` boot emitted the exact upstream-open DXG FORTIFY warning in the Xwayland wait-sync-object path. EVD-0086 records that the active WSL boot is `6.18.40.1-microsoft-standard-WSL2+` with systemd running and no matching fatal/FORTIFY/p9/init-timeout lines in the filtered current-boot kernel log; Xwayland was not running and no same-host bundled/custom A/B has been done. The signature also exists on Microsoft 6.18.26.1 and bundled 6.18.33.2-2, so this is not attributed to RamShared, but bundled reproduction does not qualify the risk. Separate `RamShared-Kernel` attempts timed out starting `/sbin/init`, with unclean journal and p9-cancellation evidence. | Under separate attended approval, run a fresh-boot same-host bundled/custom A/B with no RamShared or pressure activation. Require exact distro/version, systemd `running`, readable fresh warning log, DXG/Xwayland/lightweight NVIDIA probe, zero FORTIFY/init-timeout/unclean/p9/fatal signals, and query-error count no worse than the sealed bundled baseline. See the [2026-08-23 finding](incidents/2026-08-23-wsl2-dxg-fortify-systemd-no-go.md). |
 | Custom-kernel/ublk as day-1 product transport | DEFERRED | NBD remains the day-1 WSL2 product path. ublk root and QEMU smokes are historical capability evidence, not product transport closure. On 2026-07-18, `SANITIZED_ARTIFACT_REF` recorded SSH, non-interactive privilege, and ublk capability on `SANITIZED_VM_KERNEL_LAB`. The VM still had no GPU surface, and no product ublk lifecycle, swapoff-first teardown, crash/drain, or no-ghost proof existed. | A dedicated custom-kernel lab SPEC needs isolated before→action→after evidence for transport wire-up, ordered detach, crash/drain, and terminal no-ghost state. This is an open evidence definition, not an instruction to act. |
 
+## Latest Evidence — 2026-09-27
+
+### WSL2 freeze memory ownership (EVD-0093–EVD-0096)
+
+The active WSL guest's `vmbus_alloc_buffer` vmalloc entries grew from 27,661
+maps / 2,861,541 declared backing pages at 14:28 to 31,792 maps / 3,288,325
+pages at 15:08. That is 4,131 additional maps and about 1.63 GiB more
+declared guest backing pages in roughly 40 minutes. `MemAvailable` fell by
+about 903 MiB to 512 MiB. These page/map counts do not measure Windows
+resident RAM or identify allocation owners. A 15:09 Windows sample had
+16,261 MiB physical RAM available, up 671 MiB from 15:00; the data do not
+show Windows physical exhaustion. A VS Code `git fetch --all` used up to
+about 646 MiB RSS and was stopped, but guest memory did not recover
+immediately and VMBus maps continued to grow. It is an avoidable load, not a
+proven cause. GPADL retention/rescind remains a plausible mechanism, but the
+active Build #6 source is unmatched and the current upstream source diff is
+not ported, built, or installed on the WSL target. Keep the freeze cause and
+the correction `PARTIAL`; do not claim that the patch will reclaim current
+kernel allocations or lower memory before a matching kernel is activated.
+
+The next freeze is now documented in EVD-0096. The last prior-boot health
+sample had about 181 MiB guest memory available, 3.32 GiB of 4 GiB swap in
+use, and PSI `some`/`full` avg10 of 28%/28%, while RamShared activation,
+daemon, and tiers were off. The journal then stopped after repeated
+memory-pressure cache-flush messages; it contains no kernel crash signature
+that names the trigger. Screenshots show heavy I: reads, but neither their
+owner nor a causal link to the configured C: swap VHDX is established.
+After WSL restarted, the same `#6` kernel had about 12 GiB guest memory
+available, all swap free, and zero PSI. Windows also retained substantial
+physical-memory headroom. VMBus map count reset from 31,792 to 330 across the
+restart. This confirms recovery of guest pressure and reset of guest
+allocations, not the owning driver or underlying cause.
+
+Image provenance is now bounded: `.wslconfig` selects a custom kernel image
+on C:; its `#6` build stamp matches the running
+`6.18.40.1-microsoft-standard-WSL2+ #6` kernel. The repo's `arch/x86/boot/bzImage`
+is a different `#8` image, and no immutable receipt connects active `#6` to a
+source commit. Do not equate the active image with the current checkout or
+its uncommitted patch.
+
+EVD-0096 also confirms the screenshot label bug is a deployment-parity gap:
+the current source already labels WSL2 memory correctly and its focused test
+passes, but the installed/local release binaries inspected here predate that
+change. The exact executable behind the screenshot was not captured. This
+display bug is independent of the freeze investigation. Keep both the exact
+freeze cause and corrected kernel deployment `PARTIAL`; stress remains off.
+
 ## Closed In This Session
 
 All run IDs, commands, VM names, and `SANITIZED_*` values below are retained
