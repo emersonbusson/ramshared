@@ -159,6 +159,10 @@ pub struct StressReport {
     #[serde(default)]
     pub tier2_physical_cache_target_mb: u64,
     #[serde(default)]
+    pub simultaneous_physical_cache_target_mib: u64,
+    #[serde(default)]
+    pub simultaneous_physical_cache_mib: u64,
+    #[serde(default)]
     pub simultaneous_full_tiers: bool,
     #[serde(default)]
     pub physical_cache_samples: usize,
@@ -893,17 +897,21 @@ fn full_tier_snapshot(
     ssd_pct: u64,
     opts: &StressOptions,
     cache: Option<CacheSample>,
-) -> bool {
-    zram_pct >= opts.tier1_target_pct
-        && logical_nbd_pct >= opts.tier2_target_pct
-        && ssd_pct >= opts.tier3_target_pct.unwrap_or(100)
-        && cache.is_some_and(|sample| {
-            sample.target_mib > 0
-                && sample.at_target
-                && opts
-                    .physical_cache_target_mib
-                    .is_none_or(|requested| sample.cached_mib >= requested)
-        })
+) -> Option<CacheSample> {
+    if zram_pct < opts.tier1_target_pct
+        || logical_nbd_pct < opts.tier2_target_pct
+        || ssd_pct < opts.tier3_target_pct.unwrap_or(100)
+    {
+        return None;
+    }
+
+    cache.filter(|sample| {
+        sample.target_mib > 0
+            && sample.at_target
+            && opts.physical_cache_target_mib.is_none_or(|requested| {
+                sample.target_mib >= requested && sample.cached_mib >= requested
+            })
+    })
 }
 
 pub fn probe_allocation_latency_ms() -> f64 {
@@ -1075,6 +1083,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         physical_cache_required_mib =
             full_profile_cache_target(opts.physical_cache_target_mib, initial_cache_sample)?;
     }
+    let mut qualification_opts = opts.clone();
+    if opts.full_three_tier_profile {
+        qualification_opts.physical_cache_target_mib = Some(physical_cache_required_mib);
+    }
     if (cascade_mode || opts.tier3_only) && current_kernel_faults() != Some(0) {
         return Err("kernel fault evidence is unavailable or already contains faults".to_string());
     }
@@ -1161,6 +1173,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut peak_vram = 0u64;
     let mut peak_physical_vram = 0u64;
     let mut peak_physical_target = 0u64;
+    let mut simultaneous_physical_cache_target = 0u64;
+    let mut simultaneous_physical_cache = 0u64;
     let mut physical_cache_samples = 0usize;
     let mut cache_lost_during_stress = false;
     let mut safety_halt = false;
@@ -1241,9 +1255,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
             peak_physical_target = peak_physical_target.max(sample.target_mib);
         }
-        if !opts.tier3_only {
-            simultaneous_full_tiers |=
-                full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, opts, cache_sample);
+        if !opts.tier3_only
+            && let Some(sample) = full_tier_snapshot(
+                cap1.pct,
+                cap2.pct,
+                cap3.pct,
+                &qualification_opts,
+                cache_sample,
+            )
+        {
+            simultaneous_full_tiers = true;
+            if sample.target_mib > simultaneous_physical_cache_target {
+                simultaneous_physical_cache_target = sample.target_mib;
+                simultaneous_physical_cache = sample.cached_mib;
+            }
         }
 
         let reading =
@@ -1717,9 +1742,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 peak_physical_vram = peak_physical_vram.max(sample.cached_mib);
                 peak_physical_target = peak_physical_target.max(sample.target_mib);
             }
-            if !opts.tier3_only {
-                simultaneous_full_tiers |=
-                    full_tier_snapshot(cap1.pct, cap2.pct, cap3.pct, opts, cache_sample);
+            if !opts.tier3_only
+                && let Some(sample) = full_tier_snapshot(
+                    cap1.pct,
+                    cap2.pct,
+                    cap3.pct,
+                    &qualification_opts,
+                    cache_sample,
+                )
+            {
+                simultaneous_full_tiers = true;
+                if sample.target_mib > simultaneous_physical_cache_target {
+                    simultaneous_physical_cache_target = sample.target_mib;
+                    simultaneous_physical_cache = sample.cached_mib;
+                }
             }
             hold_cap3_pct = cap3.pct;
             let reading = compute_telemetry_reading(
@@ -1834,6 +1870,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             .unwrap_or(cap2.pct),
         tier2_nbd_throughput_mbs: (peak_vram_mbs * 10.0).round() / 10.0,
         tier2_physical_cache_target_mb: peak_physical_target,
+        simultaneous_physical_cache_target_mib: simultaneous_physical_cache_target,
+        simultaneous_physical_cache_mib: simultaneous_physical_cache,
         simultaneous_full_tiers,
         physical_cache_samples,
         tier3_ssd_mb: peak_ssd,
@@ -2097,14 +2135,14 @@ mod tests {
             target_mib: 1024,
             at_target: false,
         });
-        assert!(full_tier_snapshot(95, 95, 15, &opts, full));
-        assert!(!full_tier_snapshot(95, 95, 15, &opts, partial));
-        assert!(!full_tier_snapshot(95, 95, 15, &opts, None));
-        assert!(!full_tier_snapshot(95, 95, 14, &opts, full));
-        assert!(!full_tier_snapshot(94, 95, 15, &opts, full));
-        assert!(!full_tier_snapshot(95, 94, 15, &opts, full));
+        assert!(full_tier_snapshot(95, 95, 15, &opts, full).is_some());
+        assert!(full_tier_snapshot(95, 95, 15, &opts, partial).is_none());
+        assert!(full_tier_snapshot(95, 95, 15, &opts, None).is_none());
+        assert!(full_tier_snapshot(95, 95, 14, &opts, full).is_none());
+        assert!(full_tier_snapshot(94, 95, 15, &opts, full).is_none());
+        assert!(full_tier_snapshot(95, 94, 15, &opts, full).is_none());
         opts.physical_cache_target_mib = Some(4096);
-        assert!(!full_tier_snapshot(95, 95, 15, &opts, full));
+        assert!(full_tier_snapshot(95, 95, 15, &opts, full).is_none());
     }
 
     #[test]
@@ -2368,21 +2406,39 @@ mod tests {
             target_mib: 4096,
             at_target: true,
         });
-        assert!(full_tier_snapshot(100, 100, 99, &opts, cache));
-        assert!(!full_tier_snapshot(99, 100, 99, &opts, cache));
-        assert!(!full_tier_snapshot(100, 99, 99, &opts, cache));
-        assert!(!full_tier_snapshot(100, 100, 98, &opts, cache));
-        assert!(!full_tier_snapshot(
+        assert!(full_tier_snapshot(100, 100, 99, &opts, cache).is_some());
+        assert!(full_tier_snapshot(99, 100, 99, &opts, cache).is_none());
+        assert!(full_tier_snapshot(100, 99, 99, &opts, cache).is_none());
+        assert!(full_tier_snapshot(100, 100, 98, &opts, cache).is_none());
+        assert!(
+            full_tier_snapshot(
+                100,
+                100,
+                99,
+                &opts,
+                Some(CacheSample {
+                    cached_mib: 4095,
+                    target_mib: 4096,
+                    at_target: false,
+                })
+            )
+            .is_none()
+        );
+
+        let qualified = full_tier_snapshot(
             100,
             100,
             99,
             &opts,
             Some(CacheSample {
-                cached_mib: 4095,
-                target_mib: 4096,
-                at_target: false,
-            })
-        ));
+                cached_mib: 3072,
+                target_mib: 2560,
+                at_target: true,
+            }),
+        )
+        .unwrap_or_else(|| panic!("qualified tiers return the sample from this observation"));
+        assert_eq!(qualified.target_mib, 2560);
+        assert_eq!(qualified.cached_mib, 3072);
     }
 
     #[test]
@@ -2578,6 +2634,8 @@ mod tests {
             tier2_logical_swap_pct: 50,
             tier2_nbd_throughput_mbs: 500.0,
             tier2_physical_cache_target_mb: 400,
+            simultaneous_physical_cache_target_mib: 0,
+            simultaneous_physical_cache_mib: 0,
             simultaneous_full_tiers: false,
             physical_cache_samples: 1,
             tier3_ssd_mb: 100,

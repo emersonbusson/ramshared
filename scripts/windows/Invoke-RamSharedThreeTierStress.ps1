@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Supervise the exact physical-cache and three-tier stress profile from Windows.
+  Supervise a worker-admitted physical-cache and three-tier stress profile from Windows.
 .DESCRIPTION
   The Windows process owns the timeout and host commit guard. The guest performs
   swapoff-first cleanup. A stalled guest is contained by terminating only the
@@ -19,6 +19,76 @@ param(
 
 $ErrorActionPreference = "Stop"
 Import-Module (Join-Path $PSScriptRoot "SharedWslHostMemoryGate.psm1") -Force
+
+function Test-ThreeTierStressPhysicalCacheResult {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()][object]$Stress,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 32768)][int]$PhysicalCacheCapMiB
+    )
+
+    if ($null -eq $Stress -or [string]$Stress.status -cne "PASS_ZERO_PANIC") { return $false }
+    $simultaneous = $Stress.PSObject.Properties["simultaneous_full_tiers"]
+    if ($null -eq $simultaneous -or $simultaneous.Value -isnot [bool] -or -not $simultaneous.Value) {
+        return $false
+    }
+
+    $values = @{}
+    foreach ($name in @(
+        "metric_version",
+        "tier1_target_pct",
+        "tier2_target_pct",
+        "tier3_target_pct",
+        "physical_cache_samples",
+        "physical_cache_required_mib",
+        "tier2_physical_cache_target_mb",
+        "tier2_vram_mb",
+        "simultaneous_physical_cache_target_mib",
+        "simultaneous_physical_cache_mib"
+    )) {
+        $property = $Stress.PSObject.Properties[$name]
+        if ($null -eq $property -or $null -eq $property.Value -or
+            $property.Value -is [bool] -or $property.Value -is [string]) {
+            return $false
+        }
+        $parsed = [UInt64]0
+        $text = [Convert]::ToString($property.Value, [Globalization.CultureInfo]::InvariantCulture)
+        if (-not [UInt64]::TryParse(
+                $text,
+                [Globalization.NumberStyles]::None,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [ref]$parsed)) {
+            return $false
+        }
+        $values[$name] = $parsed
+    }
+
+    if ($values["metric_version"] -ne 2 -or
+        $values["tier1_target_pct"] -ne 100 -or
+        $values["tier2_target_pct"] -ne 100 -or
+        $values["tier3_target_pct"] -ne 99 -or
+        $values["physical_cache_samples"] -eq 0) {
+        return $false
+    }
+
+    $required = $values["physical_cache_required_mib"]
+    $peakTarget = $values["tier2_physical_cache_target_mb"]
+    $peakCached = $values["tier2_vram_mb"]
+    $simultaneousTarget = $values["simultaneous_physical_cache_target_mib"]
+    $simultaneousCached = $values["simultaneous_physical_cache_mib"]
+    return ($required -gt 0 -and
+        $required -le [UInt64]$PhysicalCacheCapMiB -and
+        $peakTarget -gt 0 -and $peakTarget -le [UInt64]$PhysicalCacheCapMiB -and
+        $peakCached -gt 0 -and $peakCached -le [UInt64]$PhysicalCacheCapMiB -and
+        $simultaneousTarget -gt 0 -and
+        $simultaneousTarget -le [UInt64]$PhysicalCacheCapMiB -and
+        $simultaneousTarget -ge $required -and
+        $simultaneousTarget -le $peakTarget -and
+        $simultaneousCached -ge $simultaneousTarget -and
+        $simultaneousCached -le [UInt64]$PhysicalCacheCapMiB -and
+        $simultaneousCached -le $peakCached)
+}
+
 if ($Distro -cne "Ubuntu-24.04") { throw "sealed distro mismatch" }
 if ($ArtifactRoot -notmatch '^[A-Za-z]:\\') { throw "ArtifactRoot must be an absolute Windows drive path" }
 
@@ -32,6 +102,7 @@ $guestSwapFreeReserveMiB = 1024
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 if ([int]$manifest.schema_version -ne 3 -or [int]$manifest.logical_capacity_mib -ne 4096 -or
     [int]$manifest.physical_cache_cap_mib -ne 4096) { throw "exact 4096 MiB sealed origin is unavailable" }
+$physicalCacheCapMiB = [int]$manifest.physical_cache_cap_mib
 $guardian = Get-Content -Raw -LiteralPath $guardianPath | ConvertFrom-Json
 if (-not (Test-SharedWslGuardianFresh -Guardian $guardian -MaximumAgeSeconds 15)) {
     throw "Windows WSL guardian is unavailable or stale"
@@ -48,7 +119,9 @@ $plan = [ordered]@{
     profile = "full-three-tier"
     distro = $Distro
     release = $releasePath
-    physical_cache_target_mib = 4096
+    physical_cache_cap_mib = $physicalCacheCapMiB
+    physical_cache_target_mib = $null
+    physical_cache_target_policy = "active worker-reported safe target, capped by the sealed manifest"
     zram_target_pct = 100
     nbd_logical_target_pct = 100
     ssd_target_pct = 99
@@ -82,6 +155,7 @@ set -euo pipefail
 artifact=$1
 guest_mem_available_reserve_mib=$2
 guest_swap_free_reserve_mib=$3
+physical_cache_cap_mib=$4
 release=/opt/ramshared/current
 bin="$release/bin/ramshared"
 daemon="$release/bin/ramsharedd"
@@ -105,7 +179,7 @@ test -x "$bin" && test -x "$daemon"
 "$bin" monitor --jsonl --interval-ms 1000 --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json --output "$artifact/monitor.jsonl" >"$artifact/monitor.out" 2>"$artifact/monitor.err" &
 monitor_pid=$!
 cat /proc/swaps >"$artifact/before-swaps.txt"
-"$bin" up --vram 4096 --zram 1024 --daemon "$daemon" >"$artifact/up.out" 2>"$artifact/up.err"
+"$bin" up --vram "$physical_cache_cap_mib" --zram 1024 --daemon "$daemon" >"$artifact/up.out" 2>"$artifact/up.err"
 systemctl start ramshared-supervisor.service
 ready=0
 for _ in $(seq 1 30); do
@@ -140,7 +214,8 @@ try {
     $guestScriptPath = "$guestDir/guest-stress.sh"
     $proc = Start-Process -FilePath "wsl.exe" -ArgumentList @(
         "-d", $Distro, "-u", "root", "--", "bash", $guestScriptPath, $guestDir,
-        [string]$guestMemAvailableReserveMiB, [string]$guestSwapFreeReserveMiB
+        [string]$guestMemAvailableReserveMiB, [string]$guestSwapFreeReserveMiB,
+        [string]$physicalCacheCapMiB
     ) `
         -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
     while ($true) {
@@ -178,9 +253,9 @@ $stress = $null
 if (Test-Path -LiteralPath $stressPath) {
     try { $stress = Get-Content -Raw -LiteralPath $stressPath | ConvertFrom-Json } catch {}
 }
-$pass = $null -eq $reason -and $exitCode -eq 0 -and $null -ne $stress -and
-    $stress.status -ceq "PASS_ZERO_PANIC" -and [bool]$stress.simultaneous_full_tiers -and
-    [int]$stress.tier2_vram_mb -ge 4096 -and
+$physicalCacheResult = Test-ThreeTierStressPhysicalCacheResult `
+    -Stress $stress -PhysicalCacheCapMiB $physicalCacheCapMiB
+$pass = $null -eq $reason -and $exitCode -eq 0 -and $physicalCacheResult -and
     (Test-Path -LiteralPath (Join-Path $dir "binary-match.txt"))
 $summary = [ordered]@{
     status = if ($pass) { "PASS" } else { "FAIL" }
@@ -188,7 +263,12 @@ $summary = [ordered]@{
     wsl_exit_code = $exitCode
     stress_verdict = if ($null -ne $stress) { $stress.status } else { $null }
     simultaneous_full_tiers = if ($null -ne $stress) { $stress.simultaneous_full_tiers } else { $false }
-    physical_cache_mib = if ($null -ne $stress) { $stress.tier2_vram_mb } else { $null }
+    physical_cache_cap_mib = $physicalCacheCapMiB
+    physical_cache_target_mib = if ($null -ne $stress) { $stress.simultaneous_physical_cache_target_mib } else { $null }
+    simultaneous_physical_cache_mib = if ($null -ne $stress) { $stress.simultaneous_physical_cache_mib } else { $null }
+    physical_cache_required_mib = if ($null -ne $stress) { $stress.physical_cache_required_mib } else { $null }
+    worker_peak_cache_target_mib = if ($null -ne $stress) { $stress.tier2_physical_cache_target_mb } else { $null }
+    peak_physical_cache_mib = if ($null -ne $stress) { $stress.tier2_vram_mb } else { $null }
     artifact = $dir
 }
 $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dir "summary.json") -Encoding UTF8
