@@ -213,6 +213,7 @@ enum CliCommand {
     Down,
     Status { json: bool },
     Monitor { options: MonitorOptions },
+    Config { mode: ConfigMode },
     Diagnose { args: Vec<String> },
     Stress { args: Vec<String> },
     Help,
@@ -246,6 +247,20 @@ fn parse_json_option(command: &'static str, options: &[String]) -> Result<bool, 
         [option] if option == "--json" => Ok(true),
         _ => Err(CliParseError::InvalidOption {
             command,
+            options: options.to_vec(),
+        }),
+    }
+}
+
+fn parse_config_mode(options: &[String]) -> Result<ConfigMode, CliParseError> {
+    match options {
+        [] => Ok(ConfigMode::Interactive),
+        [command] if command == "show" => Ok(ConfigMode::Show { json: false }),
+        [command, format] if command == "show" && format == "--json" => {
+            Ok(ConfigMode::Show { json: true })
+        }
+        _ => Err(CliParseError::InvalidOption {
+            command: "config",
             options: options.to_vec(),
         }),
     }
@@ -309,6 +324,9 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "doctor" => Ok(CliCommand::Doctor {
             json: parse_json_option("doctor", options)?,
         }),
+        "config" => Ok(CliCommand::Config {
+            mode: parse_config_mode(options)?,
+        }),
         "up" => Ok(CliCommand::Up {
             args: options.to_vec(),
         }),
@@ -366,6 +384,12 @@ trait CliActionRunner {
     ) -> ExitCode;
     fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn config(
+        &mut self,
+        mode: ConfigMode,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
     fn monitor(
         &mut self,
         options: &MonitorOptions,
@@ -469,6 +493,15 @@ impl CliActionRunner for SystemCliActions {
 
     fn status(&mut self, json: bool, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
         to_exit(cascade::status(json), stderr)
+    }
+
+    fn config(
+        &mut self,
+        mode: ConfigMode,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        resource_config::run(mode, stdout, stderr)
     }
 
     fn monitor(
@@ -598,6 +631,7 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::MigrateLegacyCascade) => actions.migrate_legacy_cascade(stdout, stderr),
         Ok(CliCommand::Down) => actions.down(stdout, stderr),
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
+        Ok(CliCommand::Config { mode }) => actions.config(mode, stdout, stderr),
         Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
         Ok(CliCommand::Stress { args }) => actions.stress(&args, stdout, stderr),
@@ -690,6 +724,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "  ramshared recover --status|--resume");
     let _ = writeln!(stderr, "  ramshared check [--json]");
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
+    let _ = writeln!(
+        stderr,
+        "  ramshared config [show [--json]]  # cross-platform resource inventory"
+    );
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
     let _ = writeln!(
         stderr,
@@ -1755,6 +1793,16 @@ mod tests {
             self.result()
         }
 
+        fn config(
+            &mut self,
+            mode: ConfigMode,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Config { mode });
+            self.result()
+        }
+
         fn monitor(
             &mut self,
             options: &MonitorOptions,
@@ -2005,8 +2053,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_cli_command(&cli_args(&["config", "show", "--json"]))
-                .expect("json show parses"),
+            parse_cli_command(&cli_args(&["config", "show", "--json"])).expect("json show parses"),
             CliCommand::Config {
                 mode: ConfigMode::Show { json: true },
             }
@@ -2533,6 +2580,9 @@ CONFIG_BLK_DEV_NBD=m\n\
             &["check", "--json"][..],
             &["doctor"][..],
             &["doctor", "--json"][..],
+            &["config"][..],
+            &["config", "show"][..],
+            &["config", "show", "--json"][..],
             &["up", "--vram", "1024"][..],
             &["migrate-cascade", "--from-legacy"][..],
             &["down"][..],

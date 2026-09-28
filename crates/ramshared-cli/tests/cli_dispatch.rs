@@ -60,6 +60,34 @@ fn cli_help_and_unknown_command() {
 }
 
 #[test]
+fn cli_resource_config_json_discovers_platform_resources_read_only() {
+    let output = run_cli(&["config", "show", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert!(matches!(
+        value["platform"].as_str(),
+        Some("native_linux" | "wsl2")
+    ));
+    assert!(value["guest_memory"]["total_bytes"].is_number());
+    assert!(value["swaps"].is_array());
+    assert!(value["block_devices"].is_array());
+    assert!(value["warnings"].is_array());
+    assert!(value["gpu_budget_status"].is_string());
+    assert!(value["observed_unix_ms"].as_u64().is_some());
+
+    if value["platform"] == "wsl2" {
+        assert!(value["windows"].is_object() || !value["warnings"].as_array().unwrap().is_empty());
+    } else {
+        assert!(value["windows"].is_null());
+    }
+
+    let mutation = run_cli(&["config", "apply"]);
+    assert_eq!(mutation.status.code(), Some(2));
+    assert!(stderr(&mutation).contains("invalid config option"));
+}
+
+#[test]
 fn cli_check_and_doctor_report_decision_json_and_text() {
     let check_json = run_cli(&["check", "--json"]);
     let check_value: serde_json::Value = serde_json::from_slice(&check_json.stdout).unwrap();
