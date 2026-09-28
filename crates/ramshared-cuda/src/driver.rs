@@ -586,7 +586,7 @@ mod tests {
     thread_local! {
         static UNREGISTER_CALLS: Cell<usize> = const { Cell::new(0) };
         static MOCK_DEVICE_MEMORY: RefCell<BTreeMap<CuDevicePtr, Vec<u8>>> =
-            RefCell::new(BTreeMap::new());
+            const { RefCell::new(BTreeMap::new()) };
         static NEXT_MOCK_DEVICE_ADDRESS: Cell<CuDevicePtr> = const { Cell::new(0x1000) };
     }
 
