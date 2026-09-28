@@ -229,6 +229,38 @@ fn resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow() {
 }
 
 #[test]
+fn resource_profile_groups_windows_volume_ids_case_insensitively_for_capacity() {
+    let profile = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: vec![
+            ResourceTarget::WslFallback {
+                windows_volume_id: "volume-guid-a".into(),
+                path: r"C:\wsl\swap.vhdx".into(),
+                bytes: 30 * 1024 * 1024 * 1024,
+            },
+            ResourceTarget::WslOrigin {
+                windows_volume_id: "VOLUME-GUID-A".into(),
+                path: r"C:\wsl\origin.vhdx".into(),
+                allocated_bytes: 30 * 1024 * 1024 * 1024,
+            },
+        ],
+    };
+
+    let requirements = profile
+        .required_free_bytes_by_volume()
+        .expect("same Windows volume requirements add without overflow");
+
+    assert_eq!(requirements.len(), 1);
+    assert_eq!(
+        requirements.get(&StorageVolumeIdentity::Windows {
+            volume_id: "volume-guid-a".into(),
+        }),
+        Some(&(DISK_RESERVE_FLOOR_BYTES + 60 * 1024 * 1024 * 1024))
+    );
+}
+
+#[test]
 fn resource_profile_rejects_transient_mount_id_in_persisted_targets() {
     let text = r#"
 schema_version = 1
