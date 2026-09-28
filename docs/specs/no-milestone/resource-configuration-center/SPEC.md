@@ -58,6 +58,7 @@ check; apply does not disable prior swap.
 | DT-19 | For each stable volume, require `free_bytes >= checked_sum(new_swapfile_bytes, new_origin_allocation_bytes, other_new_managed_bytes, 10 GiB)`. The 10 GiB floor is non-overridable and matches the existing origin reserve. Existing allocated files are already reflected in `free_bytes` and are not subtracted twice. Benchmark is separate: require `free_bytes >= 96 MiB + 10 GiB`, clean the exact test file, then remeasure before apply; uncertain cleanup refuses apply. | Makes same-disk tier configuration explicit and prevents storage overcommit. |
 | DT-20 | Keep the existing v3 sealed block-origin reader/schema unchanged. New native file origins use a separate `/etc/ramshared/native-origin.toml` manifest and are selected only by the native provider; never auto-convert or write a second origin over an existing one. Block and file origins are distinct first-class storage kinds for their owning platform contracts, not an automatic compatibility fallback. If a sealed block origin already exists, show it and require its existing migration path before replacing it. | Avoids weakening or ambiguating an existing sealed origin while adding Linux SSD file selection. |
 | DT-21 | Each 32 MiB sample writes 31 MiB sequentially with a 1 MiB buffer and flushes once, then performs 256 distinct 4 KiB writes with a durable flush after each write; total payload writes are exactly 32 MiB per sample. Linux uses `fdatasync`; Windows uses `FlushFileBuffers`. Read-back verifies the complete file. Three samples yield 96 MiB maximum payload writes per volume. Report p99 over 768 small-write latency observations plus all sequential-throughput results, their median, and deviation. Run one child worker sequentially with at most one outstanding filesystem operation and a 120-second per-volume deadline. Persist a lease containing process ID plus start identity and the exact owned target before launch. On timeout, request termination and verify that exact process has exited before cleanup. If exit or cleanup cannot be proven, persist `worker_stuck`, keep the lease and exact file record, do not launch another worker, and block disk mutations on that target until attended recovery proves exit and exact cleanup. | Defines a reproducible durable small-write and sequential-throughput comparison within the stated byte ceiling. A filesystem call can remain uninterruptible, so the deadline bounds the supervisor wait but cannot promise kernel-level cancellation. The persisted lease prevents a later invocation from overlooking an orphaned worker. |
+| DT-22 | Represent an already-created, identity-sealed native origin as `linux_file_origin` with its inode and identity hash. Represent a not-yet-created selection as `linux_file_origin_request`, containing only the stable filesystem/device identity, managed relative path, and requested allocation. A read-only plan may validate the current mount and capacity for a request; it must not claim that the file exists, has been created, or is safe to open. The privileged creation transaction generates the inode-bound manifest only after securely creating and verifying the exact file. Duplicate-path detection treats a request and sealed origin at the same stable path as a conflict. | The prior profile shape required a real inode before the UI could express a new Linux origin, making it impossible to configure the requested target before creation. Separating intent from sealed runtime identity avoids fabricating provenance. |
 
 ## Interfaces
 
@@ -232,11 +233,12 @@ check; apply does not disable prior swap.
   `resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths`,
   `resource_profile_rejects_zero_or_unbound_storage_identity`,
   `resource_profile_rejects_oversized_or_controlled_identity_and_paths`, and
-  `resource_profile_rejects_ambiguous_windows_target_paths`.
+  `resource_profile_rejects_ambiguous_windows_target_paths`,
+  `resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_inode`.
 - Read-only CLI profile loading and capacity planning are implemented. Remaining:
   interactive target selection, profile persistence, providers, mutation, and
   live native Linux/WSL2 target qualification.
-- Cover: profile slice passed at 91.3% (293/321 lines).
+- Cover: profile slice passed at 93.1% (312/335 lines).
 
 **`crates/ramshared-cli/src/resource_config.rs`**
 - Purpose: shared read-only resource observations, native Linux/WSL2 platform
@@ -257,6 +259,7 @@ check; apply does not disable prior swap.
   `mount_capacity_uses_live_available_blocks_without_writing`,
   `config_plan_never_mutates_host_or_guest`,
   `native_linux_plan_resolves_current_mount_from_stable_filesystem_identity`,
+  `native_linux_origin_request_plan_binds_volume_without_claiming_creation`,
   `native_linux_profile_survives_a_new_mount_namespace_id`,
   `native_linux_plan_refuses_multiple_current_mounts_for_one_profile_identity`,
   `storage_candidate_rejects_filesystem_subtree_mounts`,
@@ -269,7 +272,7 @@ check; apply does not disable prior swap.
 - Remaining required tests: `config_apply_is_idempotent_and_refuses_changed_rollback_target`,
   `config_apply_requires_durable_intent_before_mutation`, and provider/E2E
   tests listed below.
-- Cover: the current read-only planning slice passed at 88.5%; apply/provider
+- Cover: the current read-only planning slice passed at 88.7%; apply/provider
   policy remains unimplemented and uncovered.
 - Kahneman: #13/#17.
 
@@ -452,8 +455,10 @@ in place.
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_supports_multiple_targets_on_one_and_multiple_volumes` | unit | #9/#13/#17 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_rejects_transient_mount_id_in_persisted_targets` | unit | #13/#17 | ≥80% |
+| `crates/ramshared-config/tests/resource_profile.rs` | `resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_inode` | unit | #13/#17 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_plan_never_mutates_host_or_guest` | unit | #13 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `native_linux_plan_resolves_current_mount_from_stable_filesystem_identity` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `native_linux_origin_request_plan_binds_volume_without_claiming_creation` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `native_linux_profile_survives_a_new_mount_namespace_id` | unit | #13/#17 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `native_linux_plan_refuses_multiple_current_mounts_for_one_profile_identity` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `storage_candidate_rejects_filesystem_subtree_mounts` | unit | #13/#16 | ≥80% |

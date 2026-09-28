@@ -70,6 +70,12 @@ pub enum ResourceTarget {
         allocated_bytes: u64,
         identity_field_hash: String,
     },
+    LinuxFileOriginRequest {
+        filesystem_uuid: String,
+        device_identity: String,
+        managed_relative_path: String,
+        allocated_bytes: u64,
+    },
     WslFallback {
         windows_volume_id: String,
         path: String,
@@ -241,6 +247,19 @@ impl ResourceProfile {
                 }
             }
             (
+                ResourcePlatform::NativeLinux,
+                ResourceTarget::LinuxFileOriginRequest {
+                    filesystem_uuid,
+                    device_identity,
+                    managed_relative_path,
+                    allocated_bytes,
+                },
+            ) => {
+                validate_linux_storage_identity(filesystem_uuid, device_identity)?;
+                validate_linux_relative_path(managed_relative_path)?;
+                validate_positive_bytes("target.allocated_bytes", *allocated_bytes)?;
+            }
+            (
                 ResourcePlatform::Wsl2,
                 ResourceTarget::WslFallback {
                     windows_volume_id,
@@ -270,6 +289,9 @@ impl ResourceProfile {
             (_, ResourceTarget::LinuxFileOrigin { .. }) => {
                 return Err(platform_mismatch("linux_file_origin", platform));
             }
+            (_, ResourceTarget::LinuxFileOriginRequest { .. }) => {
+                return Err(platform_mismatch("linux_file_origin_request", platform));
+            }
             (_, ResourceTarget::WslFallback { .. }) => {
                 return Err(platform_mismatch("wsl_fallback", platform));
             }
@@ -294,6 +316,11 @@ impl ResourceTarget {
                 filesystem_uuid,
                 device_identity,
                 ..
+            }
+            | Self::LinuxFileOriginRequest {
+                filesystem_uuid,
+                device_identity,
+                ..
             } => StorageVolumeIdentity::Linux {
                 filesystem_uuid: filesystem_uuid.clone(),
                 device_identity: device_identity.clone(),
@@ -313,6 +340,9 @@ impl ResourceTarget {
         match self {
             Self::LinuxSwapfile { bytes, .. } | Self::WslFallback { bytes, .. } => *bytes,
             Self::LinuxFileOrigin {
+                allocated_bytes, ..
+            }
+            | Self::LinuxFileOriginRequest {
                 allocated_bytes, ..
             }
             | Self::WslOrigin {
@@ -337,6 +367,12 @@ fn managed_path_identity(target: &ResourceTarget) -> ManagedPathIdentity {
             ..
         }
         | ResourceTarget::LinuxFileOrigin {
+            filesystem_uuid,
+            device_identity,
+            managed_relative_path,
+            ..
+        }
+        | ResourceTarget::LinuxFileOriginRequest {
             filesystem_uuid,
             device_identity,
             managed_relative_path,

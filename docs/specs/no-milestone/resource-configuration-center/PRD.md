@@ -30,7 +30,8 @@ authoritative.
 - **Confirmed in codebase:** `scripts/safety/wslconfig-ctl.sh apply` rewrites the canonical profile and tells the operator to restart WSL later. It does not expose an interactive resource selector.
 - **Confirmed in codebase:** `scripts/windows/Manage-RamSharedOrigin.ps1` accepts an origin size/path, selects the registered distro volume or C: for the automatic new-origin path, enforces reserve checks, and preserves a sealed origin path. The WSL fallback `swapFile` is a separate setting and is not used to infer the origin volume.
 - **Confirmed in codebase:** `crates/ramshared-wsl2d/src/gpu_budget.rs` has fresh adapter-bound allocator/WDDM admission and fixed host-display/runtime reserves. Existing target selection is dynamic; this PRD does not authorize allocation above that live safe target.
-- **Confirmed in codebase:** `crates/ramshared-cli/src/monitor.rs` uses Ratatui for `ramshared top`. The custom parser now implements `ramshared config` with a read-only interactive view and `show [--json]`; it has no `plan`, `benchmark`, or `apply` action yet. `crates/ramshared-config::Config` still describes broker and agent TOML. Its new `resource_profile` module defines the versioned user policy model, but the CLI and providers do not load or persist that profile yet.
+- **Confirmed in codebase:** `crates/ramshared-cli/src/monitor.rs` uses Ratatui for `ramshared top`. The custom parser implements a read-only `ramshared config` view, `show [--json]`, and `plan [--json] [--profile PATH]`; it loads bounded user-supplied profiles and binds storage requests to current identity/capacity observations. It still has no interactive selection, profile writer, benchmark, or apply action. `crates/ramshared-config::Config` still describes broker and agent TOML; its separate `resource_profile` module defines variable user ceilings and platform-bound targets.
+- **Confirmed in codebase:** A new native Linux origin request can be represented without inventing the inode or identity hash that only exist after secure file creation. `linux_file_origin_request` is an intent for read-only capacity planning; `linux_file_origin` remains the identity-sealed representation of an existing file.
 - **Confirmed in codebase:** The Linux cascade creates its managed ZRAM and origin-backed swap devices through `crates/ramshared-cli/src/cascade/cascade_io.rs`; the current lifecycle does not expose a general system swapfile volume selector. Discovery must not mistake RamShared's logical SSD-backed swap device for a conventional Linux swapfile.
 - **Confirmed in codebase:** `crates/ramshared-block/src/origin_cache.rs` provides `FileOrigin`, but `crates/ramshared-wsl2d/src/main.rs::open_validated_origin` currently accepts only a block device sealed by PARTUUID/PTUUID/swap UUID. Native file-backed origin selection therefore needs its own identity-sealed manifest path; an arbitrary filename cannot be passed to the existing WSL origin path.
 - **Confirmed in codebase:** `docs/specs/no-milestone/wsl2-origin-capacity-policy/` covers origin size, volume reserve, and sealed-path behavior. It expressly leaves the independent WSL fallback swap path outside its scope.
@@ -44,8 +45,9 @@ authoritative.
 
 Complete the guided `ramshared config` TUI and add a typed, platform-neutral
 resource profile/policy layer with Linux-native and WSL2 host providers. The
-current source has read-only discovery and display only. Keep platform actions
-in their owning components:
+current source already has read-only discovery, a variable profile model, and
+capacity planning; selection, profile persistence, provider actions, and
+application remain incomplete. Keep platform actions in their owning components:
 
 - On native Linux, a bounded privileged provider discovers block devices,
   mounted filesystems, swap devices/files, and free space; it can create

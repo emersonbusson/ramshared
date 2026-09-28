@@ -123,6 +123,7 @@ fn resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_ino
     profile
         .validate_for(ResourcePlatform::NativeLinux)
         .expect("a planned origin has no inode until the provider creates it");
+    assert!(profile.validate_for(ResourcePlatform::Wsl2).is_err());
 
     let required = profile
         .required_free_bytes_by_volume()
@@ -138,6 +139,48 @@ fn resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_ino
     let encoded = profile.to_toml().expect("origin request serializes");
     let decoded = ResourceProfile::parse(&encoded).expect("origin request roundtrips");
     assert_eq!(decoded, profile);
+
+    let zero_sized = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: vec![ResourceTarget::LinuxFileOriginRequest {
+            filesystem_uuid: "fs-uuid-new".into(),
+            device_identity: "wwn-local-nvme".into(),
+            managed_relative_path: "origin/ramshared.img".into(),
+            allocated_bytes: 0,
+        }],
+    };
+    assert!(
+        zero_sized
+            .validate_for(ResourcePlatform::NativeLinux)
+            .is_err()
+    );
+
+    let duplicate_request_and_sealed = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: vec![
+            ResourceTarget::LinuxFileOrigin {
+                filesystem_uuid: "fs-uuid-new".into(),
+                device_identity: "wwn-local-nvme".into(),
+                managed_relative_path: "origin/ramshared.img".into(),
+                inode: 12,
+                allocated_bytes: 4 * 1024 * 1024 * 1024,
+                identity_field_hash: "a".repeat(64),
+            },
+            ResourceTarget::LinuxFileOriginRequest {
+                filesystem_uuid: "fs-uuid-new".into(),
+                device_identity: "wwn-local-nvme".into(),
+                managed_relative_path: "origin/ramshared.img".into(),
+                allocated_bytes: 4 * 1024 * 1024 * 1024,
+            },
+        ],
+    };
+    assert!(
+        duplicate_request_and_sealed
+            .validate_for(ResourcePlatform::NativeLinux)
+            .is_err()
+    );
 }
 
 #[test]

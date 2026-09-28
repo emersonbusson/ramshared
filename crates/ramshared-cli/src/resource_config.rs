@@ -1017,6 +1017,11 @@ fn resource_volume_identity(target: &ResourceTarget) -> StorageVolumeIdentity {
             filesystem_uuid,
             device_identity,
             ..
+        }
+        | ResourceTarget::LinuxFileOriginRequest {
+            filesystem_uuid,
+            device_identity,
+            ..
         } => StorageVolumeIdentity::Linux {
             filesystem_uuid: filesystem_uuid.clone(),
             device_identity: device_identity.clone(),
@@ -1045,6 +1050,15 @@ fn target_kind_path_and_size(target: &ResourceTarget) -> (&'static str, String, 
             ..
         } => (
             "linux_file_origin",
+            managed_relative_path.clone(),
+            *allocated_bytes,
+        ),
+        ResourceTarget::LinuxFileOriginRequest {
+            managed_relative_path,
+            allocated_bytes,
+            ..
+        } => (
+            "linux_file_origin_request",
             managed_relative_path.clone(),
             *allocated_bytes,
         ),
@@ -1272,6 +1286,12 @@ fn planned_path_identity(
             device_identity,
             managed_relative_path,
             ..
+        }
+        | ResourceTarget::LinuxFileOriginRequest {
+            filesystem_uuid,
+            device_identity,
+            managed_relative_path,
+            ..
         } => Some(PlannedPathIdentity::Linux {
             filesystem_uuid: filesystem_uuid.clone(),
             device_identity: device_identity.clone(),
@@ -1339,6 +1359,11 @@ fn target_free_bytes(
             ..
         }
         | ResourceTarget::LinuxFileOrigin {
+            filesystem_uuid,
+            device_identity,
+            ..
+        }
+        | ResourceTarget::LinuxFileOriginRequest {
             filesystem_uuid,
             device_identity,
             ..
@@ -2375,6 +2400,37 @@ priority = -1
         let stale_plan = build_resource_plan(&stale_snapshot, Some(profile))
             .expect("stale native telemetry is represented as a refusal");
         assert_eq!(stale_plan.targets[0].status, "stale_sample");
+    }
+
+    #[test]
+    fn native_linux_origin_request_plan_binds_volume_without_claiming_creation() {
+        let mut snapshot = fixture_snapshot();
+        snapshot.platform = RuntimePlatform::NativeLinux;
+        snapshot.windows = None;
+        let mut device = fixture_block_device();
+        device.eligible_for_file_storage = true;
+        snapshot.block_devices = vec![device];
+        let profile = r#"
+schema_version = 1
+
+[[targets]]
+kind = "linux_file_origin_request"
+filesystem_uuid = "fs-uuid"
+device_identity = "wwn:wwn-123"
+managed_relative_path = "origin/ramshared.img"
+allocated_bytes = 4294967296
+"#;
+
+        let plan = build_resource_plan(&snapshot, Some(profile)).expect("origin request plans");
+
+        assert_eq!(plan.status, "ready_for_review");
+        assert_eq!(plan.targets[0].kind, "linux_file_origin_request");
+        assert_eq!(plan.targets[0].status, "storage_ready");
+        assert_eq!(plan.targets[0].required_free_bytes, 14 * 1024 * 1024 * 1024);
+        assert_eq!(plan.targets[0].observed_mount_id, Some(41));
+        assert!(!plan.writes_performed);
+        assert!(!plan.apply_enabled);
+        assert!(render_plan_text(&plan).contains("Read-only plan"));
     }
 
     #[test]

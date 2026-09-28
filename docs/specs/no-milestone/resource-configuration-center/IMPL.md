@@ -40,6 +40,13 @@ settings. Native Linux target qualification has not run on a native host.
   capacity, then reports that current mount ID in the plan. Multiple matching
   mounts refuse as ambiguous. It does not create a file, activate swap, select
   a disk, or claim native-host qualification.
+- Native Linux origin intent is distinct from a materialized sealed file:
+  `linux_file_origin_request` carries stable filesystem/device identity, a
+  managed relative path, and requested bytes without fabricating an inode or
+  manifest hash. The read-only planner checks current identity and capacity
+  and reports the request kind; it does not claim the file was created or is
+  ready to open. `linux_file_origin` remains reserved for an existing sealed
+  file, and duplicate-path validation treats both forms as the same target.
 - Under WSL2, the view labels guest RAM separately from Windows host physical
   memory and commit headroom, and lists every volume returned by the bounded
   `Get-Volume` query, including removable, unknown, and drive-letterless rows.
@@ -65,7 +72,8 @@ settings. Native Linux target qualification has not run on a native host.
 - `ramshared-config::resource_profile` parses a 64 KiB-bounded TOML profile
   with schema version 1, variable byte ceilings, adapter-bound GPU caps, and
   multiple platform-bound storage targets. A profile can represent swap and
-  origin placements on the same or different stable volumes. Validation
+  origin placements on the same or different stable volumes, including a new
+  native origin request before its file has an inode. Validation
   rejects schema or platform mismatch, unknown fields, unsafe or duplicate
   managed paths, unbound identities, and invalid allocation metadata. It
   computes a checked free-space requirement per stable volume, summing every
@@ -82,10 +90,10 @@ settings. Native Linux target qualification has not run on a native host.
 | Path | Change |
 | --- | --- |
 | `crates/ramshared-cli/src/main.rs` | `config` parsing, dispatch, help text, and read-only `plan [--json] [--profile PATH]`; unsupported mutation actions remain rejected. |
-| `crates/ramshared-cli/src/resource_config.rs` | Platform detection, memory/swap snapshots, bounded Linux and Windows inventory, read-only profile loading/planning, stable target binding, stale/inconsistent sample refusals, path alias detection, JSON/text rendering, and read-only TUI. |
+| `crates/ramshared-cli/src/resource_config.rs` | Platform detection, memory/swap snapshots, bounded Linux and Windows inventory, read-only profile loading/planning, stable target binding, native origin-request capacity planning, stale/inconsistent sample refusals, path alias detection, JSON/text rendering, and read-only TUI. |
 | `crates/ramshared-cli/tests/cli_dispatch.rs` | Executes the built CLI for JSON discovery and explicit-profile plan; confirms plan does not apply settings and mutation commands refuse before action. |
 | `crates/ramshared-config/src/resource_profile.rs` | Versioned, bounded TOML policy model; platform-bound storage targets; variable tier caps; checked capacity arithmetic; canonical Windows target paths. |
-| `crates/ramshared-config/tests/resource_profile.rs` | Tests variable caps, overflow, profile round trips, platform mismatch, malformed identity, duplicate targets, and Windows path refusal. |
+| `crates/ramshared-config/tests/resource_profile.rs` | Tests variable caps, overflow, profile round trips, proposed native origin identity/capacity, platform mismatch, malformed identity, duplicate targets, and Windows path refusal. |
 | `docs/specs/no-milestone/resource-configuration-center/SPEC.md` | Names implemented profile and inventory tests while retaining the full configuration contract as incomplete. |
 
 ## Validation
@@ -109,13 +117,19 @@ settings. Native Linux target qualification has not run on a native host.
   `resource_profile_rejects_transient_mount_id_in_persisted_targets` test
   refuses the obsolete field. `storage_candidate_rejects_filesystem_subtree_mounts`
   also reproduced the prior acceptance and now verifies a refusal.
-- The full CLI suite under the coverage gate passed 391 unit tests and
+- Regression: `resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_inode`
+  proves a new native file origin is representable before it has an inode,
+  validates platform/size/duplicate-path refusals, and round-trips the
+  request through TOML. `native_linux_origin_request_plan_binds_volume_without_claiming_creation`
+  verifies the planner binds the current mount and reserve calculation while
+  keeping `writes_performed=false` and `apply_enabled=false`.
+- The full CLI suite under the coverage gate passed 392 unit tests and
   12 CLI integration tests, including
   `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`.
-- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 10
+- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 11
   profile integration tests, including malformed/ambiguous Windows target
-  paths and refusal of persisted mount IDs. The profile slice gate passed at
-  **91.3% (293/321 lines)**.
+  paths, refusal of persisted mount IDs, and pending native-origin requests.
+  The profile slice gate passed at **93.1% (312/335 lines)**.
 - CLI E2E: `cli_resource_config_json_discovers_platform_resources_read_only`
   executes the built binary under the current WSL2 kernel, parses its JSON,
   checks platform and resource fields, and verifies `config apply` refuses.
@@ -132,7 +146,8 @@ settings. Native Linux target qualification has not run on a native host.
   current source and SPEC/IMPL updates.
 - Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli
   --files crates/ramshared-cli/src/resource_config.rs --min 80` passed at
-  **88.5% (1,900/2,148 lines)** for discovery and read-only planning.
+  **88.7% (1,941/2,189 lines)** for discovery and read-only planning,
+  including pending native-origin capacity planning.
 - PowerShell 5.1 manufactured/static harnesses passed for
   `Test-WindowsStorageMatrixStatic.ps1`,
   `Test-RamSharedWslLifecycleRecoveryStatic.ps1`,

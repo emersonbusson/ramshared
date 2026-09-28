@@ -26,12 +26,20 @@ qualify native Linux mutation, additional storage transports, or physical
 filesystem behavior. WSL guest filesystems remain ineligible until their
 Windows backing-volume identity and current free capacity are bound.
 
+Further direct model review found that `linux_file_origin` required a real
+inode and identity hash, so the profile could represent an existing sealed
+origin but not a requested new Linux origin before the creation transaction.
+DT-22 now separates `linux_file_origin_request` from the sealed runtime
+manifest. The read-only plan binds the request to current stable volume
+identity/capacity and explicitly does not claim creation or openability. The
+model and planner have named tests; TUI selection, profile persistence,
+privileged creation, and native Linux live qualification remain open.
+
 ## Open questions
 
 - No product-contract question blocks implementation. Native Linux and WSL2 are separate providers behind one CLI; WSL host memory remains read-only, and native Linux is not routed through Windows disk or swap policy.
 - Native Linux ext4/XFS, Windows volume behavior, storage-ranking stability, GPU adapters, and WSL host/guest application remain environment-bound implementation and release gates. Passing manufactured tests alone cannot close them.
 - A filesystem call may remain uninterruptible past the displayed benchmark deadline. The UI must say so; persisted worker state prevents a second operation from being admitted to the affected target until recovery proves exit and cleanup.
-
 ## Verdict
 
 **go — Step 3 implementation only.** The native Linux and WSL2 contracts are distinct, the selected sizes remain variable and bounded by current measurements, and unsafe storage, stale telemetry, unsupported providers, and uncertain cleanup fail closed. This verdict does not mean the feature is implemented, tested, installed, or release-qualified. Do not mark the spec `DONE` until its named tests, coverage gate, and separate native Linux and WSL2 before/action/after E2E gates pass.
