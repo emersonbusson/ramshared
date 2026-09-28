@@ -35,7 +35,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`native-vsock-host-guest-control-plane`](specs/no-milestone/native-vsock-host-guest-control-plane/) | Native vsock host-guest control plane (zero scripts) | — | — | UNQUALIFIED | — |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | PARTIAL | — |
 | [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195, #219, #221, #223, #225, #227, #229 | SPEC | — |
-| [`resource-configuration-center`](specs/no-milestone/resource-configuration-center/) | Guided and auditable RamShared resource configuration | — | — | SPEC | — |
+| [`resource-configuration-center`](specs/no-milestone/resource-configuration-center/) | Guided and auditable RamShared resource configuration | — | — | UNQUALIFIED | — |
 | [`vmbus-ring-buffer-upstream-v2`](specs/no-milestone/vmbus-ring-buffer-upstream-v2/) | Fragmentation-resilient VMBus rings across confidential guests | — | — | UNQUALIFIED | — |
 | [`vram-host-safety-and-dynamic-tiering`](specs/no-milestone/vram-host-safety-and-dynamic-tiering/) | Adapter-bound VRAM cache safety and fallback contract | — | — | SPEC | — |
 | [`vram-reclaim-pressure-matrix`](specs/no-milestone/vram-reclaim-pressure-matrix/) | PRD - VRAM reclaim pressure matrix | — | — | UNQUALIFIED | — |

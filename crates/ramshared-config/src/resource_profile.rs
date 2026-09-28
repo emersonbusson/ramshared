@@ -1,0 +1,327 @@
+//! Versioned end-user resource ceilings and stable storage targets.
+//!
+//! This module only parses and validates profile data. It performs no host or
+//! guest mutation; providers must revalidate live identity and capacity before
+//! acting on a target.
+
+use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter};
+
+use serde::{Deserialize, Serialize};
+
+pub const RESOURCE_PROFILE_SCHEMA_VERSION: u32 = 1;
+pub const DISK_RESERVE_FLOOR_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+pub const MAX_RESOURCE_PROFILE_BYTES: usize = 64 * 1024;
+const MAX_IDENTITY_BYTES: usize = 512;
+const MAX_LINUX_RELATIVE_PATH_BYTES: usize = 4096;
+const MAX_WINDOWS_PATH_BYTES: usize = 32_767;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourcePlatform {
+    NativeLinux,
+    Wsl2,
+}
+
+impl ResourcePlatform {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeLinux => "native_linux",
+            Self::Wsl2 => "wsl2",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TierCaps {
+    #[serde(default)]
+    pub zram_bytes: Option<u64>,
+    #[serde(default)]
+    pub vram_bytes: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub origin_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceProfile {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub caps: TierCaps,
+    #[serde(default)]
+    pub target: Option<ResourceTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ResourceTarget {
+    LinuxSwapfile {
+        filesystem_uuid: String,
+        device_identity: String,
+        mount_id: u64,
+        managed_relative_path: String,
+        bytes: u64,
+        priority: i32,
+    },
+    LinuxFileOrigin {
+        filesystem_uuid: String,
+        device_identity: String,
+        mount_id: u64,
+        managed_relative_path: String,
+        inode: u64,
+        allocated_bytes: u64,
+        identity_field_hash: String,
+    },
+    WslFallback {
+        windows_volume_id: String,
+        path: String,
+        bytes: u64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResourceProfileError {
+    Parse(String),
+    UnsupportedSchemaVersion(u32),
+    PlatformMismatch {
+        target: &'static str,
+        platform: &'static str,
+    },
+    Invalid {
+        field: &'static str,
+        reason: &'static str,
+    },
+    CapacityOverflow,
+}
+
+impl Display for ResourceProfileError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse(message) => write!(formatter, "invalid resource profile: {message}"),
+            Self::UnsupportedSchemaVersion(version) => {
+                write!(
+                    formatter,
+                    "unsupported resource profile schema version {version}"
+                )
+            }
+            Self::PlatformMismatch { target, platform } => write!(
+                formatter,
+                "resource target {target} is not valid for platform {platform}"
+            ),
+            Self::Invalid { field, reason } => {
+                write!(
+                    formatter,
+                    "invalid resource profile field {field}: {reason}"
+                )
+            }
+            Self::CapacityOverflow => {
+                formatter.write_str("managed storage requirement overflows byte capacity")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResourceProfileError {}
+
+impl ResourceProfile {
+    pub fn parse(text: &str) -> Result<Self, ResourceProfileError> {
+        if text.len() > MAX_RESOURCE_PROFILE_BYTES {
+            return Err(invalid("profile", "exceeds the 64 KiB input limit"));
+        }
+        toml::from_str(text).map_err(|error| ResourceProfileError::Parse(error.to_string()))
+    }
+
+    pub fn to_toml(&self) -> Result<String, ResourceProfileError> {
+        toml::to_string(self).map_err(|error| ResourceProfileError::Parse(error.to_string()))
+    }
+
+    pub fn validate_for(&self, platform: ResourcePlatform) -> Result<(), ResourceProfileError> {
+        if self.schema_version != RESOURCE_PROFILE_SCHEMA_VERSION {
+            return Err(ResourceProfileError::UnsupportedSchemaVersion(
+                self.schema_version,
+            ));
+        }
+
+        for identity in self.caps.vram_bytes.keys() {
+            validate_identity("caps.vram_bytes adapter identity", identity)?;
+        }
+
+        let Some(target) = self.target.as_ref() else {
+            return Ok(());
+        };
+
+        match (platform, target) {
+            (
+                ResourcePlatform::NativeLinux,
+                ResourceTarget::LinuxSwapfile {
+                    filesystem_uuid,
+                    device_identity,
+                    mount_id,
+                    managed_relative_path,
+                    bytes,
+                    priority,
+                },
+            ) => {
+                validate_linux_storage_identity(filesystem_uuid, device_identity, *mount_id)?;
+                validate_linux_relative_path(managed_relative_path)?;
+                validate_positive_bytes("target.bytes", *bytes)?;
+                if !(-1..=32_767).contains(priority) {
+                    return Err(invalid("target.priority", "must be between -1 and 32767"));
+                }
+            }
+            (
+                ResourcePlatform::NativeLinux,
+                ResourceTarget::LinuxFileOrigin {
+                    filesystem_uuid,
+                    device_identity,
+                    mount_id,
+                    managed_relative_path,
+                    inode,
+                    allocated_bytes,
+                    identity_field_hash,
+                },
+            ) => {
+                validate_linux_storage_identity(filesystem_uuid, device_identity, *mount_id)?;
+                validate_linux_relative_path(managed_relative_path)?;
+                validate_positive_bytes("target.allocated_bytes", *allocated_bytes)?;
+                if *inode == 0 {
+                    return Err(invalid("target.inode", "must be non-zero"));
+                }
+                if identity_field_hash.len() != 64
+                    || !identity_field_hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Err(invalid(
+                        "target.identity_field_hash",
+                        "must contain exactly 64 hexadecimal characters",
+                    ));
+                }
+            }
+            (
+                ResourcePlatform::Wsl2,
+                ResourceTarget::WslFallback {
+                    windows_volume_id,
+                    path,
+                    bytes,
+                },
+            ) => {
+                validate_identity("target.windows_volume_id", windows_volume_id)?;
+                validate_windows_path(path)?;
+                validate_positive_bytes("target.bytes", *bytes)?;
+            }
+            (_, ResourceTarget::LinuxSwapfile { .. }) => {
+                return Err(platform_mismatch("linux_swapfile", platform));
+            }
+            (_, ResourceTarget::LinuxFileOrigin { .. }) => {
+                return Err(platform_mismatch("linux_file_origin", platform));
+            }
+            (_, ResourceTarget::WslFallback { .. }) => {
+                return Err(platform_mismatch("wsl_fallback", platform));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub fn checked_required_free_bytes(
+    managed_allocations: &[u64],
+) -> Result<u64, ResourceProfileError> {
+    managed_allocations
+        .iter()
+        .try_fold(DISK_RESERVE_FLOOR_BYTES, |required, allocation| {
+            required
+                .checked_add(*allocation)
+                .ok_or(ResourceProfileError::CapacityOverflow)
+        })
+}
+
+fn validate_linux_storage_identity(
+    filesystem_uuid: &str,
+    device_identity: &str,
+    mount_id: u64,
+) -> Result<(), ResourceProfileError> {
+    validate_identity("target.filesystem_uuid", filesystem_uuid)?;
+    validate_identity("target.device_identity", device_identity)?;
+    if mount_id == 0 {
+        return Err(invalid("target.mount_id", "must be non-zero"));
+    }
+    Ok(())
+}
+
+fn validate_identity(field: &'static str, value: &str) -> Result<(), ResourceProfileError> {
+    if value.trim().is_empty() {
+        return Err(invalid(field, "must not be empty"));
+    }
+    if value.len() > MAX_IDENTITY_BYTES {
+        return Err(invalid(field, "exceeds the identity length limit"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(invalid(field, "contains a control character"));
+    }
+    Ok(())
+}
+
+fn validate_linux_relative_path(path: &str) -> Result<(), ResourceProfileError> {
+    if path.is_empty() || path.len() > MAX_LINUX_RELATIVE_PATH_BYTES {
+        return Err(invalid(
+            "target.managed_relative_path",
+            "has invalid length",
+        ));
+    }
+    if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
+        return Err(invalid(
+            "target.managed_relative_path",
+            "must be a relative Linux path",
+        ));
+    }
+    if path.chars().any(char::is_control)
+        || path
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(invalid(
+            "target.managed_relative_path",
+            "contains an unsafe path component",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_windows_path(path: &str) -> Result<(), ResourceProfileError> {
+    let drive_path = path.as_bytes().get(1) == Some(&b':')
+        && path.as_bytes()[0].is_ascii_alphabetic()
+        && path.as_bytes().get(2) == Some(&b'\\');
+    let volume_path = path.starts_with(r"\\?\Volume{") && path.contains("}\\");
+    if path.is_empty() || path.len() > MAX_WINDOWS_PATH_BYTES || (!drive_path && !volume_path) {
+        return Err(invalid(
+            "target.path",
+            "must be an absolute drive or volume-GUID path",
+        ));
+    }
+    if path.chars().any(char::is_control)
+        || path.split(['\\', '/']).any(|component| component == "..")
+    {
+        return Err(invalid("target.path", "contains an unsafe path component"));
+    }
+    Ok(())
+}
+
+fn validate_positive_bytes(field: &'static str, bytes: u64) -> Result<(), ResourceProfileError> {
+    if bytes == 0 {
+        return Err(invalid(field, "must be greater than zero"));
+    }
+    Ok(())
+}
+
+fn platform_mismatch(target: &'static str, platform: ResourcePlatform) -> ResourceProfileError {
+    ResourceProfileError::PlatformMismatch {
+        target,
+        platform: platform.as_str(),
+    }
+}
+
+fn invalid(field: &'static str, reason: &'static str) -> ResourceProfileError {
+    ResourceProfileError::Invalid { field, reason }
+}

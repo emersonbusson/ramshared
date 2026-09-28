@@ -293,14 +293,45 @@ fn storage_eligibility(device: &BlockDevice, mount: Option<&MountInfo>) -> (bool
         Some(true) => return (false, "removable storage is not eligible".into()),
         None => return (false, "removable status is unavailable".into()),
     }
-    if device.transport.as_deref() == Some("usb") {
+    let Some(transport) = device.transport.as_deref() else {
+        return (
+            false,
+            "storage transport is unavailable; local backing cannot be verified".into(),
+        );
+    };
+    if transport.eq_ignore_ascii_case("usb") {
         return (
             false,
             "USB storage is not eligible for managed files".into(),
         );
     }
-    if device.kind != "part" {
-        return (false, "select a filesystem on a partition".into());
+    if [
+        "aoe", "drbd", "fc", "fcoe", "iscsi", "nbd", "network", "nvme-of", "nvmeof", "nvmf", "rbd",
+    ]
+    .iter()
+    .any(|known| transport.eq_ignore_ascii_case(known))
+    {
+        return (
+            false,
+            "network-backed storage is not eligible for managed files".into(),
+        );
+    }
+    if ![
+        "ata", "ide", "mmc", "nvme", "pci", "sas", "sata", "scsi", "virtio",
+    ]
+    .iter()
+    .any(|known| transport.eq_ignore_ascii_case(known))
+    {
+        return (
+            false,
+            format!("storage transport {transport} is not qualified as local"),
+        );
+    }
+    if device.kind != "part" && device.kind != "disk" {
+        return (
+            false,
+            "select a filesystem on a partition or whole disk".into(),
+        );
     }
     let Some(mount) = mount else {
         return (false, "no current mount record matches this device".into());
@@ -320,12 +351,16 @@ fn storage_eligibility(device: &BlockDevice, mount: Option<&MountInfo>) -> (bool
     if device.uuid.as_deref().is_none_or(str::is_empty) {
         return (false, "filesystem UUID is unavailable".into());
     }
-    if device
-        .parent_hardware_identity
-        .as_deref()
-        .is_none_or(str::is_empty)
-    {
-        return (false, "stable parent-device identity is unavailable".into());
+    let stable_storage_identity = match device.kind.as_str() {
+        "part" => device.parent_hardware_identity.as_deref(),
+        "disk" => device.hardware_identity.as_deref(),
+        _ => None,
+    };
+    if stable_storage_identity.is_none_or(str::is_empty) {
+        return (
+            false,
+            "stable storage-device identity is unavailable".into(),
+        );
     }
     match mount.filesystem.to_ascii_lowercase().as_str() {
         "ext4" | "xfs" => (
@@ -578,6 +613,36 @@ fn attach_mount_inventory(devices: &mut [BlockDevice], mut mounts: Vec<MountInfo
     }
 }
 
+fn apply_platform_storage_policy(devices: &mut [BlockDevice], platform: RuntimePlatform) {
+    if platform != RuntimePlatform::Wsl2 {
+        return;
+    }
+
+    for device in devices {
+        let has_mounted_supported_filesystem = device.mounts.iter().any(|mount| {
+            !mount.read_only
+                && matches!(
+                    mount.filesystem.to_ascii_lowercase().as_str(),
+                    "ext4" | "xfs"
+                )
+                && mount.total_bytes.is_some()
+                && mount.available_bytes.is_some()
+        });
+        if has_mounted_supported_filesystem {
+            let guest_reason = device.eligibility_reason.trim();
+            device.eligible_for_file_storage = false;
+            device.eligibility_reason = if guest_reason.is_empty() {
+                "WSL2 host-volume identity and free capacity are not bound to this guest filesystem"
+                    .into()
+            } else {
+                format!(
+                    "WSL2 host-volume identity and free capacity are not bound to this guest filesystem; guest check: {guest_reason}"
+                )
+            };
+        }
+    }
+}
+
 fn parse_windows_volume(value: &Value) -> Result<WindowsVolume, InventoryError> {
     if !value.is_object() {
         return Err(InventoryError("Windows volume row is not an object".into()));
@@ -717,13 +782,14 @@ fn collect_snapshot() -> Result<ResourceSnapshot, InventoryError> {
         .map_err(|error| InventoryError(format!("cannot read guest swap inventory: {error}")))?;
     let swaps = parse_swap_table(&swaps_text)?;
     let mut warnings = Vec::new();
-    let block_devices = match collect_linux_block_devices() {
+    let mut block_devices = match collect_linux_block_devices() {
         Ok(devices) => devices,
         Err(error) => {
             warnings.push(format!("Linux block inventory unavailable: {error}"));
             Vec::new()
         }
     };
+    apply_platform_storage_policy(&mut block_devices, platform);
     let windows = if platform == RuntimePlatform::Wsl2 {
         match collect_windows_snapshot() {
             Ok(snapshot) => Some(snapshot),
@@ -1024,6 +1090,26 @@ mod tests {
     }
 
     #[test]
+    fn wsl2_guest_storage_requires_host_volume_identity_and_capacity_binding() {
+        let mut candidate = fixture_block_device();
+        candidate.eligible_for_file_storage = true;
+        candidate.eligibility_reason = "mount is otherwise eligible".into();
+
+        apply_platform_storage_policy(std::slice::from_mut(&mut candidate), RuntimePlatform::Wsl2);
+        assert!(!candidate.eligible_for_file_storage);
+        assert!(candidate.eligibility_reason.contains("host-volume"));
+
+        candidate.eligible_for_file_storage = true;
+        candidate.eligibility_reason = "native filesystem candidate".into();
+        apply_platform_storage_policy(
+            std::slice::from_mut(&mut candidate),
+            RuntimePlatform::NativeLinux,
+        );
+        assert!(candidate.eligible_for_file_storage);
+        assert_eq!(candidate.eligibility_reason, "native filesystem candidate");
+    }
+
+    #[test]
     fn meminfo_accepts_user_sized_ram_and_swap_without_product_minima() {
         // Deliberately varied parser fixtures; these are not product defaults.
         let small = parse_meminfo(
@@ -1195,6 +1281,73 @@ mod tests {
         let mut xfs_mount = fixture_mount_info();
         xfs_mount.filesystem = "xfs".into();
         assert!(storage_eligibility(&candidate, Some(&xfs_mount)).0);
+    }
+
+    #[test]
+    fn network_backed_block_devices_are_ineligible_and_multiple_local_disks_remain_eligible() {
+        let nvme = fixture_block_device();
+        let nvme_mount = fixture_mount_info();
+
+        let mut sata = fixture_block_device();
+        sata.name = "sdb1".into();
+        sata.path = "/dev/sdb1".into();
+        sata.major_minor = Some("8:17".into());
+        sata.parent = Some("sdb".into());
+        sata.parent_hardware_identity = Some("serial:local-sata-2".into());
+        sata.transport = Some("sata".into());
+        let sata_mount = MountInfo {
+            major_minor: "8:17".into(),
+            mountpoint: "/mnt/second".into(),
+            source: "/dev/sdb1".into(),
+            filesystem: "xfs".into(),
+            ..fixture_mount_info()
+        };
+
+        assert!(storage_eligibility(&nvme, Some(&nvme_mount)).0);
+        assert!(storage_eligibility(&sata, Some(&sata_mount)).0);
+
+        for transport in ["iscsi", "nbd", "rbd", "fcoe", "nvme-of"] {
+            let mut remote = nvme.clone();
+            remote.transport = Some(transport.into());
+            let (eligible, reason) = storage_eligibility(&remote, Some(&nvme_mount));
+            assert!(!eligible, "{transport} must not be a writable local target");
+            assert!(reason.contains("network"), "unexpected reason: {reason}");
+        }
+
+        for transport in [None, Some("unclassified".into())] {
+            let mut ambiguous = nvme.clone();
+            ambiguous.transport = transport;
+            let (eligible, reason) = storage_eligibility(&ambiguous, Some(&nvme_mount));
+            assert!(!eligible, "unproven local transport must be refused");
+            assert!(reason.contains("transport"), "unexpected reason: {reason}");
+        }
+    }
+
+    #[test]
+    fn mounted_whole_disk_filesystem_uses_its_own_stable_identity() {
+        let mut disk = fixture_block_device();
+        disk.name = "sdc".into();
+        disk.path = "/dev/sdc".into();
+        disk.kind = "disk".into();
+        disk.size_bytes = Some(1024 * 1024 * 1024 * 1024);
+        disk.uuid = Some("root-fs-uuid".into());
+        disk.parent = None;
+        disk.major_minor = Some("8:32".into());
+        disk.partition_uuid = None;
+        disk.hardware_identity = Some("wwn:virtual-disk-123".into());
+        disk.parent_hardware_identity = None;
+
+        let mount = MountInfo {
+            major_minor: "8:32".into(),
+            source: "/dev/sdc".into(),
+            ..fixture_mount_info()
+        };
+        assert!(storage_eligibility(&disk, Some(&mount)).0);
+
+        disk.hardware_identity = None;
+        let (eligible, reason) = storage_eligibility(&disk, Some(&mount));
+        assert!(!eligible);
+        assert!(reason.contains("stable"));
     }
 
     #[test]

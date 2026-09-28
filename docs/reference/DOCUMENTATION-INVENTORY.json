@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 343,
-    "classified": 340,
+    "total": 344,
+    "classified": 341,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -2390,6 +2390,18 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "immutable",
       "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/resource-configuration-center/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
     },
     {
       "path": "docs/specs/no-milestone/resource-configuration-center/PRD.md",

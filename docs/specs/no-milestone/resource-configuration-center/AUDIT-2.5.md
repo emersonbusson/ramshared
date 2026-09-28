@@ -13,6 +13,19 @@
 
 No high-severity or hard-no-go finding remains in the design. The review is against the current repository sources, including the existing `FileOrigin`, WSL sealed block-origin path, WSL origin manager reserve, GPU budget owner, `.wslconfig` owner, and Linux cascade lifecycle. The new native origin provider and config UI do not exist yet.
 
+## Implementation recheck — 2026-09-28
+
+Direct implementation review found that the initial read-only Linux inventory
+could accept ext4/XFS on a known network-backed block transport, and could
+treat missing or unrecognized `TRAN` data as sufficient proof of local
+storage. The source now refuses known network transports and requires a
+recognized local transport. The named regression first failed for iSCSI and
+missing transport, then passed while keeping independent NVMe and SATA
+candidates eligible. This closes that source-policy defect; it does not
+qualify native Linux mutation, additional storage transports, or physical
+filesystem behavior. WSL guest filesystems remain ineligible until their
+Windows backing-volume identity and current free capacity are bound.
+
 ## Open questions
 
 - No product-contract question blocks implementation. Native Linux and WSL2 are separate providers behind one CLI; WSL host memory remains read-only, and native Linux is not routed through Windows disk or swap policy.

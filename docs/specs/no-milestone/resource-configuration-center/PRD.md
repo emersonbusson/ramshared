@@ -25,12 +25,12 @@ authoritative.
 
 ## 2. Technical context
 
-- **Confirmed in codebase:** The test `meminfo_missing_or_inconsistent_core_values_are_unavailable` in `crates/ramshared-cli/src/monitor.rs` checks missing fields and relational bounds. Its KiB values are parser fixtures, not runtime capacities, configuration defaults, or allocation ceilings; coverage is being extended across different valid RAM/swap sizes.
+- **Confirmed in codebase:** The test `meminfo_missing_or_inconsistent_core_values_are_unavailable` in `crates/ramshared-cli/src/monitor.rs` checks missing fields and relational bounds. The companion `meminfo_accepts_user_sized_ram_and_swap_without_product_minima` accepts parser fixtures from 256 MiB RAM / 128 MiB swap to 48 GiB RAM / 20 GiB swap. These are parser inputs, not runtime capacities, configuration defaults, or allocation ceilings.
 - **Confirmed in codebase:** `scripts/safety/wslconfig-lib.sh` currently renders defaults of a 16 GiB WSL memory ceiling and 4 GiB fallback swap. These are current script defaults, not parser limits or user-independent capacity requirements; environment variables can override them. `WSLCONFIG_SWAPFILE` preserves an existing path and does not discover all available volumes.
 - **Confirmed in codebase:** `scripts/safety/wslconfig-ctl.sh apply` rewrites the canonical profile and tells the operator to restart WSL later. It does not expose an interactive resource selector.
 - **Confirmed in codebase:** `scripts/windows/Manage-RamSharedOrigin.ps1` accepts an origin size/path, selects the registered distro volume or C: for the automatic new-origin path, enforces reserve checks, and preserves a sealed origin path. The WSL fallback `swapFile` is a separate setting and is not used to infer the origin volume.
 - **Confirmed in codebase:** `crates/ramshared-wsl2d/src/gpu_budget.rs` has fresh adapter-bound allocator/WDDM admission and fixed host-display/runtime reserves. Existing target selection is dynamic; this PRD does not authorize allocation above that live safe target.
-- **Confirmed in codebase:** `crates/ramshared-cli/src/monitor.rs` already uses Ratatui for `ramshared top`; the custom CLI parser in `crates/ramshared-cli/src/main.rs` has no `config` command. `crates/ramshared-config` currently describes broker and agent TOML, not end-user hardware policy.
+- **Confirmed in codebase:** `crates/ramshared-cli/src/monitor.rs` uses Ratatui for `ramshared top`. The custom parser now implements `ramshared config` with a read-only interactive view and `show [--json]`; it has no `plan`, `benchmark`, or `apply` action yet. `crates/ramshared-config::Config` still describes broker and agent TOML. Its new `resource_profile` module defines the versioned user policy model, but the CLI and providers do not load or persist that profile yet.
 - **Confirmed in codebase:** The Linux cascade creates its managed ZRAM and origin-backed swap devices through `crates/ramshared-cli/src/cascade/cascade_io.rs`; the current lifecycle does not expose a general system swapfile volume selector. Discovery must not mistake RamShared's logical SSD-backed swap device for a conventional Linux swapfile.
 - **Confirmed in codebase:** `crates/ramshared-block/src/origin_cache.rs` provides `FileOrigin`, but `crates/ramshared-wsl2d/src/main.rs::open_validated_origin` currently accepts only a block device sealed by PARTUUID/PTUUID/swap UUID. Native file-backed origin selection therefore needs its own identity-sealed manifest path; an arbitrary filename cannot be passed to the existing WSL origin path.
 - **Confirmed in codebase:** `docs/specs/no-milestone/wsl2-origin-capacity-policy/` covers origin size, volume reserve, and sealed-path behavior. It expressly leaves the independent WSL fallback swap path outside its scope.
@@ -42,9 +42,10 @@ authoritative.
 
 ## 3. Recommended option
 
-Add a guided `ramshared config` TUI to the existing CLI and a typed,
-platform-neutral resource profile/policy layer with Linux-native and WSL2 host
-providers. Keep platform actions in their owning components:
+Complete the guided `ramshared config` TUI and add a typed, platform-neutral
+resource profile/policy layer with Linux-native and WSL2 host providers. The
+current source has read-only discovery and display only. Keep platform actions
+in their owning components:
 
 - On native Linux, a bounded privileged provider discovers block devices,
   mounted filesystems, swap devices/files, and free space; it can create
@@ -140,7 +141,9 @@ the UI can inspect and export a plan but cannot apply it.
   manager's size limits, approval, fixed-allocation, reserve, and sealed
   manifest flow. For a new native Linux origin, create a fixed-allocated file
   only inside an app-owned directory on the selected eligible mount and seal
-  filesystem UUID, parent-device identity, mount identity, inode, exact path,
+  filesystem UUID, stable backing-device identity (parent identity for a
+  partition, device identity for a whole-disk filesystem), mount identity,
+  inode, exact path,
   and size before daemon use. If a sealed origin exists, disable path/size
   changes that replace or move it and direct the user to the existing
   migration/recovery process.
@@ -305,7 +308,9 @@ the UI can inspect and export a plan but cannot apply it.
   filesystem identity, display mount/letter, parent relationship, filesystem,
   device kind, total/free bytes, available/reason, sample time. Unmounted
   devices have no writable mount target.
-- **Native origin identity:** filesystem UUID, parent block identity, mount ID,
+- **Native origin identity:** filesystem UUID, stable backing-device identity
+  (parent identity for a partition, device identity for a whole-disk
+  filesystem), mount ID,
   app-owned relative path, inode/device number, exact allocated size, and
   manifest hash over the identity fields, verified again from the open file
   descriptor before daemon use. Do not hash origin contents: the authoritative

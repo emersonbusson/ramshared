@@ -78,6 +78,26 @@ fn cli_resource_config_json_discovers_platform_resources_read_only() {
 
     if value["platform"] == "wsl2" {
         assert!(value["windows"].is_object() || !value["warnings"].as_array().unwrap().is_empty());
+        assert!(
+            value["block_devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|device| device["eligible_for_file_storage"].as_bool() == Some(false)),
+            "guest filesystem capacity must not imply host-volume capacity"
+        );
+        assert!(
+            value["block_devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|device| !device["mounts"].as_array().unwrap().is_empty())
+                .all(|device| device["eligibility_reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("host-volume")),
+            "mounted WSL guest filesystems need a host-volume binding reason"
+        );
     } else {
         assert!(value["windows"].is_null());
     }

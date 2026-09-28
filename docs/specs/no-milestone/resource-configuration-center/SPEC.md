@@ -42,13 +42,13 @@ check; apply does not disable prior swap.
 | DT-3 | Every user value is a ceiling. ZRAM, VRAM, and origin decisions remain clamped by the owning runtime policy; if no owning policy can validate a current safe maximum, an increase is refused. Config never reserves physical host memory or GPU memory. | Prevents user configuration from turning a target into an unconditional allocation. |
 | DT-4 | WSL `memory=` is read-only in this slice. Do not infer a safe WSL maximum from physical-memory/commit snapshots or invent a new reserve formula. WSL memory and commit observations are explanatory only. | `FreeVirtualMemory`, physical headroom, commit headroom, and WSL working set are distinct; this feature has no independently qualified formula that turns them into a safe VM maximum. |
 | DT-5 | Admission uses the freshness and identity contracts of the owning telemetry provider. A provider with no freshness bound cannot authorize an increase. Each mutation takes a fresh observation immediately before the first write and rechecks resource identity/capacity at each storage operation. | Avoids copying stale or ambiguous values into a second policy. |
-| DT-6 | Linux inventory joins the complete local block-device tree from `lsblk` with `findmnt` mount records. Display unmounted devices, group mounted filesystems under their parent device, and bind each writable target to filesystem UUID, parent block identity (WWN/serial/PARTUUID when available), mount ID, filesystem type/options, read-only state, and free bytes. Kernel-assigned device names and mount paths are presentation/lookup values only. Unmounted, ambiguous, or missing-stable-identity targets remain visible but ineligible; discovery never mounts a device. | Prevents writes to a renumbered, remounted, substituted, or implicitly mounted device while showing the user all discovered local storage. |
-| DT-7 | V1 Linux managed swapfile writes are eligible only on tested ext4 and XFS mounts. Btrfs, overlay, network, removable, read-only, unknown, and unsupported filesystems are listed with a reason and remain ineligible until their filesystem-specific allocation and `swapon` contract has named tests and a separate SPEC decision. | Swapfiles have filesystem-specific allocation requirements; unsupported paths must not be guessed safe. |
+| DT-6 | Linux inventory joins the complete local block-device tree from `lsblk` with `/proc/self/mountinfo`. Display unmounted devices, group mounted filesystems under their backing device, and bind each writable target to filesystem UUID, stable backing identity (the parent WWN/serial for a partition, or the device's own WWN/serial for a filesystem directly on a whole disk), mount ID, filesystem type/options, read-only state, and free bytes. Kernel-assigned device names and mount paths are presentation/lookup values only. Unmounted, ambiguous, or missing-stable-identity targets remain visible but ineligible; discovery never mounts a device. In WSL2, a guest filesystem stays ineligible for file placement until its backing Windows volume identity and current host free capacity are bound to it; guest free space alone does not satisfy that gate. | A machine may have one disk with a filesystem directly on the disk, so requiring a partition would hide a valid native Linux target. Stable backing identity still prevents writes to a renumbered, remounted, substituted, or implicitly mounted device. WSL2's expandable VHDX needs a separate host-volume capacity check. |
+| DT-7 | V1 Linux managed swapfile writes are eligible only on tested ext4 and XFS mounts over a recognized local block transport. Known network-backed transports (iSCSI, NBD, RBD, DRBD, Fibre Channel, FCoE, AoE, and NVMe-oF), plus missing or unrecognized transport identity, remain visible but ineligible even when the filesystem itself is ext4/XFS. Btrfs, overlay, network filesystems, removable, read-only, unknown, and unsupported filesystems remain visible with a reason and ineligible until their filesystem-specific allocation and `swapon` contract has named tests and a separate SPEC decision. | Swapfiles have filesystem- and backing-transport-specific requirements; unsupported, ambiguous, or remote paths must not be guessed safe. |
 | DT-8 | A Linux swapfile is create-once under an app-owned root-controlled directory on the selected mount; paths are opened relative to a verified directory handle with no symlink traversal. A closed-action root helper refuses disk-tier changes unless RamShared is `Off`, then validates exact size, filesystem, free-space floor, mount ID, and active swap identities. It writes a matching systemd `.swap` unit; it never edits `/etc/fstab`. Existing swaps are never disabled or removed by apply. | Makes path ownership auditable and limits root operations to one exact transaction. |
 | DT-9 | Linux swap migration is forward-only until the previous swap is proven inactive and unused. Creating/enabling a replacement may leave both files present. Cleanup accepts only an app-owned exact path, inactive swap identity, `SwapUsed=0`, no unit references, and unchanged transaction hashes; any missing proof leaves the old file/unit intact and reports cleanup pending. | `swapoff` can move pages and fail under pressure; configuration must not trigger it or delete backing storage while referenced. |
 | DT-10 | In WSL2, `swap` and `swapFile` are changed only by the Windows host helper, after fresh probes confirm every affected distribution is `Off`. It uses unique `[wsl2]` keys, an exact backup, stable Windows volume identity, atomic replacement, and `pending_wsl_restart=true`. Setting `swap=0` is refused unless every affected distribution has a verified persistent non-RamShared swap alternative. Changing the selected path never deletes the prior VHDX/file. No `wsl --shutdown` or `wsl --terminate` is invoked. | `.wslconfig` is global to that Windows user's WSL2 distributions and changes apply at VM start; a lost fallback or active distribution must not be hidden by a host-only configuration change. |
 | DT-11 | Windows candidates are enumerated for display, including ineligible volumes. WSL swap/origin writes require a unique fixed local volume identity, NTFS/ReFS eligibility as enforced by the owning host manager, canonical target path, and the applicable free-space reserve. Drive letters are display-only and are resolved again immediately before each write. | Reuses the existing Windows origin manager's supported filesystem and identity contract. |
-| DT-12 | WSL2 origin creation/path remains delegated to `Manage-RamSharedOrigin.ps1` and its sealed block manifest. Native Linux gets a separate manifest and open path for an app-owned regular file, implemented by reusing `FileOrigin`; identity includes filesystem UUID, parent block identity, mount ID, relative managed path, inode/device, exact allocated size, and a manifest hash over these identity fields, verified again from the open fd before serving. Do not hash origin contents because daemon writes change them. Existing sealed origins remain immutable. | Native users can select a different SSD without repartitioning while WSL keeps its existing VHDX/block provenance contract. |
+| DT-12 | WSL2 origin creation/path remains delegated to `Manage-RamSharedOrigin.ps1` and its sealed block manifest. Native Linux gets a separate manifest and open path for an app-owned regular file, implemented by reusing `FileOrigin`; identity includes filesystem UUID, stable backing-device identity (parent WWN/serial for a partition, device WWN/serial for a whole-disk filesystem), mount ID, relative managed path, inode/device, exact allocated size, and a manifest hash over these identity fields, verified again from the open fd before serving. Do not hash origin contents because daemon writes change them. Existing sealed origins remain immutable. | Native users can select a different SSD without repartitioning while WSL keeps its existing VHDX/block provenance contract. |
 | DT-13 | GPU targets are keyed by stable adapter identity. A cap is applied as `min(user_cap, current_safe_target)` using the existing driver/WDDM provider, display reserve, runtime buffer, freshness rules, and identity checks. Missing/stale/ambiguous budgets produce no increase. | Prevents one adapter's headroom being spent against another or a stale budget. |
 | DT-14 | One user-approved benchmark covers at most eight eligible volumes; each volume receives three 32 MiB samples (96 MiB writes) through a fixed 1 MiB buffer, with durable flush and read-back hash. Total write ceiling is 768 MiB per run. Larger candidate sets require an explicitly selected batch and a new preview. No background run/retry. | Keeps automatic comparison useful while bounding write volume. |
 | DT-15 | Each round measures both durable small-write latency and sequential throughput; volume order rotates by round. Report raw samples and medians. Recommend a measured leader only for the selected use case when median difference is ≥10% and the other metric does not rank in the opposite direction; otherwise report a tie. Never label one volume universally fastest. | A volume may be better for swap latency and different for origin throughput; a small run is a recommendation, not a guarantee. |
@@ -67,9 +67,10 @@ check; apply does not disable prior swap.
   confirmation. `activate-linux-swap` and cleanup are unavailable on WSL2.
 - **Shared profile:** `/etc/ramshared/resource-profile.toml`, schema version
   1, root-owned and mode `0600`. Fields include per-tier caps and a tagged
-  platform target: `linux_swapfile` (mount UUID, parent device identity,
-  managed path, bytes, priority), `linux_file_origin` (filesystem UUID, parent
-  identity, mount ID, managed relative path, inode, exact allocated bytes,
+  platform target: `linux_swapfile` (mount UUID, stable backing-device
+  identity, managed path, bytes, priority), `linux_file_origin` (filesystem
+  UUID, stable backing-device identity, mount ID, managed relative path, inode,
+  exact allocated bytes,
   identity-field manifest hash), or `wsl_fallback` (Windows volume identity,
   path, bytes).
   Unknown fields, duplicate keys, overflow, stale profile hash, invalid target,
@@ -122,10 +123,10 @@ check; apply does not disable prior swap.
   same-directory file, fsync, verify bytes/hash/mode/owner, and rename
   atomically. A changed target hash refuses; rollback only when it still
   matches this transaction's output.
-- **Linux swapfile:** revalidate the exact mount ID, filesystem UUID, parent
-  identity, filesystem type/options, free bytes, and managed directory before
-  create. Allocate only the new unique file; verify exact allocated size and
-  swapfile suitability before `mkswap`. Write and verify the exact systemd
+- **Linux swapfile:** revalidate the exact mount ID, filesystem UUID, stable
+  backing-device identity, filesystem type/options, free bytes, and managed
+  directory before create. Allocate only the new unique file; verify exact
+  allocated size and swapfile suitability before `mkswap`. Write and verify the exact systemd
   unit. `apply` enables the unit for future boot but does not start it. The
   separate `activate-linux-swap` action repeats the admission checks and runs
   `swapon` only after confirmation. If command outcome is uncertain, retain
@@ -134,8 +135,8 @@ check; apply does not disable prior swap.
   the app-owned directory on the reviewed mount. Use fixed allocation, verify
   allocated bytes and file type, sync the file and containing directory, then
   atomically publish a distinct native-origin manifest bound to filesystem,
-  parent, mount, relative path, inode, allocated size, and identity-field
-  hash. The daemon opens
+  stable backing-device identity, mount, relative path, inode, allocated size,
+  and identity-field hash. The daemon opens
   without symlink traversal, rechecks the fd/path identity before serving, and
   uses the existing `FileOrigin` write-through backend. Never truncate or
   reuse a pre-existing file. If manifest publication or daemon validation is
@@ -206,20 +207,48 @@ check; apply does not disable prior swap.
 
 ## Files to CREATE / MODIFY / DELETE
 
-### CREATE
+### CREATE / MODIFY — partial implementation
+
+**`crates/ramshared-config/src/resource_profile.rs`**
+- Purpose: parse and validate versioned user ceilings and platform-bound
+  storage targets without performing host or guest mutations.
+- RF / DT: RF-3, RF-5, RF-7..RF-9, RF-12; DT-2..DT-3, DT-6..DT-8,
+  DT-10..DT-13, DT-19..DT-20.
+- Types / fns: `ResourceProfile`, `TierCaps`, `ResourceTarget`,
+  `ResourcePlatform`, `validate_for()`, and checked combined-capacity
+  arithmetic.
+- Implemented tests in `crates/ramshared-config/tests/resource_profile.rs`:
+  `resource_profile_accepts_variable_caps_and_rejects_overflow`,
+  `resource_profile_roundtrips_stable_volume_and_adapter_ids`,
+  `resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths`,
+  `resource_profile_rejects_zero_or_unbound_storage_identity`,
+  `resource_profile_rejects_oversized_or_controlled_identity_and_paths`, and
+  `resource_profile_errors_render_without_losing_the_failed_gate`.
+- Remaining: CLI profile loading/persistence, typed plan/apply, providers, and
+  live native Linux/WSL2 validation.
+- Cover: ≥80% slice gate; profile slice currently exceeds the target.
 
 **`crates/ramshared-cli/src/resource_config.rs`**
-- Purpose: shared resource observations, platform detection, plan/refusal
-  policy, `config` dispatch orchestration, and TUI states.
-- RF / DT: RF-1..RF-3, RF-9..RF-13; DT-1..DT-5, DT-17..DT-18.
-- Types / fns: `ResourceConfigAction`, `ResourceConfigPlan`,
-  `ResourceProvider`, `run_resource_config()`.
+- Purpose: shared read-only resource observations, native Linux/WSL2 platform
+  detection, verified filesystem inventory, and a read-only TUI. Plan creation,
+  provider actions, and mutation orchestration remain unimplemented.
+- RF / DT: RF-1..RF-3, RF-9..RF-13; DT-1..DT-7, DT-17..DT-18.
+- Types / fns currently present: `ResourceSnapshot`, `RuntimePlatform`,
+  `MountInfo`, `collect_snapshot()`, `parse_mountinfo()`, and `run()`.
 - Reference: `crates/ramshared-cli/src/monitor.rs` for Ratatui/test backend;
   `crates/ramshared-cli/src/cascade/` for platform boundary patterns.
-- Required tests: `config_plan_never_mutates_host_or_guest`,
+- Implemented tests: `platform_detection_distinguishes_native_linux_from_wsl2`,
+  `linux_block_inventory_preserves_mounted_and_unmounted_devices`,
+  `mountinfo_parser_decodes_paths_and_records_mount_identity_and_access`,
+  `storage_candidate_requires_current_writable_mount_capacity_and_stable_identity`,
+  `network_backed_block_devices_are_ineligible_and_multiple_local_disks_remain_eligible`,
+  `mounted_whole_disk_filesystem_uses_its_own_stable_identity`,
+  and `mount_capacity_uses_live_available_blocks_without_writing`.
+- Remaining required tests: `config_plan_never_mutates_host_or_guest`,
   `resource_policy_rejects_unknown_stale_and_inconsistent_samples`,
-  `config_apply_is_idempotent_and_refuses_changed_rollback_target`.
-- Cover: ≥80% pure policy; TUI rendering N/A — presentation.
+  and `config_apply_is_idempotent_and_refuses_changed_rollback_target`.
+- Cover: implemented inventory slice ≥80%; the full configuration policy is
+  not covered until its remaining source exists.
 - Kahneman: #13/#17.
 
 **`crates/ramshared-cli/src/resource_config/linux.rs`**
@@ -235,8 +264,8 @@ check; apply does not disable prior swap.
 
 **`crates/ramshared-wsl2d/src/native_origin.rs`**
 - Purpose: parse the native file-origin manifest and open/verify its
-  file-backed `FileOrigin` against mount, filesystem, parent device, inode,
-  size, and fd identity.
+  file-backed `FileOrigin` against mount, filesystem, stable backing-device
+  identity, inode, size, and fd identity.
 - RF / DT: RF-1, RF-3, RF-8; DT-12, DT-19..DT-20.
 - Required tests: `native_origin_manifest_binds_open_fd_identity`,
   `native_origin_manifest_rejects_path_mount_and_inode_drift`.
@@ -276,12 +305,12 @@ check; apply does not disable prior swap.
 ### MODIFY
 
 **`crates/ramshared-config/src/lib.rs`**
-- Purpose: additive schema-v1 resource profile with platform-tagged swap
-  target, caps, stable IDs, validation and canonical serialization.
+- Purpose: export the resource-profile module while preserving the existing
+  broker/agent `Config` schema and behavior.
 - RF / DT: RF-3, RF-8, RF-12; DT-2..DT-3, DT-12..DT-13.
-- Required tests: `resource_profile_accepts_variable_caps_and_rejects_overflow`,
-  `resource_profile_roundtrips_stable_volume_and_adapter_ids`.
-- Cover: ≥80% new policy.
+- Tests: existing broker/agent unit suite plus the dedicated profile test
+  target.
+- Cover: N/A — module declaration.
 - Kahneman: #13/#17.
 
 **`crates/ramshared-cli/src/main.rs`**
@@ -386,8 +415,18 @@ in place.
 
 | Production path | Test (`file` :: `test_name`) | Kind | Kahneman | Cover |
 | --- | --- | --- | --- | --- |
-| `crates/ramshared-config/src/lib.rs` | `resource_profile_accepts_variable_caps_and_rejects_overflow` | unit | #13 | ≥80% |
-| `crates/ramshared-config/src/lib.rs` | `resource_profile_roundtrips_stable_volume_and_adapter_ids` | unit | #17 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `platform_detection_distinguishes_native_linux_from_wsl2` | unit | #13 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `linux_block_inventory_preserves_mounted_and_unmounted_devices` | unit | #13 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `mountinfo_parser_decodes_paths_and_records_mount_identity_and_access` | unit | #13 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `storage_candidate_requires_current_writable_mount_capacity_and_stable_identity` | unit | #13/#16 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `network_backed_block_devices_are_ineligible_and_multiple_local_disks_remain_eligible` | unit | #13/#16 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `mounted_whole_disk_filesystem_uses_its_own_stable_identity` | unit | #13/#16 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `wsl2_guest_storage_requires_host_volume_identity_and_capacity_binding` | unit | #13/#16 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `meminfo_accepts_user_sized_ram_and_swap_without_product_minima` | unit | #13 | slice gate |
+| `crates/ramshared-cli/src/resource_config.rs` | `mount_capacity_uses_live_available_blocks_without_writing` | read-only live unit | #13 | slice gate |
+| `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_json_discovers_platform_resources_read_only` | CLI E2E | #13 | N/A — dispatch |
+| `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_accepts_variable_caps_and_rejects_overflow` | unit | #9/#13 | ≥80% |
+| `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_roundtrips_stable_volume_and_adapter_ids` | unit | #17 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_plan_never_mutates_host_or_guest` | unit | #13 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `resource_policy_rejects_unknown_stale_and_inconsistent_samples` | unit | #13 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_apply_is_idempotent_and_refuses_changed_rollback_target` | unit | #17 | ≥80% |
