@@ -263,11 +263,13 @@ check; apply does not disable prior swap.
   `resource_policy_rejects_unknown_stale_and_inconsistent_samples`,
   `resource_plan_without_profile_reports_not_configured_and_read_only`,
   `resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target`, and
-  `profile_loader_rejects_symlinks_oversized_files_and_untrusted_system_profiles`.
+  `profile_loader_rejects_symlinks_oversized_files_and_untrusted_system_profiles`,
+  `windows_inventory_lists_every_volume_and_explains_ineligible_targets`, and
+  `windows_inventory_probe_does_not_filter_volumes_by_drive_type`.
 - Remaining required tests: `config_apply_is_idempotent_and_refuses_changed_rollback_target`,
   `config_apply_requires_durable_intent_before_mutation`, and provider/E2E
   tests listed below.
-- Cover: the current read-only planning slice passed at 87.6%; apply/provider
+- Cover: the current read-only planning slice passed at 88.5%; apply/provider
   policy remains unimplemented and uncovered.
 - Kahneman: #13/#17.
 
@@ -459,6 +461,8 @@ in place.
 | `crates/ramshared-cli/src/resource_config.rs` | `resource_plan_without_profile_reports_not_configured_and_read_only` | unit | #13 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `profile_loader_rejects_symlinks_oversized_files_and_untrusted_system_profiles` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `windows_inventory_lists_every_volume_and_explains_ineligible_targets` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `windows_inventory_probe_does_not_filter_volumes_by_drive_type` | source contract | #13 | ≥80% |
 | `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it` | CLI E2E | #13 | N/A — dispatch |
 | `crates/ramshared-cli/src/main.rs` | `config_command_accepts_interactive_show_and_read_only_plan_modes` | unit | #13 | N/A — parser |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_apply_is_idempotent_and_refuses_changed_rollback_target` | unit | #17 | ≥80% |

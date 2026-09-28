@@ -41,11 +41,16 @@ settings. Native Linux target qualification has not run on a native host.
   mounts refuse as ambiguous. It does not create a file, activate swap, select
   a disk, or claim native-host qualification.
 - Under WSL2, the view labels guest RAM separately from Windows host physical
-  memory and commit headroom, and lists fixed Windows volumes with their
-  current free/total bytes and stable volume IDs in JSON. Native Linux never
-  queries a Windows host provider. A WSL guest filesystem is never offered as
-  a write target until its exact backing Windows volume and host free capacity
-  are bound to that guest filesystem; guest VHDX free space alone is not proof.
+  memory and commit headroom, and lists every volume returned by the bounded
+  `Get-Volume` query, including removable, unknown, and drive-letterless rows.
+  The text view shows drive type, filesystem, stable volume identity, capacity,
+  and the same volume-level eligibility reasons used by the planner. Missing
+  Windows capacity remains unavailable instead of being converted to zero.
+  These are candidates only: a configured path still needs fresh identity and
+  host-capacity binding. Native Linux never queries a Windows host provider. A
+  WSL guest filesystem is never offered as a write target until its exact
+  backing Windows volume and host free capacity are bound to that guest
+  filesystem; guest VHDX free space alone is not proof.
 - A WSL2 plan binds a configured target to one fresh Windows volume identity,
   confirms the drive-letter or volume-GUID path resolves under that volume,
   checks fixed NTFS/ReFS eligibility and free capacity, and rejects aliases
@@ -104,7 +109,7 @@ settings. Native Linux target qualification has not run on a native host.
   `resource_profile_rejects_transient_mount_id_in_persisted_targets` test
   refuses the obsolete field. `storage_candidate_rejects_filesystem_subtree_mounts`
   also reproduced the prior acceptance and now verifies a refusal.
-- The full CLI suite under the coverage gate passed 389 unit tests and
+- The full CLI suite under the coverage gate passed 391 unit tests and
   12 CLI integration tests, including
   `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`.
 - Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 10
@@ -114,6 +119,9 @@ settings. Native Linux target qualification has not run on a native host.
 - CLI E2E: `cli_resource_config_json_discovers_platform_resources_read_only`
   executes the built binary under the current WSL2 kernel, parses its JSON,
   checks platform and resource fields, and verifies `config apply` refuses.
+  Its live WSL discovery uses the unfiltered `Get-Volume` collector; the
+  deterministic unit matrix verifies removable, unsupported-filesystem, and
+  missing-identity reasons in the text view.
 - CLI plan E2E: `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`
   loads a temporary user-readable caps-only draft and verifies no write or
   apply permission is reported. It does not prove a live storage-target plan;
@@ -124,7 +132,7 @@ settings. Native Linux target qualification has not run on a native host.
   current source and SPEC/IMPL updates.
 - Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli
   --files crates/ramshared-cli/src/resource_config.rs --min 80` passed at
-  **87.6% (1,793/2,046 lines)** for discovery and read-only planning.
+  **88.5% (1,900/2,148 lines)** for discovery and read-only planning.
 - PowerShell 5.1 manufactured/static harnesses passed for
   `Test-WindowsStorageMatrixStatic.ps1`,
   `Test-RamSharedWslLifecycleRecoveryStatic.ps1`,

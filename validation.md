@@ -8232,3 +8232,108 @@ substitute for the missing platform evidence.
 **Verdict:** 🟡 `PARTIAL` — one concrete source defect was corrected and all
 seven active gaps were re-audited, but their required feature and platform
 proof remains open.
+
+## 2026-09-28 06:28 -03 — enumerate every Windows volume candidate
+
+**What:** Re-read the Windows inventory collector, renderer, planner, and
+resource-configuration SPEC. The PowerShell collector filtered out every
+non-fixed volume, and the text view omitted volume identity, drive type, and
+eligibility reasons. The collector now preserves every row returned by
+`Get-Volume`; missing capacity remains null. The text view reports identity,
+type, capacity, and the planner's volume-level refusal reason. Volume rows are
+candidate inventory only; a plan still binds a configured path to fresh
+identity and host capacity.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0107`.
+**Owner role:** cross-platform resource configuration / source validation.
+**Observed at:** `2026-09-28T09:28:42Z`.
+**Verified at:** `2026-09-28T09:28:42Z`.
+**Source revision:** `5a93d101afa42faed2d06bf17e681986a89cc1ff`.
+**Source state:** Test checkpoint `ac4bd09e` records two failing regressions;
+`5a93d101` contains the implementation that makes them pass.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0102 through EVD-0106; this corrects one source
+gap but does not close the resource-configuration gate.
+**Freshness:** The named CLI discovery E2E ran against the current WSL guest and
+executed the actual bounded Windows inventory provider. No volume identities,
+labels, or raw host paths are retained here. The installed release was not
+changed by this source test.
+**Category:** source regression / live read-only WSL discovery / coverage.
+**How to measure:** Run the named `windows_inventory_*` unit tests, the
+`cli_resource_config_json_discovers_platform_resources_read_only` integration
+test, the CLI source-slice coverage gate, and strict Clippy. No volume write,
+benchmark, swap change, tier activation, host install, or WSL shutdown was run.
+
+**Checks:** The first RED run failed because the view still printed
+`Windows fixed volumes:` and the collector contained a fixed-only
+`Where-Object`. After the fix, the two focused inventory tests passed and the
+resource-config unit suite passed 28/28. The live CLI discovery E2E passed;
+the complete coverage run passed 391 unit tests and 12 integration tests, with
+the resource-config slice at 88.5% (1,900/2,148 lines). Strict Clippy passed
+for `ramshared-cli` and `ramshared-config`. These results qualify discovery
+and rendering only. They do not prove every Windows volume class on every
+machine or a storage write path.
+
+**Remaining boundary:** The configurator remains read-only. It cannot let a
+user choose a target, persist a profile, change swap or tier caps, apply or
+rollback settings, or benchmark and recommend a disk. No native Linux live
+target test or WSL plan against a selected real volume ran. The resource
+configuration gate remains `PARTIAL`; the other six active gates retain the
+open evidence recorded in EVD-0106.
+
+**Verdict:** 🟡 `PARTIAL` — complete Windows volume rows and refusal reasons
+are now visible and tested; selection, mutation, benchmarking, and platform
+qualification remain open.
+
+## 2026-09-28 06:28 -03 — enumerate every Windows volume candidate
+
+**What:** Re-read the Windows inventory collector, renderer, planner, and
+resource-configuration SPEC. The PowerShell collector filtered out every
+non-fixed volume, and the text view omitted volume identity, drive type, and
+eligibility reasons. The collector now preserves every row returned by
+`Get-Volume`; missing capacity remains null. The text view reports identity,
+type, capacity, and the planner's volume-level refusal reason. Volume rows are
+candidate inventory only; a plan still binds a configured path to fresh
+identity and host capacity.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0107`.
+**Owner role:** cross-platform resource configuration / source validation.
+**Observed at:** `2026-09-28T09:28:42Z`.
+**Verified at:** `2026-09-28T09:28:42Z`.
+**Source revision:** `5a93d101afa42faed2d06bf17e681986a89cc1ff`.
+**Source state:** Test checkpoint `ac4bd09e` records the two failing
+regressions; `5a93d101` contains the fix. Documentation updates are in the
+current worktree and will be committed with this evidence.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0102 through EVD-0106; this corrects one source
+gap but does not close the resource-configuration gate.
+**Freshness:** The named CLI discovery E2E ran against the current WSL guest and
+executed the actual bounded Windows inventory provider. No volume identities,
+labels, or raw host paths are retained here. The installed release was not
+changed by this source test.
+**Category:** source regression / live read-only WSL discovery / coverage.
+**How to measure:** Run the named `windows_inventory_*` unit tests, the
+`cli_resource_config_json_discovers_platform_resources_read_only` integration
+test, the CLI source-slice coverage gate, and strict Clippy. No volume write,
+benchmark, swap change, tier activation, host install, or WSL shutdown was run.
+
+**Checks:** The first RED run failed because the view still printed
+`Windows fixed volumes:` and the collector contained a fixed-only
+`Where-Object`. After the fix, the two focused inventory tests passed and the
+resource-config unit suite passed 28/28. The live CLI discovery E2E passed;
+the complete coverage run passed 391 unit tests and 12 integration tests, with
+the resource-config slice at 88.5% (1,900/2,148 lines). Strict Clippy passed
+for `ramshared-cli` and `ramshared-config`. These results qualify discovery
+and rendering only. They do not prove every Windows volume class on every
+machine or a storage write path.
+
+**Remaining boundary:** The configurator remains read-only. It cannot let a
+user choose a target, persist a profile, change swap or tier caps, apply or
+rollback settings, or benchmark and recommend a disk. No native Linux live
+target test or WSL plan against a selected real volume ran. The resource
+configuration gate remains `PARTIAL`; the other six active gates retain the
+open evidence recorded in EVD-0106.
+
+**Verdict:** 🟡 `PARTIAL` — complete Windows volume rows and refusal reasons
+are now visible and tested; selection, mutation, benchmarking, and platform
+qualification remain open.
