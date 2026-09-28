@@ -804,19 +804,19 @@ fn collect_linux_block_devices() -> Result<Vec<BlockDevice>, InventoryError> {
     Ok(devices)
 }
 
-fn collect_windows_snapshot() -> Result<WindowsSnapshot, InventoryError> {
-    let script = r#"
+fn windows_inventory_script() -> &'static str {
+    r#"
 $ErrorActionPreference = 'Stop'
 $os = Get-CimInstance Win32_OperatingSystem
 $memory = Get-CimInstance Win32_PerfRawData_PerfOS_Memory
-$volumes = @(Get-Volume -ErrorAction Stop | Where-Object { $_.DriveType -eq 'Fixed' } | ForEach-Object {
+$volumes = @(Get-Volume -ErrorAction Stop | ForEach-Object {
     [pscustomobject]@{
         drive_letter = if ($null -ne $_.DriveLetter) { [string]$_.DriveLetter } else { $null }
         label = [string]$_.FileSystemLabel
         file_system = [string]$_.FileSystem
         drive_type = [string]$_.DriveType
-        size_bytes = [uint64]$_.Size
-        free_bytes = [uint64]$_.SizeRemaining
+        size_bytes = if ($null -ne $_.Size) { [uint64]$_.Size } else { $null }
+        free_bytes = if ($null -ne $_.SizeRemaining) { [uint64]$_.SizeRemaining } else { $null }
         volume_id = [string]$_.UniqueId
     }
 })
@@ -832,7 +832,11 @@ $result = [pscustomobject]@{
     volumes = @($volumes)
 }
 ConvertTo-Json -InputObject $result -Depth 5 -Compress
-"#;
+"#
+}
+
+fn collect_windows_snapshot() -> Result<WindowsSnapshot, InventoryError> {
+    let script = windows_inventory_script();
     let mut command = Command::new("powershell.exe");
     command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
     let output = run_bounded_command(
@@ -1189,32 +1193,50 @@ fn windows_target_free_bytes(
             "selected path does not resolve under the bound Windows volume".into(),
         ));
     }
-    if volume.drive_type != "Fixed"
-        || !volume.file_system.as_deref().is_some_and(|filesystem| {
-            filesystem.eq_ignore_ascii_case("NTFS") || filesystem.eq_ignore_ascii_case("ReFS")
-        })
-    {
-        return Err((
-            "target_ineligible",
-            "Windows target is not a fixed NTFS/ReFS volume".into(),
-        ));
-    }
-    let (Some(total), Some(free)) = (volume.size_bytes, volume.free_bytes) else {
-        return Err((
-            "capacity_unavailable",
-            "Windows volume total/free capacity is unavailable".into(),
-        ));
-    };
-    if free > total {
-        return Err((
-            "inconsistent_sample",
-            "Windows free capacity exceeds its total capacity".into(),
-        ));
-    }
+    let free = windows_volume_eligibility(volume, matches.len())
+        .map_err(|(code, reason)| (code, reason.to_owned()))?;
     Ok(StorageObservation {
         free_bytes: free,
         mount_id: None,
     })
+}
+
+fn windows_volume_eligibility(
+    volume: &WindowsVolume,
+    matching_id_count: usize,
+) -> Result<u64, (&'static str, &'static str)> {
+    if !volume.drive_type.eq_ignore_ascii_case("Fixed") {
+        return Err(("target_ineligible", "volume is not fixed"));
+    }
+    if !volume
+        .volume_id
+        .as_deref()
+        .is_some_and(|identity| !identity.trim().is_empty())
+    {
+        return Err((
+            "identity_unavailable",
+            "stable volume identity is unavailable",
+        ));
+    }
+    if matching_id_count != 1 {
+        return Err(("identity_unavailable", "volume identity is ambiguous"));
+    }
+    let Some(filesystem) = volume.file_system.as_deref() else {
+        return Err(("target_ineligible", "filesystem is unavailable"));
+    };
+    if !filesystem.eq_ignore_ascii_case("NTFS") && !filesystem.eq_ignore_ascii_case("ReFS") {
+        return Err(("target_ineligible", "filesystem is not NTFS/ReFS"));
+    }
+    let (Some(total), Some(free)) = (volume.size_bytes, volume.free_bytes) else {
+        return Err(("capacity_unavailable", "volume capacity is unavailable"));
+    };
+    if free > total {
+        return Err((
+            "inconsistent_sample",
+            "reported free capacity exceeds total capacity",
+        ));
+    }
+    Ok(free)
 }
 
 fn windows_path_belongs_to_volume(path: &str, volume: &WindowsVolume) -> bool {
@@ -1618,7 +1640,7 @@ fn render_text(snapshot: &ResourceSnapshot) -> String {
     }
 
     if snapshot.platform == RuntimePlatform::Wsl2 {
-        let _ = writeln!(output, "Windows fixed volumes:");
+        let _ = writeln!(output, "Windows volumes:");
         match &snapshot.windows {
             Some(windows) if windows.volumes.is_empty() => {
                 let _ = writeln!(output, "  none reported");
@@ -1629,14 +1651,39 @@ fn render_text(snapshot: &ResourceSnapshot) -> String {
                         .drive_letter
                         .as_deref()
                         .map_or_else(|| "(no drive letter)".into(), |letter| format!("{letter}:"));
+                    let identity = volume
+                        .volume_id
+                        .as_deref()
+                        .filter(|identity| !identity.trim().is_empty());
+                    let matching_id_count = identity.map_or(0, |identity| {
+                        windows
+                            .volumes
+                            .iter()
+                            .filter(|candidate| {
+                                candidate
+                                    .volume_id
+                                    .as_deref()
+                                    .is_some_and(|observed| observed.eq_ignore_ascii_case(identity))
+                            })
+                            .count()
+                    });
+                    let eligibility = match windows_volume_eligibility(volume, matching_id_count) {
+                        Ok(_) => "eligible volume candidate".to_owned(),
+                        Err((_, reason)) => format!("ineligible: {reason}"),
+                    };
+                    let identity = identity.map_or_else(
+                        || "identity unknown".to_owned(),
+                        |identity| format!("ID {identity}"),
+                    );
                     let _ = writeln!(
                         output,
-                        "  {drive} {} {} — free {} of {}",
+                        "  {drive} {} {} ({}) — {identity} — {eligibility} — free {} of {}",
                         volume.label.as_deref().unwrap_or("unlabeled"),
                         volume
                             .file_system
                             .as_deref()
                             .unwrap_or("filesystem unknown"),
+                        volume.drive_type,
                         format_gib(volume.free_bytes),
                         format_gib(volume.size_bytes)
                     );
@@ -2140,15 +2187,15 @@ mod tests {
 
     #[test]
     fn windows_inventory_probe_does_not_filter_volumes_by_drive_type() {
-        let source = include_str!("resource_config.rs");
-        let normalized = source
+        let script = windows_inventory_script();
+        let normalized = script
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect::<String>()
             .to_ascii_lowercase();
 
         assert!(normalized.contains("get-volume-erroractionstop"));
-        assert!(!normalized.contains("where-object{$_.drivetype-eq'fixed'}"));
+        assert!(!normalized.contains("where-object{$_"));
         assert!(normalized.contains("size_bytes=if($null-ne$_.size)"));
         assert!(normalized.contains("free_bytes=if($null-ne$_.sizeremaining)"));
     }
