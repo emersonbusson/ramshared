@@ -8151,3 +8151,84 @@ host install, WSL shutdown, kernel build, or hardware campaign was run.
 **Verdict:** 🟡 `PARTIAL` — multi-volume profile semantics and refusal logic
 are implemented and covered; CLI integration and platform execution remain
 open.
+
+## 2026-09-28 05:51 -03 — independent re-audit of seven active PARTIAL gates
+
+**What:** Re-read the current source for every active `PARTIAL` row instead of
+reusing its prior verdict. Reproduced the read-only resource-plan tests and
+found that Linux target profiles persisted a boot/namespace-scoped mount ID.
+Removed that identity from saved targets, resolved one fresh mount from stable
+filesystem/device identity, and refused ambiguous mounts and filesystem
+subtree roots. The separate kernel candidate and installed host state were
+also inspected read-only.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0106`.
+**Owner role:** independent source audit / configuration / reliability.
+**Observed at:** `2026-09-28T08:51:55Z`.
+**Verified at:** `2026-09-28T08:51:55Z`.
+**Source revision:** `750090a54c13ff6662aab3dde453e4f5a4dc648c`.
+**Source state:** RamShared branch `feat/ramshared-20260921-consolidation`
+contains the source correction and PRD/SPEC/IMPL update at the recorded
+revision. This EVD and the corresponding GAP-register entry are follow-up
+documentation. The separate kernel candidate has a dirty worktree; it is not
+part of this RamShared revision.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0100 through EVD-0105 until each open platform or
+feature gate has its own current close evidence.
+**Freshness:** Guest CLI version, kernel release, `/proc/meminfo`,
+`/proc/swaps`, memory PSI, and daemon presence were sampled together at
+08:51 UTC. Source tests and
+PowerShell static suites ran during this audit.
+**Category:** source re-audit / named tests and coverage / read-only runtime
+sample.
+**How to measure:** Run the listed Cargo tests and coverage gates; inspect
+`crates/ramshared-wsl2d/src/main.rs`, `crates/ramshared-winsvc/src/main.rs`,
+the separate kernel diff and UIO remove/mmap paths; run the named Windows
+static scripts; read `/proc/swaps`, `/proc/pressure/memory`, the installed
+CLI version, and `uname`. No activation, stress, storage write, benchmark,
+host install, WSL shutdown, kernel build, KUnit, or physical campaign ran.
+
+**Current read-only sample:** `/usr/local/bin/ramshared --version` reports
+`0.14.1`; `uname` reports `6.18.40.1-microsoft-standard-WSL2+ #6`.
+`MemTotal` is 16,379,364 KiB and `MemAvailable` 7,043,872 KiB. The only swap
+entry is the 4 GiB WSL fallback swap device, with 1,326,072 KiB used and
+2,868,232 KiB free. Memory PSI `some` and `full` avg10/60/300 are all zero,
+and no `ramsharedd` process was found. This sample does not identify the
+source commit behind the running kernel or explain earlier freezes.
+
+**Checks:** `cargo test -j 1 -p ramshared-config` passed 15 unit and 10
+profile integration tests; the resource-profile slice gate passed at 91.3%
+(293/321 lines). The focused CLI config suite passed 26/26; its full coverage
+run passed 389 unit and 12 integration tests, with the resource-config slice
+at 87.6% (1,793/2,046 lines). Strict Clippy passed for both affected crates.
+The WSL host-gate suite passed 14/14, the GPU budget suite 13/13, the Windows
+service control-plane helper suite 12/12, and the legacy `swapoff_first`
+suite 3/3. PowerShell 5.1 static/manufactured suites passed for host
+autonomous lifecycle, WSL lifecycle recovery, origin safety, and the Windows
+storage matrix. `cargo fmt --all -- --check`, `git diff --check`, the gap
+register tests, and full `./scripts/docs-check.sh` passed. These are source,
+static, or hermetic results; they do not qualify live host/guest transport,
+physical storage/GPU behavior, kernel runtime interleavings, or CoCo memory
+transitions.
+
+**Seven-gate source audit:**
+
+| Active gate | Fresh finding | Status |
+| --- | --- | --- |
+| WSL2 freeze memory ownership | The running `#6` image still has no source-revision receipt. The separate kernel diff is dirty; its retained-buffer list has no production drain/reclaimer. In the UIO path, `uio_unregister_device()` clears `idev->info` without waiting for existing mappings, and `hv_uio_remove()` then runs buffer cleanup. This is an ownership/lifetime risk, not proof of a UAF or the prior freeze trigger. No candidate build, KUnit, install, GPADL drill, or CoCo transition was run. | PARTIAL |
+| WSL2 control-plane stability and effective revocable-cache transition | The helper suites pass, but source search finds no `host_gate` or `control_plane` call from either production daemon/service entrypoint. There is no live handshake, lease/manifest exchange, or rollout proof. | PARTIAL |
+| Legacy WSL2 service handoff and teardown | Three swapoff-first regression tests pass, but the installed CLI remains v0.14.1, no daemon is running, and this audit has no current-release `BINARY_MATCH` or repeated post-reboot handoff evidence. | PARTIAL |
+| Cross-vendor GPU budget identity and stress admission | Thirteen policy tests cover freshness, identity, reserve, WDDM intersection, and refusals. No live worker allocation/teardown or AMD/Intel/multi-adapter campaign ran. | PARTIAL |
+| Corrected Windows physical lifecycle qualification | Host lifecycle, recovery, and origin static/manufactured checks pass. They do not load and verify the corrected package across supervised physical cold boots or prove rollback on the target host. | PARTIAL |
+| Windows virtual-disk properties, counters, and performance matrix | The static harness validates the specified cells and refusal paths; no physical five-cell, three-run matrix, 75-sample artifact bundle, payload-integrity run, or current Event ID 153 window exists in this audit. | PARTIAL |
+| Cross-platform resource configuration | Native Linux and WSL2 are both in the PRD/SPEC, and the profile/planner supports variable caps plus multiple stable storage targets. A newly found transient mount-ID defect is fixed. The CLI plan remains read-only: there is no interactive target selection, profile persistence, apply/rollback provider, bounded disk benchmark, or native Linux live target E2E. WSL guest filesystems still require bound Windows-volume capacity. | PARTIAL |
+
+**Assessment:** The seven status labels remain accurate after direct source
+inspection and fresh named checks. The profile correction improves
+cross-boot Linux target resolution but does not turn the UI into a complete
+configurator. No prior `PARTIAL` became `PASS`; unit/static proof did not
+substitute for the missing platform evidence.
+
+**Verdict:** 🟡 `PARTIAL` — one concrete source defect was corrected and all
+seven active gaps were re-audited, but their required feature and platform
+proof remains open.
