@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use ramshared_config::resource_profile::{
     DISK_RESERVE_FLOOR_BYTES, RESOURCE_PROFILE_SCHEMA_VERSION, ResourcePlatform, ResourceProfile,
-    ResourceProfileError, ResourceTarget, TierCaps, checked_required_free_bytes,
+    ResourceProfileError, ResourceTarget, StorageVolumeIdentity, TierCaps,
+    checked_required_free_bytes,
 };
 
 #[test]
@@ -18,14 +19,14 @@ fn resource_profile_accepts_variable_caps_and_rejects_overflow() {
             vram_bytes: adapter_caps,
             origin_bytes: Some(3 * 1024 * 1024 * 1024),
         },
-        target: Some(ResourceTarget::LinuxSwapfile {
+        targets: vec![ResourceTarget::LinuxSwapfile {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
             mount_id: 27,
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 128 * 1024 * 1024,
             priority: -1,
-        }),
+        }],
     };
 
     profile
@@ -42,6 +43,117 @@ fn resource_profile_accepts_variable_caps_and_rejects_overflow() {
 }
 
 #[test]
+fn resource_profile_supports_multiple_targets_on_one_and_multiple_volumes() {
+    let text = r#"
+schema_version = 1
+
+[[targets]]
+kind = "linux_swapfile"
+filesystem_uuid = "fs-uuid-a"
+device_identity = "wwn-0x5000-local-a"
+mount_id = 27
+managed_relative_path = "swap/ramshared-a.swap"
+bytes = 1073741824
+priority = -1
+
+[[targets]]
+kind = "linux_file_origin"
+filesystem_uuid = "fs-uuid-a"
+device_identity = "wwn-0x5000-local-a"
+mount_id = 27
+managed_relative_path = "origin/ramshared-a.img"
+inode = 42
+allocated_bytes = 3221225472
+identity_field_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[[targets]]
+kind = "linux_file_origin"
+filesystem_uuid = "fs-uuid-b"
+device_identity = "wwn-0x5000-local-b"
+mount_id = 81
+managed_relative_path = "origin/ramshared-b.img"
+inode = 84
+allocated_bytes = 2147483648
+identity_field_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+"#;
+
+    let profile = ResourceProfile::parse(text)
+        .expect("one profile can describe swap and origin targets on multiple volumes");
+    profile
+        .validate_for(ResourcePlatform::NativeLinux)
+        .expect("all selected targets have stable native identities");
+    let encoded = profile.to_toml().expect("multi-target profile serializes");
+    let decoded = ResourceProfile::parse(&encoded).expect("multi-target profile round-trips");
+
+    assert_eq!(decoded, profile);
+    assert_eq!(encoded.matches("[[targets]]").count(), 3);
+
+    let requirements = profile
+        .required_free_bytes_by_volume()
+        .expect("per-volume allocation totals fit in checked arithmetic");
+    assert_eq!(requirements.len(), 2);
+    assert_eq!(
+        requirements.get(&StorageVolumeIdentity::Linux {
+            filesystem_uuid: "fs-uuid-a".into(),
+            device_identity: "wwn-0x5000-local-a".into(),
+        }),
+        Some(&(DISK_RESERVE_FLOOR_BYTES + 4 * 1024 * 1024 * 1024))
+    );
+    assert_eq!(
+        requirements.get(&StorageVolumeIdentity::Linux {
+            filesystem_uuid: "fs-uuid-b".into(),
+            device_identity: "wwn-0x5000-local-b".into(),
+        }),
+        Some(&(DISK_RESERVE_FLOOR_BYTES + 2 * 1024 * 1024 * 1024))
+    );
+}
+
+#[test]
+fn resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow() {
+    let duplicate_path = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: vec![
+            ResourceTarget::WslFallback {
+                windows_volume_id: "volume-guid-a".into(),
+                path: r"C:\wsl\swap.vhdx".into(),
+                bytes: 1024,
+            },
+            ResourceTarget::WslOrigin {
+                windows_volume_id: "VOLUME-GUID-A".into(),
+                path: r"c:/WSL/SWAP.VHDX".into(),
+                allocated_bytes: 2048,
+            },
+        ],
+    };
+    assert!(duplicate_path.validate_for(ResourcePlatform::Wsl2).is_err());
+
+    let overflow = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: vec![
+            ResourceTarget::WslFallback {
+                windows_volume_id: "volume-guid-a".into(),
+                path: r"C:\wsl\swap.vhdx".into(),
+                bytes: u64::MAX,
+            },
+            ResourceTarget::WslOrigin {
+                windows_volume_id: "volume-guid-a".into(),
+                path: r"C:\wsl\origin.vhdx".into(),
+                allocated_bytes: 1,
+            },
+        ],
+    };
+    overflow
+        .validate_for(ResourcePlatform::Wsl2)
+        .expect("target identity is valid before calculating capacity");
+    assert_eq!(
+        overflow.required_free_bytes_by_volume(),
+        Err(ResourceProfileError::CapacityOverflow)
+    );
+}
+
+#[test]
 fn resource_profile_roundtrips_stable_volume_and_adapter_ids() {
     let text = r#"
 schema_version = 1
@@ -53,7 +165,7 @@ origin_bytes = 2147483648
 [caps.vram_bytes]
 "luid:aabbccdd:00001122" = 1610612736
 
-[target]
+[[targets]]
 kind = "wsl_fallback"
 windows_volume_id = "\\\\?\\Volume{01234567-89ab-cdef-0123-456789abcdef}\\"
 path = "I:\\wsl\\swap.vhdx"
@@ -77,7 +189,7 @@ bytes = 4294967296
     let file_origin = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::LinuxFileOrigin {
+        targets: vec![ResourceTarget::LinuxFileOrigin {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
             mount_id: 27,
@@ -85,7 +197,7 @@ bytes = 4294967296
             inode: 42,
             allocated_bytes: 3 * 1024 * 1024 * 1024,
             identity_field_hash: "a".repeat(64),
-        }),
+        }],
     };
     file_origin
         .validate_for(ResourcePlatform::NativeLinux)
@@ -94,15 +206,23 @@ bytes = 4294967296
     let volume_guid_path = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::WslFallback {
-            windows_volume_id: "volume-guid-b".into(),
-            path: r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\wsl\swap.vhdx".into(),
-            bytes: 4 * 1024 * 1024 * 1024,
-        }),
+        targets: vec![
+            ResourceTarget::WslFallback {
+                windows_volume_id: "volume-guid-b".into(),
+                path: r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\wsl\swap.vhdx".into(),
+                bytes: 4 * 1024 * 1024 * 1024,
+            },
+            ResourceTarget::WslOrigin {
+                windows_volume_id: "volume-guid-b".into(),
+                path: r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\ramshared\origin.vhdx"
+                    .into(),
+                allocated_bytes: 8 * 1024 * 1024 * 1024,
+            },
+        ],
     };
     volume_guid_path
         .validate_for(ResourcePlatform::Wsl2)
-        .expect("volume-GUID path is absolute");
+        .expect("volume-GUID swap and origin paths are absolute");
 }
 
 #[test]
@@ -110,11 +230,11 @@ fn resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths() 
     let profile = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::WslFallback {
+        targets: vec![ResourceTarget::WslFallback {
             windows_volume_id: "volume-guid".into(),
             path: "I:\\wsl\\swap.vhdx".into(),
             bytes: 4 * 1024 * 1024 * 1024,
-        }),
+        }],
     };
     assert!(profile.validate_for(ResourcePlatform::NativeLinux).is_err());
 
@@ -122,7 +242,7 @@ fn resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths() 
     let unsupported = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION + 1,
         caps: TierCaps::default(),
-        target: None,
+        targets: Vec::new(),
     };
     assert!(
         unsupported
@@ -133,7 +253,7 @@ fn resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths() 
     let caps_only = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: None,
+        targets: Vec::new(),
     };
     assert!(
         caps_only
@@ -145,7 +265,7 @@ fn resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths() 
     let unsafe_target = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::LinuxFileOrigin {
+        targets: vec![ResourceTarget::LinuxFileOrigin {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
             mount_id: 27,
@@ -153,7 +273,7 @@ fn resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths() 
             inode: 42,
             allocated_bytes: 1024,
             identity_field_hash: "a".repeat(64),
-        }),
+        }],
     };
     assert!(
         unsafe_target
@@ -167,14 +287,14 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
     let invalid = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::LinuxSwapfile {
+        targets: vec![ResourceTarget::LinuxSwapfile {
             filesystem_uuid: " ".into(),
             device_identity: "wwn-0x5000-local-a".into(),
             mount_id: 0,
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 0,
             priority: i32::MAX,
-        }),
+        }],
     };
     assert!(invalid.validate_for(ResourcePlatform::NativeLinux).is_err());
 
@@ -208,7 +328,7 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
         let profile = ResourceProfile {
             schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
             caps: TierCaps::default(),
-            target: Some(target),
+            targets: vec![target],
         };
         assert!(profile.validate_for(ResourcePlatform::NativeLinux).is_err());
     }
@@ -216,7 +336,7 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
     let invalid_origin = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::LinuxFileOrigin {
+        targets: vec![ResourceTarget::LinuxFileOrigin {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
             mount_id: 27,
@@ -224,7 +344,7 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
             inode: 0,
             allocated_bytes: 1024,
             identity_field_hash: "not-a-hash".into(),
-        }),
+        }],
     };
     assert!(
         invalid_origin
@@ -235,11 +355,11 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
     let invalid_windows_path = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         caps: TierCaps::default(),
-        target: Some(ResourceTarget::WslFallback {
+        targets: vec![ResourceTarget::WslFallback {
             windows_volume_id: "volume-guid-a".into(),
             path: r"relative\swap.vhdx".into(),
             bytes: 1024,
-        }),
+        }],
     };
     assert!(
         invalid_windows_path
@@ -259,7 +379,7 @@ fn resource_profile_rejects_oversized_or_controlled_identity_and_paths() {
                 vram_bytes,
                 ..TierCaps::default()
             },
-            target: None,
+            targets: Vec::new(),
         };
         assert!(profile.validate_for(ResourcePlatform::NativeLinux).is_err());
     }
@@ -277,14 +397,14 @@ fn resource_profile_rejects_oversized_or_controlled_identity_and_paths() {
         let profile = ResourceProfile {
             schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
             caps: TierCaps::default(),
-            target: Some(ResourceTarget::LinuxSwapfile {
+            targets: vec![ResourceTarget::LinuxSwapfile {
                 filesystem_uuid: "fs-uuid-a".into(),
                 device_identity: "wwn-0x5000-local-a".into(),
                 mount_id: 27,
                 managed_relative_path,
                 bytes: 1024,
                 priority: -1,
-            }),
+            }],
         };
         assert!(profile.validate_for(ResourcePlatform::NativeLinux).is_err());
     }
@@ -296,11 +416,11 @@ fn resource_profile_rejects_oversized_or_controlled_identity_and_paths() {
         let profile = ResourceProfile {
             schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
             caps: TierCaps::default(),
-            target: Some(ResourceTarget::WslFallback {
+            targets: vec![ResourceTarget::WslFallback {
                 windows_volume_id: "volume-guid-a".into(),
                 path,
                 bytes: 1024,
-            }),
+            }],
         };
         assert!(profile.validate_for(ResourcePlatform::Wsl2).is_err());
     }

@@ -37,12 +37,15 @@ and native Linux live qualification has not been run in this WSL2 environment.
   origin, a profile, `.wslconfig`, a driver, or a running RamShared tier.
 - `ramshared-config::resource_profile` parses a 64 KiB-bounded TOML profile
   with schema version 1, variable byte ceilings, adapter-bound GPU caps, and
-  one tagged native Linux or WSL2 storage target. Validation rejects schema or
-  platform mismatch, unknown fields, unsafe paths, unbound identities, and
-  invalid allocation metadata. A helper computes the checked storage free-space
-  requirement plus the SPEC's 10 GiB floor; it does not inspect a live volume
-  or authorize a write. This floor is not a RAM, swap, or VRAM minimum. The
-  type is not yet wired to the CLI or any writer.
+  multiple platform-bound storage targets. A profile can represent swap and
+  origin placements on the same or different stable volumes. Validation
+  rejects schema or platform mismatch, unknown fields, unsafe or duplicate
+  managed paths, unbound identities, and invalid allocation metadata. It
+  computes a checked free-space requirement per stable volume, summing every
+  managed allocation and adding the SPEC's 10 GiB reserve once per volume; it
+  does not inspect live volume free space or authorize writes. This floor is
+  not a RAM, swap, or VRAM minimum. The profile is not wired to CLI/storage
+  providers yet.
 
 ## Files
 
@@ -125,6 +128,10 @@ and native Linux live qualification has not been run in this WSL2 environment.
 - The typed profile has no CLI loader or persistence yet. There is no
   privileged Linux helper, Windows configuration helper, transaction log, or
   apply/rollback flow.
+- The profile now represents multiple swap/origin targets and groups checked
+  capacity by stable volume identity. It still does not let a user select or
+  save those targets from the CLI, bind a live candidate to a saved target, or
+  apply the settings.
 - Native Linux and WSL2 mutation flows, per-filesystem allocation behavior,
   GPU adapter selection, and storage benchmark behavior remain unqualified.
 - The active reliability PARTIAL gates listed in `docs/reliability/GAP-REGISTER.md`

@@ -66,13 +66,17 @@ check; apply does not disable prior swap.
   side effects. Mutations require a one-use current plan ID and explicit
   confirmation. `activate-linux-swap` and cleanup are unavailable on WSL2.
 - **Shared profile:** `/etc/ramshared/resource-profile.toml`, schema version
-  1, root-owned and mode `0600`. Fields include per-tier caps and a tagged
-  platform target: `linux_swapfile` (mount UUID, stable backing-device
+  1, root-owned and mode `0600`. Fields include per-tier caps and a list of
+  platform-bound targets: `linux_swapfile` (mount UUID, stable backing-device
   identity, managed path, bytes, priority), `linux_file_origin` (filesystem
   UUID, stable backing-device identity, mount ID, managed relative path, inode,
   exact allocated bytes,
-  identity-field manifest hash), or `wsl_fallback` (Windows volume identity,
-  path, bytes).
+  identity-field manifest hash), `wsl_fallback` (Windows volume identity,
+  path, bytes), and `wsl_origin` (Windows volume identity, origin path, exact
+  allocation). A profile may select swap and origin on the same or different
+  stable volumes. The planner groups their allocations by stable volume and
+  adds the non-overridable 10 GiB reserve once per volume. Windows paths are
+  compared case-insensitively when detecting duplicate targets.
   Unknown fields, duplicate keys, overflow, stale profile hash, invalid target,
   or unsupported platform refuse apply.
 - **Native origin manifest:** `/etc/ramshared/native-origin.toml`, root-owned
@@ -215,11 +219,13 @@ check; apply does not disable prior swap.
 - RF / DT: RF-3, RF-5, RF-7..RF-9, RF-12; DT-2..DT-3, DT-6..DT-8,
   DT-10..DT-13, DT-19..DT-20.
 - Types / fns: `ResourceProfile`, `TierCaps`, `ResourceTarget`,
-  `ResourcePlatform`, `validate_for()`, and checked combined-capacity
-  arithmetic.
+  `ResourcePlatform`, `StorageVolumeIdentity`, `validate_for()`, and checked
+  per-volume capacity arithmetic.
 - Implemented tests in `crates/ramshared-config/tests/resource_profile.rs`:
   `resource_profile_accepts_variable_caps_and_rejects_overflow`,
   `resource_profile_roundtrips_stable_volume_and_adapter_ids`,
+  `resource_profile_supports_multiple_targets_on_one_and_multiple_volumes`,
+  `resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow`,
   `resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths`,
   `resource_profile_rejects_zero_or_unbound_storage_identity`,
   `resource_profile_rejects_oversized_or_controlled_identity_and_paths`, and
@@ -427,6 +433,8 @@ in place.
 | `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_json_discovers_platform_resources_read_only` | CLI E2E | #13 | N/A — dispatch |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_accepts_variable_caps_and_rejects_overflow` | unit | #9/#13 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_roundtrips_stable_volume_and_adapter_ids` | unit | #17 | ≥80% |
+| `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_supports_multiple_targets_on_one_and_multiple_volumes` | unit | #9/#13/#17 | ≥80% |
+| `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_plan_never_mutates_host_or_guest` | unit | #13 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `resource_policy_rejects_unknown_stale_and_inconsistent_samples` | unit | #13 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_apply_is_idempotent_and_refuses_changed_rollback_target` | unit | #17 | ≥80% |

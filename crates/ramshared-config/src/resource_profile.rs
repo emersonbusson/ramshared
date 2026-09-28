@@ -4,7 +4,7 @@
 //! guest mutation; providers must revalidate live identity and capacity before
 //! acting on a target.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub struct ResourceProfile {
     #[serde(default)]
     pub caps: TierCaps,
     #[serde(default)]
-    pub target: Option<ResourceTarget>,
+    pub targets: Vec<ResourceTarget>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -76,6 +76,22 @@ pub enum ResourceTarget {
         windows_volume_id: String,
         path: String,
         bytes: u64,
+    },
+    WslOrigin {
+        windows_volume_id: String,
+        path: String,
+        allocated_bytes: u64,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum StorageVolumeIdentity {
+    Linux {
+        filesystem_uuid: String,
+        device_identity: String,
+    },
+    Windows {
+        volume_id: String,
     },
 }
 
@@ -146,10 +162,40 @@ impl ResourceProfile {
             validate_identity("caps.vram_bytes adapter identity", identity)?;
         }
 
-        let Some(target) = self.target.as_ref() else {
-            return Ok(());
-        };
+        let mut managed_paths = HashSet::new();
+        for target in &self.targets {
+            self.validate_target(platform, target)?;
+            if !managed_paths.insert(managed_path_identity(target)) {
+                return Err(invalid(
+                    "targets",
+                    "contains duplicate managed storage paths",
+                ));
+            }
+        }
 
+        Ok(())
+    }
+
+    pub fn required_free_bytes_by_volume(
+        &self,
+    ) -> Result<BTreeMap<StorageVolumeIdentity, u64>, ResourceProfileError> {
+        let mut requirements = BTreeMap::new();
+        for target in &self.targets {
+            let required = requirements
+                .entry(target.storage_volume_identity())
+                .or_insert(DISK_RESERVE_FLOOR_BYTES);
+            *required = required
+                .checked_add(target.allocated_bytes())
+                .ok_or(ResourceProfileError::CapacityOverflow)?;
+        }
+        Ok(requirements)
+    }
+
+    fn validate_target(
+        &self,
+        platform: ResourcePlatform,
+        target: &ResourceTarget,
+    ) -> Result<(), ResourceProfileError> {
         match (platform, target) {
             (
                 ResourcePlatform::NativeLinux,
@@ -210,6 +256,18 @@ impl ResourceProfile {
                 validate_windows_path(path)?;
                 validate_positive_bytes("target.bytes", *bytes)?;
             }
+            (
+                ResourcePlatform::Wsl2,
+                ResourceTarget::WslOrigin {
+                    windows_volume_id,
+                    path,
+                    allocated_bytes,
+                },
+            ) => {
+                validate_identity("target.windows_volume_id", windows_volume_id)?;
+                validate_windows_path(path)?;
+                validate_positive_bytes("target.allocated_bytes", *allocated_bytes)?;
+            }
             (_, ResourceTarget::LinuxSwapfile { .. }) => {
                 return Err(platform_mismatch("linux_swapfile", platform));
             }
@@ -219,9 +277,92 @@ impl ResourceProfile {
             (_, ResourceTarget::WslFallback { .. }) => {
                 return Err(platform_mismatch("wsl_fallback", platform));
             }
+            (_, ResourceTarget::WslOrigin { .. }) => {
+                return Err(platform_mismatch("wsl_origin", platform));
+            }
         }
 
         Ok(())
+    }
+}
+
+impl ResourceTarget {
+    fn storage_volume_identity(&self) -> StorageVolumeIdentity {
+        match self {
+            Self::LinuxSwapfile {
+                filesystem_uuid,
+                device_identity,
+                ..
+            }
+            | Self::LinuxFileOrigin {
+                filesystem_uuid,
+                device_identity,
+                ..
+            } => StorageVolumeIdentity::Linux {
+                filesystem_uuid: filesystem_uuid.clone(),
+                device_identity: device_identity.clone(),
+            },
+            Self::WslFallback {
+                windows_volume_id, ..
+            }
+            | Self::WslOrigin {
+                windows_volume_id, ..
+            } => StorageVolumeIdentity::Windows {
+                volume_id: windows_volume_id.clone(),
+            },
+        }
+    }
+
+    fn allocated_bytes(&self) -> u64 {
+        match self {
+            Self::LinuxSwapfile { bytes, .. } | Self::WslFallback { bytes, .. } => *bytes,
+            Self::LinuxFileOrigin {
+                allocated_bytes, ..
+            }
+            | Self::WslOrigin {
+                allocated_bytes, ..
+            } => *allocated_bytes,
+        }
+    }
+}
+
+#[derive(Eq, Hash, PartialEq)]
+enum ManagedPathIdentity {
+    Linux(String, String, String),
+    Windows(String, String),
+}
+
+fn managed_path_identity(target: &ResourceTarget) -> ManagedPathIdentity {
+    match target {
+        ResourceTarget::LinuxSwapfile {
+            filesystem_uuid,
+            device_identity,
+            managed_relative_path,
+            ..
+        }
+        | ResourceTarget::LinuxFileOrigin {
+            filesystem_uuid,
+            device_identity,
+            managed_relative_path,
+            ..
+        } => ManagedPathIdentity::Linux(
+            filesystem_uuid.clone(),
+            device_identity.clone(),
+            managed_relative_path.clone(),
+        ),
+        ResourceTarget::WslFallback {
+            windows_volume_id,
+            path,
+            ..
+        }
+        | ResourceTarget::WslOrigin {
+            windows_volume_id,
+            path,
+            ..
+        } => ManagedPathIdentity::Windows(
+            windows_volume_id.to_ascii_lowercase(),
+            path.replace('/', "\\").to_ascii_lowercase(),
+        ),
     }
 }
 

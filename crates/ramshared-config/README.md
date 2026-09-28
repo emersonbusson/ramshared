@@ -6,7 +6,7 @@ Shared configuration schemas, validation rules, and fail-closed limit enforcemen
 
 `ramshared-config` parses and validates TOML configuration files across broker, agent, and resource-policy surfaces:
 - **Broker & Agent Schemas:** Strongly typed representations of listen addresses, slice sizes, allocation floors, and watchdog timeouts.
-- **Resource Profile Model:** Versioned variable tier ceilings and stable Linux/WSL2 storage targets. The model is currently a pure parser/validator and is not yet loaded or persisted by `ramshared config`.
+- **Resource Profile Model:** Versioned variable tier ceilings and multiple stable Linux/WSL2 storage targets. Swap and origin can be placed on the same or different volumes; checked capacity is grouped by stable volume identity. The model is currently a pure parser/validator and is not yet loaded or persisted by `ramshared config`.
 - **Fail-Closed Validation:** Validates memory bounds, socket permissions, and backend selections before daemons attempt resource initialization.
 - **Pure Library Design:** Parsing logic is fully decoupled from I/O to enable deterministic offline unit testing.
 
