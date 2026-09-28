@@ -1,7 +1,8 @@
-//! vsock control plane for the Windows host service.
+//! Host-side control-plane policy helpers for the Windows service.
 //!
-//! AF_HYPERV listener, heartbeat deadline tracking, lease management,
-//! and VHDX lifecycle via `wsl.exe --mount`.
+//! This module contains heartbeat deadline tracking and bounded VHDX command
+//! helpers. The AF_HYPERV transport is in `ramshared-ipc::vsock`; neither the
+//! transport nor these helpers are wired into the production service yet.
 //!
 //! SPEC: docs/specs/no-milestone/native-vsock-host-guest-control-plane/SPEC.md
 
