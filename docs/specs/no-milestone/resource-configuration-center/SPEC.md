@@ -59,10 +59,12 @@ check; apply does not disable prior swap.
 | DT-20 | Keep the existing v3 sealed block-origin reader/schema unchanged. New native file origins use a separate `/etc/ramshared/native-origin.toml` manifest and are selected only by the native provider; never auto-convert or write a second origin over an existing one. Block and file origins are distinct first-class storage kinds for their owning platform contracts, not an automatic compatibility fallback. If a sealed block origin already exists, show it and require its existing migration path before replacing it. | Avoids weakening or ambiguating an existing sealed origin while adding Linux SSD file selection. |
 | DT-21 | Each 32 MiB sample writes 31 MiB sequentially with a 1 MiB buffer and flushes once, then performs 256 distinct 4 KiB writes with a durable flush after each write; total payload writes are exactly 32 MiB per sample. Linux uses `fdatasync`; Windows uses `FlushFileBuffers`. Read-back verifies the complete file. Three samples yield 96 MiB maximum payload writes per volume. Report p99 over 768 small-write latency observations plus all sequential-throughput results, their median, and deviation. Run one child worker sequentially with at most one outstanding filesystem operation and a 120-second per-volume deadline. Persist a lease containing process ID plus start identity and the exact owned target before launch. On timeout, request termination and verify that exact process has exited before cleanup. If exit or cleanup cannot be proven, persist `worker_stuck`, keep the lease and exact file record, do not launch another worker, and block disk mutations on that target until attended recovery proves exit and exact cleanup. | Defines a reproducible durable small-write and sequential-throughput comparison within the stated byte ceiling. A filesystem call can remain uninterruptible, so the deadline bounds the supervisor wait but cannot promise kernel-level cancellation. The persisted lease prevents a later invocation from overlooking an orphaned worker. |
 | DT-22 | Represent an already-created, identity-sealed native origin as `linux_file_origin` with its inode and identity hash. Represent a not-yet-created selection as `linux_file_origin_request`, containing only the stable filesystem/device identity, managed relative path, and requested allocation. A read-only plan may validate the current mount and capacity for a request; it must not claim that the file exists, has been created, or is safe to open. The privileged creation transaction generates the inode-bound manifest only after securely creating and verifying the exact file. Duplicate-path detection treats a request and sealed origin at the same stable path as a conflict. | The prior profile shape required a real inode before the UI could express a new Linux origin, making it impossible to configure the requested target before creation. Separating intent from sealed runtime identity avoids fabricating provenance. |
+| DT-23 | `ramshared config draft --output PATH` requires a foreground TTY on stdin and stdout. It lists every current candidate with eligibility reasons, lets the user select one or more eligible volumes for conventional fallback swap or a RamShared SSD-origin request, accepts positive variable sizes in MiB, and displays the read-only combined-capacity plan before a final `SAVE` confirmation. It writes only the explicitly named new file with `create_new`, `O_NOFOLLOW`, mode `0600`, and current-user ownership; the parent must already exist, be a directory owned by the current user, and not be group/world writable. Existing paths refuse; it never overwrites or creates a system profile. The writer verifies exact file length and bytes after writing and syncs the file and parent directory. Missing TTY, stale/ambiguous identity, unsupported candidates, invalid/overflowing sizes, capacity/reserve shortfall, or declined confirmation performs no write. The generated file is an untrusted draft for `config plan --profile PATH`, not an applied setting. | Allows a user to choose among detected disks and set variable swap/origin sizes while keeping all host/guest changes behind a later provider transaction. An exclusive draft cannot be confused with an already-applied system profile. |
 
 ## Interfaces
 
-- **CLI/TUI:** `ramshared config`; subcommands `show`, `plan`, `benchmark`,
+- **CLI/TUI:** `ramshared config`; subcommands `show`, `plan`,
+  `draft --output PATH`, `benchmark`,
   `apply`, `activate-linux-swap`, and `cleanup-linux-swap`. Parsing has no
   side effects. Mutations require a one-use current plan ID and explicit
   confirmation. `activate-linux-swap` and cleanup are unavailable on WSL2.
@@ -71,8 +73,9 @@ check; apply does not disable prior swap.
   platform-bound targets: `linux_swapfile` (filesystem UUID, stable backing-device
   identity, managed relative path, bytes, priority), `linux_file_origin` (filesystem
   UUID, stable backing-device identity, managed relative path, inode,
-  exact allocated bytes,
-  identity-field manifest hash), `wsl_fallback` (Windows volume identity,
+  exact allocated bytes, identity-field manifest hash),
+  `linux_file_origin_request` (filesystem UUID, stable backing-device identity,
+  managed relative path, requested allocation), `wsl_fallback` (Windows volume identity,
   path, bytes), and `wsl_origin` (Windows volume identity, origin path, exact
   allocation). A profile may select swap and origin on the same or different
   stable volumes. The planner groups their allocations by stable volume and
@@ -129,6 +132,14 @@ check; apply does not disable prior swap.
   same-directory file, fsync, verify bytes/hash/mode/owner, and rename
   atomically. A changed target hash refuses; rollback only when it still
   matches this transaction's output.
+- **User draft:** create only the explicitly named new profile after the user
+  confirms the rendered plan. Resolve and validate the existing parent
+  directory before opening the target with `create_new` and `O_NOFOLLOW`; set
+  mode `0600`, verify current-user ownership and exact contents, and sync the
+  file. If creation or writing fails, remove only the file proven to have the
+  same opened-file identity; if that proof fails, report the exact retained
+  path and do not claim a complete draft. An existing target is never replaced.
+  Draft creation changes no platform setting and requires no privilege.
 - **Linux swapfile:** revalidate the exact mount ID, filesystem UUID, stable
   backing-device identity, filesystem type/options, free bytes, and managed
   directory before create. Allocate only the new unique file; verify exact
@@ -416,22 +427,25 @@ in place.
    mismatch, unknown telemetry, stable resource IDs, and combined storage
    capacity before any write.
 2. Implement read-only Linux/WSL inventory and `show`/`plan`; no helper writes.
-3. Implement Linux helper request bounds and manufactured volume/mount/filesystem
+3. Implement interactive volume/role/size draft creation and safe no-overwrite
+   profile output; prove native Linux and Windows volume selections with
+   manufactured candidate inventories and keep the generated plan read-only.
+4. Implement Linux helper request bounds and manufactured volume/mount/filesystem
    identity tests; enable only ext4/XFS.
-4. Add the native file-origin manifest parser/open path and lifecycle selector;
+5. Add the native file-origin manifest parser/open path and lifecycle selector;
    keep the current v3 sealed block-origin reader intact and test platform
    selection, identity drift, allocation, and manifest replay.
-5. Implement create-once managed Linux swapfile and systemd unit; test all
+6. Implement create-once managed Linux swapfile and systemd unit; test all
    partial failures and preserve existing active swaps. Add explicit activate
    and zero-use cleanup commands only after the ownership tests pass.
-6. Implement bounded per-platform volume benchmark with global byte cap,
+7. Implement bounded per-platform volume benchmark with global byte cap,
    volume identity pinning, supervised worker, measured timeout, and exact
    cleanup custody.
-7. Implement the Windows host helper for WSL `swap`/`swapFile`, retaining all
+8. Implement the Windows host helper for WSL `swap`/`swapFile`, retaining all
    unrelated `.wslconfig` bytes and exact rollback. Do not modify `memory=`.
-8. Wire resource profile caps into existing ZRAM/GPU/origin owners; revalidate
+9. Wire resource profile caps into existing ZRAM/GPU/origin owners; revalidate
    caps at every live admission, not only at apply.
-9. Run Rust coverage, Linux manufactured-helper tests, Windows PowerShell
+10. Run Rust coverage, Linux manufactured-helper tests, Windows PowerShell
    manufactured tests, and docs checks. Then run separate disposable native
    Linux and WSL2 before/action/after drills. Record absent hardware/filesystem
    classes as partial, not supported.
@@ -450,6 +464,16 @@ in place.
 | `crates/ramshared-cli/src/resource_config.rs` | `meminfo_accepts_user_sized_ram_and_swap_without_product_minima` | unit | #13 | slice gate |
 | `crates/ramshared-cli/src/resource_config.rs` | `mount_capacity_uses_live_available_blocks_without_writing` | read-only live unit | #13 | slice gate |
 | `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_json_discovers_platform_resources_read_only` | CLI E2E | #13 | N/A — dispatch |
+| `crates/ramshared-cli/src/main.rs` | `config_command_accepts_draft_mode_and_requires_output_path` | unit | #13 | N/A — parser |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_builds_native_targets_from_eligible_mounts` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_builds_wsl_targets_from_unique_eligible_volumes` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_builds_wsl_volume_guid_target_without_drive_letter` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_refuses_ineligible_ambiguous_stale_and_overflowed_targets` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_save_requires_owned_parent_uses_mode_0600_and_never_overwrites` | unit | #13/#17 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_wizard_saves_only_after_review_and_explicit_confirmation` | unit | #13/#17 | ≥80% |
+| `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_draft_refuses_non_tty_before_writing` | CLI refusal E2E | #13/#16 | N/A — dispatch |
+| `crates/ramshared-cli/src/resource_config.rs` | `resource_plan_aggregates_case_aliases_before_capacity_check` | unit | #9/#13/#16 | ≥80% |
+| `crates/ramshared-config/tests/resource_profile.rs` | `resource_profile_groups_windows_volume_ids_case_insensitively_for_capacity` | unit | #9/#13 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_accepts_variable_caps_and_rejects_overflow` | unit | #9/#13 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_roundtrips_stable_volume_and_adapter_ids` | unit | #17 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_supports_multiple_targets_on_one_and_multiple_volumes` | unit | #9/#13/#17 | ≥80% |

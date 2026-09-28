@@ -108,6 +108,25 @@ fn cli_resource_config_json_discovers_platform_resources_read_only() {
 }
 
 #[test]
+fn cli_resource_config_draft_refuses_non_tty_before_writing() {
+    let path = std::env::temp_dir().join(format!(
+        "ramshared-resource-draft-{}-{}.toml",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let path_text = path.to_string_lossy().into_owned();
+
+    let output = run_cli(&["config", "draft", "--output", &path_text]);
+
+    assert_ne!(output.status.code(), Some(0));
+    assert!(stderr(&output).contains("needs a terminal"));
+    assert!(
+        !path.exists(),
+        "non-interactive draft must not create a file"
+    );
+}
+
+#[test]
 fn cli_resource_config_plan_loads_an_explicit_profile_without_applying_it() {
     let path = std::env::temp_dir().join(format!(
         "ramshared-resource-profile-{}-{}.toml",

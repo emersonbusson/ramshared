@@ -331,7 +331,7 @@ impl ResourceTarget {
             | Self::WslOrigin {
                 windows_volume_id, ..
             } => StorageVolumeIdentity::Windows {
-                volume_id: windows_volume_id.clone(),
+                volume_id: windows_volume_id.to_lowercase(),
             },
         }
     }

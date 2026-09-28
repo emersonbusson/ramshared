@@ -32,8 +32,10 @@ origin but not a requested new Linux origin before the creation transaction.
 DT-22 now separates `linux_file_origin_request` from the sealed runtime
 manifest. The read-only plan binds the request to current stable volume
 identity/capacity and explicitly does not claim creation or openability. The
-model and planner have named tests; TUI selection, profile persistence,
-privileged creation, and native Linux live qualification remain open.
+model and planner have named tests. An attended `config draft` flow now selects
+fallback/origin storage and persists only a new mode-`0600` user draft;
+system-profile apply, GPU selection, benchmarking, privileged creation, and
+native Linux live qualification remain open.
 
 ## Open questions
 

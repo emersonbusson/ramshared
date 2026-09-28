@@ -260,6 +260,21 @@ fn parse_config_mode(options: &[String]) -> Result<ConfigMode, CliParseError> {
             Ok(ConfigMode::Show { json: true })
         }
         [command, ..] if command == "plan" => parse_config_plan(&options[1..]),
+        [command, ..] if command == "draft" => parse_config_draft(&options[1..]),
+        _ => Err(CliParseError::InvalidOption {
+            command: "config",
+            options: options.to_vec(),
+        }),
+    }
+}
+
+fn parse_config_draft(options: &[String]) -> Result<ConfigMode, CliParseError> {
+    match options {
+        [flag, path] if flag == "--output" && !path.is_empty() && !path.starts_with("--") => {
+            Ok(ConfigMode::Draft {
+                output_path: path.clone(),
+            })
+        }
         _ => Err(CliParseError::InvalidOption {
             command: "config",
             options: options.to_vec(),
@@ -757,7 +772,7 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
     let _ = writeln!(
         stderr,
-        "  ramshared config [show [--json] | plan [--json] [--profile PATH]]"
+        "  ramshared config [show [--json] | plan [--json] [--profile PATH] | draft --output PATH]"
     );
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
     let _ = writeln!(
@@ -2160,15 +2175,17 @@ mod tests {
         assert!(parse_cli_command(&cli_args(&["config", "draft"])).is_err());
         assert!(parse_cli_command(&cli_args(&["config", "draft", "--output"])).is_err());
         assert!(parse_cli_command(&cli_args(&["config", "draft", "--output", "--json"])).is_err());
-        assert!(parse_cli_command(&cli_args(&[
-            "config",
-            "draft",
-            "--output",
-            "/tmp/a.toml",
-            "--output",
-            "/tmp/b.toml",
-        ]))
-        .is_err());
+        assert!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "draft",
+                "--output",
+                "/tmp/a.toml",
+                "--output",
+                "/tmp/b.toml",
+            ]))
+            .is_err()
+        );
     }
 
     #[test]

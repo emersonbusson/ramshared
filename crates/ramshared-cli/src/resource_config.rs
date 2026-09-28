@@ -3,8 +3,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as FmtWrite};
 use std::fs::{self, OpenOptions};
-use std::io::{self, IsTerminal, Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::io::{self, IsTerminal, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -18,6 +18,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use rustix::fs::{Mode, fchmod};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -28,12 +29,19 @@ const WINDOWS_INVENTORY_OUTPUT_LIMIT: usize = 256 * 1024;
 const DEFAULT_RESOURCE_PROFILE_PATH: &str = "/etc/ramshared/resource-profile.toml";
 const STORAGE_SAMPLE_MAX_AGE_MS: u64 = 30_000;
 const STORAGE_SAMPLE_FUTURE_TOLERANCE_MS: u64 = 5_000;
+const MAX_DRAFT_LINE_BYTES: usize = 128;
+const MAX_DRAFT_TARGETS: usize = 16;
+const DRAFT_LINUX_SWAP_PATH: &str = "swap/ramshared-fallback.swap";
+const DRAFT_LINUX_ORIGIN_PATH: &str = "origin/ramshared-origin.img";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigMode {
     Interactive,
     Show {
         json: bool,
+    },
+    Draft {
+        output_path: String,
     },
     Plan {
         json: bool,
@@ -157,6 +165,31 @@ struct PlannedTarget {
 struct StorageObservation {
     free_bytes: u64,
     mount_id: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DraftVolumeCandidate {
+    display: String,
+    free_bytes: u64,
+    storage: DraftStorageIdentity,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DraftStorageIdentity {
+    NativeLinux {
+        filesystem_uuid: String,
+        device_identity: String,
+    },
+    Wsl2 {
+        volume_id: String,
+        drive_letter: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DraftTargetRole {
+    FallbackSwap,
+    RamSharedOrigin,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1032,7 +1065,7 @@ fn resource_volume_identity(target: &ResourceTarget) -> StorageVolumeIdentity {
         | ResourceTarget::WslOrigin {
             windows_volume_id, ..
         } => StorageVolumeIdentity::Windows {
-            volume_id: windows_volume_id.clone(),
+            volume_id: windows_volume_id.to_lowercase(),
         },
     }
 }
@@ -1693,7 +1726,17 @@ fn render_text(snapshot: &ResourceSnapshot) -> String {
                             .count()
                     });
                     let eligibility = match windows_volume_eligibility(volume, matching_id_count) {
-                        Ok(_) => "eligible volume candidate".to_owned(),
+                        Ok(_)
+                            if identity.is_some_and(|identity| {
+                                draft_wsl_target_path_is_valid(
+                                    identity,
+                                    volume.drive_letter.as_deref(),
+                                )
+                            }) =>
+                        {
+                            "eligible volume candidate".to_owned()
+                        }
+                        Ok(_) => "ineligible: no safe canonical target path".to_owned(),
                         Err((_, reason)) => format!("ineligible: {reason}"),
                     };
                     let identity = identity.map_or_else(
@@ -1807,9 +1850,545 @@ fn run_interactive() -> Result<(), InventoryError> {
     result
 }
 
+fn draft_volume_candidates(
+    snapshot: &ResourceSnapshot,
+    now_unix_ms: u64,
+) -> Vec<DraftVolumeCandidate> {
+    match snapshot.platform {
+        RuntimePlatform::NativeLinux => {
+            let mut candidates = Vec::new();
+            let mut seen = HashSet::new();
+            for device in &snapshot.block_devices {
+                let (Some(filesystem_uuid), Some(device_identity)) =
+                    (device.uuid.as_deref(), backing_device_identity(device))
+                else {
+                    continue;
+                };
+                let identity = StorageVolumeIdentity::Linux {
+                    filesystem_uuid: filesystem_uuid.into(),
+                    device_identity: device_identity.into(),
+                };
+                let Ok(observation) = linux_target_free_bytes(
+                    snapshot,
+                    filesystem_uuid,
+                    device_identity,
+                    now_unix_ms,
+                ) else {
+                    continue;
+                };
+                if !seen.insert(identity) {
+                    continue;
+                }
+                let mountpoint = device
+                    .mounts
+                    .iter()
+                    .find(|mount| Some(mount.mount_id) == observation.mount_id)
+                    .map(|mount| mount.mountpoint.as_str())
+                    .unwrap_or("mount unknown");
+                candidates.push(DraftVolumeCandidate {
+                    display: format!(
+                        "{} at {} — filesystem {}, device {}",
+                        device.model.as_deref().unwrap_or(&device.name),
+                        mountpoint,
+                        filesystem_uuid,
+                        device_identity
+                    ),
+                    free_bytes: observation.free_bytes,
+                    storage: DraftStorageIdentity::NativeLinux {
+                        filesystem_uuid: filesystem_uuid.into(),
+                        device_identity: device_identity.into(),
+                    },
+                });
+            }
+            candidates
+        }
+        RuntimePlatform::Wsl2 => {
+            let Some(windows) = snapshot.windows.as_ref() else {
+                return Vec::new();
+            };
+            if !sample_is_fresh(windows.observed_unix_ms, now_unix_ms) {
+                return Vec::new();
+            }
+            windows
+                .volumes
+                .iter()
+                .filter_map(|volume| {
+                    let volume_id = volume.volume_id.as_deref()?;
+                    let matching_id_count = windows
+                        .volumes
+                        .iter()
+                        .filter(|candidate| {
+                            candidate
+                                .volume_id
+                                .as_deref()
+                                .is_some_and(|observed| observed.eq_ignore_ascii_case(volume_id))
+                        })
+                        .count();
+                    let free_bytes = windows_volume_eligibility(volume, matching_id_count).ok()?;
+                    if !draft_wsl_target_path_is_valid(volume_id, volume.drive_letter.as_deref()) {
+                        return None;
+                    }
+                    Some(DraftVolumeCandidate {
+                        display: format!(
+                            "{} {} ({}) — volume {}",
+                            volume.drive_letter.as_deref().map_or_else(
+                                || "no drive letter".into(),
+                                |letter| { format!("{letter}:") }
+                            ),
+                            volume.label.as_deref().unwrap_or("unlabeled"),
+                            volume
+                                .file_system
+                                .as_deref()
+                                .unwrap_or("filesystem unknown"),
+                            volume_id
+                        ),
+                        free_bytes,
+                        storage: DraftStorageIdentity::Wsl2 {
+                            volume_id: volume_id.into(),
+                            drive_letter: volume.drive_letter.clone(),
+                        },
+                    })
+                })
+                .collect()
+        }
+    }
+}
+
+fn draft_windows_path(
+    volume_id: &str,
+    drive_letter: Option<&str>,
+    role: DraftTargetRole,
+) -> Result<String, InventoryError> {
+    let leaf = match role {
+        DraftTargetRole::FallbackSwap => "fallback-swap.vhdx",
+        DraftTargetRole::RamSharedOrigin => "origin.vhdx",
+    };
+    let path = if let Some(letter) = drive_letter {
+        let letter = letter.trim_end_matches(':');
+        if letter.len() != 1 || !letter.as_bytes()[0].is_ascii_alphabetic() {
+            return Err(InventoryError(
+                "selected Windows volume has an invalid drive-letter display value".into(),
+            ));
+        }
+        format!("{}:\\wsl\\ramshared\\{leaf}", letter.to_ascii_uppercase())
+    } else {
+        format!(
+            "{}\\wsl\\ramshared\\{leaf}",
+            volume_id.trim_end_matches(['\\', '/'])
+        )
+    };
+    Ok(path)
+}
+
+fn draft_wsl_target_path_is_valid(volume_id: &str, drive_letter: Option<&str>) -> bool {
+    let Ok(path) = draft_windows_path(volume_id, drive_letter, DraftTargetRole::FallbackSwap)
+    else {
+        return false;
+    };
+    let profile = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: vec![ResourceTarget::WslFallback {
+            windows_volume_id: volume_id.into(),
+            path,
+            bytes: 1,
+        }],
+    };
+    profile.validate_for(ResourcePlatform::Wsl2).is_ok()
+}
+
+fn materialize_draft_target(
+    candidate: &DraftVolumeCandidate,
+    role: DraftTargetRole,
+    bytes: u64,
+) -> Result<ResourceTarget, InventoryError> {
+    match &candidate.storage {
+        DraftStorageIdentity::NativeLinux {
+            filesystem_uuid,
+            device_identity,
+        } => Ok(match role {
+            DraftTargetRole::FallbackSwap => ResourceTarget::LinuxSwapfile {
+                filesystem_uuid: filesystem_uuid.clone(),
+                device_identity: device_identity.clone(),
+                managed_relative_path: DRAFT_LINUX_SWAP_PATH.into(),
+                bytes,
+                priority: -1,
+            },
+            DraftTargetRole::RamSharedOrigin => ResourceTarget::LinuxFileOriginRequest {
+                filesystem_uuid: filesystem_uuid.clone(),
+                device_identity: device_identity.clone(),
+                managed_relative_path: DRAFT_LINUX_ORIGIN_PATH.into(),
+                allocated_bytes: bytes,
+            },
+        }),
+        DraftStorageIdentity::Wsl2 {
+            volume_id,
+            drive_letter,
+        } => {
+            let path = draft_windows_path(volume_id, drive_letter.as_deref(), role)?;
+            Ok(match role {
+                DraftTargetRole::FallbackSwap => ResourceTarget::WslFallback {
+                    windows_volume_id: volume_id.clone(),
+                    path,
+                    bytes,
+                },
+                DraftTargetRole::RamSharedOrigin => ResourceTarget::WslOrigin {
+                    windows_volume_id: volume_id.clone(),
+                    path,
+                    allocated_bytes: bytes,
+                },
+            })
+        }
+    }
+}
+
+fn parse_draft_size_mib(value: &str) -> Result<u64, InventoryError> {
+    let mib = value
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| InventoryError("size must be a positive integer MiB value".into()))?;
+    if mib == 0 {
+        return Err(InventoryError("size must be greater than zero".into()));
+    }
+    mib.checked_mul(1024 * 1024)
+        .ok_or_else(|| InventoryError("size exceeds the supported byte range".into()))
+}
+
+fn read_draft_line(
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+    prompt: &str,
+) -> Result<String, InventoryError> {
+    write!(output, "{prompt}")
+        .map_err(|error| InventoryError(format!("cannot write config prompt: {error}")))?;
+    output
+        .flush()
+        .map_err(|error| InventoryError(format!("cannot flush config prompt: {error}")))?;
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0_u8; 1];
+        let read = input
+            .read(&mut byte)
+            .map_err(|error| InventoryError(format!("cannot read config input: {error}")))?;
+        if read == 0 {
+            return Err(InventoryError(
+                "end of input before draft confirmation".into(),
+            ));
+        }
+        match byte[0] {
+            b'\n' => break,
+            b'\r' => continue,
+            value if bytes.len() < MAX_DRAFT_LINE_BYTES => bytes.push(value),
+            _ => return Err(InventoryError("config input line exceeds 128 bytes".into())),
+        }
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| InventoryError(format!("config input is not UTF-8: {error}")))
+}
+
+fn resolve_user_draft_path(path: &Path) -> Result<(PathBuf, PathBuf), InventoryError> {
+    let file_name = path
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| InventoryError("draft output must name a new file".into()))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let canonical_parent = fs::canonicalize(parent).map_err(|error| {
+        InventoryError(format!("cannot resolve draft parent directory: {error}"))
+    })?;
+    let metadata = fs::symlink_metadata(&canonical_parent).map_err(|error| {
+        InventoryError(format!("cannot inspect draft parent directory: {error}"))
+    })?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.permissions().mode() & 0o022 != 0
+    {
+        return Err(InventoryError(
+            "draft parent must be a directory owned by this user and not group/world writable"
+                .into(),
+        ));
+    }
+    Ok((canonical_parent.clone(), canonical_parent.join(file_name)))
+}
+
+fn remove_draft_if_same_file(path: &Path, opened: &fs::File) {
+    let Ok(opened_metadata) = opened.metadata() else {
+        return;
+    };
+    let Ok(path_metadata) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if !path_metadata.file_type().is_symlink()
+        && path_metadata.dev() == opened_metadata.dev()
+        && path_metadata.ino() == opened_metadata.ino()
+    {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn save_profile_draft(path: &Path, profile_text: &str) -> Result<PathBuf, InventoryError> {
+    if profile_text.len() > MAX_RESOURCE_PROFILE_BYTES {
+        return Err(InventoryError(
+            "draft profile exceeds the 64 KiB size limit".into(),
+        ));
+    }
+    let (parent, resolved_path) = resolve_user_draft_path(path)?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(&resolved_path).map_err(|error| {
+        if error.kind() == io::ErrorKind::AlreadyExists {
+            InventoryError("draft output already exists; it was not overwritten".into())
+        } else {
+            InventoryError(format!("cannot create draft output: {error}"))
+        }
+    })?;
+    let write_result = (|| {
+        fchmod(&file, Mode::RUSR | Mode::WUSR)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        file.write_all(profile_text.as_bytes())?;
+        file.sync_all()?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 1
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.permissions().mode() & 0o777 != 0o600
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "draft file owner, type, link count, or mode verification failed",
+            ));
+        }
+        if metadata.len() != profile_text.len() as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "draft file length does not match the requested profile",
+            ));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        let mut readback = vec![0; profile_text.len()];
+        file.read_exact(&mut readback)?;
+        let mut trailing = [0_u8; 1];
+        if file.read(&mut trailing)? != 0 || readback != profile_text.as_bytes() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "draft file content does not match the requested profile",
+            ));
+        }
+        fs::File::open(&parent)?.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        remove_draft_if_same_file(&resolved_path, &file);
+        if let Ok(parent_directory) = fs::File::open(&parent) {
+            let _ = parent_directory.sync_all();
+        }
+        return Err(InventoryError(format!(
+            "could not securely write profile draft: {error}"
+        )));
+    }
+    Ok(resolved_path)
+}
+
+fn display_draft_candidates(
+    snapshot: &ResourceSnapshot,
+    candidates: &[DraftVolumeCandidate],
+    output: &mut dyn Write,
+) -> Result<(), InventoryError> {
+    write!(output, "{}", render_text(snapshot))
+        .map_err(|error| InventoryError(format!("cannot display resource inventory: {error}")))?;
+    if candidates.is_empty() {
+        return Err(InventoryError(
+            "no fresh, uniquely identified eligible storage volume is available for a draft target"
+                .into(),
+        ));
+    }
+    writeln!(output, "Eligible draft targets:")
+        .map_err(|error| InventoryError(format!("cannot display draft candidates: {error}")))?;
+    for (index, candidate) in candidates.iter().enumerate() {
+        writeln!(
+            output,
+            "  {}. {} — free {}",
+            index + 1,
+            candidate.display,
+            format_gib(Some(candidate.free_bytes))
+        )
+        .map_err(|error| InventoryError(format!("cannot display draft candidates: {error}")))?;
+    }
+    Ok(())
+}
+
+fn add_draft_target(
+    snapshot: &ResourceSnapshot,
+    candidates: &[DraftVolumeCandidate],
+    profile: &mut ResourceProfile,
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+) -> Result<bool, InventoryError> {
+    let role_text = read_draft_line(input, output, "Add target [swap | origin | done]: ")?;
+    let role = match role_text.trim().to_ascii_lowercase().as_str() {
+        "swap" => DraftTargetRole::FallbackSwap,
+        "origin" => DraftTargetRole::RamSharedOrigin,
+        "done" => return Ok(false),
+        _ => {
+            return Err(InventoryError(
+                "target role must be swap, origin, or done".into(),
+            ));
+        }
+    };
+    let volume_text = read_draft_line(input, output, "Eligible volume number: ")?;
+    let volume_index = volume_text
+        .trim()
+        .parse::<usize>()
+        .ok()
+        .and_then(|index| index.checked_sub(1))
+        .filter(|index| *index < candidates.len())
+        .ok_or_else(|| InventoryError("selected volume number is not in the list".into()))?;
+    let size_text = read_draft_line(input, output, "Target size (MiB): ")?;
+    let bytes = parse_draft_size_mib(&size_text)?;
+    profile.targets.push(materialize_draft_target(
+        &candidates[volume_index],
+        role,
+        bytes,
+    )?);
+    let profile_text = profile
+        .to_toml()
+        .map_err(|error| InventoryError(format!("cannot encode draft profile: {error}")))?;
+    let plan = match build_resource_plan(snapshot, Some(&profile_text)) {
+        Ok(plan) if plan.status == "ready_for_review" => plan,
+        Ok(plan) => {
+            profile.targets.pop();
+            writeln!(
+                output,
+                "Target refused; it was not added:\n{}",
+                render_plan_text(&plan)
+            )
+            .map_err(|error| InventoryError(format!("cannot display target refusal: {error}")))?;
+            return Ok(true);
+        }
+        Err(error) => {
+            profile.targets.pop();
+            writeln!(output, "Target refused: {error}").map_err(|write_error| {
+                InventoryError(format!("cannot display target refusal: {write_error}"))
+            })?;
+            return Ok(true);
+        }
+    };
+    let selected = plan
+        .targets
+        .last()
+        .map(|target| target.kind)
+        .unwrap_or("target");
+    writeln!(
+        output,
+        "Added {selected}; current plan remains read-only and apply-disabled."
+    )
+    .map_err(|error| InventoryError(format!("cannot display draft result: {error}")))?;
+    Ok(true)
+}
+
+fn collect_draft_profile(
+    snapshot: &ResourceSnapshot,
+    candidates: &[DraftVolumeCandidate],
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+) -> Result<ResourceProfile, InventoryError> {
+    let mut profile = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps::default(),
+        targets: Vec::new(),
+    };
+    loop {
+        if profile.targets.len() == MAX_DRAFT_TARGETS {
+            writeln!(output, "Maximum of {MAX_DRAFT_TARGETS} targets reached.")
+                .map_err(|error| InventoryError(format!("cannot write draft result: {error}")))?;
+            break;
+        }
+        if !add_draft_target(snapshot, candidates, &mut profile, input, output)? {
+            break;
+        }
+    }
+    if profile.targets.is_empty() {
+        return Err(InventoryError("no draft targets were selected".into()));
+    }
+    profile
+        .validate_for(profile_platform(snapshot.platform))
+        .map_err(|error| InventoryError(format!("draft profile is invalid: {error}")))?;
+    Ok(profile)
+}
+
+fn save_reviewed_draft(
+    snapshot: &ResourceSnapshot,
+    profile: &ResourceProfile,
+    output_path: &Path,
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+) -> Result<(), InventoryError> {
+    let profile_text = profile
+        .to_toml()
+        .map_err(|error| InventoryError(format!("cannot encode draft profile: {error}")))?;
+    let plan = build_resource_plan(snapshot, Some(&profile_text))?;
+    if plan.status != "ready_for_review" || plan.apply_enabled || plan.writes_performed {
+        return Err(InventoryError(
+            "final draft plan is blocked or unexpectedly permits mutation".into(),
+        ));
+    }
+    writeln!(output, "{}", render_plan_text(&plan))
+        .map_err(|error| InventoryError(format!("cannot display final draft plan: {error}")))?;
+    writeln!(
+        output,
+        "Draft only: no swap, origin, GPU, .wslconfig, or running tier was changed."
+    )
+    .map_err(|error| InventoryError(format!("cannot display draft boundary: {error}")))?;
+    let confirmation = read_draft_line(
+        input,
+        output,
+        &format!("Type SAVE to create new draft {}: ", output_path.display()),
+    )?;
+    if confirmation != "SAVE" {
+        writeln!(output, "Draft canceled; no file was written.")
+            .map_err(|error| InventoryError(format!("cannot display cancellation: {error}")))?;
+        return Ok(());
+    }
+    let saved_path = save_profile_draft(output_path, &profile_text)?;
+    writeln!(output, "Validated draft saved at {}.", saved_path.display())
+        .map_err(|error| InventoryError(format!("cannot report saved draft: {error}")))
+}
+
+fn run_draft_wizard_with_io(
+    snapshot: &ResourceSnapshot,
+    output_path: &Path,
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+) -> Result<(), InventoryError> {
+    let candidates = draft_volume_candidates(snapshot, unix_millis());
+    display_draft_candidates(snapshot, &candidates, output)?;
+    let profile = collect_draft_profile(snapshot, &candidates, input, output)?;
+    save_reviewed_draft(snapshot, &profile, output_path, input, output)
+}
+
+fn run_draft_wizard(output_path: &str, output: &mut dyn Write) -> Result<(), InventoryError> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(InventoryError(
+            "config draft needs a terminal on stdin and stdout; no profile was written".into(),
+        ));
+    }
+    let snapshot = collect_snapshot()?;
+    let mut input = io::stdin().lock();
+    run_draft_wizard_with_io(&snapshot, Path::new(output_path), &mut input, output)
+}
+
 pub(crate) fn run(mode: ConfigMode, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
     let result = match mode {
         ConfigMode::Interactive => run_interactive(),
+        ConfigMode::Draft { output_path } => run_draft_wizard(&output_path, stdout),
         ConfigMode::Show { json } => collect_snapshot().and_then(|snapshot| {
             let output = if json {
                 render_json(&snapshot)?
@@ -2195,6 +2774,15 @@ mod tests {
                 free_bytes: Some(32 * 1024 * 1024 * 1024),
                 volume_id: None,
             },
+            WindowsVolume {
+                drive_letter: None,
+                label: Some("Malformed path".into()),
+                file_system: Some("NTFS".into()),
+                drive_type: "Fixed".into(),
+                size_bytes: Some(64 * 1024 * 1024 * 1024),
+                free_bytes: Some(32 * 1024 * 1024 * 1024),
+                volume_id: Some("not-a-volume-guid".into()),
+            },
         ]);
 
         let output = render_text(&snapshot);
@@ -2208,6 +2796,7 @@ mod tests {
             "G: Unsupported FAT32 (Fixed) — ID volume-g — ineligible: filesystem is not NTFS/ReFS"
         ));
         assert!(output.contains("H: Unidentified NTFS (Fixed) — identity unknown — ineligible: stable volume identity is unavailable"));
+        assert!(output.contains("(no drive letter) Malformed path NTFS (Fixed) — ID not-a-volume-guid — ineligible: no safe canonical target path"));
     }
 
     #[test]
@@ -2298,6 +2887,340 @@ mod tests {
         assert!(rendered.contains("Windows host RAM"));
         assert!(rendered.contains("C:"));
         assert!(rendered.contains("I:"));
+    }
+
+    #[test]
+    fn config_draft_builds_native_targets_from_eligible_mounts() {
+        let mut snapshot = fixture_snapshot();
+        snapshot.platform = RuntimePlatform::NativeLinux;
+        snapshot.windows = None;
+        snapshot.block_devices = vec![fixture_block_device()];
+
+        let candidates = draft_volume_candidates(&snapshot, unix_millis());
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].display.contains("/data"));
+        assert_eq!(candidates[0].free_bytes, 200 * 1024 * 1024 * 1024);
+
+        let swap = materialize_draft_target(
+            &candidates[0],
+            DraftTargetRole::FallbackSwap,
+            2 * 1024 * 1024 * 1024,
+        )
+        .expect("native swap request materializes");
+        let origin = materialize_draft_target(
+            &candidates[0],
+            DraftTargetRole::RamSharedOrigin,
+            4 * 1024 * 1024 * 1024,
+        )
+        .expect("native origin request materializes");
+        let profile = ResourceProfile {
+            schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+            caps: TierCaps::default(),
+            targets: vec![swap, origin],
+        };
+        let profile_text = profile.to_toml().expect("draft profile encodes");
+        let plan = build_resource_plan(&snapshot, Some(&profile_text))
+            .expect("native selected targets plan read-only");
+
+        assert_eq!(plan.status, "ready_for_review");
+        assert!(!plan.apply_enabled);
+        assert!(!plan.writes_performed);
+        assert_eq!(
+            plan.targets[0].volume_identity,
+            "filesystem:fs-uuid;device:wwn:wwn-123"
+        );
+        assert_eq!(plan.targets[0].requested_bytes, 2 * 1024 * 1024 * 1024);
+        assert_eq!(plan.targets[1].requested_bytes, 4 * 1024 * 1024 * 1024);
+        assert!(profile_text.contains("linux_file_origin_request"));
+    }
+
+    #[test]
+    fn config_draft_builds_wsl_targets_from_unique_eligible_volumes() {
+        let snapshot = fixture_snapshot();
+        let candidates = draft_volume_candidates(&snapshot, unix_millis());
+        assert_eq!(candidates.len(), 2);
+        let selected = candidates
+            .iter()
+            .find(|candidate| {
+                matches!(
+                    &candidate.storage,
+                    DraftStorageIdentity::Wsl2 { volume_id, .. } if volume_id == "vol-i"
+                )
+            })
+            .expect("I volume remains selectable");
+        assert!(selected.display.contains("I:"));
+
+        let swap = materialize_draft_target(
+            selected,
+            DraftTargetRole::FallbackSwap,
+            2 * 1024 * 1024 * 1024,
+        )
+        .expect("WSL fallback selection materializes");
+        let origin = materialize_draft_target(
+            selected,
+            DraftTargetRole::RamSharedOrigin,
+            4 * 1024 * 1024 * 1024,
+        )
+        .expect("WSL origin selection materializes");
+        let profile = ResourceProfile {
+            schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+            caps: TierCaps::default(),
+            targets: vec![swap, origin],
+        };
+        let profile_text = profile.to_toml().expect("WSL draft profile encodes");
+        let plan = build_resource_plan(&snapshot, Some(&profile_text))
+            .expect("selected WSL targets plan read-only");
+
+        assert_eq!(plan.status, "ready_for_review");
+        assert_eq!(
+            plan.targets[0].path,
+            "I:\\wsl\\ramshared\\fallback-swap.vhdx"
+        );
+        assert_eq!(plan.targets[1].path, "I:\\wsl\\ramshared\\origin.vhdx");
+        assert!(
+            plan.targets
+                .iter()
+                .all(|target| target.volume_identity == "vol-i")
+        );
+        assert!(!plan.apply_enabled);
+        assert!(!plan.writes_performed);
+    }
+
+    #[test]
+    fn config_draft_builds_wsl_volume_guid_target_without_drive_letter() {
+        let mut snapshot = fixture_snapshot();
+        let volume_guid = r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\";
+        snapshot
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .volumes
+            .push(WindowsVolume {
+                drive_letter: None,
+                label: Some("Unlettered data".into()),
+                file_system: Some("NTFS".into()),
+                drive_type: "Fixed".into(),
+                size_bytes: Some(300 * 1024 * 1024 * 1024),
+                free_bytes: Some(200 * 1024 * 1024 * 1024),
+                volume_id: Some(volume_guid.into()),
+            });
+
+        let candidates = draft_volume_candidates(&snapshot, unix_millis());
+        let selected = candidates
+            .iter()
+            .find(|candidate| {
+                matches!(
+                    &candidate.storage,
+                    DraftStorageIdentity::Wsl2 { volume_id, drive_letter: None }
+                        if volume_id == volume_guid
+                )
+            })
+            .expect("canonical volume-GUID target is selectable without a drive letter");
+        let target = materialize_draft_target(
+            selected,
+            DraftTargetRole::RamSharedOrigin,
+            1024 * 1024 * 1024,
+        )
+        .expect("volume-GUID origin request materializes");
+        let profile = ResourceProfile {
+            schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+            caps: TierCaps::default(),
+            targets: vec![target],
+        };
+        let profile_text = profile.to_toml().expect("volume-GUID profile encodes");
+        let plan = build_resource_plan(&snapshot, Some(&profile_text))
+            .expect("volume-GUID target plans against its unique volume");
+
+        assert_eq!(plan.status, "ready_for_review");
+        assert_eq!(
+            plan.targets[0].path,
+            r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\wsl\ramshared\origin.vhdx"
+        );
+        assert_eq!(plan.targets[0].volume_identity, volume_guid.to_lowercase());
+    }
+
+    #[test]
+    fn config_draft_refuses_ineligible_ambiguous_stale_and_overflowed_targets() {
+        let now = unix_millis();
+        let mut ambiguous_linux = fixture_snapshot();
+        ambiguous_linux.platform = RuntimePlatform::NativeLinux;
+        ambiguous_linux.windows = None;
+        ambiguous_linux.block_devices = vec![fixture_block_device(), fixture_block_device()];
+        assert!(draft_volume_candidates(&ambiguous_linux, now).is_empty());
+
+        let mut stale_windows = fixture_snapshot();
+        stale_windows
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .observed_unix_ms = Some(now.saturating_sub(STORAGE_SAMPLE_MAX_AGE_MS + 1));
+        assert!(draft_volume_candidates(&stale_windows, now).is_empty());
+
+        let mut unsupported_windows = fixture_snapshot();
+        unsupported_windows
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .volumes[1]
+            .drive_type = "Removable".into();
+        assert_eq!(draft_volume_candidates(&unsupported_windows, now).len(), 1);
+
+        let mut duplicate_volume_id = fixture_snapshot();
+        let duplicate = duplicate_volume_id
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .volumes[1]
+            .clone();
+        duplicate_volume_id
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .volumes
+            .push(duplicate);
+        assert_eq!(draft_volume_candidates(&duplicate_volume_id, now).len(), 1);
+
+        let mut malformed_unlettered = fixture_snapshot();
+        malformed_unlettered
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .volumes
+            .push(WindowsVolume {
+                drive_letter: None,
+                label: Some("Malformed identity".into()),
+                file_system: Some("NTFS".into()),
+                drive_type: "Fixed".into(),
+                size_bytes: Some(64 * 1024 * 1024 * 1024),
+                free_bytes: Some(32 * 1024 * 1024 * 1024),
+                volume_id: Some("not-a-volume-guid".into()),
+            });
+        assert_eq!(draft_volume_candidates(&malformed_unlettered, now).len(), 2);
+
+        assert!(parse_draft_size_mib("0").is_err());
+        assert!(parse_draft_size_mib("18446744073709551615").is_err());
+        assert!(parse_draft_size_mib("-1").is_err());
+        assert_eq!(parse_draft_size_mib("4096").unwrap(), 4096 * 1024 * 1024);
+    }
+
+    #[test]
+    fn resource_plan_aggregates_case_aliases_before_capacity_check() {
+        let mut snapshot = fixture_snapshot();
+        snapshot
+            .windows
+            .as_mut()
+            .expect("Windows inventory fixture")
+            .volumes[0]
+            .free_bytes = Some(65 * 1024 * 1024 * 1024);
+        let profile = format!(
+            r#"
+schema_version = 1
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = "vol-c"
+path = "C:\\wsl\\ramshared\\fallback.vhdx"
+bytes = {}
+
+[[targets]]
+kind = "wsl_origin"
+windows_volume_id = "VOL-C"
+path = "C:\\wsl\\ramshared\\origin.vhdx"
+allocated_bytes = {}
+"#,
+            30_u64 * 1024 * 1024 * 1024,
+            30_u64 * 1024 * 1024 * 1024
+        );
+
+        let plan = build_resource_plan(&snapshot, Some(&profile))
+            .expect("case variants resolve to the same current volume");
+
+        assert_eq!(plan.status, "blocked");
+        assert_eq!(plan.targets[0].status, "insufficient_space");
+        assert_eq!(plan.targets[1].status, "insufficient_space");
+        assert_eq!(plan.targets[0].required_free_bytes, 70 * 1024 * 1024 * 1024);
+        assert_eq!(plan.targets[0].volume_identity, "vol-c");
+        assert!(!plan.apply_enabled);
+    }
+
+    #[test]
+    fn config_draft_save_requires_owned_parent_uses_mode_0600_and_never_overwrites() {
+        let directory = draft_test_directory("save");
+        let path = directory.join("profile.toml");
+        let first = "schema_version = 1\n";
+        let saved = save_profile_draft(&path, first).expect("draft saves securely");
+        assert_eq!(saved, path);
+        assert_eq!(
+            fs::read_to_string(&path).expect("draft content reads back"),
+            first
+        );
+        let metadata = fs::metadata(&path).expect("draft metadata");
+        assert_eq!(metadata.uid(), rustix::process::geteuid().as_raw());
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert!(save_profile_draft(&path, "changed\n").is_err());
+        assert_eq!(fs::read_to_string(&path).expect("original remains"), first);
+
+        let unsafe_directory = directory.join("unsafe");
+        fs::create_dir(&unsafe_directory).expect("unsafe fixture directory creates");
+        let mut permissions = fs::metadata(&unsafe_directory)
+            .expect("unsafe directory metadata")
+            .permissions();
+        permissions.set_mode(0o777);
+        fs::set_permissions(&unsafe_directory, permissions).expect("unsafe mode applies");
+        assert!(save_profile_draft(&unsafe_directory.join("blocked.toml"), first).is_err());
+
+        fs::remove_dir_all(directory).expect("draft fixtures removed");
+    }
+
+    #[test]
+    fn config_draft_wizard_saves_only_after_review_and_explicit_confirmation() {
+        let snapshot = fixture_snapshot();
+        let directory = draft_test_directory("wizard");
+        let output_path = directory.join("profile.toml");
+        let mut input = io::Cursor::new("origin\n2\n4096\nswap\n1\n1024\ndone\nSAVE\n");
+        let mut output = Vec::new();
+
+        run_draft_wizard_with_io(&snapshot, &output_path, &mut input, &mut output)
+            .expect("confirmed draft wizard completes");
+
+        let output = String::from_utf8(output).expect("wizard output is UTF-8");
+        assert!(output.contains("Windows host RAM"));
+        assert!(output.contains("I:\\wsl\\ramshared\\origin.vhdx"));
+        assert!(output.contains("Draft only: no swap, origin, GPU, .wslconfig"));
+        assert!(output.contains("Validated draft saved"));
+        let profile_text = fs::read_to_string(&output_path).expect("saved draft reads");
+        let profile = ResourceProfile::parse(&profile_text).expect("saved profile parses");
+        assert_eq!(profile.targets.len(), 2);
+        assert!(profile.targets.iter().any(|target| matches!(
+            target,
+            ResourceTarget::WslOrigin { windows_volume_id, .. } if windows_volume_id == "vol-i"
+        )));
+        assert!(profile.targets.iter().any(|target| matches!(
+            target,
+            ResourceTarget::WslFallback { windows_volume_id, .. } if windows_volume_id == "vol-c"
+        )));
+
+        let canceled_path = directory.join("canceled.toml");
+        let mut input = io::Cursor::new("swap\n1\n1024\ndone\nNO\n");
+        let mut output = Vec::new();
+        run_draft_wizard_with_io(&snapshot, &canceled_path, &mut input, &mut output)
+            .expect("declined draft is a successful cancellation");
+        assert!(!canceled_path.exists());
+
+        fs::remove_dir_all(directory).expect("wizard fixtures removed");
+    }
+
+    fn draft_test_directory(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time follows Unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-config-draft-{label}-{}-{timestamp}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("temporary draft directory creates");
+        path
     }
 
     #[test]
