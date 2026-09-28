@@ -538,6 +538,30 @@ test("coverage_child_runner_uses_private_target_without_shell_and_propagates_fai
   }
 });
 
+test("coverage_child_runner_can_include_ignored_tests_for_an_explicit_hardware_free_slice", () => {
+  const runLlvmCov = checkerApi("runLlvmCov");
+  const root = mkdtempSync(join(tmpdir(), "ramshared-cov-ignored-"));
+  try {
+    const cargoRoot = join(root, "cargo-root");
+    mkdirSync(cargoRoot);
+    writeFileSync(join(cargoRoot, "Cargo.toml"), "[workspace]\n");
+    const reportPath = join(root, "result.json");
+    const targetPath = join(root, "private-target");
+    runLlvmCov(["ramshared-vulkan"], reportPath, targetPath, {
+      repoRoot: cargoRoot,
+      includeIgnored: true,
+      spawnCommand: (command, args) => {
+        assert.equal(command, "timeout");
+        assert.deepEqual(args.slice(args.indexOf("--")), ["--", "--test-threads=1", "--include-ignored"]);
+        writeFileSync(reportPath, "{}\n");
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("coverage_child_deadline_is_terminal_and_fail_closed", () => {
   const runLlvmCov = checkerApi("runLlvmCov");
   const root = mkdtempSync(join(tmpdir(), "ramshared-cov-child-timeout-"));
