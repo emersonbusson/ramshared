@@ -427,6 +427,39 @@ fn resource_profile_rejects_oversized_or_controlled_identity_and_paths() {
 }
 
 #[test]
+fn resource_profile_rejects_ambiguous_windows_target_paths() {
+    let ambiguous_paths = [
+        r"C:\wsl\\swap.vhdx",
+        r"C:\wsl\.\swap.vhdx",
+        r"C:\wsl\..\swap.vhdx",
+        r"C:\wsl\swap.vhdx:stream",
+        r"C:\wsl\swap.vhdx. ",
+        r"C:\wsl\NUL.txt",
+        r"C:\wsl\swap.vhdx\",
+        r"C:\",
+        r"C:\wsl/swap.vhdx",
+        r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\wsl\..\swap.vhdx",
+    ];
+
+    for path in ambiguous_paths {
+        let profile = ResourceProfile {
+            schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+            caps: TierCaps::default(),
+            targets: vec![ResourceTarget::WslFallback {
+                windows_volume_id: "volume-guid-a".into(),
+                path: path.into(),
+                bytes: 1024,
+            }],
+        };
+
+        assert!(
+            profile.validate_for(ResourcePlatform::Wsl2).is_err(),
+            "ambiguous Windows path must be rejected: {path:?}"
+        );
+    }
+}
+
+#[test]
 fn resource_profile_errors_render_without_losing_the_failed_gate() {
     assert!(
         ResourceProfileError::Parse("bad TOML".into())

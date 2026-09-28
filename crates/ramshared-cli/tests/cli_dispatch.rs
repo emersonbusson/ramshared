@@ -108,6 +108,36 @@ fn cli_resource_config_json_discovers_platform_resources_read_only() {
 }
 
 #[test]
+fn cli_resource_config_plan_loads_an_explicit_profile_without_applying_it() {
+    let path = std::env::temp_dir().join(format!(
+        "ramshared-resource-profile-{}-{}.toml",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&path, "schema_version = 1\n[caps]\nzram_bytes = 0\n").unwrap();
+    let path_text = path.to_string_lossy().into_owned();
+
+    let output = run_cli(&["config", "plan", "--json", "--profile", &path_text]);
+    let cleanup = fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        cleanup.is_ok(),
+        "temporary profile was not modified or retained"
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"].as_u64(), Some(1));
+    assert_eq!(value["profile_state"].as_str(), Some("validated"));
+    assert_eq!(
+        value["status"].as_str(),
+        Some("profile_loaded_no_storage_targets")
+    );
+    assert_eq!(value["user_caps"]["zram_bytes"].as_u64(), Some(0));
+    assert_eq!(value["writes_performed"].as_bool(), Some(false));
+    assert_eq!(value["apply_enabled"].as_bool(), Some(false));
+}
+
+#[test]
 fn cli_check_and_doctor_report_decision_json_and_text() {
     let check_json = run_cli(&["check", "--json"]);
     let check_value: serde_json::Value = serde_json::from_slice(&check_json.stdout).unwrap();

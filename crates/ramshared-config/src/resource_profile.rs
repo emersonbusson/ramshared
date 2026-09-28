@@ -359,10 +359,7 @@ fn managed_path_identity(target: &ResourceTarget) -> ManagedPathIdentity {
             windows_volume_id,
             path,
             ..
-        } => ManagedPathIdentity::Windows(
-            windows_volume_id.to_ascii_lowercase(),
-            path.replace('/', "\\").to_ascii_lowercase(),
-        ),
+        } => ManagedPathIdentity::Windows(windows_volume_id.to_lowercase(), path.to_lowercase()),
     }
 }
 
@@ -434,19 +431,97 @@ fn validate_windows_path(path: &str) -> Result<(), ResourceProfileError> {
     let drive_path = path.as_bytes().get(1) == Some(&b':')
         && path.as_bytes()[0].is_ascii_alphabetic()
         && path.as_bytes().get(2) == Some(&b'\\');
-    let volume_path = path.starts_with(r"\\?\Volume{") && path.contains("}\\");
+    let volume_prefix = r"\\?\Volume{";
+    let volume_path = path
+        .get(..volume_prefix.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(volume_prefix));
     if path.is_empty() || path.len() > MAX_WINDOWS_PATH_BYTES || (!drive_path && !volume_path) {
         return Err(invalid(
             "target.path",
             "must be an absolute drive or volume-GUID path",
         ));
     }
-    if path.chars().any(char::is_control)
-        || path.split(['\\', '/']).any(|component| component == "..")
-    {
-        return Err(invalid("target.path", "contains an unsafe path component"));
+
+    let components_start = if drive_path {
+        3
+    } else {
+        let guid_start = volume_prefix.len();
+        let guid_end = guid_start + 36;
+        let guid = path.get(guid_start..guid_end).ok_or_else(|| {
+            invalid(
+                "target.path",
+                "volume path must contain a canonical volume GUID",
+            )
+        })?;
+        if !is_canonical_guid(guid)
+            || !path
+                .as_bytes()
+                .get(guid_end..guid_end + 2)
+                .is_some_and(|separator| separator == b"}\\")
+        {
+            return Err(invalid(
+                "target.path",
+                "volume path must contain a canonical volume GUID",
+            ));
+        }
+        guid_end + 2
+    };
+    let Some(remainder) = path.get(components_start..) else {
+        return Err(invalid("target.path", "has an invalid root"));
+    };
+    if remainder.is_empty() || path.contains('/') || path.chars().any(char::is_control) {
+        return Err(invalid(
+            "target.path",
+            "must name a file using canonical Windows separators and characters",
+        ));
+    }
+
+    for component in remainder.split('\\') {
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.ends_with(' ')
+            || component.ends_with('.')
+            || component.contains(':')
+            || component
+                .chars()
+                .any(|character| matches!(character, '<' | '>' | '"' | '|' | '?' | '*'))
+            || component.encode_utf16().count() > 255
+            || is_reserved_windows_device_name(component)
+        {
+            return Err(invalid("target.path", "contains an unsafe path component"));
+        }
     }
     Ok(())
+}
+
+fn is_canonical_guid(guid: &str) -> bool {
+    guid.len() == 36
+        && guid.bytes().enumerate().all(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn is_reserved_windows_device_name(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or(component)
+        .trim_end_matches([' ', '.'])
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|prefix| {
+        stem.strip_prefix(prefix).is_some_and(|suffix| {
+            (suffix.len() == 1 && suffix.as_bytes()[0].is_ascii_digit() && suffix != "0")
+                || matches!(suffix, "¹" | "²" | "³")
+        })
+    })
 }
 
 fn validate_positive_bytes(field: &'static str, bytes: u64) -> Result<(), ResourceProfileError> {

@@ -5,16 +5,22 @@
 
 ## Status
 
-**partial** · read-only discovery and display are implemented in the shared
-CLI. A v1 typed profile model validates variable ceilings and stable storage
-targets, but the CLI does not yet load or persist it. No settings are applied,
-and native Linux live qualification has not been run in this WSL2 environment.
+**partial** · read-only discovery, a v1 typed multi-target profile, and
+`ramshared config plan` are implemented for native Linux and WSL2. The command
+loads the root-owned default profile or an explicit bounded draft, binds its
+storage targets to fresh inventory, and reports capacity/refusal reasons. It
+does not persist profiles, offer target selection, benchmark disks, or apply
+settings. Native Linux target qualification has not run on a native host.
 
 ## Delivered contract
 
 - `ramshared config` opens a read-only terminal view; `config show` prints a
   human-readable inventory and `config show --json` prints a typed snapshot.
-  Unsupported mutation actions fail during parsing before resource discovery.
+  `config plan [--json] [--profile PATH]` loads the root-owned
+  `/etc/ramshared/resource-profile.toml` when present, or a user-supplied
+  bounded draft. A missing default profile is reported as `not_configured`; an
+  explicitly requested missing profile fails. Unsupported mutation actions
+  fail during parsing before resource discovery.
 - Linux reads RAM and swap counters from the active guest and enumerates block
   devices with `lsblk`. It joins devices to `/proc/self/mountinfo` by
   `MAJ:MIN` and samples filesystem total/free capacity through `statvfs`.
@@ -26,15 +32,28 @@ and native Linux live qualification has not been run in this WSL2 environment.
   Known network-backed transports and missing/unrecognized transport identity,
   removable/USB, read-only, unmounted, unsupported, or ambiguous candidates
   remain visible with a refusal reason.
+- A native Linux plan binds a configured target to filesystem UUID, stable
+  backing-device identity, exact current mount ID, device number, writable
+  eligibility, and fresh `statvfs` free capacity. It reports the checked
+  target-plus-10-GiB-per-volume reserve requirement; it does not create a
+  file, activate swap, select a disk, or claim native-host qualification.
 - Under WSL2, the view labels guest RAM separately from Windows host physical
   memory and commit headroom, and lists fixed Windows volumes with their
   current free/total bytes and stable volume IDs in JSON. Native Linux never
   queries a Windows host provider. A WSL guest filesystem is never offered as
   a write target until its exact backing Windows volume and host free capacity
   are bound to that guest filesystem; guest VHDX free space alone is not proof.
+- A WSL2 plan binds a configured target to one fresh Windows volume identity,
+  confirms the drive-letter or volume-GUID path resolves under that volume,
+  checks fixed NTFS/ReFS eligibility and free capacity, and rejects aliases
+  where two profile entries resolve to one volume-relative path. Unknown,
+  stale, ambiguous, mismatched, or inconsistent samples are refusals.
 - The view explicitly says disk speed was not measured and GPU/VRAM budgets
   were not sampled. It opens no GPU context and does not modify swap, an
   origin, a profile, `.wslconfig`, a driver, or a running RamShared tier.
+- Plan output states `writes_performed=false` and `apply_enabled=false` in
+  both text/JSON forms. Caps are displayed as ceilings only; the plan does
+  not authorize them against live GPU, ZRAM, or origin budgets.
 - `ramshared-config::resource_profile` parses a 64 KiB-bounded TOML profile
   with schema version 1, variable byte ceilings, adapter-bound GPU caps, and
   multiple platform-bound storage targets. A profile can represent swap and
@@ -43,19 +62,22 @@ and native Linux live qualification has not been run in this WSL2 environment.
   managed paths, unbound identities, and invalid allocation metadata. It
   computes a checked free-space requirement per stable volume, summing every
   managed allocation and adding the SPEC's 10 GiB reserve once per volume; it
-  does not inspect live volume free space or authorize writes. This floor is
-  not a RAM, swap, or VRAM minimum. The profile is not wired to CLI/storage
-  providers yet.
+  does not inspect live volume free space or authorize writes. Windows paths
+  reject ambiguous components, alternate data streams, reserved device names,
+  and malformed volume GUIDs. The loader rejects symlinks and oversized or
+  non-regular inputs; the system profile must be root-owned, single-link, mode
+  0600, under a root-owned non-writable directory. This floor is not a RAM,
+  swap, or VRAM minimum. No profile save or storage mutation provider exists.
 
 ## Files
 
 | Path | Change |
 | --- | --- |
-| `crates/ramshared-cli/src/main.rs` | `config` parsing, dispatch, and help text; only interactive and read-only `show [--json]` modes are accepted. |
-| `crates/ramshared-cli/src/resource_config.rs` | Platform detection, dynamic memory/swap snapshots, bounded Linux and Windows inventory, exact mount identity, local transport refusal, partition/whole-disk eligibility, JSON/text rendering, and read-only TUI. |
-| `crates/ramshared-cli/tests/cli_dispatch.rs` | Executes the built CLI for JSON discovery and confirms mutation commands refuse before action. |
-| `crates/ramshared-config/src/resource_profile.rs` | Versioned, bounded TOML policy model; platform-bound storage targets; variable tier caps; checked disk-capacity arithmetic. |
-| `crates/ramshared-config/tests/resource_profile.rs` | Red/green tests for variable caps, overflow, profile round trips, platform mismatch, malformed identity, and path refusal. |
+| `crates/ramshared-cli/src/main.rs` | `config` parsing, dispatch, help text, and read-only `plan [--json] [--profile PATH]`; unsupported mutation actions remain rejected. |
+| `crates/ramshared-cli/src/resource_config.rs` | Platform detection, memory/swap snapshots, bounded Linux and Windows inventory, read-only profile loading/planning, stable target binding, stale/inconsistent sample refusals, path alias detection, JSON/text rendering, and read-only TUI. |
+| `crates/ramshared-cli/tests/cli_dispatch.rs` | Executes the built CLI for JSON discovery and explicit-profile plan; confirms plan does not apply settings and mutation commands refuse before action. |
+| `crates/ramshared-config/src/resource_profile.rs` | Versioned, bounded TOML policy model; platform-bound storage targets; variable tier caps; checked capacity arithmetic; canonical Windows target paths. |
+| `crates/ramshared-config/tests/resource_profile.rs` | Tests variable caps, overflow, profile round trips, platform mismatch, malformed identity, duplicate targets, and Windows path refusal. |
 | `docs/specs/no-milestone/resource-configuration-center/SPEC.md` | Names implemented profile and inventory tests while retaining the full configuration contract as incomplete. |
 
 ## Validation
@@ -67,23 +89,31 @@ and native Linux live qualification has not been run in this WSL2 environment.
   failed on an iSCSI fixture and passed after network and unproven transports
   were rejected; the test confirms independent NVMe and SATA candidates can
   both be marked eligible. It does not implement user selection.
-- Full CLI tests: `cargo test -j 1 -p ramshared-cli` passed 379 unit tests and
-  11 CLI integration tests.
-- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 6
-  integration tests. The initial integration-test run failed to compile
-  because `resource_profile` did not exist; it passed after the typed module
-  was added. The named profile slice gate passed at **95.5% (169/177 lines)**.
+- RED/GREEN: `resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target`
+  first exposed that the plan accepted two spellings of the same volume-relative
+  file as `storage_ready`; the planner now refuses the second entry. The CLI
+  parser regression also reproduced `--profile --json` being accepted as a
+  profile filename; an option-looking value now fails before discovery.
+- Full CLI tests: `cargo test -j 1 -p ramshared-cli` passed 385 unit tests and
+  12 CLI integration tests, including
+  `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`.
+- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 9
+  profile integration tests, including malformed/ambiguous Windows target
+  paths. The profile slice gate passed at **91.4% (299/327 lines)**.
 - CLI E2E: `cli_resource_config_json_discovers_platform_resources_read_only`
   executes the built binary under the current WSL2 kernel, parses its JSON,
   checks platform and resource fields, and verifies `config apply` refuses.
-- Static checks: `cargo clippy -j 1 -p ramshared-cli --all-targets -- -D warnings`
-  passed. `cargo fmt --all -- --check`, `git diff --check`, and
-  `./scripts/docs-check.sh` passed after the final source and documentation
-  updates.
+- CLI plan E2E: `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`
+  loads a temporary user-readable caps-only draft and verifies no write or
+  apply permission is reported. It does not prove a live storage-target plan;
+  the target identity/capacity paths are currently covered by unit fixtures.
+- Static checks: `cargo clippy -j 1 -p ramshared-cli -p ramshared-config
+  --all-targets --all-features -- -D warnings` passed. `cargo fmt --all -- --check`,
+  `git diff --check`, and the full `./scripts/docs-check.sh` passed after the
+  current source and SPEC/IMPL updates.
 - Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli
   --files crates/ramshared-cli/src/resource_config.rs --min 80` passed at
-  **88.3% (1,131/1,281 lines)** after network and unclassified-transport
-  refusals were added.
+  **86.0% (1,696/1,971 lines)** for discovery and read-only planning.
 - PowerShell 5.1 manufactured/static harnesses passed for
   `Test-WindowsStorageMatrixStatic.ps1`,
   `Test-RamSharedWslLifecycleRecoveryStatic.ps1`,
@@ -119,19 +149,19 @@ and native Linux live qualification has not been run in this WSL2 environment.
 
 ## Gaps
 
-- The UI cannot select or persist a swap volume, configure variable ZRAM/
-  VRAM/origin ceilings, create a native Linux swapfile or file origin, stage
-  WSL fallback swap settings, benchmark disks, or recommend a speed leader.
+- The TUI cannot select or persist a swap volume, edit tier ceilings, create a
+  native Linux swapfile/file origin, stage WSL fallback swap settings,
+  benchmark disks, or recommend a speed leader. `config plan` validates only
+  targets already present in a profile file; it does not save the draft.
 - The WSL memory ceiling stays read-only by SPEC. The typed profile contains
   no host-RAM setting; only ZRAM, per-adapter VRAM, origin, and platform-owned
   fallback swap targets are in its scope.
-- The typed profile has no CLI loader or persistence yet. There is no
-  privileged Linux helper, Windows configuration helper, transaction log, or
-  apply/rollback flow.
-- The profile now represents multiple swap/origin targets and groups checked
-  capacity by stable volume identity. It still does not let a user select or
-  save those targets from the CLI, bind a live candidate to a saved target, or
-  apply the settings.
+- The typed profile loader and read-only plan are wired to live inventory.
+  There is no profile writer, privileged Linux helper, Windows configuration
+  helper, transaction log, or apply/rollback flow.
+- The profile represents multiple swap/origin targets and the plan binds each
+  configured target to its current volume/mount identity. It still does not
+  let a user select candidates in the TUI or save profile changes.
 - Native Linux and WSL2 mutation flows, per-filesystem allocation behavior,
   GPU adapter selection, and storage benchmark behavior remain unqualified.
 - The active reliability PARTIAL gates listed in `docs/reliability/GAP-REGISTER.md`
@@ -148,6 +178,6 @@ changes active swap, an origin, GPU allocation, or platform configuration.
 
 | RF | ITEM | Status |
 | --- | --- | --- |
-| RF-1..RF-2, RF-5, RF-13 | ITEM-1..ITEM-3 | Read-only discovery implemented; native live E2E remains open. |
-| RF-3, RF-5, RF-7..RF-8, RF-12 | ITEM-1 | Typed schema and validation only; no profile loading, live capacity admission, or configuration write is exposed. |
+| RF-1..RF-2, RF-5, RF-13 | ITEM-1..ITEM-3 | Read-only discovery and target plan implemented; native live E2E remains open. |
+| RF-3, RF-5, RF-7..RF-8, RF-12 | ITEM-1 | Typed schema, bounded loading, stable identity/capacity plan; no profile persistence or configuration write is exposed. |
 | RF-3..RF-4, RF-6..RF-12 | ITEM-4..ITEM-8 | Provider integration, selection, mutation, benchmark, and live qualification remain incomplete. |

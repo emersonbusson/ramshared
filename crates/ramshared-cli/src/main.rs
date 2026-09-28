@@ -259,11 +259,42 @@ fn parse_config_mode(options: &[String]) -> Result<ConfigMode, CliParseError> {
         [command, format] if command == "show" && format == "--json" => {
             Ok(ConfigMode::Show { json: true })
         }
+        [command, ..] if command == "plan" => parse_config_plan(&options[1..]),
         _ => Err(CliParseError::InvalidOption {
             command: "config",
             options: options.to_vec(),
         }),
     }
+}
+
+fn parse_config_plan(options: &[String]) -> Result<ConfigMode, CliParseError> {
+    let mut json = false;
+    let mut profile_path = None;
+    let mut index = 0;
+    while index < options.len() {
+        match options[index].as_str() {
+            "--json" if !json => json = true,
+            "--profile" if profile_path.is_none() && index + 1 < options.len() => {
+                index += 1;
+                let path = options[index].as_str();
+                if path.is_empty() || path.starts_with("--") {
+                    return Err(CliParseError::InvalidOption {
+                        command: "config",
+                        options: options.to_vec(),
+                    });
+                }
+                profile_path = Some(path.to_string());
+            }
+            _ => {
+                return Err(CliParseError::InvalidOption {
+                    command: "config",
+                    options: options.to_vec(),
+                });
+            }
+        }
+        index += 1;
+    }
+    Ok(ConfigMode::Plan { json, profile_path })
 }
 
 fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
@@ -726,7 +757,7 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
     let _ = writeln!(
         stderr,
-        "  ramshared config [show [--json]]  # cross-platform resource inventory"
+        "  ramshared config [show [--json] | plan [--json] [--profile PATH]]"
     );
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
     let _ = writeln!(
@@ -2039,7 +2070,7 @@ mod tests {
     }
 
     #[test]
-    fn config_command_accepts_only_interactive_or_read_only_show_modes() {
+    fn config_command_accepts_interactive_show_and_read_only_plan_modes() {
         assert_eq!(
             parse_cli_command(&cli_args(&["config"])).expect("interactive config parses"),
             CliCommand::Config {
@@ -2058,8 +2089,56 @@ mod tests {
                 mode: ConfigMode::Show { json: true },
             }
         );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "plan"])).expect("plan parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: false,
+                    profile_path: None,
+                },
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "plan",
+                "--json",
+                "--profile",
+                "/tmp/draft.toml",
+            ]))
+            .expect("profile-backed json plan parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: true,
+                    profile_path: Some("/tmp/draft.toml".into()),
+                },
+            }
+        );
         assert!(parse_cli_command(&cli_args(&["config", "apply"])).is_err());
         assert!(parse_cli_command(&cli_args(&["config", "show", "--write"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "plan", "--profile"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "plan", "--profile", "--json"])).is_err());
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "plan", "--profile", " draft.toml "]))
+                .expect("profile path whitespace is preserved"),
+            CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: false,
+                    profile_path: Some(" draft.toml ".into()),
+                },
+            }
+        );
+        assert!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "plan",
+                "--profile",
+                "a",
+                "--profile",
+                "b"
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -2080,6 +2159,31 @@ mod tests {
             actions.calls,
             vec![CliCommand::Config {
                 mode: ConfigMode::Show { json: true },
+            }]
+        );
+    }
+
+    #[test]
+    fn config_plan_dispatches_to_read_only_action() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit = run_from_args(
+            &cli_args(&["config", "plan", "--json"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(
+            actions.calls,
+            vec![CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: true,
+                    profile_path: None,
+                },
             }]
         );
     }

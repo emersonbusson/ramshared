@@ -229,15 +229,17 @@ check; apply does not disable prior swap.
   `resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths`,
   `resource_profile_rejects_zero_or_unbound_storage_identity`,
   `resource_profile_rejects_oversized_or_controlled_identity_and_paths`, and
-  `resource_profile_errors_render_without_losing_the_failed_gate`.
-- Remaining: CLI profile loading/persistence, typed plan/apply, providers, and
-  live native Linux/WSL2 validation.
+- `resource_profile_rejects_ambiguous_windows_target_paths`.
+- Read-only CLI profile loading and capacity planning are implemented. Remaining:
+  interactive target selection, profile persistence, providers, mutation, and
+  live native Linux/WSL2 target qualification.
 - Cover: ≥80% slice gate; profile slice currently exceeds the target.
 
 **`crates/ramshared-cli/src/resource_config.rs`**
 - Purpose: shared read-only resource observations, native Linux/WSL2 platform
-  detection, verified filesystem inventory, and a read-only TUI. Plan creation,
-  provider actions, and mutation orchestration remain unimplemented.
+  detection, verified filesystem inventory, a read-only TUI, and a typed
+  read-only plan for an existing profile. Provider actions and mutation
+  orchestration remain unimplemented.
 - RF / DT: RF-1..RF-3, RF-9..RF-13; DT-1..DT-7, DT-17..DT-18.
 - Types / fns currently present: `ResourceSnapshot`, `RuntimePlatform`,
   `MountInfo`, `collect_snapshot()`, `parse_mountinfo()`, and `run()`.
@@ -249,12 +251,18 @@ check; apply does not disable prior swap.
   `storage_candidate_requires_current_writable_mount_capacity_and_stable_identity`,
   `network_backed_block_devices_are_ineligible_and_multiple_local_disks_remain_eligible`,
   `mounted_whole_disk_filesystem_uses_its_own_stable_identity`,
-  and `mount_capacity_uses_live_available_blocks_without_writing`.
-- Remaining required tests: `config_plan_never_mutates_host_or_guest`,
+  `mount_capacity_uses_live_available_blocks_without_writing`,
+  `config_plan_never_mutates_host_or_guest`,
+  `native_linux_resource_plan_binds_the_mount_and_device_identity`,
   `resource_policy_rejects_unknown_stale_and_inconsistent_samples`,
-  and `config_apply_is_idempotent_and_refuses_changed_rollback_target`.
-- Cover: implemented inventory slice ≥80%; the full configuration policy is
-  not covered until its remaining source exists.
+  `resource_plan_without_profile_reports_not_configured_and_read_only`,
+  `resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target`, and
+  `profile_loader_rejects_symlinks_oversized_files_and_untrusted_system_profiles`.
+- Remaining required tests: `config_apply_is_idempotent_and_refuses_changed_rollback_target`,
+  `config_apply_requires_durable_intent_before_mutation`, and provider/E2E
+  tests listed below.
+- Cover: the current read-only planning slice passed at 84.6%; apply/provider
+  policy remains unimplemented and uncovered.
 - Kahneman: #13/#17.
 
 **`crates/ramshared-cli/src/resource_config/linux.rs`**
@@ -436,7 +444,13 @@ in place.
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_supports_multiple_targets_on_one_and_multiple_volumes` | unit | #9/#13/#17 | ≥80% |
 | `crates/ramshared-config/src/resource_profile.rs` | `resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_plan_never_mutates_host_or_guest` | unit | #13 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `native_linux_resource_plan_binds_the_mount_and_device_identity` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `resource_policy_rejects_unknown_stale_and_inconsistent_samples` | unit | #13 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `resource_plan_without_profile_reports_not_configured_and_read_only` | unit | #13 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `profile_loader_rejects_symlinks_oversized_files_and_untrusted_system_profiles` | unit | #13/#16 | ≥80% |
+| `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it` | CLI E2E | #13 | N/A — dispatch |
+| `crates/ramshared-cli/src/main.rs` | `config_command_accepts_interactive_show_and_read_only_plan_modes` | unit | #13 | N/A — parser |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_apply_is_idempotent_and_refuses_changed_rollback_target` | unit | #17 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_apply_requires_durable_intent_before_mutation` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `native_origin_plan_accounts_combined_volume_capacity` | unit | #9/#13 | ≥80% |

@@ -1,11 +1,18 @@
 //! Read-only discovery and display for the cross-platform resource settings UI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as FmtWrite};
-use std::io::{self, IsTerminal, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{self, IsTerminal, Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ramshared_config::resource_profile::{
+    MAX_RESOURCE_PROFILE_BYTES, RESOURCE_PROFILE_SCHEMA_VERSION, ResourcePlatform, ResourceProfile,
+    ResourceTarget, StorageVolumeIdentity, TierCaps,
+};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
@@ -13,15 +20,25 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 const LINUX_INVENTORY_OUTPUT_LIMIT: usize = 1024 * 1024;
 const WINDOWS_INVENTORY_OUTPUT_LIMIT: usize = 256 * 1024;
+const DEFAULT_RESOURCE_PROFILE_PATH: &str = "/etc/ramshared/resource-profile.toml";
+const STORAGE_SAMPLE_MAX_AGE_MS: u64 = 30_000;
+const STORAGE_SAMPLE_FUTURE_TOLERANCE_MS: u64 = 5_000;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ConfigMode {
     Interactive,
-    Show { json: bool },
+    Show {
+        json: bool,
+    },
+    Plan {
+        json: bool,
+        profile_path: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -87,6 +104,7 @@ struct MountInfo {
     read_only: bool,
     total_bytes: Option<u64>,
     available_bytes: Option<u64>,
+    capacity_observed_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -117,8 +135,50 @@ struct WindowsVolume {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct WindowsSnapshot {
     observed_utc: String,
+    observed_unix_ms: Option<u64>,
     host_memory: HostMemorySnapshot,
     volumes: Vec<WindowsVolume>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct PlannedTarget {
+    kind: &'static str,
+    volume_identity: String,
+    path: String,
+    requested_bytes: u64,
+    required_free_bytes: u64,
+    observed_free_bytes: Option<u64>,
+    status: &'static str,
+    reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum PlannedPathIdentity {
+    Linux {
+        filesystem_uuid: String,
+        device_identity: String,
+        relative_path: String,
+    },
+    Windows {
+        volume_id: String,
+        relative_path: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ResourcePlan {
+    schema_version: u32,
+    platform: RuntimePlatform,
+    observed_unix_ms: u64,
+    profile_state: &'static str,
+    profile_sha256: Option<String>,
+    user_caps: Option<TierCaps>,
+    targets: Vec<PlannedTarget>,
+    gpu_budget_status: String,
+    warnings: Vec<String>,
+    writes_performed: bool,
+    apply_enabled: bool,
+    status: &'static str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -541,6 +601,7 @@ fn parse_mountinfo(text: &str) -> Result<Vec<MountInfo>, InventoryError> {
             read_only,
             total_bytes: None,
             available_bytes: None,
+            capacity_observed_unix_ms: None,
         });
     }
     Ok(mounts)
@@ -564,6 +625,7 @@ fn attach_mount_inventory(devices: &mut [BlockDevice], mut mounts: Vec<MountInfo
     for mount in &mut mounts {
         (mount.total_bytes, mount.available_bytes) = mount_capacity_bytes(&mount.mountpoint)
             .map_or((None, None), |(total, available)| {
+                mount.capacity_observed_unix_ms = Some(unix_millis());
                 (Some(total), Some(available))
             });
     }
@@ -679,6 +741,7 @@ fn parse_windows_snapshot(text: &str) -> Result<WindowsSnapshot, InventoryError>
 
     Ok(WindowsSnapshot {
         observed_utc,
+        observed_unix_ms: json_u64(&root, "observed_unix_ms"),
         host_memory: HostMemorySnapshot {
             total_bytes: json_u64(&host_memory_value, "total_bytes"),
             free_bytes: json_u64(&host_memory_value, "free_bytes"),
@@ -749,6 +812,7 @@ $volumes = @(Get-Volume -ErrorAction Stop | Where-Object { $_.DriveType -eq 'Fix
 })
 $result = [pscustomobject]@{
     observed_utc = [DateTime]::UtcNow.ToString('o')
+    observed_unix_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
     host_memory = [pscustomobject]@{
         total_bytes = [uint64]$os.TotalVisibleMemorySize * [uint64]1024
         free_bytes = [uint64]$os.FreePhysicalMemory * [uint64]1024
@@ -801,11 +865,7 @@ fn collect_snapshot() -> Result<ResourceSnapshot, InventoryError> {
     } else {
         None
     };
-    let observed_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(u64::MAX as u128) as u64;
+    let observed_unix_ms = unix_millis();
 
     Ok(ResourceSnapshot {
         platform,
@@ -817,6 +877,609 @@ fn collect_snapshot() -> Result<ResourceSnapshot, InventoryError> {
         gpu_budget_status: "not sampled by storage inventory; no GPU context opened".into(),
         warnings,
     })
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn sample_is_fresh(sample_unix_ms: Option<u64>, now_unix_ms: u64) -> bool {
+    sample_unix_ms.is_some_and(|sample| {
+        sample <= now_unix_ms.saturating_add(STORAGE_SAMPLE_FUTURE_TOLERANCE_MS)
+            && now_unix_ms.saturating_sub(sample) <= STORAGE_SAMPLE_MAX_AGE_MS
+    })
+}
+
+fn load_profile_text(
+    path: &Path,
+    require_root_owned: bool,
+) -> Result<Option<String>, InventoryError> {
+    if require_root_owned {
+        let Some(parent) = path.parent() else {
+            return Err(InventoryError(
+                "profile path has no parent directory".into(),
+            ));
+        };
+        match fs::symlink_metadata(parent) {
+            Ok(metadata)
+                if metadata.is_dir()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.uid() == 0
+                    && metadata.mode() & 0o022 == 0 => {}
+            Ok(_) => {
+                return Err(InventoryError(
+                    "system profile directory must be root-owned and not group/world writable"
+                        .into(),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(InventoryError(format!(
+                    "cannot inspect system profile directory: {error}"
+                )));
+            }
+        }
+    }
+
+    let path_metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(InventoryError(format!(
+                "cannot inspect profile file: {error}"
+            )));
+        }
+    };
+    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
+        return Err(InventoryError(
+            "profile input must be a regular, non-symlink file".into(),
+        ));
+    }
+    if path_metadata.len() > MAX_RESOURCE_PROFILE_BYTES as u64 {
+        return Err(InventoryError(
+            "profile input exceeds the 64 KiB limit".into(),
+        ));
+    }
+
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|error| InventoryError(format!("cannot open profile file: {error}")))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|error| InventoryError(format!("cannot inspect open profile: {error}")))?;
+    if !opened_metadata.is_file()
+        || opened_metadata.dev() != path_metadata.dev()
+        || opened_metadata.ino() != path_metadata.ino()
+    {
+        return Err(InventoryError(
+            "profile file changed while it was being opened".into(),
+        ));
+    }
+    if require_root_owned
+        && (opened_metadata.uid() != 0
+            || opened_metadata.mode() & 0o7777 != 0o600
+            || opened_metadata.nlink() != 1)
+    {
+        return Err(InventoryError(
+            "system profile must be a single-link root-owned file with mode 0600".into(),
+        ));
+    }
+
+    let mut content = Vec::with_capacity(path_metadata.len() as usize);
+    file.take((MAX_RESOURCE_PROFILE_BYTES + 1) as u64)
+        .read_to_end(&mut content)
+        .map_err(|error| InventoryError(format!("cannot read profile file: {error}")))?;
+    if content.len() > MAX_RESOURCE_PROFILE_BYTES {
+        return Err(InventoryError(
+            "profile input exceeds the 64 KiB limit".into(),
+        ));
+    }
+    String::from_utf8(content)
+        .map(Some)
+        .map_err(|error| InventoryError(format!("profile input is not UTF-8: {error}")))
+}
+
+fn profile_platform(platform: RuntimePlatform) -> ResourcePlatform {
+    match platform {
+        RuntimePlatform::NativeLinux => ResourcePlatform::NativeLinux,
+        RuntimePlatform::Wsl2 => ResourcePlatform::Wsl2,
+    }
+}
+
+fn resource_volume_identity(target: &ResourceTarget) -> StorageVolumeIdentity {
+    match target {
+        ResourceTarget::LinuxSwapfile {
+            filesystem_uuid,
+            device_identity,
+            ..
+        }
+        | ResourceTarget::LinuxFileOrigin {
+            filesystem_uuid,
+            device_identity,
+            ..
+        } => StorageVolumeIdentity::Linux {
+            filesystem_uuid: filesystem_uuid.clone(),
+            device_identity: device_identity.clone(),
+        },
+        ResourceTarget::WslFallback {
+            windows_volume_id, ..
+        }
+        | ResourceTarget::WslOrigin {
+            windows_volume_id, ..
+        } => StorageVolumeIdentity::Windows {
+            volume_id: windows_volume_id.clone(),
+        },
+    }
+}
+
+fn target_kind_path_and_size(target: &ResourceTarget) -> (&'static str, String, u64) {
+    match target {
+        ResourceTarget::LinuxSwapfile {
+            managed_relative_path,
+            bytes,
+            ..
+        } => ("linux_swapfile", managed_relative_path.clone(), *bytes),
+        ResourceTarget::LinuxFileOrigin {
+            managed_relative_path,
+            allocated_bytes,
+            ..
+        } => (
+            "linux_file_origin",
+            managed_relative_path.clone(),
+            *allocated_bytes,
+        ),
+        ResourceTarget::WslFallback { path, bytes, .. } => ("wsl_fallback", path.clone(), *bytes),
+        ResourceTarget::WslOrigin {
+            path,
+            allocated_bytes,
+            ..
+        } => ("wsl_origin", path.clone(), *allocated_bytes),
+    }
+}
+
+fn volume_identity_text(identity: &StorageVolumeIdentity) -> String {
+    match identity {
+        StorageVolumeIdentity::Linux {
+            filesystem_uuid,
+            device_identity,
+        } => format!("filesystem:{filesystem_uuid};device:{device_identity}"),
+        StorageVolumeIdentity::Windows { volume_id } => volume_id.clone(),
+    }
+}
+
+fn backing_device_identity(device: &BlockDevice) -> Option<&str> {
+    device
+        .parent_hardware_identity
+        .as_deref()
+        .or(device.hardware_identity.as_deref())
+}
+
+fn linux_target_free_bytes(
+    snapshot: &ResourceSnapshot,
+    filesystem_uuid: &str,
+    device_identity: &str,
+    mount_id: u64,
+    now_unix_ms: u64,
+) -> Result<u64, (&'static str, String)> {
+    if snapshot.platform != RuntimePlatform::NativeLinux {
+        return Err((
+            "identity_unavailable",
+            "native Linux targets are unavailable on this platform".into(),
+        ));
+    }
+
+    let mut matched_filesystem = false;
+    for device in &snapshot.block_devices {
+        if device.uuid.as_deref() != Some(filesystem_uuid)
+            || backing_device_identity(device) != Some(device_identity)
+        {
+            continue;
+        }
+        matched_filesystem = true;
+        for mount in &device.mounts {
+            if mount.mount_id != mount_id
+                || device.major_minor.as_deref() != Some(mount.major_minor.as_str())
+            {
+                continue;
+            }
+            let (eligible, reason) = storage_eligibility(device, Some(mount));
+            if !eligible {
+                return Err(("target_ineligible", reason));
+            }
+            if !sample_is_fresh(mount.capacity_observed_unix_ms, now_unix_ms) {
+                return Err((
+                    "stale_sample",
+                    "filesystem free-space sample is missing or stale".into(),
+                ));
+            }
+            let (Some(total), Some(free)) = (mount.total_bytes, mount.available_bytes) else {
+                return Err((
+                    "capacity_unavailable",
+                    "filesystem total/free capacity is unavailable".into(),
+                ));
+            };
+            if free > total {
+                return Err((
+                    "inconsistent_sample",
+                    "filesystem free capacity exceeds its total capacity".into(),
+                ));
+            }
+            return Ok(free);
+        }
+    }
+
+    let reason = if matched_filesystem {
+        "stable filesystem matched but the selected mount identity did not"
+    } else {
+        "stable filesystem and backing-device identity are not present in the inventory"
+    };
+    Err(("identity_unavailable", reason.into()))
+}
+
+fn windows_target_free_bytes(
+    snapshot: &ResourceSnapshot,
+    windows_volume_id: &str,
+    target_path: &str,
+    now_unix_ms: u64,
+) -> Result<u64, (&'static str, String)> {
+    if snapshot.platform != RuntimePlatform::Wsl2 {
+        return Err((
+            "identity_unavailable",
+            "Windows volume targets are only available under WSL2".into(),
+        ));
+    }
+    let Some(windows) = snapshot.windows.as_ref() else {
+        return Err((
+            "identity_unavailable",
+            "Windows host volume inventory is unavailable".into(),
+        ));
+    };
+    if !sample_is_fresh(windows.observed_unix_ms, now_unix_ms) {
+        return Err((
+            "stale_sample",
+            "Windows volume sample is missing or stale".into(),
+        ));
+    }
+    let matches = windows
+        .volumes
+        .iter()
+        .filter(|volume| {
+            volume
+                .volume_id
+                .as_deref()
+                .is_some_and(|observed| observed.eq_ignore_ascii_case(windows_volume_id))
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err((
+            "identity_unavailable",
+            "Windows volume identity is absent or ambiguous".into(),
+        ));
+    }
+    let volume = matches[0];
+    if !windows_path_belongs_to_volume(target_path, volume) {
+        return Err((
+            "identity_unavailable",
+            "selected path does not resolve under the bound Windows volume".into(),
+        ));
+    }
+    if volume.drive_type != "Fixed"
+        || !volume.file_system.as_deref().is_some_and(|filesystem| {
+            filesystem.eq_ignore_ascii_case("NTFS") || filesystem.eq_ignore_ascii_case("ReFS")
+        })
+    {
+        return Err((
+            "target_ineligible",
+            "Windows target is not a fixed NTFS/ReFS volume".into(),
+        ));
+    }
+    let (Some(total), Some(free)) = (volume.size_bytes, volume.free_bytes) else {
+        return Err((
+            "capacity_unavailable",
+            "Windows volume total/free capacity is unavailable".into(),
+        ));
+    };
+    if free > total {
+        return Err((
+            "inconsistent_sample",
+            "Windows free capacity exceeds its total capacity".into(),
+        ));
+    }
+    Ok(free)
+}
+
+fn windows_path_belongs_to_volume(path: &str, volume: &WindowsVolume) -> bool {
+    windows_path_relative_to_volume(path, volume).is_some()
+}
+
+fn windows_path_relative_to_volume(path: &str, volume: &WindowsVolume) -> Option<String> {
+    let normalized_path = path.to_lowercase();
+    let drive_relative = volume.drive_letter.as_deref().and_then(|drive| {
+        let drive = drive.trim_end_matches(':').to_lowercase();
+        normalized_path.strip_prefix(&format!("{drive}:\\"))
+    });
+    let volume_relative = volume.volume_id.as_deref().and_then(|identity| {
+        let prefix = format!("{}\\", identity.trim_end_matches('\\').to_lowercase());
+        normalized_path.strip_prefix(&prefix)
+    });
+    drive_relative.or(volume_relative).map(str::to_owned)
+}
+
+fn planned_path_identity(
+    snapshot: &ResourceSnapshot,
+    target: &ResourceTarget,
+) -> Option<PlannedPathIdentity> {
+    match target {
+        ResourceTarget::LinuxSwapfile {
+            filesystem_uuid,
+            device_identity,
+            managed_relative_path,
+            ..
+        }
+        | ResourceTarget::LinuxFileOrigin {
+            filesystem_uuid,
+            device_identity,
+            managed_relative_path,
+            ..
+        } => Some(PlannedPathIdentity::Linux {
+            filesystem_uuid: filesystem_uuid.clone(),
+            device_identity: device_identity.clone(),
+            relative_path: managed_relative_path.clone(),
+        }),
+        ResourceTarget::WslFallback {
+            windows_volume_id,
+            path,
+            ..
+        }
+        | ResourceTarget::WslOrigin {
+            windows_volume_id,
+            path,
+            ..
+        } => {
+            let windows = snapshot.windows.as_ref()?;
+            let mut matches = windows.volumes.iter().filter(|volume| {
+                volume
+                    .volume_id
+                    .as_deref()
+                    .is_some_and(|observed| observed.eq_ignore_ascii_case(windows_volume_id))
+            });
+            let volume = matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            let relative_path = windows_path_relative_to_volume(path, volume)?;
+            Some(PlannedPathIdentity::Windows {
+                volume_id: windows_volume_id
+                    .trim_end_matches('\\')
+                    .trim_end_matches('/')
+                    .to_lowercase(),
+                relative_path: relative_path.to_lowercase(),
+            })
+        }
+    }
+}
+
+fn unconfigured_resource_plan(snapshot: &ResourceSnapshot) -> ResourcePlan {
+    ResourcePlan {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        platform: snapshot.platform,
+        observed_unix_ms: snapshot.observed_unix_ms,
+        profile_state: "not_configured",
+        profile_sha256: None,
+        user_caps: None,
+        targets: Vec::new(),
+        gpu_budget_status: snapshot.gpu_budget_status.clone(),
+        warnings: snapshot.warnings.clone(),
+        writes_performed: false,
+        apply_enabled: false,
+        status: "not_configured",
+    }
+}
+
+fn target_free_bytes(
+    snapshot: &ResourceSnapshot,
+    target: &ResourceTarget,
+    now_unix_ms: u64,
+) -> Result<u64, (&'static str, String)> {
+    match target {
+        ResourceTarget::LinuxSwapfile {
+            filesystem_uuid,
+            device_identity,
+            mount_id,
+            ..
+        }
+        | ResourceTarget::LinuxFileOrigin {
+            filesystem_uuid,
+            device_identity,
+            mount_id,
+            ..
+        } => linux_target_free_bytes(
+            snapshot,
+            filesystem_uuid,
+            device_identity,
+            *mount_id,
+            now_unix_ms,
+        ),
+        ResourceTarget::WslFallback {
+            windows_volume_id,
+            path,
+            ..
+        }
+        | ResourceTarget::WslOrigin {
+            windows_volume_id,
+            path,
+            ..
+        } => windows_target_free_bytes(snapshot, windows_volume_id, path, now_unix_ms),
+    }
+}
+
+fn plan_target(
+    snapshot: &ResourceSnapshot,
+    target: &ResourceTarget,
+    required_free_bytes: u64,
+    now_unix_ms: u64,
+    duplicate_path: bool,
+) -> PlannedTarget {
+    let volume_identity = resource_volume_identity(target);
+    let (kind, path, requested_bytes) = target_kind_path_and_size(target);
+    let assessment = if duplicate_path {
+        Err((
+            "duplicate_target_path",
+            "target resolves to the same managed path as another profile entry".into(),
+        ))
+    } else {
+        target_free_bytes(snapshot, target, now_unix_ms)
+    };
+    let (observed_free_bytes, status, reason) = match assessment {
+        Ok(free_bytes) if free_bytes >= required_free_bytes => {
+            (Some(free_bytes), "storage_ready", None)
+        }
+        Ok(free_bytes) => (
+            Some(free_bytes),
+            "insufficient_space",
+            Some("available free space is below the combined target and reserve".into()),
+        ),
+        Err((status, reason)) => (None, status, Some(reason)),
+    };
+    PlannedTarget {
+        kind,
+        volume_identity: volume_identity_text(&volume_identity),
+        path,
+        requested_bytes,
+        required_free_bytes,
+        observed_free_bytes,
+        status,
+        reason,
+    }
+}
+
+fn plan_status(targets: &[PlannedTarget]) -> &'static str {
+    if targets.is_empty() {
+        "profile_loaded_no_storage_targets"
+    } else if targets
+        .iter()
+        .all(|target| target.status == "storage_ready")
+    {
+        "ready_for_review"
+    } else {
+        "blocked"
+    }
+}
+
+fn profile_warnings(snapshot: &ResourceSnapshot, caps: &TierCaps) -> Vec<String> {
+    let mut warnings = snapshot.warnings.clone();
+    if caps.zram_bytes.is_some() || !caps.vram_bytes.is_empty() || caps.origin_bytes.is_some() {
+        warnings.push(
+            "tier ceilings are displayed only; this plan does not sample their owning runtime budgets or authorize increases".into(),
+        );
+    }
+    warnings
+}
+
+fn profile_digest(profile_text: &str) -> String {
+    Sha256::digest(profile_text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn build_resource_plan(
+    snapshot: &ResourceSnapshot,
+    profile_text: Option<&str>,
+) -> Result<ResourcePlan, InventoryError> {
+    let Some(profile_text) = profile_text else {
+        return Ok(unconfigured_resource_plan(snapshot));
+    };
+    let profile = ResourceProfile::parse(profile_text)
+        .map_err(|error| InventoryError(format!("resource profile is invalid: {error}")))?;
+    profile
+        .validate_for(profile_platform(snapshot.platform))
+        .map_err(|error| InventoryError(format!("resource profile is not valid here: {error}")))?;
+    let required_by_volume = profile
+        .required_free_bytes_by_volume()
+        .map_err(|error| InventoryError(format!("cannot calculate profile capacity: {error}")))?;
+    let now_unix_ms = unix_millis();
+    let mut targets = Vec::with_capacity(profile.targets.len());
+    let mut planned_paths = HashSet::new();
+
+    for target in &profile.targets {
+        let volume_identity = resource_volume_identity(target);
+        let required_free_bytes = required_by_volume
+            .get(&volume_identity)
+            .copied()
+            .ok_or_else(|| InventoryError("profile target has no volume requirement".into()))?;
+        let duplicate_path = planned_path_identity(snapshot, target)
+            .is_some_and(|identity| !planned_paths.insert(identity));
+        targets.push(plan_target(
+            snapshot,
+            target,
+            required_free_bytes,
+            now_unix_ms,
+            duplicate_path,
+        ));
+    }
+
+    let status = plan_status(&targets);
+    let profile_sha256 = profile_digest(profile_text);
+    let warnings = profile_warnings(snapshot, &profile.caps);
+    Ok(ResourcePlan {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        platform: snapshot.platform,
+        observed_unix_ms: snapshot.observed_unix_ms,
+        profile_state: "validated",
+        profile_sha256: Some(profile_sha256),
+        user_caps: Some(profile.caps),
+        targets,
+        gpu_budget_status: snapshot.gpu_budget_status.clone(),
+        warnings,
+        writes_performed: false,
+        apply_enabled: false,
+        status,
+    })
+}
+
+fn render_plan_text(plan: &ResourcePlan) -> String {
+    let mut output = String::new();
+    let _ = writeln!(output, "RamShared read-only resource plan: {}", plan.status);
+    let _ = writeln!(output, "Profile: {}", plan.profile_state);
+    if let Some(digest) = &plan.profile_sha256 {
+        let _ = writeln!(output, "Profile SHA-256: {digest}");
+    }
+    for target in &plan.targets {
+        let _ = writeln!(
+            output,
+            "{} {} — {} (needs {}, observed free {})",
+            target.kind,
+            target.path,
+            target.status,
+            format_gib(Some(target.required_free_bytes)),
+            format_gib(target.observed_free_bytes)
+        );
+        let _ = writeln!(output, "  volume identity: {}", target.volume_identity);
+        if let Some(reason) = &target.reason {
+            let _ = writeln!(output, "  reason: {reason}");
+        }
+    }
+    for warning in &plan.warnings {
+        let _ = writeln!(output, "Warning: {warning}");
+    }
+    let _ = writeln!(
+        output,
+        "Read-only plan. No settings, swap, origin, disk, GPU, or running tier were changed."
+    );
+    let _ = writeln!(output, "Apply enabled: {}", plan.apply_enabled);
+    output
+}
+
+fn render_plan_json(plan: &ResourcePlan) -> Result<String, InventoryError> {
+    serde_json::to_string(plan)
+        .map_err(|error| InventoryError(format!("cannot serialize resource plan: {error}")))
 }
 
 fn format_gib(bytes: Option<u64>) -> String {
@@ -1061,6 +1724,28 @@ pub(crate) fn run(mode: ConfigMode, stdout: &mut dyn Write, stderr: &mut dyn Wri
             writeln!(stdout, "{output}")
                 .map_err(|error| InventoryError(format!("cannot write config output: {error}")))
         }),
+        ConfigMode::Plan { json, profile_path } => (|| {
+            let snapshot = collect_snapshot()?;
+            let require_root_owned = profile_path.is_none();
+            let path = profile_path.map_or_else(
+                || PathBuf::from(DEFAULT_RESOURCE_PROFILE_PATH),
+                PathBuf::from,
+            );
+            let profile_text = load_profile_text(&path, require_root_owned)?;
+            if !require_root_owned && profile_text.is_none() {
+                return Err(InventoryError(
+                    "requested profile file does not exist".into(),
+                ));
+            }
+            let plan = build_resource_plan(&snapshot, profile_text.as_deref())?;
+            let output = if json {
+                render_plan_json(&plan)?
+            } else {
+                render_plan_text(&plan)
+            };
+            writeln!(stdout, "{output}")
+                .map_err(|error| InventoryError(format!("cannot write resource plan: {error}")))
+        })(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -1214,6 +1899,7 @@ mod tests {
             read_only: false,
             total_bytes: Some(300 * 1024 * 1024 * 1024),
             available_bytes: Some(200 * 1024 * 1024 * 1024),
+            capacity_observed_unix_ms: Some(unix_millis()),
         };
         let candidate = BlockDevice {
             name: "nvme0n1p1".into(),
@@ -1480,6 +2166,211 @@ mod tests {
         }
     }
 
+    #[test]
+    fn config_plan_never_mutates_host_or_guest() {
+        let snapshot = fixture_snapshot();
+        let before = render_json(&snapshot).expect("snapshot serializes before planning");
+        let profile = r#"
+schema_version = 1
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = "vol-i"
+path = "I:\\wsl\\swap.vhdx"
+bytes = 4294967296
+"#;
+
+        let plan = build_resource_plan(&snapshot, Some(profile)).expect("profile plans");
+
+        assert_eq!(plan.status, "ready_for_review");
+        assert_eq!(plan.targets.len(), 1);
+        assert_eq!(plan.targets[0].status, "storage_ready");
+        assert_eq!(plan.targets[0].required_free_bytes, 14 * 1024 * 1024 * 1024);
+        assert!(!plan.apply_enabled);
+        assert_eq!(
+            render_json(&snapshot).expect("snapshot serializes after planning"),
+            before,
+            "planning must leave the observed host/guest snapshot unchanged"
+        );
+    }
+
+    #[test]
+    fn native_linux_resource_plan_binds_the_mount_and_device_identity() {
+        let mut snapshot = fixture_snapshot();
+        snapshot.platform = RuntimePlatform::NativeLinux;
+        snapshot.windows = None;
+        let mut device = fixture_block_device();
+        device.eligible_for_file_storage = true;
+        snapshot.block_devices = vec![device];
+        let profile = r#"
+schema_version = 1
+
+[[targets]]
+kind = "linux_swapfile"
+filesystem_uuid = "fs-uuid"
+device_identity = "wwn:wwn-123"
+mount_id = 41
+managed_relative_path = "swap/ramshared.swap"
+bytes = 1073741824
+priority = -1
+"#;
+
+        let plan = build_resource_plan(&snapshot, Some(profile)).expect("native plan builds");
+
+        assert_eq!(plan.status, "ready_for_review");
+        assert_eq!(plan.targets[0].status, "storage_ready");
+        assert_eq!(plan.targets[0].required_free_bytes, 11 * 1024 * 1024 * 1024);
+        assert_eq!(
+            plan.targets[0].observed_free_bytes,
+            Some(200 * 1024 * 1024 * 1024)
+        );
+
+        let mut stale_snapshot = snapshot.clone();
+        stale_snapshot.block_devices[0].mounts[0].capacity_observed_unix_ms = Some(1);
+        let stale_plan = build_resource_plan(&stale_snapshot, Some(profile))
+            .expect("stale native telemetry is represented as a refusal");
+        assert_eq!(stale_plan.targets[0].status, "stale_sample");
+    }
+
+    #[test]
+    fn resource_plan_without_profile_reports_not_configured_and_read_only() {
+        let plan = build_resource_plan(&fixture_snapshot(), None).expect("empty plan builds");
+
+        assert_eq!(plan.profile_state, "not_configured");
+        assert_eq!(plan.status, "not_configured");
+        assert!(plan.targets.is_empty());
+        assert!(!plan.writes_performed);
+        assert!(!plan.apply_enabled);
+    }
+
+    #[test]
+    fn resource_policy_rejects_unknown_stale_and_inconsistent_samples() {
+        let unknown_volume = r#"
+schema_version = 1
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = "volume-not-in-inventory"
+path = "C:\\wsl\\swap.vhdx"
+bytes = 1048576
+"#;
+        let unknown_plan = build_resource_plan(&fixture_snapshot(), Some(unknown_volume))
+            .expect("unbound target remains a visible refusal");
+        assert_eq!(unknown_plan.targets[0].status, "identity_unavailable");
+
+        let mismatched_path = r#"
+schema_version = 1
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = "vol-i"
+path = "C:\\wsl\\swap.vhdx"
+bytes = 1048576
+"#;
+        let mismatched_plan = build_resource_plan(&fixture_snapshot(), Some(mismatched_path))
+            .expect("path-volume mismatch remains a visible refusal");
+        assert_eq!(mismatched_plan.targets[0].status, "identity_unavailable");
+
+        let valid_volume = r#"
+schema_version = 1
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = "vol-i"
+path = "I:\\wsl\\swap.vhdx"
+bytes = 1048576
+"#;
+        let mut stale_snapshot = fixture_snapshot();
+        stale_snapshot
+            .windows
+            .as_mut()
+            .expect("fixture includes host inventory")
+            .observed_unix_ms = Some(1);
+        let stale_plan = build_resource_plan(&stale_snapshot, Some(valid_volume))
+            .expect("stale telemetry is represented as a refusal");
+        assert_eq!(stale_plan.targets[0].status, "stale_sample");
+
+        let mut inconsistent_snapshot = fixture_snapshot();
+        let volume = &mut inconsistent_snapshot
+            .windows
+            .as_mut()
+            .expect("fixture includes host inventory")
+            .volumes[1];
+        volume.size_bytes = Some(1);
+        volume.free_bytes = Some(2);
+        let inconsistent_plan = build_resource_plan(&inconsistent_snapshot, Some(valid_volume))
+            .expect("inconsistent capacity is represented as a refusal");
+        assert_eq!(inconsistent_plan.targets[0].status, "inconsistent_sample");
+    }
+
+    #[test]
+    fn resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target() {
+        let mut snapshot = fixture_snapshot();
+        let volume_guid = r"\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\";
+        snapshot
+            .windows
+            .as_mut()
+            .expect("fixture includes host inventory")
+            .volumes[1]
+            .volume_id = Some(volume_guid.into());
+        let profile = format!(
+            r#"
+schema_version = 1
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = {volume_guid:?}
+path = "I:\\wsl\\swap.vhdx"
+bytes = 1048576
+
+[[targets]]
+kind = "wsl_origin"
+windows_volume_id = {volume_guid:?}
+path = "\\\\?\\Volume{{01234567-89ab-cdef-0123-456789abcdef}}\\wsl\\swap.vhdx"
+allocated_bytes = 1048576
+"#
+        );
+
+        let plan = build_resource_plan(&snapshot, Some(&profile)).expect("profile plans");
+
+        assert_eq!(plan.targets[0].status, "storage_ready");
+        assert_eq!(plan.targets[1].status, "duplicate_target_path");
+        assert!(!plan.apply_enabled);
+    }
+
+    #[test]
+    fn profile_loader_rejects_symlinks_oversized_files_and_untrusted_system_profiles() {
+        use std::os::unix::fs::symlink;
+
+        let directory = std::env::temp_dir().join(format!(
+            "ramshared-profile-loader-{}-{}",
+            std::process::id(),
+            unix_millis()
+        ));
+        fs::create_dir(&directory).expect("temporary test directory is created");
+        let profile_path = directory.join("profile.toml");
+        let profile_content = "schema_version = 1\n";
+        fs::write(&profile_path, profile_content).expect("temporary profile is written");
+
+        assert_eq!(
+            load_profile_text(&profile_path, false).expect("explicit profile reads"),
+            Some(profile_content.into())
+        );
+        assert!(load_profile_text(&profile_path, true).is_err());
+
+        let symlink_path = directory.join("profile-link.toml");
+        symlink(&profile_path, &symlink_path).expect("profile symlink is created");
+        assert!(load_profile_text(&symlink_path, false).is_err());
+        assert!(load_profile_text(&directory, false).is_err());
+
+        let oversized_path = directory.join("oversized.toml");
+        fs::write(&oversized_path, vec![b'x'; MAX_RESOURCE_PROFILE_BYTES + 1])
+            .expect("oversized test profile is written");
+        assert!(load_profile_text(&oversized_path, false).is_err());
+
+        fs::remove_dir_all(directory).expect("temporary profile fixtures are removed");
+    }
+
     fn fixture_mount_info() -> MountInfo {
         MountInfo {
             mount_id: 41,
@@ -1494,6 +2385,7 @@ mod tests {
             read_only: false,
             total_bytes: Some(300 * 1024 * 1024 * 1024),
             available_bytes: Some(200 * 1024 * 1024 * 1024),
+            capacity_observed_unix_ms: Some(unix_millis()),
         }
     }
 
@@ -1525,7 +2417,7 @@ mod tests {
     fn fixture_snapshot() -> ResourceSnapshot {
         ResourceSnapshot {
             platform: RuntimePlatform::Wsl2,
-            observed_unix_ms: 0,
+            observed_unix_ms: unix_millis(),
             guest_memory: MemorySnapshot {
                 total_bytes: Some(16 * 1024 * 1024 * 1024),
                 available_bytes: Some(8 * 1024 * 1024 * 1024),
@@ -1536,6 +2428,7 @@ mod tests {
             swaps: Vec::new(),
             windows: Some(WindowsSnapshot {
                 observed_utc: "2026-09-27T22:00:00Z".into(),
+                observed_unix_ms: Some(unix_millis()),
                 host_memory: HostMemorySnapshot {
                     total_bytes: Some(32 * 1024 * 1024 * 1024),
                     free_bytes: Some(16 * 1024 * 1024 * 1024),

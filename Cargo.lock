@@ -964,6 +964,7 @@ name = "ramshared-cli"
 version = "0.15.0"
 dependencies = [
  "libc",
+ "ramshared-config",
  "ramshared-cuda",
  "ramshared-tier",
  "ramshared-vram",
