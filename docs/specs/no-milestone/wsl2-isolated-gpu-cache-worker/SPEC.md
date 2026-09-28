@@ -226,6 +226,7 @@
 | `crates/ramshared-wsl2d/src/gpu_budget.rs` | `tests::missing_luid_and_unavailable_dxg_allow_allocator_only_startup` | unit | #13 | >= 80% |
 | `crates/ramshared-wsl2d/src/gpu_budget.rs` | `tests::candidate_target_applies_reserve_freshness_and_request_cap` | unit | #13/#16 | >= 80% |
 | `crates/ramshared-wsl2d/src/gpu_budget.rs` | `tests::candidate_selection_prefers_largest_safe_target_then_stable_ties` | unit | #9 | >= 80% |
+| `crates/ramshared-vulkan/src/lib.rs` | `tests::exact_device_open_rejects_out_of_range_ordinal_without_clamping` | ignored software-ICD integration | #13/#16 | >= 80% |
 
 ---
 
@@ -235,5 +236,6 @@
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-block -p ramshared-wsl2d` (also covered by the passing workspace suite)
 - [x] Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/gpu_cache_worker.rs,crates/ramshared-block/src/ipc_cache_client.rs,crates/ramshared-wsl2d/src/gpu_budget.rs --min 80`
+- [ ] Vulkan provider coverage with the hosted Mesa software ICD: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vulkan --files crates/ramshared-vulkan/src/lib.rs --min 80 --include-ignored`. This runs the Vulkan integration cases marked ignored on machines without an ICD; the CI runner must set `VK_ICD_FILENAMES` to Mesa lavapipe before the gate.
 - [ ] Live path verification: `sudo ramshared check --json` confirms `cache_state=ACTIVE` with valid worker instance.
 - [ ] Live fault drill: interrupt a worker during cache I/O, verify origin responses within the IPC deadline, capture worker state until reaped, and confirm clean teardown. A software kill test does not establish zero kernel D-state on physical drivers.

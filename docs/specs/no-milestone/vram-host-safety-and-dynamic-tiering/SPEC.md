@@ -108,6 +108,7 @@
 | File | Change | Named verification |
 | --- | --- | --- |
 | `crates/ramshared-vram/src/lib.rs` | Central budget and identity contract | `budget_target_preserves_reserve_after_existing_use`; `adapter_identity_matches_cross_api_only_through_shared_luid` |
+| `crates/ramshared-cuda/src/vram_impl.rs` | CUDA adapter implements the shared budget and memory traits | `test_vram_error_conversion_out_of_range`; `test_vram_error_conversion_provider`; `mock_driver_exercises_memory_and_mapping_raii` |
 | `crates/ramshared-wsl2d/src/gpu_budget.rs` | Candidate selection, reserve sizing, WDDM composition | `direct_broker_slice_preserves_live_reserve_canary_and_alignment`; `mismatched_stale_future_and_malformed_budgets_are_rejected` |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | Live per-allocation admission | `worker_budget_target_never_exceeds_current_available_headroom`; `worker_respects_headroom_floor` |
 | `crates/ramshared-block/src/isolated_origin.rs` | Origin fallback contract | `cache_timeout_falls_back_to_origin` |
@@ -118,7 +119,7 @@
 | Production path | Test | Kind | Kahneman | Coverage |
 | --- | --- | --- | --- | --- |
 | `ramshared-vram/src/lib.rs` | named budget and identity tests above | unit | #13 | >=80% changed logic |
-| `ramshared-wsl2d/src/gpu_budget.rs` | freshness, WDDM, slice, and adapter selection tests | unit | #13 | >=80% (current gate recorded in validation) |
+| `ramshared-wsl2d/src/gpu_budget.rs` | freshness, WDDM, slice, and adapter selection tests | unit | #13 | Slice coverage is owned by the isolated GPU cache-worker SPEC. |
 | `ramshared-block/src/gpu_cache_worker.rs` | target, allocation, and revoke tests | unit | #16/#17 | >=80% changed logic |
 | `ramshared-block/src/isolated_origin.rs` | `cache_timeout_falls_back_to_origin` | unit | #16 | >=80% changed logic |
 | `ramshared-wsl2d/src/main.rs` | direct broker refusal and worker-loss tests | unit/integration | #13 | >=80% changed logic |
@@ -130,7 +131,7 @@ Required source commands:
 cargo fmt --all -- --check
 cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d
 cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-dxg -p ramshared-vulkan -p ramshared-wsl2d --all-targets -- -D warnings
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/gpu_budget.rs --min 80
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/vram_impl.rs --min 80
 ```
 
 Live `before → action → after` evidence for GPU allocation, cache revocation,

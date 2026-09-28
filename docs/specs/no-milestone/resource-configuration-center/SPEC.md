@@ -522,7 +522,7 @@ in place.
 ## Validation checklist
 
 - [ ] `cargo fmt --all -- --check`; `cargo clippy -p ramshared-config -p ramshared-cli -- -D warnings`; focused and workspace tests.
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-config,ramshared-cli,ramshared-wsl2d --files crates/ramshared-config/src/lib.rs,crates/ramshared-cli/src/resource_config.rs,crates/ramshared-wsl2d/src/gpu_budget.rs --min 80`.
+- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli,ramshared-config --files crates/ramshared-cli/src/resource_config.rs,crates/ramshared-config/src/resource_profile.rs --min 80`. GPU budget policy coverage is owned by the GPU worker specification.
 - [ ] Linux provider manufactured tests prove exact ownership, supported filesystem rules, active-swap preservation, and cleanup refusal.
 - [ ] Windows provider manufactured tests prove volume identity, `.wslconfig` preservation, restart pending, and exact rollback.
 - [ ] `bash scripts/safety/wslconfig-ctl.sh selftest` and existing origin/GPU suites pass.

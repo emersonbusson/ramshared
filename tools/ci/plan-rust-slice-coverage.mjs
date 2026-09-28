@@ -82,7 +82,7 @@ function isRustProductionPath(value) {
 
 function commandFields(command) {
   if (!Array.isArray(command) || command.length < 8 || command[0] !== 'node' || command[1] !== COVERAGE_SCRIPT) return null
-  const fields = { packages: null, files: null, min: null }
+  const fields = { packages: null, files: null, min: null, includeIgnored: false }
   for (let index = 2; index < command.length; index++) {
     const token = command[index]
     if (token === '-p' || token === '--packages') {
@@ -96,6 +96,9 @@ function commandFields(command) {
       fields.min = Number(command[++index])
     } else if (token === '--report-json') {
       if (!safeRelative(command[++index])) return null
+    } else if (token === '--include-ignored') {
+      if (fields.includeIgnored) return null
+      fields.includeIgnored = true
     } else {
       return null
     }

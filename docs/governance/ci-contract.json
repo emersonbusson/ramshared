@@ -544,7 +544,8 @@
         "node tools/ci/check-ci-contract.mjs --check-local",
         "tools/ci/check-ci-contract.test.mjs",
         "tools/ci/plan-rust-slice-coverage.test.mjs",
-        "node tools/ci/plan-rust-slice-coverage.mjs --all"
+        "node tools/ci/plan-rust-slice-coverage.mjs --all",
+        "tools/ci/check-rust-slice-coverage.test.mjs"
       ],
       "open_gaps": []
     },

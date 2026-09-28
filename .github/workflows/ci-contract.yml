@@ -73,6 +73,14 @@ jobs:
           --test-coverage-functions=80
           tools/ci/plan-rust-slice-coverage.test.mjs
 
+      - name: Rust coverage runner coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/check-rust-slice-coverage.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/check-rust-slice-coverage.test.mjs
+
       - name: Validate exact SPEC coverage map
         run: node tools/ci/plan-rust-slice-coverage.mjs --all
 
@@ -157,6 +165,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+
+      - name: Install Mesa software Vulkan ICD
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libvulkan1 mesa-vulkan-drivers
+          icd_path="$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)"
+          test -n "$icd_path"
+          printf 'VK_ICD_FILENAMES=%s\n' "$icd_path" >> "$GITHUB_ENV"
 
       - name: Fetch immutable Rust slice baselines
         run: |

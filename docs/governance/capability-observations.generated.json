@@ -943,6 +943,7 @@
           "crates/ramshared-block/src/gpu_cache_worker.rs",
           "crates/ramshared-block/src/ipc_cache_client.rs",
           "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-cuda/src/vram_impl.rs",
           "crates/ramshared-vram/src/lib.rs",
           "crates/ramshared-wsl2d/src/gpu_budget.rs",
           "crates/ramshared-wsl2d/src/main.rs"

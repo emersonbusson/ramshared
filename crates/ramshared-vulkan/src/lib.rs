@@ -762,6 +762,7 @@ mod tests {
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
     fn open_enumerates_device_and_heap() {
         let p = VulkanProvider::open(0).expect("opens Vulkan");
+        assert!(VulkanProvider::device_count().expect("counts Vulkan devices") > 0);
         assert!(!p.device_name().is_empty(), "device has a name");
         let total = p.device_local_total();
         let budget = p.budget_snapshot().expect("budget snapshot");
@@ -786,6 +787,19 @@ mod tests {
             budget.adapter
         );
         assert!(total > 0, "heap > 0");
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + software or physical ICD"]
+    fn exact_device_open_rejects_out_of_range_ordinal_without_clamping() {
+        let count = VulkanProvider::device_count().expect("counts Vulkan devices");
+        assert!(count > 0, "ICD exposes at least one device");
+        let selected = VulkanProvider::open_exact(0).expect("opens exact ordinal zero");
+        assert!(!selected.device_name().is_empty());
+        assert!(matches!(
+            VulkanProvider::open_exact(count),
+            Err(VramError::Provider(message)) if message.contains("out of range")
+        ));
     }
 
     #[test]

@@ -32,6 +32,8 @@
  *                     (must include per-file summaries, e.g. from a prior --report-json).
  *   --allow-missing   If a --files path is absent from the profile, treat as note (still FAIL
  *                     unless the path also does not exist on disk → always FAIL).
+ *   --include-ignored Include ignored tests only for a slice with declared software-only
+ *                     prerequisites.
  *   --metric lines|regions|functions   Default: lines.
  *
  * Exit: 0 pass · 1 gate fail · 2 usage / tool error.
@@ -92,6 +94,7 @@ function parseArgs(argv) {
     reportJson: "",
     reportOnly: "",
     allowMissing: false,
+    includeIgnored: false,
     metric: "lines",
     help: false,
   };
@@ -120,6 +123,7 @@ function parseArgs(argv) {
     else if (argument === "--report-json") out.reportJson = next();
     else if (argument === "--report-only") out.reportOnly = next();
     else if (argument === "--allow-missing") out.allowMissing = true;
+    else if (argument === "--include-ignored") out.includeIgnored = true;
     else if (argument === "--metric") out.metric = next();
     else throw usageError(`unknown arg: ${argument}`);
   }
@@ -526,7 +530,13 @@ function runLlvmCov(
   packages,
   jsonOutPath,
   cargoTargetDir,
-  { repoRoot = REPO_ROOT, env = process.env, spawnCommand = spawnSync, error = console.error } = {},
+  {
+    repoRoot = REPO_ROOT,
+    env = process.env,
+    spawnCommand = spawnSync,
+    error = console.error,
+    includeIgnored = false,
+  } = {},
 ) {
   if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "Cargo.toml not found at repository root", 2);
@@ -535,6 +545,7 @@ function runLlvmCov(
   for (const packageName of packages) cargoArgs.push("-p", packageName);
   cargoArgs.push("--json", "--summary-only", "--output-path", jsonOutPath);
   cargoArgs.push("--", "--test-threads=1");
+  if (includeIgnored) cargoArgs.push("--include-ignored");
 
   const renderedArgs = cargoArgs.map((argument) =>
     argument === jsonOutPath ? "<private-run>/llvm-cov.json" : argument,
@@ -658,7 +669,10 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       if (options.packages.length === 0) throw usageError("--packages / -p required unless --report-only");
       coverageContent = runWithCoverageIsolation({
         execute: (run) => {
-          runLlvmCov(options.packages, run.jsonPath, run.cargoTargetDir, { error });
+          runLlvmCov(options.packages, run.jsonPath, run.cargoTargetDir, {
+            error,
+            includeIgnored: options.includeIgnored,
+          });
           if (options.reportJson) {
             const destination = resolve(REPO_ROOT, options.reportJson);
             mkdirSync(dirname(destination), { recursive: true });

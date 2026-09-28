@@ -705,6 +705,34 @@ mod tests {
         let context = cuda.create_context(&device).unwrap();
         assert_eq!(context.mem_info().unwrap(), (4096, 8192));
 
+        assert_eq!(
+            ramshared_vram::VramProvider::mem_info(&context).unwrap(),
+            (4096, 8192)
+        );
+        let budget = ramshared_vram::VramProvider::budget_snapshot(&context).unwrap();
+        assert_eq!(budget.adapter, None);
+        assert_eq!(budget.total_bytes, Some(8192));
+        assert_eq!(budget.budget_bytes, 8192);
+        assert_eq!(budget.used_bytes, 4096);
+        assert_eq!(budget.available_bytes(), 4096);
+        assert_eq!(
+            budget.source,
+            ramshared_vram::GpuBudgetSource::DriverReported
+        );
+
+        let mut provider_memory = ramshared_vram::VramProvider::alloc(&context, 16).unwrap();
+        assert_eq!(ramshared_vram::VramMemory::len(&provider_memory), 16);
+        assert!(!ramshared_vram::VramMemory::is_empty(&provider_memory));
+        ramshared_vram::VramMemory::zero(&mut provider_memory).unwrap();
+        ramshared_vram::VramMemory::write_at(&mut provider_memory, 1, &[9, 8, 7]).unwrap();
+        let mut provider_output = [0; 3];
+        ramshared_vram::VramMemory::read_at(&provider_memory, 1, &mut provider_output).unwrap();
+        assert_eq!(provider_output, [9, 8, 7]);
+        assert!(matches!(
+            ramshared_vram::VramMemory::write_at(&mut provider_memory, 16, &[1]),
+            Err(ramshared_vram::VramError::OutOfRange { .. })
+        ));
+
         let mut memory = context.alloc(16).unwrap();
         assert_eq!(memory.len(), 16);
         assert!(!memory.is_empty());
