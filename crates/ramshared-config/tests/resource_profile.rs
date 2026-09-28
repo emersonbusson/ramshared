@@ -105,6 +105,42 @@ identity_field_hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 }
 
 #[test]
+fn resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_inode() {
+    let profile = ResourceProfile {
+        schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
+        caps: TierCaps {
+            origin_bytes: Some(4 * 1024 * 1024 * 1024),
+            ..TierCaps::default()
+        },
+        targets: vec![ResourceTarget::LinuxFileOriginRequest {
+            filesystem_uuid: "fs-uuid-new".into(),
+            device_identity: "wwn-local-nvme".into(),
+            managed_relative_path: "origin/ramshared.img".into(),
+            allocated_bytes: 4 * 1024 * 1024 * 1024,
+        }],
+    };
+
+    profile
+        .validate_for(ResourcePlatform::NativeLinux)
+        .expect("a planned origin has no inode until the provider creates it");
+
+    let required = profile
+        .required_free_bytes_by_volume()
+        .expect("planned origin capacity is checked");
+    assert_eq!(
+        required.get(&StorageVolumeIdentity::Linux {
+            filesystem_uuid: "fs-uuid-new".into(),
+            device_identity: "wwn-local-nvme".into(),
+        }),
+        Some(&(DISK_RESERVE_FLOOR_BYTES + 4 * 1024 * 1024 * 1024))
+    );
+
+    let encoded = profile.to_toml().expect("origin request serializes");
+    let decoded = ResourceProfile::parse(&encoded).expect("origin request roundtrips");
+    assert_eq!(decoded, profile);
+}
+
+#[test]
 fn resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow() {
     let duplicate_path = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
