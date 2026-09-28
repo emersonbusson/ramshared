@@ -838,6 +838,14 @@ test('spec_coverage_map_requires_exact_command_in_spec', () => {
   assert.equal(result.errors.some((item) => item.rule === 'spec-command-missing'), true)
 })
 
+test('coverage_map_accepts_an_exact_include_ignored_coverage_command', () => {
+  const command = 'node tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80 --include-ignored'
+  const root = fixtureRoot(`\`\`\`bash\n${command}\n\`\`\`\n`)
+  const map = coverageMap()
+  map.entries[0].command.push('--include-ignored')
+  assert.equal(validateCoverageMap(map, root).ok, true)
+})
+
 test('changed_business_rust_file_requires_mapped_spec_command', () => {
   const root = fixtureRoot('```bash\nnode tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80\n```\n')
   const mapped = selectCoverageEntries(coverageMap(), ['crates/fixture/src/policy.rs'], root)
