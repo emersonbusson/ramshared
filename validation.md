@@ -8285,6 +8285,74 @@ open evidence recorded in EVD-0106.
 are now visible and tested; selection, mutation, benchmarking, and platform
 qualification remain open.
 
+## 2026-09-28 07:22 -03 — independent re-audit of all seven active PARTIAL gates
+
+**What:** Re-read current source and evidence for each active gate instead of
+reusing the EVD-0106 conclusions. Reran the available Rust policy/identity
+tests and Windows static suites. Corrected two public source descriptions:
+the kernel-fork README no longer calls the v2 candidate production-qualified
+or claims support across all Hyper-V architectures, and the Windows
+`control_plane` module comment now says its helpers and AF_HYPERV transport are
+not wired into the service.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0108`.
+**Owner role:** independent reliability / source audit.
+**Observed at:** `2026-09-28T10:22:07Z`.
+**Verified at:** `2026-09-28T10:22:07Z`.
+**Source revision:** `3cb1babc4b1c80ff9f5f168a6f8d420172d33161`.
+**Related kernel fork revision:** `a022ac393ecaab845682f5afe2be6be792aedde2`.
+**Source state:** The RamShared comment correction is committed. The kernel
+README correction is committed and pushed to the public fork. The kernel v2
+candidate still has uncommitted source changes in its working tree; those
+changes were not built, tested, installed, or committed by this audit.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0100 through EVD-0107 until every feature and
+platform gate has its own current close evidence.
+**Freshness:** Read-only WSL sample at 2026-09-28 10:18 UTC: `MemTotal`
+16,379,364 KiB, `MemAvailable` 6,729,104 KiB, WSL fallback swap 4,194,304 KiB
+total / 2,864,716 KiB free, and memory PSI some/full avg10/60/300 all 0.00.
+The installed health-monitor process used 2,888 KiB RSS; no `ramsharedd` or
+stress process was found. This sample does not explain prior freezes or prove
+that the kernel candidate caused them.
+**Category:** independent source re-audit / named tests / read-only runtime.
+**How to measure:** Re-read the entrypoints, host-gate/control-plane modules,
+GPU admission policy, VMBus/UIO candidate, and Windows lifecycle/storage
+harnesses; run the listed focused Rust tests and static scripts. No kernel
+build, KUnit, install, host mutation, stress activation, storage benchmark,
+WSL shutdown, or CoCo transition was run.
+
+**Direct audit and current verdicts:**
+
+| Active gate | Fresh source or test finding | Status |
+| --- | --- | --- |
+| WSL2 freeze memory ownership | The kernel branch still has dirty changes. `hv_uio_remove()` unregisters UIO and immediately tears down its buffers/ring; the UIO core clears `idev->info` without a VMA-close tracker. The candidate retains uncertain GPADLs, but its retained-owner cleanup is test-only and has no production reclaimer. This is a lifetime risk, not proof of a use-after-free or prior freeze cause. No candidate build, KUnit, GPADL drill, or CoCo test ran. | PARTIAL |
+| WSL2 host/guest control plane | AF_VSOCK/AF_HYPERV transport primitives exist, but neither production entrypoint calls them. The present handshake has no guest finish message proving the host response. The re-read helper tests do not qualify a live authenticated lease or revocation. | PARTIAL |
+| Legacy WSL2 service handoff | `/usr/local/bin/ramshared` still reports v0.14.1. A low-RSS health-monitor process is active, but there is no `ramsharedd` process or stress. No v0.15.0 post-reboot `BINARY_MATCH` was established here. | PARTIAL |
+| Cross-vendor GPU budget and stress | Host-gate tests pass 14/14, GPU policy 13/13, adapter-identity tests 4/4, and swapoff-first tests 3/3. These prove policy/refusal logic; no live worker allocation or multi-vendor campaign ran. | PARTIAL |
+| Windows physical lifecycle | `Test-RamSharedWslLifecycleRecoveryStatic`, `Test-HostAutonomousLifecycleStatic`, and `Test-RamSharedOriginStatic` pass. No supervised physical cold-boot campaign or loaded-package `BINARY_MATCH` ran. | PARTIAL |
+| Windows storage matrix | `Test-WindowsStorageMatrixStatic` passes its manufactured matrix and refusal cases. No five-cell physical matrix, three runs per cell, 75-sample artifact set, or real payload-integrity campaign ran. | PARTIAL |
+| Cross-platform resource configuration | EVD-0107 and the current source show all discovered Windows volume rows, including ineligible rows with reasons. The UI remains read-only, without selection, saved profile, apply/rollback, or benchmark; native Linux live target proof and a selected real WSL volume plan are absent. | PARTIAL |
+
+**Checks:** Focused Rust suites passed: host gate 14/14, Windows control-plane
+helpers 12/12, swapoff-first 3/3, GPU admission policy 13/13, and adapter
+identity 4/4. Four Windows PowerShell 5.1 static/manufactured suites passed.
+The live resource-config coverage/E2E and strict Clippy results are recorded
+in EVD-0107. `cargo fmt --all -- --check` and `git diff --check` passed.
+The public kernel README now labels the current VMBus candidate unqualified;
+that documentation correction is not kernel validation.
+
+**Assessment:** All seven active labels remain `PARTIAL` after independent
+source inspection. The current WSL sample is healthy enough for this
+read-only audit, but does not authorize the heavy kernel build or host stress.
+The build-permit integration was not available in the session, so no heavy
+build was attempted or permitted by bypass.
+
+**Verdict:** 🟡 `PARTIAL` — source descriptions and one inventory defect are
+corrected, and the active labels were independently checked. VMBus mapping and
+GPADL lifetime, authenticated runtime wiring, release parity, live GPU
+allocation, physical Windows campaigns, and full resource configuration
+remain open.
+
 ## 2026-09-28 06:28 -03 — enumerate every Windows volume candidate
 
 **What:** Re-read the Windows inventory collector, renderer, planner, and
