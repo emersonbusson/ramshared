@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 export const MAX_FILE_BYTES = 512 * 1024
+export const MAX_VALIDATION_LOG_BYTES = 1024 * 1024
 export const MAX_PATHS = 2_000
 export const MAX_FINDINGS = 10_000
 export const MAX_PROTECTED_INVENTORY_BYTES = 2 * 1024 * 1024
@@ -320,9 +321,13 @@ export function scanText(relative, text, lineNumbers = null) {
   return findings.sort(compareFindings)
 }
 
+export function fileSizeLimitFor(relative) {
+  return relative === 'validation.md' ? MAX_VALIDATION_LOG_BYTES : MAX_FILE_BYTES
+}
+
 export function scanBuffer(relative, buffer, lineNumbers = null) {
   if (!Buffer.isBuffer(buffer)) throw new LanguageError('invalid-buffer')
-  if (buffer.length > MAX_FILE_BYTES) throw new LanguageError('file-size-limit')
+  if (buffer.length > fileSizeLimitFor(relative)) throw new LanguageError('file-size-limit')
   if (buffer.includes(0)) return []
   let text
   try {

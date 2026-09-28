@@ -10,6 +10,7 @@ import { inflateSync } from 'node:zlib'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 512 * 1024
+const MAX_VALIDATION_LOG_BYTES = 1024 * 1024
 const MAX_PUBLIC_BINARY_BYTES = 8 * 1024 * 1024
 const MAX_PNG_DECODED_BYTES = 64 * 1024 * 1024
 const MAX_PNG_TEXT_BYTES = 64 * 1024
@@ -1144,6 +1145,10 @@ function publicJpegPath(file) {
   return isPublicArtifact(file) && /^\.jpe?g$/i.test(path.posix.extname(file))
 }
 
+export function fileSizeLimitFor(file) {
+  return file === 'validation.md' ? MAX_VALIDATION_LOG_BYTES : MAX_FILE_BYTES
+}
+
 function publicJpegManifestFinding(reason) {
   return {
     path: PUBLIC_BINARY_DIGESTS_FILE,
@@ -1162,7 +1167,7 @@ function strictJsonCandidate(root, mode, files, snapshot, file, missingReason, n
     return { value: null, reason: invalidReason }
   }
   if (candidate.kind !== 'file') return { value: null, reason: notRegularReason }
-  if (candidate.buffer.length > MAX_FILE_BYTES) return { value: null, reason: invalidReason }
+  if (candidate.buffer.length > fileSizeLimitFor(file)) return { value: null, reason: invalidReason }
   let text
   try {
     text = UTF8.decode(candidate.buffer)
@@ -1632,7 +1637,7 @@ function scanSnapshot(root, mode, asOf, snapshot, files, changedArtifacts) {
         }
         continue
       }
-      if (buffer.length > MAX_FILE_BYTES) throw new HygieneError('file-size-limit')
+      if (buffer.length > fileSizeLimitFor(file)) throw new HygieneError('file-size-limit')
       let text
       try {
         text = UTF8.decode(buffer)
@@ -1664,7 +1669,7 @@ function scanSnapshot(root, mode, asOf, snapshot, files, changedArtifacts) {
       continue
     }
     if (!classifyText(buffer, file)) continue
-    if (buffer.length > MAX_FILE_BYTES) throw new HygieneError('file-size-limit')
+    if (buffer.length > fileSizeLimitFor(file)) throw new HygieneError('file-size-limit')
     const text = UTF8.decode(buffer)
     if (file === ALLOWLIST_FILE) continue
     findings.push(...scanRuleMatches(file, file, allowlist, rules), ...scanRuleMatches(file, text, allowlist, rules))

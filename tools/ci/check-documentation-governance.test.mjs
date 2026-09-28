@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   findDuplicateNormativeBlocks,
+  fileSizeLimitFor,
   scanProvenance,
   validateClaims,
   validateJourneyManifest,
@@ -35,6 +36,11 @@ function rootFixture() {
   }
   return root
 }
+
+test('append_only_validation_log_has_a_bounded_larger_size_budget', () => {
+  assert.equal(fileSizeLimitFor('validation.md'), 1024 * 1024)
+  assert.equal(fileSizeLimitFor('docs/reliability/GAP-REGISTER.md'), 512 * 1024)
+})
 
 function parityText() {
   const rows = [

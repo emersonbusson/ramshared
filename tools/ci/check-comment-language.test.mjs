@@ -290,6 +290,14 @@ test('resource_bound_and_invalid_utf8_fail_closed', () => {
   )
 })
 
+test('append_only_validation_log_uses_its_bounded_size_budget', () => {
+  assert.deepEqual(scanBuffer('validation.md', Buffer.alloc(MAX_FILE_BYTES + 1)), [])
+  assert.throws(
+    () => scanBuffer('validation.md', Buffer.alloc(1024 * 1024 + 1)),
+    (error) => error instanceof LanguageError && error.message === 'file-size-limit',
+  )
+})
+
 test('opaque_protected_inventory_skips_invalid_utf8_but_diff_fails_closed', (t) => {
   const target = 'docs/specs/no-milestone/example/evidence/legacy.txt'
   const root = repository(t, { [target]: 'Historical English record\n' })

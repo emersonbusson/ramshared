@@ -11,6 +11,7 @@ import { deflateSync } from 'node:zlib'
 import {
   classifyText,
   enumerateFiles,
+  fileSizeLimitFor,
   isSafeRepoPath,
   run,
   scanDocumentActivation,
@@ -20,6 +21,11 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const CLI = path.join(ROOT, 'tools/ci/check-public-hygiene.mjs')
 const AS_OF = new Date('2026-08-22T00:00:00Z')
+
+test('append_only_validation_log_has_a_bounded_larger_size_budget', () => {
+  assert.equal(fileSizeLimitFor('validation.md'), 1024 * 1024)
+  assert.equal(fileSizeLimitFor('docs/reliability/GAP-REGISTER.md'), 512 * 1024)
+})
 
 function git(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }) }
 function lineHash(line) { return createHash('sha256').update(`${line}\n`).digest('hex') }

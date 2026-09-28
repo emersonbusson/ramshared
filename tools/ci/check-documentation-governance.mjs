@@ -8,6 +8,7 @@ import { evaluateClaimClosures, loadClaimClosures } from './documentation-claim-
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MAX_FILE_BYTES = 512 * 1024
+const MAX_VALIDATION_LOG_BYTES = 1024 * 1024
 const MAX_FILES = 2000
 const REQUIRED_PARITY = [
   'architecture and topology', 'capability state', 'prd and spec requirements',
@@ -311,6 +312,10 @@ function* walk(dir) {
   }
 }
 
+export function fileSizeLimitFor(relativePath) {
+  return relativePath === 'validation.md' ? MAX_VALIDATION_LOG_BYTES : MAX_FILE_BYTES
+}
+
 function structuralFiles(root) {
   const extensions = new Set(['.md', '.json', '.jsonl', '.yml', '.yaml', '.sh', '.ps1', '.mjs'])
   const files = []
@@ -319,7 +324,7 @@ function structuralFiles(root) {
     if (!extensions.has(path.extname(full).toLowerCase())) continue
     if (!(rel === 'README.md' || rel === 'README.pt-BR.md' || rel === 'ARCHITECTURE.md' || rel === 'CLAUDE.md' || rel === 'AGENTS.md' || rel === 'validation.md' || rel.startsWith('.claude/rules/') || rel.startsWith('docs/') || rel === 'scripts/docs-check.sh')) continue
     const stat = statSync(full)
-    if (stat.size > MAX_FILE_BYTES) { files.push({ path: rel, text: '', oversize: true }); continue }
+    if (stat.size > fileSizeLimitFor(rel)) { files.push({ path: rel, text: '', oversize: true }); continue }
     files.push({ path: rel, text: readFileSync(full, 'utf8') })
     if (files.length > MAX_FILES) break
   }
