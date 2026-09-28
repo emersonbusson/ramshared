@@ -7875,3 +7875,218 @@ were rechecked against source; deployment/release parity, live control-plane,
 post-reboot lifecycle, physical GPU/Windows storage evidence, matched kernel
 forensics, UIO mapping lifetime/reclamation, and the config implementation
 remain incomplete.
+
+## 2026-09-28 00:38–01:20 -03 — configuration inventory and host-memory recheck
+
+**What:** Re-ran the v0.15.0 read-only configuration command and compared its
+Linux and Windows resource inventories. Rechecked the configuration candidate
+policy against native multi-disk behavior and WSL VHDX capacity, measured the
+Windows PowerShell processes, and re-ran source-level Linux, GPU, lifecycle,
+and Windows harnesses.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0102`.
+**Owner role:** runtime / source audit / configuration / reliability.
+**Observed at:** `2026-09-28T03:38:06Z`.
+**Verified at:** `2026-09-28T04:20:12Z`.
+**Source revision:** `3f8ddbacbbc23d33e7b4d8b1851d6785eceabb81`.
+**Source state:** branch `feat/ramshared-20260921-consolidation`; source,
+test, and specification changes are uncommitted. Separate kernel tree is
+based on `6c2591cbe959d6ff4c310da9818b1743829b23da` and remains dirty.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0101 and EVD-0103; it supersedes EVD-0101's statement
+that the CLI has no configuration command. It does not replace its historical
+host/guest readings.
+**Freshness:** Guest and Windows config samples were seven seconds apart;
+PowerShell process and host physical-memory values were sampled 14 minutes
+later.
+**Category:** resource discovery / host and guest memory / source tests /
+PowerShell static tests.
+**How to measure:** Run `target/debug/ramshared config show --json`, read
+`/proc/meminfo`, `/proc/swaps`, and `/proc/pressure/memory`, run
+`/usr/local/bin/ramshared --version`, sample Windows
+`Win32_OperatingSystem.FreePhysicalMemory` and PowerShell process private bytes,
+then inspect Rust and kernel source directly. Run the named Rust and
+PowerShell tests listed below.
+
+**Paired state:** The WSL guest reported about 8.0 GiB `MemAvailable`,
+2.35 GiB `SwapFree`, and zero memory PSI avg10/60/300. Its root filesystem was
+ext4 directly on a whole virtual disk and reported about 1,007 GiB total and
+834 GiB free. `ramshared config show --json` marks it ineligible for file
+placement with the reason that its exact Windows backing-volume identity and
+current host free capacity are not bound to this guest filesystem. The
+Windows snapshot independently listed five fixed volumes. It did not identify
+which one backs the WSL virtual disk; no C:/I: ranking is supported. Labels,
+volume IDs, filesystem UUIDs, and hardware IDs are omitted.
+
+At 03:38 UTC Windows reported about 1,682 MiB physical RAM free. At 03:52 UTC
+it reported 1,778.3 MiB. That later sample found three PowerShell processes
+with 231.3 MiB private memory total and a 115 MiB maximum per process. This
+does not reproduce the previously observed 11.5 GiB process and does not
+identify the earlier process's cause. The installed executable remains
+v0.14.1; no `ramsharedd` process was present. The 4 GiB WSL fallback swap
+was the only active swap device. No RamShared activation or
+stress was run.
+
+**Source correction:** Native Linux storage discovery joins `lsblk` device
+identity with `/proc/self/mountinfo` and supports stable-ID filesystems on
+partitions or whole disks. Direct review found that ext4/XFS on known
+network-backed transports could pass the prior eligibility check even though
+the SPEC requires local storage. Missing and unrecognized transport identity
+was also accepted. The new named test first failed for iSCSI and missing
+transport, then passed after known network transports and unproven transports
+were refused. The same test passes separate NVMe and SATA local candidates.
+Native Linux remains a first-class provider; WSL is a sibling
+provider with a separate host-volume identity requirement. The command remains
+read-only: it cannot select or apply swap/origin placement, profile caps,
+benchmark storage, or recommend a fastest disk.
+
+**Checks:** `cargo test -j 1 -p ramshared-cli` passed 379 unit and 11
+integration tests. `cargo clippy -j 1 -p ramshared-cli --all-targets --
+-D warnings` passed. The `resource_config.rs` line-coverage gate passed at
+88.3% (1,131/1,281). `cargo test -j 1 -p ramshared-wsl2d --lib
+gpu_budget::tests` passed 13/13; `host_gate::tests` passed 14/14; the
+swapoff-first legacy migration test passed 1/1. PowerShell 5.1 static and
+manufactured suites passed for the storage matrix, WSL lifecycle recovery,
+host autonomous lifecycle, and origin paths. The tests used
+`-ExecutionPolicy Bypass` only for each process; Windows policy was not
+modified. Strict checkpatch on the dirty kernel C/H diff reported zero
+findings. These tests do not establish physical Windows/SSD/GPU behavior,
+native Linux mutation, kernel build/KUnit, or Hyper-V/CoCo qualification.
+
+**Assessment:** The 16 GiB/4 GiB fixtures in the parser test remain test data,
+not product minimums or preallocated capacity. This host's physical free RAM
+was about 1.6–1.7 GiB during the sample; no full stress or kernel build was
+attempted. Keep the installed/source mismatch and all hardware gates open.
+
+**Verdict:** 🟡 `PARTIAL` — read-only discovery, local-storage refusal,
+variable-size parser inputs, and static/unit tests are verified. Configuration
+mutation, native Linux live validation, disk comparison, and hardware gates
+remain incomplete.
+
+## 2026-09-28 00:38–01:20 -03 — independent audit of every active PARTIAL
+
+**What:** Re-read executable Rust, PowerShell, and separate kernel candidate
+source for every active `PARTIAL` in the Gap Register. Re-ran its named local
+tests and static harnesses. Did not accept EVD-0100/EVD-0101 conclusions
+without a matching source check or a fresh sample.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0103`.
+**Owner role:** independent source / runtime reliability audit.
+**Observed at:** `2026-09-28T04:20:12Z`.
+**Verified at:** `2026-09-28T04:20:12Z`.
+**Source revision:** `3f8ddbacbbc23d33e7b4d8b1851d6785eceabb81`.
+**Source state:** RamShared worktree contains uncommitted source, test, and
+documentation changes.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0100–EVD-0102 until release or platform evidence
+supersedes the relevant gate.
+**Category:** active PARTIAL source audit / named unit and static tests /
+installed identity.
+**Freshness:** Guest and Windows measurements were sampled at 03:38 UTC;
+PowerShell process totals at 03:52 UTC; source and harness checks completed at
+04:20 UTC.
+**How to measure:** Inspect the exact entrypoints, named tests, current
+installed binary, guest swap/pressure, kernel worktree diff, and Windows
+static harness results. No stress, mutation, activation, host install, WSL
+shutdown, or physical-disk benchmark was run.
+
+| Active gate | Direct source/test finding | Status |
+| --- | --- | --- |
+| WSL2 freeze memory ownership | Current guest sample has zero PSI but cannot explain the earlier freezes. Active WSL `#6` has no exact source receipt. Candidate source has UIO page references, but unregister does not wait for mapping closure; removal proceeds to buffer cleanup and memory reencryption without a VMA lifetime tracker. The candidate retained-buffer list has only test cleanup and no production reclaimer. Strict checkpatch is clean; candidate build, KUnit, install, GPADL runtime interleavings, and CoCo transitions remain untested. Do not claim a proven UAF or freeze cause. | PARTIAL |
+| WSL2 control-plane stability and effective revocable-cache transition | Direct search of both daemon/service source trees found no production `host_gate` call or AF_VSOCK/AF_HYPERV startup from the runtime entrypoints. `host_gate::tests` passes 14/14 but tests the helper policy, not a live transport. No live handshake, lease/manifest exchange, or 24-hour rollout exists. | PARTIAL |
+| Legacy WSL2 service handoff and teardown | Installed `/usr/local/bin/ramshared` is v0.14.1; no `ramsharedd` process exists and the fallback swap is the only active swap. The source swapoff-first test passes 1/1. No installed v0.15.0 `BINARY_MATCH` or post-reboot repeated handoff was run. | PARTIAL |
+| Cross-vendor GPU budget identity and stress admission | The fresh-identity, WDDM intersection, freshness, reserve, and refusal tests pass 13/13. No live allocator worker, GPU memory allocation/teardown, second adapter, or AMD/Intel campaign was run. | PARTIAL |
+| Corrected Windows physical lifecycle qualification | PowerShell 5.1 is available in this environment. Static/manufactured suites for WSL lifecycle recovery, host autonomous lifecycle, and origin safety pass. They do not exercise physical cold boot, current loaded-binary identity, recovery, or rollback on the target host. | PARTIAL |
+| Windows virtual-disk properties, counters, and performance matrix | `Test-WindowsStorageMatrixStatic.ps1` passes its manufactured matrix and refusal checks. No physical five-cell, three-run matrix, intended-payload integrity, raw counter bundle, or current Event ID 153 window was collected. | PARTIAL |
+| Cross-platform resource configuration | PRD/SPEC specify equal native Linux and WSL2 providers and variable user ceilings. Source now implements read-only resource discovery; Linux stable-ID ext4/XFS targets support multiple disks and known remote or unclassified transports refuse. WSL guest filesystems remain ineligible until backing Windows volume identity/free capacity are bound. There is no typed profile, `plan`/`apply`, managed swap/origin write, disk benchmark, or speed recommendation; native Linux live E2E has not run. | PARTIAL |
+
+**Assessment:** All seven `PARTIAL` statuses remain accurate for the missing
+platform proof or unimplemented feature work. Static/unit results advance the
+evidence without qualifying physical Windows, GPU, storage, or kernel paths.
+The earlier EVD-0101 statement that `ramshared config` did not exist is
+historical and is superseded by EVD-0102; the present command is a read-only
+inventory only. The earlier assumption that the PowerShell runtime was absent
+is also not valid for this sample: PowerShell 5.1 is available and the current
+static harnesses pass.
+
+**Verdict:** 🟡 `PARTIAL` — source-level gaps have been corrected or precisely
+bounded, but none of the seven gates is closed by this audit.
+
+## 2026-09-28 02:18 -03 — typed resource profile and independent gate recheck
+
+**What:** Rechecked the active PARTIAL findings against the current Rust,
+PowerShell, and separate kernel-candidate source. Added a bounded v1 resource
+profile model for variable user ceilings and stable platform storage targets.
+Captured a fresh read-only guest sample after source tests.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0104`.
+**Owner role:** source audit / configuration / reliability.
+**Observed at:** `2026-09-28T05:18:30Z`.
+**Verified at:** `2026-09-28T05:39:30Z`.
+**Source revision:** `9c94c7b78f91109930d32a9542baf3fb4bf0cc41`.
+**Source state:** branch `feat/ramshared-20260921-consolidation` is at the
+source commit above; this EVD, the gap-register update, and the generated
+capability-observation update are documentation-only changes. The separate
+kernel tree remains dirty and is not part of this RamShared revision.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0102 and EVD-0103 until profile integration or
+live platform/release evidence supersedes the relevant gate.
+**Freshness:** Guest memory, swap, PSI, installed CLI version, and process
+presence were sampled together at 05:18 UTC. Source tests and static suites
+completed by 05:20 UTC.
+**Category:** typed resource policy / source and static tests / guest status.
+**How to measure:** Read `/proc/meminfo`, `/proc/swaps`, and
+`/proc/pressure/memory`; run the installed CLI `--version`; check for a running
+`ramsharedd`; execute the named Rust and PowerShell suites; inspect the active
+source entrypoints and separate kernel diff. No RamShared activation, storage
+write, benchmark, stress, kernel build, or host install was performed.
+
+**Current guest sample:** `MemTotal` was about 15.6 GiB, `MemAvailable` about
+7.3 GiB, and `SwapFree` about 2.6 GiB. Memory PSI avg10/60/300 remained zero.
+The only active swap entry was the 4 GiB WSL fallback swap. The installed CLI
+still reports v0.14.1, and no `ramsharedd` process was present. This is a
+read-only point sample; it does not prove the earlier freeze cause or qualify
+an installed v0.15.0 binary.
+
+**Profile change:** `ramshared-config::resource_profile` now parses TOML up to
+64 KiB and validates schema version, variable byte ceilings, stable adapter
+and storage IDs, native Linux versus WSL2 target types, Linux relative paths,
+Windows absolute paths, and target allocation metadata. It computes a checked
+combined storage free-space requirement with the SPEC's 10 GiB reserve floor;
+it does not inspect live volume free space or authorize writes. Six named
+integration tests pass. The two required profile tests verify variable values,
+overflow refusal, and stable volume/adapter ID round-trip. The profile is not
+loaded or persisted by `ramshared config`; selection, plan/apply, managed
+swap/origin writes, and disk comparison remain unimplemented.
+
+**Checks:** `cargo test -j 1 -p ramshared-config` passed 15 unit and 6
+integration tests; strict package Clippy passed; its business-logic slice
+coverage passed at 95.6% (172/180 lines). `cargo test -j 1 -p ramshared-cli`
+passed 379 unit and 11 integration tests; strict Clippy passed and the
+`resource_config.rs` slice gate passed at 88.3% (1,131/1,281). The isolated
+GPU budget suite passed 13/13, host-gate suite 14/14, and swapoff-first
+migration test 1/1. PowerShell 5.1 static/manufactured suites passed for the
+Windows storage matrix, WSL lifecycle recovery, autonomous lifecycle, and
+origin safety. Kernel `checkpatch.pl --strict` on the dirty candidate diff
+reported zero errors, warnings, or checks. `-ExecutionPolicy Bypass` was used
+only per test process; Windows policy was not changed. Rust formatting,
+`git diff --check`, docs-index, validation-schema, and the complete
+`./scripts/docs-check.sh` all passed after regenerating the capability
+observations artifact. These checks do not establish live host/guest transport,
+loaded-binary identity, physical storage or GPU behavior, VMBus runtime
+interleavings, KUnit, or CoCo transitions.
+
+**Independent status audit:** All seven current PARTIAL rows remain open for
+source or environment reasons confirmed directly. The kernel candidate still
+has no production retained-buffer reclaimer or UIO VMA-close tracker, and was
+not built or installed. The host/guest control-plane module is not started by
+the daemon/service entrypoints; its helper tests do not prove a live handshake.
+The current release remains v0.14.1. GPU policy has refusal and allocation
+unit coverage but no live multi-adapter/vendor allocation campaign. Windows
+physical lifecycle and storage-matrix evidence remains absent. Resource
+configuration now has a typed model but still lacks CLI/provider integration
+and native Linux live E2E. No prior PARTIAL verdict was promoted based on
+source presence or manufactured tests alone.
+
+**Verdict:** 🟡 `PARTIAL` — the typed profile and read-only policy gates
+advance, but all seven reliability/qualification gates remain open.

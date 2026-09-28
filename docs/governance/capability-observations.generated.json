@@ -880,17 +880,22 @@
           "crates/ramshared-cli/src/cascade/mod.rs",
           "crates/ramshared-cli/src/main.rs",
           "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-cli/src/resource_config.rs",
           "crates/ramshared-config/src/lib.rs",
+          "crates/ramshared-config/src/resource_profile.rs",
           "crates/ramshared-wsl2d/src/gpu_budget.rs",
           "crates/ramshared-wsl2d/src/main.rs",
           "scripts/docs-check.sh",
           "scripts/safety/wslconfig-lib.sh",
           "scripts/windows/Manage-RamSharedOrigin.ps1"
         ],
-        "test_paths": []
+        "test_paths": [
+          "crates/ramshared-cli/tests/cli_dispatch.rs",
+          "crates/ramshared-config/tests/resource_profile.rs"
+        ]
       },
       "documents": {
-        "implementation": null,
+        "implementation": "docs/specs/no-milestone/resource-configuration-center/IMPL.md",
         "prd": "docs/specs/no-milestone/resource-configuration-center/PRD.md",
         "spec": "docs/specs/no-milestone/resource-configuration-center/SPEC.md"
       },
