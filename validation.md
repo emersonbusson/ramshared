@@ -7698,3 +7698,180 @@ is unmatched and the GPADL/UIO fix is unsafe to install.
 **Verdict:** 🟡 `PARTIAL` — guest thrashing is confirmed; the initiating
 allocation/process, I: reader, and safe matched-kernel fix remain unresolved.
 Keep stress off and do not install the unqualified kernel diff.
+
+## 2026-09-27 19:34–19:37 -03 — Active-gap source audit and monitor corrections
+
+**What:** Compared every active reliability gate against current source,
+tests, installed state, and the unbuilt VMBus worktree.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0100`.
+**Owner role:** `runtime / reliability / source audit`.
+**Observed at:** `2026-09-27T22:34:45Z`.
+**Verified at:** `2026-09-27T22:37:29Z`.
+**Source revision:** `79380a078d4df1b571827cb3d936b71e615ccf5a`.
+**Source state:** Read-only comparison of all eleven active GAP-REGISTER rows
+with their executable source and existing tests; committed monitor fixes;
+read-only installed RamShared status and guest kernel/memory counters; static
+review of the VMBus working diff and its tracked mail-series files. No stress,
+Windows lifecycle, kernel build/KUnit, or install was run.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0096–EVD-0099 and the VMBus ownership review.
+**Freshness:** Installed status and guest counters at 19:34:45 -03; source
+revision and working-tree checks at 19:34–19:37 -03.
+**Category:** `reliability / source audit / memory / monitor / VMBus / release gates`.
+**How to measure:** Compare active GAP-REGISTER claims to current source and
+named tests, then separately read installed `ramshared status --json`,
+`/proc/meminfo`, `/proc/swaps`, `/proc/pressure/memory`, `uname -a`, current
+Git revisions and worktree state. Do not infer deployment or hardware proof
+from source tests.
+
+**Monitor changes:** The dashboard previously turned missing or malformed PSI
+averages into `0%`, and kept displaying the last I/O rate as real-time after a
+refresh failed. Required `/proc/meminfo` counters were also defaulted to zero
+without marking that sample unavailable. Commits `83dcde21` and `79380a07`
+now reject malformed PSI as a pressure value, mark failed refreshes stale,
+hide stale real-time I/O rates, track required memory-counter validity, render
+missing/inconsistent RAM and swap counters as unavailable, and exclude invalid
+memory samples from the history. The full CLI binary test suite passes 360/360;
+Clippy with `-D warnings`, rustfmt check, and `git diff --check` pass. These
+source changes are not in the installed v0.14.1 executable.
+
+**Current installed and guest state:** At 19:34:45 -03,
+`ramshared status --json` reported installed `binary_version=0.14.1`, phase
+`Off`, protection/cache/origin `OFF`, daemon dead, ZRAM and VRAM absent, and
+Guardian `BLOCKED` with `guardian_state_stale`. The only managed device was
+the 4 GiB WSL fallback swap, with 2,558,876 KiB used. The guest reported
+`MemAvailable=11,359,880 KiB`, `SwapFree=1,635,428 KiB`, and zero memory PSI
+avg10/avg60/avg300. The running kernel remains
+`6.18.40.1-microsoft-standard-WSL2+ #6`. This is a no-pressure guest sample;
+it is not paired with current Windows physical/commit counters and does not
+qualify stress admission. No RamShared tier or stress was active in this
+sample.
+
+**Source audit of every open gate:**
+
+| Active gate | Source comparison and remaining proof |
+| --- | --- |
+| WSL2 freeze memory ownership — `PARTIAL` | The monitor corrections improve source telemetry but do not explain the prior guest swap thrash. The running `#6` image still has no immutable source receipt. The current VMBus working diff has safer uncertain-GPADL retention but lacks UIO VMA accounting and a retained-buffer reclaimer. No buffer-owner/channel attribution or paired current Windows sample exists. |
+| WSL2 control-plane and revocable cache — `PARTIAL` | `ramshared-wsl2d` starts an isolated local GPU worker, but its entry point does not start the bounded host/guest transport primitives in `host_gate.rs`. No live handshake, lease/manifest delivery, fresh Guardian, or 24-hour rollout is evidenced. |
+| Legacy WSL2 handoff and teardown — `PARTIAL` | The installed executable remains v0.14.1 and currently reports Off; source or hermetic tests cannot substitute for repeated idempotent start/stop on a clean v0.15 package with `BINARY_MATCH`. |
+| Three-tier stress — `BLOCKED` | Source contains separate Windows physical/commit admission and guest `MemAvailable`/`SwapFree` gates before activation. The guest counters currently clear their 1 GiB reserves, but Guardian is stale, the installed binary is v0.14.1, no current Windows sample or attached-origin proof exists, and no stress was run. |
+| Cross-vendor GPU budget — `PARTIAL` | `gpu_budget.rs` requires fresh driver-reported allocator state, adapter identity agreement, and the lower same-adapter WDDM headroom where available. Hermetic tests do not prove allocation/teardown on NVIDIA, AMD, Intel, or multiple live adapters. |
+| VMBus upstream ring series — `BLOCKED` | Direct source review found `hv_is_isolation_supported()` has a weak false default in `hv_common.c` and no arm64 override; the old allocator therefore selected `vzalloc()` for arm64 host-visible buffers. It also rounded a `u32` size before storing the result back into `u32`, allowing a near-4-GiB request to wrap. The current uncommitted worktree now selects page chunks on arm64 and rejects unrepresentable rounded sizes, with KUnit cases. `checkpatch.pl --strict` reports 0 errors/warnings/checks on the modified C/H diff. The worktree patch hash is `3447b4f61d11e7fa4ce4154287706257f8ae36cb603480c0e19faa1098646ee0`; the tracked six mail patches do not contain these helpers. No build/KUnit was run. Host rescind still retains VMBus-owned UIO pages indefinitely because `uio_unregister_device()` does not wait for open VMAs and no VMA lifetime tracker/reclaimer is implemented. |
+| Public Windows driver distribution — `BLOCKED` | The code provides lab/test-signing paths. No production-trusted signing identity or Microsoft attestation, verifier result with test-signing disabled, or public install/rollback evidence was found in this audit. |
+| Windows physical lifecycle — `PARTIAL` | Current lifecycle scripts and refusal tests exist, but this Linux environment has neither `pwsh` nor Windows PowerShell; no PowerShell test, physical cold-boot drill, or loaded-binary identity check was run here. |
+| Windows storage matrix — `PARTIAL` | The old disk-counter script is explicitly retired and points to `Invoke-WindowsStorageMatrix.ps1`; a static suite exists. No Windows run/artifact set proves the five-cell physical matrix, payload integrity, raw counters, or Event ID 153 result. |
+| Custom-kernel DXG/systemd — `BLOCKED` | Current boot identity is `#6`; this audit produced no source receipt or same-host bundled/custom A/B, Xwayland/DXG probe, or fresh boot-log qualification. |
+| Custom-kernel ublk product transport — `DEFERRED` | The repository keeps NBD as the day-1 path. This audit found no product ublk startup/teardown, crash-drain, or terminal no-ghost evidence that would justify promotion. |
+
+**Assessment:** Source checks closed three monitor-reporting defects and exposed
+two VMBus allocator defects; the latter are corrected only in an unbuilt,
+uncommitted kernel worktree that is not represented in the tracked mail
+series. The installed RamShared release and all external laboratory gates
+remain unchanged. Keep every GAP-REGISTER status as shown above; do not
+promote the kernel, activate stress, or claim cross-vendor/CoCo qualification.
+
+**Verdict:** 🟡 `PARTIAL` — source and local test evidence improved, but installed
+release parity, current Windows admission, UIO lifetime/reclamation, kernel
+build/KUnit, Hyper-V/CoCo qualification, Windows hardware/signing, and
+maintainer review remain open.
+
+## 2026-09-27 22:00–22:06 -03 — Independent active-gap and configuration audit
+
+**What:** Re-read every active `PARTIAL` gate against executable source and
+named tests, checked the current installed RamShared state and paired guest /
+Windows memory sample, and verified whether the cross-platform resource
+configuration design has reached the CLI. Re-read the dirty VMBus patch's UIO
+mapping and buffer ownership paths. Prior verdicts were treated as leads and
+rechecked from source.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0101`.
+**Owner role:** `runtime / reliability / source audit`.
+**Observed at:** `2026-09-28T01:00:39Z`.
+**Verified at:** `2026-09-28T01:06:15Z`.
+**Source revision:** `79380a078d4df1b571827cb3d936b71e615ccf5a`.
+**Source state:** RamShared worktree has the existing uncommitted parser-fixture,
+documentation-checker, governance, reliability-record, and configuration
+specification changes. The separate kernel worktree is based on
+`6c2591cbe959d6ff4c310da9818b1743829b23da`, has five dirty source/documentation
+files, and its current VMBus diff hashes to
+`6d8bee0160ed25bf96d31a7e170e1c1a47bc530162abf91df742ac45b7615dbf` across
+the selected kernel source files (excluding `IMPL.md`).
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0093–EVD-0100 until a provenance-matched release or
+new paired incident evidence supersedes it.
+**Freshness:** Installed/guest sample at 21:59–22:00 -03; Windows sample at
+22:00:39 -03; source review at 22:00–22:06 -03. Guest and Windows readings
+were collected within 73 seconds.
+**Category:** `reliability / source audit / installed state / memory / VMBus /
+configuration design`.
+**How to measure:** Read installed state with `ramshared status --json`; read
+`/proc/meminfo`, `/proc/swaps`, `/proc/pressure/memory`, and `uname -a`; query
+Windows `Win32_OperatingSystem` and `Win32_PerfRawData_PerfOS_Memory` through
+PowerShell; inspect the current Rust, PowerShell, and kernel source directly.
+Run the named source tests and manufactured/static harnesses listed below.
+
+**Current installed and paired state:** `ramshared status --json` reported
+`binary_version=0.14.1`, phase `Off`, protection/cache/origin `OFF`, daemon
+dead, Guardian `BLOCKED` with `guardian_state_stale`, and only the 4 GiB WSL
+fallback swap active at priority `-2` (about 2,124 MiB used). The installed
+command has no `config` subcommand. At 21:59 -03, the guest reported
+`MemTotal=16,379,364 KiB`, `MemAvailable=10,274,176 KiB`, `SwapTotal=4,194,304
+KiB`, `SwapFree=2,019,220 KiB`, and memory PSI `some/full avg10=0.00`. The
+running kernel is `6.18.40.1-microsoft-standard-WSL2+ #6`. At 22:00:39 -03,
+Windows reported 17,485 MiB physical memory free and commit 24,107/57,246 MiB
+(33,139 MiB remaining). This healthy guest-pressure sample does not match the
+earlier freeze and does not identify its initiating allocation; the WSL
+kernel image still has no exact source receipt. The stale Guardian independently
+prevents treating the current installation as ready for stress.
+
+**Independent source re-audit of the six active PARTIAL gates:**
+
+| Gate | Direct finding | Status |
+| --- | --- | --- |
+| WSL2 freeze memory ownership | The current sample has zero PSI and substantial guest availability, but the installed `#6` image remains source-unmatched. In the dirty candidate kernel patch, host rescind retains VMBus-owned buffers whose GPADL ownership is unresolved. UIO logical mappings have no VMA lifetime callbacks; `uio_unregister_device()` clears the info and unregisters without waiting for VMAs, while `hv_uio_remove()` proceeds to buffer cleanup and ring free. The candidate has no production retained-buffer reclaimer. This is a candidate ownership gap, not proof of the installed kernel's cause. | PARTIAL |
+| WSL2 control-plane stability and effective revocable-cache transition | `host_gate` and AF_VSOCK/AF_HYPERV transport code exist, but direct search found no `host_gate` call or host-transport startup in `ramshared-wsl2d`'s daemon entrypoint or `ramshared-winsvc` service entrypoint. These are primitives/tests, not a live handshake. The installed Guardian is stale and the release remains 0.14.1. | PARTIAL |
+| Legacy WSL2 service handoff and teardown | Swapoff-first and identity-bound teardown paths have passing hermetic regression cases, but the installed v0.14.1 daemon is Off with a stale Guardian; there is no current clean-release `BINARY_MATCH` or repeated post-reboot handoff evidence. | PARTIAL |
+| Cross-vendor GPU budget identity and stress admission | Same-adapter allocator/WDDM budget checks and freshness/identity refusals are present and their unit tests pass. No live worker allocation, teardown, or AMD/Intel/multi-adapter campaign was run. | PARTIAL |
+| Corrected Windows physical lifecycle qualification | The PowerShell static/manufactured lifecycle suites pass, but no cold-boot lifecycle, physical mutation, or loaded-binary identity drill was run. | PARTIAL |
+| Windows virtual-disk properties, counters, and performance matrix | The static storage harness passes against manufactured cases; no physical five-cell matrix, raw-counter artifact set, payload-integrity run, or Event 153 qualification exists in this audit. | PARTIAL |
+
+The checks run in this session were: `./scripts/docs-check.sh` (pass);
+`cargo test -p ramshared-cli --bin ramshared
+meminfo_missing_or_inconsistent_core_values_are_unavailable` (1 pass);
+`cargo test -p ramshared-wsl2d --lib gpu_budget::tests` (13 pass);
+`cargo test -p ramshared-wsl2d --lib host_gate::tests` (14 pass);
+`cargo test -p ramshared-wsl2d --bin ramsharedd
+daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm` (1 pass);
+`cargo test -p ramshared-cli --bin ramshared
+legacy_migration_executor_preserves_swapoff_first_order` (1 pass); and the
+PowerShell 5.1 manufactured/static harnesses
+`Test-WindowsStorageMatrixStatic.ps1`,
+`Test-RamSharedWslLifecycleRecoveryStatic.ps1`,
+`Test-HostAutonomousLifecycleStatic.ps1`, and
+`Test-RamSharedOriginStatic.ps1` (all pass). These tests do not qualify a
+physical host, GPU, Windows disk matrix, or Hyper-V guest. No kernel build,
+KUnit, stress, activation, WSL shutdown, or host installation was performed.
+
+**Configuration design state:** The new resource-configuration PRD/SPEC and
+SSDV3 2.5 review define one interface for native Linux and WSL2, with separate
+providers. The native provider is designed to enumerate block devices and
+mounted filesystems and allow supported swapfile/origin placement; WSL2 is
+designed to enumerate host volumes and stage its own fallback-swap setting.
+RAM/swap/VRAM values are per-user choices bounded by fresh provider data; the
+different values in the `meminfo` parser test are input fixtures, not product
+defaults or minimums. Optional per-volume speed comparison is consented and
+bounded by the SPEC. The code has not implemented `ramshared config`, either
+provider, or the interface; `ramshared --help` confirms the command is absent.
+The SSDV3 verdict is GO for Step 3 implementation only, not feature completion.
+
+**Assessment:** All six `PARTIAL` rows remain open for the specific missing
+proof above. The source review confirms candidate code gaps but does not
+establish the prior freeze's cause or qualify installation. Keep stress,
+promotion, and universal hardware claims blocked by their current gates.
+
+**Verdict:** 🟡 `PARTIAL` — current state is measured and the six open gates
+were rechecked against source; deployment/release parity, live control-plane,
+post-reboot lifecycle, physical GPU/Windows storage evidence, matched kernel
+forensics, UIO mapping lifetime/reclamation, and the config implementation
+remain incomplete.

@@ -122,6 +122,43 @@ dashboard's hardcoded `Protection: ACTIVE` was separately corrected in source
 commit `a5ea63d1` and passed five focused tests, but no release binary is
 installed. Keep the freeze gap `PARTIAL` and stress off.
 
+### Active-gate source and runtime audit (EVD-0100)
+
+EVD-0100 compares every open gate above with current executable source and
+separates code evidence from installed or hardware proof. All eleven statuses
+remain unchanged. Commits `83dcde21` and `79380a07` improve monitor accuracy:
+missing/malformed PSI and required `meminfo` counters no longer appear as
+invented zero values, failed refreshes are marked stale, and invalid memory
+samples do not enter the history. The CLI binary suite passes 360 tests and
+Clippy, formatting, and whitespace checks pass. The installed executable is
+still v0.14.1, phase Off; the Guardian is stale, only the WSL fallback swap is
+present, and no Windows physical/commit sample was paired with the guest.
+Stress remains blocked.
+
+Direct review of the current VMBus worktree found and patched two source gaps:
+arm64 host-visible buffers now select the page-chunk path despite the weak
+false default for `hv_is_isolation_supported()`, and page-rounding overflow is
+rejected before storing the aligned size in `u32`. Strict checkpatch is clean,
+but this worktree diff is unbuilt and untested by KUnit, is absent from the
+tracked six-patch mail series, and still retains UIO-backed buffers without a
+VMA lifetime tracker or reclaimer. Keep the upstream, CoCo, freeze-causality,
+and host-promotion gates open. The source findings and external proofs are
+itemized under EVD-0100 in [validation.md](../../validation.md).
+
+### Independent current-state cross-check (EVD-0101)
+
+EVD-0101 re-reads all six active `PARTIAL` rows against source and named tests
+and pairs a fresh guest sample with Windows memory telemetry. The installation
+is still v0.14.1 with RamShared Off and a stale Guardian; the 4 GiB WSL fallback
+swap is the only active swap device. The sample does not identify the earlier freeze
+or admit stress. The VMBus candidate still lacks UIO VMA lifetime tracking and
+a production retained-buffer reclaimer; this remains candidate evidence, not
+installed-kernel attribution. Host/guest transport and `host_gate` remain
+unwired in both runtime entrypoints. The cross-platform resource configuration
+now has a reviewed PRD/SPEC, but there is no `ramshared config` implementation.
+All six gates remain `PARTIAL`; see [EVD-0101](../../validation.md) for the
+measured values, test commands, and exact proof still missing.
+
 ## Closed In This Session
 
 All run IDs, commands, VM names, and `SANITIZED_*` values below are retained
