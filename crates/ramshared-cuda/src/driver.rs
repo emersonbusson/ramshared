@@ -556,7 +556,8 @@ fn err_string(syms: &Syms, r: CuResult) -> String {
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-    use core::cell::Cell;
+    use core::cell::{Cell, RefCell};
+    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -584,6 +585,26 @@ mod tests {
     // A global counter races when the test harness runs these tests in parallel.
     thread_local! {
         static UNREGISTER_CALLS: Cell<usize> = const { Cell::new(0) };
+        static MOCK_DEVICE_MEMORY: RefCell<BTreeMap<CuDevicePtr, Vec<u8>>> =
+            RefCell::new(BTreeMap::new());
+        static NEXT_MOCK_DEVICE_ADDRESS: Cell<CuDevicePtr> = const { Cell::new(0x1000) };
+    }
+
+    const MOCK_INVALID_VALUE: CuResult = 1;
+    const MOCK_OUT_OF_MEMORY: CuResult = 2;
+
+    fn with_mock_device_range<R>(
+        ptr: CuDevicePtr,
+        len: usize,
+        operation: impl FnOnce(&mut [u8]) -> R,
+    ) -> Option<R> {
+        MOCK_DEVICE_MEMORY.with(|memory| {
+            let mut memory = memory.borrow_mut();
+            let (base, allocation) = memory.range_mut(..=ptr).next_back()?;
+            let offset = usize::try_from(ptr.checked_sub(*base)?).ok()?;
+            let end = offset.checked_add(len)?;
+            Some(operation(allocation.get_mut(offset..end)?))
+        })
     }
 
     unsafe extern "C" fn success_init(_: u32) -> CuResult {
@@ -611,21 +632,90 @@ mod tests {
     unsafe extern "C" fn success_synchronize() -> CuResult {
         CUDA_SUCCESS
     }
-    unsafe extern "C" fn success_alloc(ptr: *mut CuDevicePtr, _: usize) -> CuResult {
-        unsafe { *ptr = 0x1000 };
+    unsafe extern "C" fn success_alloc(ptr: *mut CuDevicePtr, len: usize) -> CuResult {
+        if ptr.is_null() {
+            return MOCK_INVALID_VALUE;
+        }
+        let Some(address) = NEXT_MOCK_DEVICE_ADDRESS.with(|next| {
+            let address = next.get();
+            let width = u64::try_from(len).ok()?;
+            next.set(address.checked_add(width)?.checked_add(1)?);
+            Some(address)
+        }) else {
+            return MOCK_OUT_OF_MEMORY;
+        };
+        let mut allocation = Vec::new();
+        if allocation.try_reserve_exact(len).is_err() {
+            return MOCK_OUT_OF_MEMORY;
+        }
+        allocation.resize(len, 0);
+        MOCK_DEVICE_MEMORY.with(|memory| {
+            memory.borrow_mut().insert(address, allocation);
+        });
+        // SAFETY: the CUDA API supplies a valid output pointer; null was rejected above.
+        unsafe { *ptr = address };
         CUDA_SUCCESS
     }
-    unsafe extern "C" fn success_free(_: CuDevicePtr) -> CuResult {
+    unsafe extern "C" fn success_free(ptr: CuDevicePtr) -> CuResult {
+        MOCK_DEVICE_MEMORY.with(|memory| {
+            memory.borrow_mut().remove(&ptr);
+        });
         CUDA_SUCCESS
     }
-    unsafe extern "C" fn success_htod(_: CuDevicePtr, _: *const c_void, _: usize) -> CuResult {
-        CUDA_SUCCESS
+    unsafe extern "C" fn success_htod(
+        ptr: CuDevicePtr,
+        source: *const c_void,
+        len: usize,
+    ) -> CuResult {
+        if len == 0 {
+            return CUDA_SUCCESS;
+        }
+        if source.is_null() {
+            return MOCK_INVALID_VALUE;
+        }
+        let copied = with_mock_device_range(ptr, len, |target| {
+            // SAFETY: the test passes a valid source slice and the destination range is bounded
+            // by the mock allocation selected above.
+            unsafe {
+                core::ptr::copy_nonoverlapping(source.cast::<u8>(), target.as_mut_ptr(), len)
+            };
+        });
+        if copied.is_some() {
+            CUDA_SUCCESS
+        } else {
+            MOCK_INVALID_VALUE
+        }
     }
-    unsafe extern "C" fn success_dtoh(_: *mut c_void, _: CuDevicePtr, _: usize) -> CuResult {
-        CUDA_SUCCESS
+    unsafe extern "C" fn success_dtoh(
+        destination: *mut c_void,
+        ptr: CuDevicePtr,
+        len: usize,
+    ) -> CuResult {
+        if len == 0 {
+            return CUDA_SUCCESS;
+        }
+        if destination.is_null() {
+            return MOCK_INVALID_VALUE;
+        }
+        let copied = with_mock_device_range(ptr, len, |source| {
+            // SAFETY: the test passes a valid destination slice and the source range is bounded
+            // by the mock allocation selected above.
+            unsafe {
+                core::ptr::copy_nonoverlapping(source.as_ptr(), destination.cast::<u8>(), len)
+            };
+        });
+        if copied.is_some() {
+            CUDA_SUCCESS
+        } else {
+            MOCK_INVALID_VALUE
+        }
     }
-    unsafe extern "C" fn success_memset(_: CuDevicePtr, _: u8, _: usize) -> CuResult {
-        CUDA_SUCCESS
+    unsafe extern "C" fn success_memset(ptr: CuDevicePtr, value: u8, len: usize) -> CuResult {
+        if with_mock_device_range(ptr, len, |allocation| allocation.fill(value)).is_some() {
+            CUDA_SUCCESS
+        } else {
+            MOCK_INVALID_VALUE
+        }
     }
     unsafe extern "C" fn success_mem_info(free: *mut usize, total: *mut usize) -> CuResult {
         unsafe {
@@ -698,6 +788,8 @@ mod tests {
     #[test]
     fn mock_driver_exercises_memory_and_mapping_raii() {
         UNREGISTER_CALLS.with(|calls| calls.set(0));
+        MOCK_DEVICE_MEMORY.with(|memory| memory.borrow_mut().clear());
+        NEXT_MOCK_DEVICE_ADDRESS.with(|next| next.set(0x1000));
         let cuda = mock_cuda(Some(success_host_pointer));
         assert_eq!(cuda.device_count().unwrap(), 1);
         let device = cuda.device(0).unwrap();
