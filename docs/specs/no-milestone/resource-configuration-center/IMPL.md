@@ -164,6 +164,13 @@ or native Linux target qualification on a native host.
   loads a temporary user-readable caps-only draft and verifies no write or
   apply permission is reported. It does not prove a live storage-target plan;
   the target identity/capacity paths are currently covered by unit fixtures.
+- Live selected-volume WSL E2E (2026-09-28): an attended TTY session selected
+  one eligible real Windows host volume, drafted a 1 MiB fallback-swap request
+  under a temporary user-owned directory, and ran `config plan` against that
+  profile. The result was `ready_for_review` / `storage_ready`, with
+  `writes_performed=false` and `apply_enabled=false`; the temporary profile
+  was removed. This proves live identity/capacity planning only; it did not
+  create a VHDX, activate swap, or write to the selected volume.
 - Static checks: `cargo clippy -j 1 -p ramshared-cli -p ramshared-config
   --all-targets --all-features -- -D warnings` passed. `cargo fmt --all -- --check`,
   `git diff --check`, and the full `./scripts/docs-check.sh` passed after the
@@ -221,8 +228,10 @@ or native Linux target qualification on a native host.
   rollback flow.
 - Selection currently covers conventional fallback swap and SSD origin only.
   A draft target is capacity-reviewed, but no live storage mutation is exposed.
-- Native Linux and WSL2 mutation flows, per-filesystem allocation behavior,
-  GPU adapter selection, and storage benchmark behavior remain unqualified.
+- Native Linux host qualification, WSL2 mutation flows, per-filesystem
+  allocation behavior, GPU adapter selection, and storage benchmark behavior
+  remain unqualified. A read-only WSL plan now binds one selected real host
+  volume to fresh identity and capacity.
 - The active reliability PARTIAL gates listed in `docs/reliability/GAP-REGISTER.md`
   are unaffected by this read-only configuration slice.
 

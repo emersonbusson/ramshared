@@ -8285,6 +8285,73 @@ open evidence recorded in EVD-0106.
 are now visible and tested; selection, mutation, benchmarking, and platform
 qualification remain open.
 
+## 2026-09-28 09:37 -03 — select storage targets in a safe user draft
+
+**What:** Continued an independent audit of the resource-configuration source.
+Added `ramshared config draft --output PATH`, an attended stdin/stdout TTY
+wizard that lists storage candidates and refusal reasons, selects eligible
+native Linux mounts or WSL Windows volumes (drive letter or canonical volume
+GUID), accepts variable MiB sizes for fallback swap and SSD-origin requests,
+and reviews the combined target-plus-reserve plan. The writer creates only a
+new current-user file with mode `0600`, verifies its exact bytes, syncs file
+and parent directory, and never overwrites. It does not write the protected
+system profile or apply a setting.
+
+The independent capacity audit also found that the Windows provider resolved
+volume IDs case-insensitively while the profile capacity map grouped them
+case-sensitively. Two targets using `volume-guid-a` and `VOLUME-GUID-A` could
+therefore be evaluated as separate disks. The RED test in `60ead002` reproduced
+the split; `e6291085` canonicalizes these identities before the checked sum and
+reserve lookup. A planner regression now refuses 60 GiB of combined targets
+plus the 10 GiB reserve when that volume reports only 65 GiB free.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0110`.
+**Owner role:** cross-platform resource configuration / source audit.
+**Observed at:** `2026-09-28T12:37:12Z`.
+**Verified at:** `2026-09-28T12:37:12Z`.
+**Source revision:** `e6291085d30d87cb48e273538a2dbe7e1935bc74`.
+**Source state:** `60ead002` is the intentionally failing regression
+checkpoint; `e6291085` contains the implementation and passing tests. The
+feature remains in the v0.15.0 source branch; it is not installed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0107 through EVD-0109; this advances source
+selection and closes one planner under-count but does not close the resource
+configuration gate.
+**Freshness:** Source tests and read-only CLI discovery ran on 2026-09-28. The
+current Windows volume provider was queried by the existing discovery E2E, but
+no target volume was written or benchmarked. No native Linux machine or
+selected real WSL target was qualified.
+**Category:** source regression / read-only planning / bounded draft-file
+creation / slice coverage.
+**How to measure:** Run the CLI package suite and both resource-profile and
+resource-config slice coverage gates; run strict Clippy, formatting, and the
+full documentation checks. No swap activation, origin creation, storage
+benchmark, GPU context/allocation, system profile write, `.wslconfig` change,
+kernel build/install, stress, or WSL shutdown was performed.
+
+**Checks:** The CLI suite passed 400 unit tests and 13 integration tests. The
+resource-config slice gate passed at 88.4% (2,633/2,978 lines), and the
+resource-profile slice gate passed at 93.7% (314/335 lines); both exceed the
+80% requirement. Strict Clippy passed for `ramshared-cli` and
+`ramshared-config`. `cargo fmt --all -- --check`, `git diff --check`, and
+`./scripts/docs-check.sh` passed. The draft tests cover native mounts, Windows
+drive letters, volume-GUID targets without a drive letter, stale/ambiguous/
+ineligible inventory, variable sizes and overflow, explicit confirmation,
+no-overwrite, owner/mode, and non-TTY refusal. These checks do not demonstrate
+system-profile persistence or a live storage mutation.
+
+**Remaining boundary:** The draft contains fallback-swap and SSD-origin
+requests only. It does not expose adapter-structured GPU/VRAM settings,
+storage-speed testing/recommendation, a protected system-profile writer,
+apply/rollback providers, or durable transaction audit. Native Linux live
+qualification and WSL before/action/after on a selected real host volume are
+absent. The cross-platform resource-configuration gate remains `PARTIAL`.
+
+**Verdict:** 🟡 `PARTIAL` — disk/volume selection and safe draft persistence
+work in source, and the case-insensitive capacity under-count is fixed. GPU,
+benchmark, provider, and platform-qualification gates remain open.
+
 ## 2026-09-28 08:05 -03 — model and plan a not-yet-created native origin request
 
 **What:** Independent review found that `linux_file_origin` required an inode
@@ -8456,3 +8523,95 @@ open evidence recorded in EVD-0106.
 **Verdict:** 🟡 `PARTIAL` — complete Windows volume rows and refusal reasons
 are now visible and tested; selection, mutation, benchmarking, and platform
 qualification remain open.
+
+## 2026-09-28 10:35 -03 — fresh independent audit of active PARTIAL gates
+
+**What:** Re-read current production entrypoints, VMBus/UIO worktree changes,
+GPU admission code, resource-profile/planner source, lifecycle/storage harnesses,
+and the currently installed RamShared identity. Re-ran the named tests and
+static harnesses available here. Prior PASS/PARTIAL prose was treated as a
+claim to check, not as proof.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0111`.
+**Owner role:** independent source, runtime identity, and active-gate audit.
+**Observed at:** `2026-09-28T13:35:12Z`.
+**Verified at:** `2026-09-28T13:35:12Z`.
+**Source revision:** `e6291085d30d87cb48e273538a2dbe7e1935bc74`.
+**Kernel candidate revision:** `a022ac393ecaab845682f5afe2be6be792aedde2`.
+**Kernel candidate worktree diff SHA-256:**
+`3447b4f61d11e7fa4ce4154287706257f8ae36cb603480c0e19faa1098646ee0`.
+**Installed CLI SHA-256:**
+`49f5a770c1aefcb386ca99a7bb89b8913929ca2fcf5bfa18da28fee60ea41b89`.
+**Source state:** The RamShared feature code is committed at `e6291085`; this
+evidence, its GAP-register summary, and the selected-volume E2E note in the
+resource-configuration IMPL were uncommitted during the audit. The separate
+kernel candidate has a dirty five-file source worktree. Its dirty patch is not
+the hosted CI snapshot and has no current build receipt.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0100 through EVD-0110. EVD-0111 supersedes their
+claims about the current seven active PARTIAL gates only; it does not erase
+historical incident measurements or close any environment-bound gate.
+**Freshness:** Read-only WSL sample around 2026-09-28 13:24 UTC reported about
+5.6 GiB guest `MemAvailable`, memory PSI `some/full avg10=0.00`, and about
+1.67 GiB of the 4 GiB fallback swap used. `ramshared status --json` reported
+phase/cache/origin Off and Guardian blocked as stale; its embedded status time
+was 10:13 -03, so that Guardian field is not treated as fresh health. The only
+active swap in `/proc/swaps` was the WSL fallback device. No `ramsharedd`
+process was present; one `ramshared monitor` process had about 2.9 MiB RSS.
+A read-only GPU query saw one NVIDIA GeForce RTX 2060 (6 GiB total, about
+4.45 GiB free); this does not identify who used the other GPU memory.
+**Category:** independent source re-audit / unit and integration tests /
+PowerShell manufactured tests / live read-only WSL target planning.
+**How to measure:** Inspect current source call sites and ownership paths; run
+the listed Cargo tests, slice coverage gates, strict Clippy, PowerShell static
+harnesses, `checkpatch.pl --strict`, and documentation checks. The live draft
+E2E chose one eligible real Windows host volume, created a temporary user
+draft under a temporary directory, planned it, and removed that directory.
+No swap activation, origin write, disk benchmark, GPU allocation, physical
+lifecycle/storage campaign, tier activation, stress, WSL shutdown, package
+install, or kernel build was run. The kernel build permit interface was not
+available through this session's tools or executable path; no heavy build was
+attempted or admitted by bypass.
+
+**Independent audit of every active PARTIAL:**
+
+| Gate | Fresh evidence checked | Remaining boundary |
+| --- | --- | --- |
+| Cross-platform resource configuration | Six `config_draft` unit tests and the non-TTY refusal passed. `cargo test -p ramshared-config` passed 15 unit + 12 profile integration tests. The live read-only discovery E2E passed. A separate live WSL TTY run selected one real eligible host volume, drafted a 1 MiB fallback-swap request, and `config plan` returned `ready_for_review` with `storage_ready`, `apply_enabled=false`, and `writes_performed=false`; the temporary draft was removed. Slice coverage passed at 88.4% for `resource_config.rs` and 93.7% for `resource_profile.rs`. | The WSL test proves identity/capacity planning, not a storage mutation. GPU adapter/cap selection, a bounded paired speed comparison, durable transaction audit, protected profile writer, provider apply/rollback, and native-Linux-host E2E remain open. |
+| WSL2 freeze memory ownership | Re-read the current dirty kernel tree. `hv_uio_remove()` calls `uio_unregister_device()` and then tears down buffers/ring; the UIO mapping paths have no VMA open/close lifetime accounting. The VMBus candidate's retained-owner list has no production `CHANNELMSG_GPADL_TORNDOWN` consumer/reclaimer; retained cleanup found in `channel.c` is KUnit-only. Current candidate diff passes `checkpatch.pl --strict` with zero errors/warnings/checks. | Installed Build `#6` still has no immutable source receipt; current candidate build, KUnit, install, GPADL/UIO interleaving drill, and SEV-SNP/TDX/Arm CCA transitions remain unqualified. This is an ownership risk, not proof of a UAF or the earlier freeze trigger. No heavy build was attempted because the required permit interface was unavailable. |
+| WSL2 control-plane stability and revocable-cache transition | Source search found no AF_VSOCK/AF_HYPERV listener/client or `host_gate` call from either production daemon/service entrypoint. `HandshakeAck` exists, but no guest finish message or composed authenticated lease/manifest flow exists. Helper tests passed: host gate 14/14 and service control-plane 12/12. | The helper tests do not establish transport wiring, a live authenticated handshake, disconnect revocation, origin-only fallback, or a 24-hour rollout. |
+| Legacy WSL2 handoff and teardown | `/usr/local/bin/ramshared --version` reports 0.14.1; `--build-info` is unsupported. Current status reported phase/cache/origin Off, stale Guardian state, and fallback swap only. There is no `ramsharedd`; the monitor process is not the tier daemon. The source regression `legacy_migration_executor_preserves_swapoff_first_order` passed 1/1. | There is no installed v0.15.0 `BINARY_MATCH`, fresh Guardian binding, or repeated idempotent post-reboot handoff. No installation was attempted. |
+| Cross-vendor GPU budget identity and stress admission | Current policy suite passed 13/13; shared VRAM budget/identity suite passed 7/7. Source binds allocations to fresh driver-reported budget and exact adapter identity, constraining with same-adapter WDDM headroom when available. Current read-only hardware query reports one NVIDIA RTX 2060. | No worker allocation/teardown, second-adapter test, AMD/Intel execution, or cross-vendor campaign occurred. The host query does not attribute current 1.4 GiB GPU use to RamShared. |
+| Corrected Windows physical lifecycle | Re-ran `Test-RamSharedWslLifecycleRecoveryStatic.ps1`, `Test-HostAutonomousLifecycleStatic.ps1`, and `Test-RamSharedOriginStatic.ps1`; all passed their manufactured/static assertions. | Static checks do not load the corrected package or prove cold boot, current binary identity, physical rollback/recovery, or repeated lifecycle on Windows. |
+| Windows virtual-disk properties/counters/performance matrix | Re-ran `Test-WindowsStorageMatrixStatic.ps1`; its manufactured cell, refusal, rollback, watchdog, counter-schema, and artifact checks passed. | No physical five-cell/three-run matrix, 75-sample bundle, intended-payload integrity run, raw counter capture, or Event ID 153 window was collected. |
+
+**Checks:** `cargo test -j 1 -p ramshared-cli config_draft` passed 6 unit +
+1 CLI refusal test; the live discovery integration test passed 1/1; the
+swapoff-first migration test passed 1/1. `cargo test -j 1 -p ramshared-config`
+passed 15 unit + 12 profile integration tests. Host gate passed 14/14, GPU
+admission passed 13/13, `ramshared-vram` passed 7/7, and service control-plane
+helpers passed 12/12. CLI slice coverage passed 88.4% (2,633/2,978 lines);
+profile-model coverage passed 93.7% (314/335 lines). Strict Clippy passed for
+`ramshared-cli` and `ramshared-config`. All four Windows PowerShell static
+harnesses passed. `checkpatch.pl --strict` passed on the current kernel diff.
+The first `docs-check` run caught a missing observable-proof keyword in the
+config gate's close-evidence cell; the cell was corrected and the full suite
+was rerun afterward.
+
+**Evidence-ID integrity:** Before appending EVD-0111, `validation.md` had 115
+evidence blocks but only 110 distinct IDs. `EVD-0007`, `EVD-0008`, `EVD-0009`,
+`EVD-0010`, and `EVD-0107` each appear twice. The repeated EVD-0010 block is
+identical; the other duplicate IDs refer to different content. The schema
+checks do not enforce uniqueness. The log is append-only, so those records
+were not rewritten; EVD-0111 is a new unique ID. Do not count duplicated IDs
+as independent corroboration.
+
+**Assessment:** Source selection and read-only WSL planning improved and the
+current code/static checks pass, but all seven reliability gates remain
+`PARTIAL`. Static/unit proof does not substitute for VMBus memory lifetime,
+production control-plane wiring, release parity, cross-vendor allocations, or
+physical Windows qualification.
+
+**Verdict:** 🟡 `PARTIAL` — one real selected WSL volume now passes the draft
+and capacity-plan E2E. The seven gates were audited afresh; kernel, transport,
+release, hardware, and physical Windows qualification gaps remain open.
