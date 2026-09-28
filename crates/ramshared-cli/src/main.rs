@@ -2142,6 +2142,36 @@ mod tests {
     }
 
     #[test]
+    fn config_command_accepts_draft_mode_and_requires_output_path() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "draft",
+                "--output",
+                "/tmp/ramshared-draft.toml",
+            ]))
+            .expect("draft mode parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Draft {
+                    output_path: "/tmp/ramshared-draft.toml".into(),
+                },
+            }
+        );
+        assert!(parse_cli_command(&cli_args(&["config", "draft"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "draft", "--output"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "draft", "--output", "--json"])).is_err());
+        assert!(parse_cli_command(&cli_args(&[
+            "config",
+            "draft",
+            "--output",
+            "/tmp/a.toml",
+            "--output",
+            "/tmp/b.toml",
+        ]))
+        .is_err());
+    }
+
+    #[test]
     fn config_show_dispatches_to_read_only_action() {
         let mut actions = RecordingCliActions::default();
         let mut stdout = Vec::new();
