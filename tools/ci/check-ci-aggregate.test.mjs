@@ -92,15 +92,20 @@ function contractFixture() {
       job: 'aggregate',
       open_gaps: [],
       architecture: {
-        kind: 'local-reusable-needs-v1',
+        kind: 'local-reusable-needs-v2',
         callers: [
-          { job: 'contract', gates: ['ci-contract'], kind: 'direct' },
+          {
+            job: 'contract',
+            gates: ['ci-contract'],
+            kind: 'direct',
+            entrypoint_triggers: ['pull_request', 'push-main'],
+          },
           {
             job: 'ci-core',
             kind: 'reusable',
             workflow: './.github/workflows/ci.yml',
             summary_job: 'ci-summary',
-            summary_needs: ['rust', 'docs'],
+            summary_needs: ['rust', 'docs', 'guest-pressure-safety'],
             entrypoint_triggers: ['pull_request', 'push-main'],
             gates: ['rust-quality'],
           },
@@ -145,6 +150,7 @@ test('aggregate_needs_rejects_cancelled_or_skipped_caller', () => {
   for (const result of ['cancelled', 'skipped']) {
     const aggregate = validateAggregateNeeds(contract, {
       contract: { result },
+      'ci-core': { result: 'success' },
     }, 'pull_request')
     assert.equal(aggregate.status, 'NO-GO')
     assert.equal(aggregate.errors.some((item) => item.rule === 'aggregate-caller-not-success'), true)
@@ -153,12 +159,16 @@ test('aggregate_needs_rejects_cancelled_or_skipped_caller', () => {
 
 test('aggregate_needs_accepts_only_active_success_and_rejects_missing_callers', () => {
   const contract = contractFixture()
-  const accepted = validateAggregateNeeds(contract, { contract: { result: 'success' } }, 'pull_request')
+  const accepted = validateAggregateNeeds(contract, {
+    contract: { result: 'success' },
+    'ci-core': { result: 'success' },
+  }, 'pull_request')
   assert.equal(accepted.status, 'PASS')
 
   const missing = validateAggregateNeeds(contract, {}, 'pull_request')
   assert.equal(missing.status, 'NO-GO')
-  assert.equal(missing.errors.some((item) => item.rule === 'aggregate-caller-missing'), true)
+  assert.equal(missing.errors.some((item) =>
+    item.rule === 'aggregate-caller-missing' && item.detail === 'ci-core'), true)
 
   const invalid = validateAggregateNeeds(contract, { contract: { result: 'success' } }, 'unsupported')
   assert.equal(invalid.status, 'NO-GO')
@@ -178,7 +188,7 @@ test('aggregate_needs_requires_active_reusable_entrypoint_callers', () => {
   }, 'pull_request')
   assert.equal(missing.status, 'NO-GO')
   assert.equal(missing.errors.some((item) =>
-    item.rule === 'aggregate-caller-missing' && item.context === 'ci-core'), true)
+    item.rule === 'aggregate-caller-missing' && item.detail === 'ci-core'), true)
 
   const failed = validateAggregateNeeds(contract, {
     contract: { result: 'success' },
@@ -186,7 +196,7 @@ test('aggregate_needs_requires_active_reusable_entrypoint_callers', () => {
   }, 'pull_request')
   assert.equal(failed.status, 'NO-GO')
   assert.equal(failed.errors.some((item) =>
-    item.rule === 'aggregate-caller-not-success' && item.context === 'ci-core'), true)
+    item.rule === 'aggregate-caller-not-success' && item.detail === 'ci-core'), true)
 })
 
 test('aggregate_needs_allows_entrypoint_callers_skipped_for_other_events', () => {
