@@ -110,7 +110,9 @@ the UI can inspect and export a plan but cannot apply it.
   display letter/mount path, stable volume/filesystem/device identity,
   filesystem type, total/free bytes, and eligibility. A device without an
   eligible mounted filesystem remains visible but cannot be selected for a
-  write; the feature never mounts it. Permit selection only among
+  write; the feature never mounts it. In V1, bind/subtree mount roots remain
+  visible but ineligible so a saved relative target cannot change meaning
+  after remount. Permit selection only among
   platform-eligible candidates for that platform's fallback swap and origin.
   Show every ineligible candidate and the reason. Work with one or many
   volumes without assuming a particular drive letter or transient device name.
@@ -142,10 +144,12 @@ the UI can inspect and export a plan but cannot apply it.
   manifest flow. For a new native Linux origin, create a fixed-allocated file
   only inside an app-owned directory on the selected eligible mount and seal
   filesystem UUID, stable backing-device identity (parent identity for a
-  partition, device identity for a whole-disk filesystem), mount identity,
-  inode, exact path,
-  and size before daemon use. If a sealed origin exists, disable path/size
-  changes that replace or move it and direct the user to the existing
+  partition, device identity for a whole-disk filesystem), relative path,
+  inode, exact path, and size before daemon use. Mount IDs and device numbers
+  are fresh operation observations, not persisted profile/manifest identity;
+  each operation must resolve one current mount and verify the open file
+  against its stable filesystem/device identity. If a sealed origin exists,
+  disable path/size changes that replace or move it and direct the user to the existing
   migration/recovery process.
 - **RF-9 — Safe resource ceilings:** Show existing host/guest memory limits
   and current availability as distinct measurements. Do not propose a new WSL
@@ -310,10 +314,12 @@ the UI can inspect and export a plan but cannot apply it.
   devices have no writable mount target.
 - **Native origin identity:** filesystem UUID, stable backing-device identity
   (parent identity for a partition, device identity for a whole-disk
-  filesystem), mount ID,
-  app-owned relative path, inode/device number, exact allocated size, and
-  manifest hash over the identity fields, verified again from the open file
-  descriptor before daemon use. Do not hash origin contents: the authoritative
+  filesystem), app-owned relative path, inode, exact allocated size, and
+  manifest hash over persistent identity fields. Resolve the current mount ID
+  and device number on each open and verify the opened file against that live
+  mount plus the stable filesystem/device identity. Do not persist the
+  namespace-scoped mount ID or device number. Do not hash origin contents:
+  the authoritative
   file is expected to change as the daemon writes it.
 - **GPU observation:** stable adapter ID, provider, allocator budget/use,
   WDDM budget/use, mandatory reserves, safe target, sample time.

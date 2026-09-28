@@ -58,7 +58,6 @@ pub enum ResourceTarget {
     LinuxSwapfile {
         filesystem_uuid: String,
         device_identity: String,
-        mount_id: u64,
         managed_relative_path: String,
         bytes: u64,
         priority: i32,
@@ -66,7 +65,6 @@ pub enum ResourceTarget {
     LinuxFileOrigin {
         filesystem_uuid: String,
         device_identity: String,
-        mount_id: u64,
         managed_relative_path: String,
         inode: u64,
         allocated_bytes: u64,
@@ -202,13 +200,12 @@ impl ResourceProfile {
                 ResourceTarget::LinuxSwapfile {
                     filesystem_uuid,
                     device_identity,
-                    mount_id,
                     managed_relative_path,
                     bytes,
                     priority,
                 },
             ) => {
-                validate_linux_storage_identity(filesystem_uuid, device_identity, *mount_id)?;
+                validate_linux_storage_identity(filesystem_uuid, device_identity)?;
                 validate_linux_relative_path(managed_relative_path)?;
                 validate_positive_bytes("target.bytes", *bytes)?;
                 if !(-1..=32_767).contains(priority) {
@@ -220,14 +217,13 @@ impl ResourceProfile {
                 ResourceTarget::LinuxFileOrigin {
                     filesystem_uuid,
                     device_identity,
-                    mount_id,
                     managed_relative_path,
                     inode,
                     allocated_bytes,
                     identity_field_hash,
                 },
             ) => {
-                validate_linux_storage_identity(filesystem_uuid, device_identity, *mount_id)?;
+                validate_linux_storage_identity(filesystem_uuid, device_identity)?;
                 validate_linux_relative_path(managed_relative_path)?;
                 validate_positive_bytes("target.allocated_bytes", *allocated_bytes)?;
                 if *inode == 0 {
@@ -378,13 +374,9 @@ pub fn checked_required_free_bytes(
 fn validate_linux_storage_identity(
     filesystem_uuid: &str,
     device_identity: &str,
-    mount_id: u64,
 ) -> Result<(), ResourceProfileError> {
     validate_identity("target.filesystem_uuid", filesystem_uuid)?;
     validate_identity("target.device_identity", device_identity)?;
-    if mount_id == 0 {
-        return Err(invalid("target.mount_id", "must be non-zero"));
-    }
     Ok(())
 }
 

@@ -22,7 +22,6 @@ fn resource_profile_accepts_variable_caps_and_rejects_overflow() {
         targets: vec![ResourceTarget::LinuxSwapfile {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 27,
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 128 * 1024 * 1024,
             priority: -1,
@@ -51,7 +50,6 @@ schema_version = 1
 kind = "linux_swapfile"
 filesystem_uuid = "fs-uuid-a"
 device_identity = "wwn-0x5000-local-a"
-mount_id = 27
 managed_relative_path = "swap/ramshared-a.swap"
 bytes = 1073741824
 priority = -1
@@ -60,7 +58,6 @@ priority = -1
 kind = "linux_file_origin"
 filesystem_uuid = "fs-uuid-a"
 device_identity = "wwn-0x5000-local-a"
-mount_id = 27
 managed_relative_path = "origin/ramshared-a.img"
 inode = 42
 allocated_bytes = 3221225472
@@ -70,7 +67,6 @@ identity_field_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 kind = "linux_file_origin"
 filesystem_uuid = "fs-uuid-b"
 device_identity = "wwn-0x5000-local-b"
-mount_id = 81
 managed_relative_path = "origin/ramshared-b.img"
 inode = 84
 allocated_bytes = 2147483648
@@ -154,6 +150,24 @@ fn resource_profile_rejects_duplicate_managed_paths_and_capacity_overflow() {
 }
 
 #[test]
+fn resource_profile_rejects_transient_mount_id_in_persisted_targets() {
+    let text = r#"
+schema_version = 1
+
+[[targets]]
+kind = "linux_swapfile"
+filesystem_uuid = "fs-uuid-a"
+device_identity = "wwn-0x5000-local-a"
+mount_id = 27
+managed_relative_path = "swap/ramshared-a.swap"
+bytes = 1073741824
+priority = -1
+"#;
+
+    assert!(ResourceProfile::parse(text).is_err());
+}
+
+#[test]
 fn resource_profile_roundtrips_stable_volume_and_adapter_ids() {
     let text = r#"
 schema_version = 1
@@ -192,7 +206,6 @@ bytes = 4294967296
         targets: vec![ResourceTarget::LinuxFileOrigin {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 27,
             managed_relative_path: "origin/ramshared-a.img".into(),
             inode: 42,
             allocated_bytes: 3 * 1024 * 1024 * 1024,
@@ -268,7 +281,6 @@ fn resource_profile_rejects_platform_mismatch_unknown_fields_and_unsafe_paths() 
         targets: vec![ResourceTarget::LinuxFileOrigin {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 27,
             managed_relative_path: "../outside/origin.img".into(),
             inode: 42,
             allocated_bytes: 1024,
@@ -290,7 +302,6 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
         targets: vec![ResourceTarget::LinuxSwapfile {
             filesystem_uuid: " ".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 0,
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 0,
             priority: i32::MAX,
@@ -301,8 +312,7 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
     let invalid_swap_targets = [
         ResourceTarget::LinuxSwapfile {
             filesystem_uuid: "fs-uuid-a".into(),
-            device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 0,
+            device_identity: " ".into(),
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 1024,
             priority: -1,
@@ -310,7 +320,6 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
         ResourceTarget::LinuxSwapfile {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 27,
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 0,
             priority: -1,
@@ -318,7 +327,6 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
         ResourceTarget::LinuxSwapfile {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 27,
             managed_relative_path: "swap/ramshared-a.swap".into(),
             bytes: 1024,
             priority: 32_768,
@@ -339,7 +347,6 @@ fn resource_profile_rejects_zero_or_unbound_storage_identity() {
         targets: vec![ResourceTarget::LinuxFileOrigin {
             filesystem_uuid: "fs-uuid-a".into(),
             device_identity: "wwn-0x5000-local-a".into(),
-            mount_id: 27,
             managed_relative_path: "origin/ramshared-a.img".into(),
             inode: 0,
             allocated_bytes: 1024,
@@ -400,7 +407,6 @@ fn resource_profile_rejects_oversized_or_controlled_identity_and_paths() {
             targets: vec![ResourceTarget::LinuxSwapfile {
                 filesystem_uuid: "fs-uuid-a".into(),
                 device_identity: "wwn-0x5000-local-a".into(),
-                mount_id: 27,
                 managed_relative_path,
                 bytes: 1024,
                 priority: -1,

@@ -145,11 +145,18 @@ struct PlannedTarget {
     kind: &'static str,
     volume_identity: String,
     path: String,
+    observed_mount_id: Option<u64>,
     requested_bytes: u64,
     required_free_bytes: u64,
     observed_free_bytes: Option<u64>,
     status: &'static str,
     reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StorageObservation {
+    free_bytes: u64,
+    mount_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -398,6 +405,9 @@ fn storage_eligibility(device: &BlockDevice, mount: Option<&MountInfo>) -> (bool
     };
     if device.major_minor.as_deref() != Some(mount.major_minor.as_str()) {
         return (false, "mounted device identity does not match".into());
+    }
+    if mount.root != "/" {
+        return (false, "mount does not expose the filesystem root".into());
     }
     if mount.read_only {
         return (false, "filesystem is mounted read-only".into());
@@ -1064,9 +1074,8 @@ fn linux_target_free_bytes(
     snapshot: &ResourceSnapshot,
     filesystem_uuid: &str,
     device_identity: &str,
-    mount_id: u64,
     now_unix_ms: u64,
-) -> Result<u64, (&'static str, String)> {
+) -> Result<StorageObservation, (&'static str, String)> {
     if snapshot.platform != RuntimePlatform::NativeLinux {
         return Err((
             "identity_unavailable",
@@ -1075,6 +1084,7 @@ fn linux_target_free_bytes(
     }
 
     let mut matched_filesystem = false;
+    let mut current_mounts = Vec::new();
     for device in &snapshot.block_devices {
         if device.uuid.as_deref() != Some(filesystem_uuid)
             || backing_device_identity(device) != Some(device_identity)
@@ -1083,43 +1093,53 @@ fn linux_target_free_bytes(
         }
         matched_filesystem = true;
         for mount in &device.mounts {
-            if mount.mount_id != mount_id
-                || device.major_minor.as_deref() != Some(mount.major_minor.as_str())
-            {
-                continue;
+            if device.major_minor.as_deref() == Some(mount.major_minor.as_str()) {
+                current_mounts.push((device, mount));
             }
-            let (eligible, reason) = storage_eligibility(device, Some(mount));
-            if !eligible {
-                return Err(("target_ineligible", reason));
-            }
-            if !sample_is_fresh(mount.capacity_observed_unix_ms, now_unix_ms) {
-                return Err((
-                    "stale_sample",
-                    "filesystem free-space sample is missing or stale".into(),
-                ));
-            }
-            let (Some(total), Some(free)) = (mount.total_bytes, mount.available_bytes) else {
-                return Err((
-                    "capacity_unavailable",
-                    "filesystem total/free capacity is unavailable".into(),
-                ));
-            };
-            if free > total {
-                return Err((
-                    "inconsistent_sample",
-                    "filesystem free capacity exceeds its total capacity".into(),
-                ));
-            }
-            return Ok(free);
         }
     }
 
-    let reason = if matched_filesystem {
-        "stable filesystem matched but the selected mount identity did not"
-    } else {
-        "stable filesystem and backing-device identity are not present in the inventory"
+    if current_mounts.len() > 1 {
+        return Err((
+            "identity_ambiguous",
+            "stable filesystem identity resolves to multiple current mounts".into(),
+        ));
+    }
+    let Some((device, mount)) = current_mounts.first().copied() else {
+        let reason = if matched_filesystem {
+            "stable filesystem is not currently mounted on its reported device"
+        } else {
+            "stable filesystem and backing-device identity are not present in the inventory"
+        };
+        return Err(("identity_unavailable", reason.into()));
     };
-    Err(("identity_unavailable", reason.into()))
+
+    let (eligible, reason) = storage_eligibility(device, Some(mount));
+    if !eligible {
+        return Err(("target_ineligible", reason));
+    }
+    if !sample_is_fresh(mount.capacity_observed_unix_ms, now_unix_ms) {
+        return Err((
+            "stale_sample",
+            "filesystem free-space sample is missing or stale".into(),
+        ));
+    }
+    let (Some(total), Some(free)) = (mount.total_bytes, mount.available_bytes) else {
+        return Err((
+            "capacity_unavailable",
+            "filesystem total/free capacity is unavailable".into(),
+        ));
+    };
+    if free > total {
+        return Err((
+            "inconsistent_sample",
+            "filesystem free capacity exceeds its total capacity".into(),
+        ));
+    }
+    Ok(StorageObservation {
+        free_bytes: free,
+        mount_id: Some(mount.mount_id),
+    })
 }
 
 fn windows_target_free_bytes(
@@ -1127,7 +1147,7 @@ fn windows_target_free_bytes(
     windows_volume_id: &str,
     target_path: &str,
     now_unix_ms: u64,
-) -> Result<u64, (&'static str, String)> {
+) -> Result<StorageObservation, (&'static str, String)> {
     if snapshot.platform != RuntimePlatform::Wsl2 {
         return Err((
             "identity_unavailable",
@@ -1191,7 +1211,10 @@ fn windows_target_free_bytes(
             "Windows free capacity exceeds its total capacity".into(),
         ));
     }
-    Ok(free)
+    Ok(StorageObservation {
+        free_bytes: free,
+        mount_id: None,
+    })
 }
 
 fn windows_path_belongs_to_volume(path: &str, volume: &WindowsVolume) -> bool {
@@ -1286,26 +1309,18 @@ fn target_free_bytes(
     snapshot: &ResourceSnapshot,
     target: &ResourceTarget,
     now_unix_ms: u64,
-) -> Result<u64, (&'static str, String)> {
+) -> Result<StorageObservation, (&'static str, String)> {
     match target {
         ResourceTarget::LinuxSwapfile {
             filesystem_uuid,
             device_identity,
-            mount_id,
             ..
         }
         | ResourceTarget::LinuxFileOrigin {
             filesystem_uuid,
             device_identity,
-            mount_id,
             ..
-        } => linux_target_free_bytes(
-            snapshot,
-            filesystem_uuid,
-            device_identity,
-            *mount_id,
-            now_unix_ms,
-        ),
+        } => linux_target_free_bytes(snapshot, filesystem_uuid, device_identity, now_unix_ms),
         ResourceTarget::WslFallback {
             windows_volume_id,
             path,
@@ -1336,21 +1351,26 @@ fn plan_target(
     } else {
         target_free_bytes(snapshot, target, now_unix_ms)
     };
-    let (observed_free_bytes, status, reason) = match assessment {
-        Ok(free_bytes) if free_bytes >= required_free_bytes => {
-            (Some(free_bytes), "storage_ready", None)
-        }
-        Ok(free_bytes) => (
-            Some(free_bytes),
+    let (observed_free_bytes, observed_mount_id, status, reason) = match assessment {
+        Ok(observation) if observation.free_bytes >= required_free_bytes => (
+            Some(observation.free_bytes),
+            observation.mount_id,
+            "storage_ready",
+            None,
+        ),
+        Ok(observation) => (
+            Some(observation.free_bytes),
+            observation.mount_id,
             "insufficient_space",
             Some("available free space is below the combined target and reserve".into()),
         ),
-        Err((status, reason)) => (None, status, Some(reason)),
+        Err((status, reason)) => (None, None, status, Some(reason)),
     };
     PlannedTarget {
         kind,
         volume_identity: volume_identity_text(&volume_identity),
         path,
+        observed_mount_id,
         requested_bytes,
         required_free_bytes,
         observed_free_bytes,
@@ -1462,6 +1482,9 @@ fn render_plan_text(plan: &ResourcePlan) -> String {
             format_gib(target.observed_free_bytes)
         );
         let _ = writeln!(output, "  volume identity: {}", target.volume_identity);
+        if let Some(mount_id) = target.observed_mount_id {
+            let _ = writeln!(output, "  current mount ID (ephemeral): {mount_id}");
+        }
         if let Some(reason) = &target.reason {
             let _ = writeln!(output, "  reason: {reason}");
         }
@@ -1970,6 +1993,18 @@ mod tests {
     }
 
     #[test]
+    fn storage_candidate_rejects_filesystem_subtree_mounts() {
+        let device = fixture_block_device();
+        let mut mount = fixture_mount_info();
+        mount.root = "/mounted-subtree".into();
+
+        let (eligible, reason) = storage_eligibility(&device, Some(&mount));
+
+        assert!(!eligible);
+        assert!(reason.contains("filesystem root"));
+    }
+
+    #[test]
     fn network_backed_block_devices_are_ineligible_and_multiple_local_disks_remain_eligible() {
         let nvme = fixture_block_device();
         let nvme_mount = fixture_mount_info();
@@ -2195,7 +2230,7 @@ bytes = 4294967296
     }
 
     #[test]
-    fn native_linux_resource_plan_binds_the_mount_and_device_identity() {
+    fn native_linux_plan_resolves_current_mount_from_stable_filesystem_identity() {
         let mut snapshot = fixture_snapshot();
         snapshot.platform = RuntimePlatform::NativeLinux;
         snapshot.windows = None;
@@ -2209,7 +2244,6 @@ schema_version = 1
 kind = "linux_swapfile"
 filesystem_uuid = "fs-uuid"
 device_identity = "wwn:wwn-123"
-mount_id = 41
 managed_relative_path = "swap/ramshared.swap"
 bytes = 1073741824
 priority = -1
@@ -2219,17 +2253,76 @@ priority = -1
 
         assert_eq!(plan.status, "ready_for_review");
         assert_eq!(plan.targets[0].status, "storage_ready");
+        assert_eq!(plan.targets[0].observed_mount_id, Some(41));
         assert_eq!(plan.targets[0].required_free_bytes, 11 * 1024 * 1024 * 1024);
         assert_eq!(
             plan.targets[0].observed_free_bytes,
             Some(200 * 1024 * 1024 * 1024)
         );
+        assert!(render_plan_text(&plan).contains("current mount ID (ephemeral): 41"));
 
         let mut stale_snapshot = snapshot.clone();
         stale_snapshot.block_devices[0].mounts[0].capacity_observed_unix_ms = Some(1);
         let stale_plan = build_resource_plan(&stale_snapshot, Some(profile))
             .expect("stale native telemetry is represented as a refusal");
         assert_eq!(stale_plan.targets[0].status, "stale_sample");
+    }
+
+    #[test]
+    fn native_linux_profile_survives_a_new_mount_namespace_id() {
+        let mut snapshot = fixture_snapshot();
+        snapshot.platform = RuntimePlatform::NativeLinux;
+        snapshot.windows = None;
+        let mut device = fixture_block_device();
+        device.eligible_for_file_storage = true;
+        device.mounts[0].mount_id = 990;
+        snapshot.block_devices = vec![device];
+        let profile = r#"
+schema_version = 1
+
+[[targets]]
+kind = "linux_swapfile"
+filesystem_uuid = "fs-uuid"
+device_identity = "wwn:wwn-123"
+managed_relative_path = "swap/ramshared.swap"
+bytes = 1073741824
+priority = -1
+"#;
+
+        let plan = build_resource_plan(&snapshot, Some(profile)).expect("profile plans");
+
+        assert_eq!(plan.targets[0].status, "storage_ready");
+        assert_eq!(plan.targets[0].observed_mount_id, Some(990));
+    }
+
+    #[test]
+    fn native_linux_plan_refuses_multiple_current_mounts_for_one_profile_identity() {
+        let mut snapshot = fixture_snapshot();
+        snapshot.platform = RuntimePlatform::NativeLinux;
+        snapshot.windows = None;
+        let mut device = fixture_block_device();
+        device.eligible_for_file_storage = true;
+        let mut second_mount = device.mounts[0].clone();
+        second_mount.mount_id = 42;
+        second_mount.mountpoint = "/data-alias".into();
+        device.mounts.push(second_mount);
+        snapshot.block_devices = vec![device];
+        let profile = r#"
+schema_version = 1
+
+[[targets]]
+kind = "linux_swapfile"
+filesystem_uuid = "fs-uuid"
+device_identity = "wwn:wwn-123"
+managed_relative_path = "swap/ramshared.swap"
+bytes = 1073741824
+priority = -1
+"#;
+
+        let plan = build_resource_plan(&snapshot, Some(profile)).expect("profile plans");
+
+        assert_eq!(plan.targets[0].status, "identity_ambiguous");
+        assert_eq!(plan.targets[0].observed_mount_id, None);
     }
 
     #[test]

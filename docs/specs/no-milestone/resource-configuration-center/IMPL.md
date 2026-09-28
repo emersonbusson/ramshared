@@ -31,12 +31,15 @@ settings. Native Linux target qualification has not run on a native host.
   parent's WWN/serial; whole-disk filesystems use the disk's own WWN/serial.
   Known network-backed transports and missing/unrecognized transport identity,
   removable/USB, read-only, unmounted, unsupported, or ambiguous candidates
-  remain visible with a refusal reason.
-- A native Linux plan binds a configured target to filesystem UUID, stable
-  backing-device identity, exact current mount ID, device number, writable
-  eligibility, and fresh `statvfs` free capacity. It reports the checked
-  target-plus-10-GiB-per-volume reserve requirement; it does not create a
-  file, activate swap, select a disk, or claim native-host qualification.
+  remain visible with a refusal reason. Bind/subtree mounts whose mountinfo
+  root is not `/` also remain visible but are ineligible.
+- A native Linux profile stores filesystem UUID, stable backing-device
+  identity, and managed relative path; it does not store the ephemeral mount
+  ID. A plan resolves exactly one current filesystem-root mount, checks its
+  live mount ID and device number, writable eligibility, and fresh `statvfs`
+  capacity, then reports that current mount ID in the plan. Multiple matching
+  mounts refuse as ambiguous. It does not create a file, activate swap, select
+  a disk, or claim native-host qualification.
 - Under WSL2, the view labels guest RAM separately from Windows host physical
   memory and commit headroom, and lists fixed Windows volumes with their
   current free/total bytes and stable volume IDs in JSON. Native Linux never
@@ -94,12 +97,20 @@ settings. Native Linux target qualification has not run on a native host.
   file as `storage_ready`; the planner now refuses the second entry. The CLI
   parser regression also reproduced `--profile --json` being accepted as a
   profile filename; an option-looking value now fails before discovery.
-- Full CLI tests: `cargo test -j 1 -p ramshared-cli` passed 385 unit tests and
+- RED/GREEN: `native_linux_profile_survives_a_new_mount_namespace_id` first
+  received `identity_unavailable` when the current mount ID changed from 41 to
+  990. The profile no longer persists a mount ID; the planner now binds the
+  fresh unique mount and reports its ephemeral ID. The new
+  `resource_profile_rejects_transient_mount_id_in_persisted_targets` test
+  refuses the obsolete field. `storage_candidate_rejects_filesystem_subtree_mounts`
+  also reproduced the prior acceptance and now verifies a refusal.
+- The full CLI suite under the coverage gate passed 389 unit tests and
   12 CLI integration tests, including
   `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`.
-- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 9
+- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 10
   profile integration tests, including malformed/ambiguous Windows target
-  paths. The profile slice gate passed at **91.4% (299/327 lines)**.
+  paths and refusal of persisted mount IDs. The profile slice gate passed at
+  **91.3% (293/321 lines)**.
 - CLI E2E: `cli_resource_config_json_discovers_platform_resources_read_only`
   executes the built binary under the current WSL2 kernel, parses its JSON,
   checks platform and resource fields, and verifies `config apply` refuses.
@@ -113,7 +124,7 @@ settings. Native Linux target qualification has not run on a native host.
   current source and SPEC/IMPL updates.
 - Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli
   --files crates/ramshared-cli/src/resource_config.rs --min 80` passed at
-  **86.0% (1,696/1,971 lines)** for discovery and read-only planning.
+  **87.6% (1,793/2,046 lines)** for discovery and read-only planning.
 - PowerShell 5.1 manufactured/static harnesses passed for
   `Test-WindowsStorageMatrixStatic.ps1`,
   `Test-RamSharedWslLifecycleRecoveryStatic.ps1`,
@@ -140,12 +151,13 @@ settings. Native Linux target qualification has not run on a native host.
   totaling 231 MiB private memory (largest 115 MiB). This does not reproduce
   the previously observed 11.5 GiB PowerShell process and does not identify
   its cause.
-- The test fixture `meminfo_accepts_user_sized_ram_and_swap_without_product_minima`
+- At the recorded 03:38 UTC sample, the fixture
+  `meminfo_accepts_user_sized_ram_and_swap_without_product_minima`
   accepts values from 256 MiB RAM / 128 MiB swap through 48 GiB RAM / 20 GiB
-  swap. They are parser fixtures, not fixed product limits. The installed
-  `/usr/local/bin/ramshared` still reports v0.14.1; this v0.15.0 source target
-  has not been installed. No `ramsharedd` process was present, and the only
-  active swap was the 4 GiB WSL fallback device.
+  swap. They are parser fixtures, not fixed product limits. At that sample,
+  `/usr/local/bin/ramshared` reported v0.14.1; this v0.15.0 source target had
+  not been installed. No `ramsharedd` process was present, and the only active
+  swap was the 4 GiB WSL fallback device.
 
 ## Gaps
 
