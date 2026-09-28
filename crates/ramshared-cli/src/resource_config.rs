@@ -2092,6 +2092,68 @@ mod tests {
     }
 
     #[test]
+    fn windows_inventory_lists_every_volume_and_explains_ineligible_targets() {
+        let mut snapshot = fixture_snapshot();
+        let windows = snapshot.windows.as_mut().expect("Windows snapshot fixture");
+        windows.volumes.extend([
+            WindowsVolume {
+                drive_letter: Some("F".into()),
+                label: Some("Removable".into()),
+                file_system: Some("exFAT".into()),
+                drive_type: "Removable".into(),
+                size_bytes: Some(64 * 1024 * 1024 * 1024),
+                free_bytes: Some(32 * 1024 * 1024 * 1024),
+                volume_id: Some("volume-f".into()),
+            },
+            WindowsVolume {
+                drive_letter: Some("G".into()),
+                label: Some("Unsupported".into()),
+                file_system: Some("FAT32".into()),
+                drive_type: "Fixed".into(),
+                size_bytes: Some(64 * 1024 * 1024 * 1024),
+                free_bytes: Some(32 * 1024 * 1024 * 1024),
+                volume_id: Some("volume-g".into()),
+            },
+            WindowsVolume {
+                drive_letter: Some("H".into()),
+                label: Some("Unidentified".into()),
+                file_system: Some("NTFS".into()),
+                drive_type: "Fixed".into(),
+                size_bytes: Some(64 * 1024 * 1024 * 1024),
+                free_bytes: Some(32 * 1024 * 1024 * 1024),
+                volume_id: None,
+            },
+        ]);
+
+        let output = render_text(&snapshot);
+
+        assert!(output.contains("Windows volumes:"));
+        assert!(output.contains("C: System NTFS (Fixed) — ID vol-c — eligible"));
+        assert!(output.contains(
+            "F: Removable exFAT (Removable) — ID volume-f — ineligible: volume is not fixed"
+        ));
+        assert!(output.contains(
+            "G: Unsupported FAT32 (Fixed) — ID volume-g — ineligible: filesystem is not NTFS/ReFS"
+        ));
+        assert!(output.contains("H: Unidentified NTFS (Fixed) — identity unknown — ineligible: stable volume identity is unavailable"));
+    }
+
+    #[test]
+    fn windows_inventory_probe_does_not_filter_volumes_by_drive_type() {
+        let source = include_str!("resource_config.rs");
+        let normalized = source
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase();
+
+        assert!(normalized.contains("get-volume-erroractionstop"));
+        assert!(!normalized.contains("where-object{$_.drivetype-eq'fixed'}"));
+        assert!(normalized.contains("size_bytes=if($null-ne$_.size)"));
+        assert!(normalized.contains("free_bytes=if($null-ne$_.sizeremaining)"));
+    }
+
+    #[test]
     fn resource_view_labels_guest_and_windows_host_memory_separately() {
         let snapshot = fixture_snapshot();
         let output = render_text(&snapshot);
