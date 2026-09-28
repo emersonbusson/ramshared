@@ -215,6 +215,19 @@ source/audit tests advance evidence, but none of the seven gates has the
 required live platform/release proof to close. See
 [EVD-0104](../../validation.md).
 
+### Multi-target resource profile model (EVD-0105)
+
+EVD-0105 corrects the typed profile to represent both swap and origin targets
+on one or multiple stable volumes, including WSL origin placement as a distinct
+target. Checked required capacity now sums each target by stable volume and
+adds the 10 GiB reserve once per volume; duplicate managed paths and arithmetic
+overflow refuse. The profile slice passes at 94.2% line coverage, with the
+config crate tests, strict Clippy, and docs checks green. This remains a pure
+model: the CLI does not load or persist it, no live candidate is bound, and no
+provider performs writes. Cross-platform resource configuration remains
+`PARTIAL`, as do the other six active gates. See
+[EVD-0105](../../validation.md).
+
 ## Closed In This Session
 
 All run IDs, commands, VM names, and `SANITIZED_*` values below are retained

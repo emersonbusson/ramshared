@@ -8090,3 +8090,64 @@ source presence or manufactured tests alone.
 
 **Verdict:** 🟡 `PARTIAL` — the typed profile and read-only policy gates
 advance, but all seven reliability/qualification gates remain open.
+
+## 2026-09-28 03:00 -03 — multi-target resource profile validation
+
+**What:** Corrected the v1 resource profile so one user configuration can hold
+managed swap and origin targets on the same or different stable volumes. Added
+WSL origin placement as a distinct profile target, grouped capacity by stable
+volume identity, and refused duplicate managed paths before provider use.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0105`.
+**Owner role:** resource configuration / source validation.
+**Observed at:** `2026-09-28T06:00:30Z`.
+**Verified at:** `2026-09-28T06:00:30Z`.
+**Source revision:** `d466def5`.
+**Source state:** branch `feat/ramshared-20260921-consolidation` contains the
+reviewable source and SPEC change in `d466def5`; this evidence record is the
+follow-up documentation change.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0102 through EVD-0104 until CLI profile integration
+and provider qualification supersede this model evidence.
+**Freshness:** Source tests, Clippy, slice coverage, and documentation checks
+ran on the source revision recorded above; no runtime sample is claimed.
+**Category:** resource profile schema / unit tests / source documentation.
+**How to measure:** Run `cargo test -j 1 -p ramshared-config`,
+`cargo clippy -j 1 -p ramshared-config --all-targets -- -D warnings`,
+`node tools/ci/check-rust-slice-coverage.mjs -p ramshared-config --files
+crates/ramshared-config/src/resource_profile.rs --min 80`,
+`cargo fmt --all -- --check`, `git diff --check`, and
+`./scripts/docs-check.sh`. Inspect profile validation and named integration
+tests. No profile file was read or written, and no host, guest, disk, swap,
+origin, GPU, or kernel state was mutated.
+
+**Profile correction:** The added test first failed because the prior schema
+rejected `targets` and allowed only one `target`. The model now accepts a
+bounded list containing Linux swapfile/origin or WSL fallback-swap/origin
+entries. It validates each target against the detected platform, rejects
+case-insensitive duplicate Windows paths on the same stable volume, and
+computes checked required free bytes per volume by summing all selected files
+and adding the 10 GiB floor once. The floor is a storage reserve, not a RAM,
+swap, or VRAM minimum. This is pure profile validation; it does not inspect
+live free space, bind a saved profile to discovered candidates, authorize
+writes, or configure runtime tier caps.
+
+**Checks:** `cargo test -j 1 -p ramshared-config` passed 15 unit tests and 8
+profile integration tests. Strict Clippy passed. The profile slice coverage
+gate passed at 94.2% (244/259 lines). `cargo fmt --all -- --check`,
+`git diff --check`, and the complete `./scripts/docs-check.sh` passed. The
+named tests verify multi-target TOML round-trip, same-volume sum, independent
+per-volume reserve, WSL swap/origin coexistence, duplicate-path refusal, and
+capacity overflow refusal.
+
+**Remaining boundary:** The profile remains unloaded and unpersisted by
+`ramshared config`; there is no selection UI, live plan, managed swap/origin
+writer, storage speed comparison, or native Linux live E2E. All seven active
+reliability gates remain `PARTIAL`; this source change does not qualify the
+installed v0.14.1 binary, host/guest transport, GPU hardware, physical Windows
+storage/lifecycle, or the separate VMBus/CoCo candidate. No stress, activation,
+host install, WSL shutdown, kernel build, or hardware campaign was run.
+
+**Verdict:** 🟡 `PARTIAL` — multi-volume profile semantics and refusal logic
+are implemented and covered; CLI integration and platform execution remain
+open.
