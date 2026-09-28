@@ -16,7 +16,7 @@ function contractFixture() {
   return {
     schema_version: 1,
     contract_state: 'PARTIAL',
-    p0_requirements: [{ id: 'aggregate', gate_ids: ['ci-contract', 'aggregate'] }],
+    p0_requirements: [{ id: 'aggregate', gate_ids: ['ci-contract', 'aggregate', 'rust-quality'] }],
     gates: [
       {
         id: 'ci-contract',
@@ -38,6 +38,28 @@ function contractFixture() {
           concurrency: { cancel_in_progress: true },
         },
         required_commands: ['node tools/ci/check-ci-contract.mjs --check-local'],
+        open_gaps: [],
+      },
+      {
+        id: 'rust-quality',
+        required: true,
+        implementation: 'current',
+        workflow: '.github/workflows/ci.yml',
+        job: 'rust',
+        context: 'fmt + clippy + test',
+        trust: 'pull-request',
+        triggers: ['workflow_call'],
+        selection: { mode: 'always', paths: [] },
+        policy: {
+          timeout_minutes: 30,
+          permissions: { contents: 'read' },
+          permissions_scope: 'job',
+          action_pinning: 'full-sha',
+          continue_on_error: false,
+          retry_class: 'none',
+          concurrency: { cancel_in_progress: true },
+        },
+        required_commands: ['cargo test --workspace -- --test-threads=1'],
         open_gaps: [],
       },
       {
@@ -73,6 +95,15 @@ function contractFixture() {
         kind: 'local-reusable-needs-v1',
         callers: [
           { job: 'contract', gates: ['ci-contract'], kind: 'direct' },
+          {
+            job: 'ci-core',
+            kind: 'reusable',
+            workflow: './.github/workflows/ci.yml',
+            summary_job: 'ci-summary',
+            summary_needs: ['rust', 'docs'],
+            entrypoint_triggers: ['pull_request', 'push-main'],
+            gates: ['rust-quality'],
+          },
         ],
       },
     },
@@ -132,6 +163,39 @@ test('aggregate_needs_accepts_only_active_success_and_rejects_missing_callers', 
   const invalid = validateAggregateNeeds(contract, { contract: { result: 'success' } }, 'unsupported')
   assert.equal(invalid.status, 'NO-GO')
   assert.equal(invalid.errors.some((item) => item.rule === 'aggregate-needs-input-invalid'), true)
+})
+
+test('aggregate_needs_requires_active_reusable_entrypoint_callers', () => {
+  const contract = contractFixture()
+  const accepted = validateAggregateNeeds(contract, {
+    contract: { result: 'success' },
+    'ci-core': { result: 'success' },
+  }, 'pull_request')
+  assert.equal(accepted.status, 'PASS')
+
+  const missing = validateAggregateNeeds(contract, {
+    contract: { result: 'success' },
+  }, 'pull_request')
+  assert.equal(missing.status, 'NO-GO')
+  assert.equal(missing.errors.some((item) =>
+    item.rule === 'aggregate-caller-missing' && item.context === 'ci-core'), true)
+
+  const failed = validateAggregateNeeds(contract, {
+    contract: { result: 'success' },
+    'ci-core': { result: 'failure' },
+  }, 'pull_request')
+  assert.equal(failed.status, 'NO-GO')
+  assert.equal(failed.errors.some((item) =>
+    item.rule === 'aggregate-caller-not-success' && item.context === 'ci-core'), true)
+})
+
+test('aggregate_needs_allows_entrypoint_callers_skipped_for_other_events', () => {
+  const contract = contractFixture()
+  contract.aggregate.architecture.callers[1].entrypoint_triggers = ['pull_request']
+  const push = validateAggregateNeeds(contract, {
+    contract: { result: 'success' },
+  }, 'push-main')
+  assert.equal(push.status, 'PASS')
 })
 
 test('repository_aggregate_is_a_same_run_local_reusable_architecture', () => {
