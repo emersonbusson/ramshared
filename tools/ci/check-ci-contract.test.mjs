@@ -1107,6 +1107,18 @@ test('release_promotion_node_coverage_is_wired_into_the_canonical_pr_caller', ()
   assert.match(workflow, /--test-coverage-functions=80/)
 })
 
+test('planner_coverage_fetches_pinned_rust_baselines_before_running', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
+  const fetchIndex = workflow.indexOf('name: Fetch immutable Rust slice baselines for planner coverage')
+  const plannerIndex = workflow.indexOf('name: Exact Rust coverage planner coverage')
+
+  assert.ok(fetchIndex >= 0)
+  assert.ok(plannerIndex > fetchIndex)
+  const fetchStep = workflow.slice(fetchIndex, plannerIndex)
+  assert.match(fetchStep, /git fetch --no-tags origin "\$revision"/)
+  assert.match(fetchStep, /git cat-file -e "\$\{revision\}\^\{commit\}"/)
+})
+
 test('ci_contract_requires_fail_closed_trivy_sarif_publication', () => {
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   const gate = contract.gates.find((item) => item.id === 'trivy')

@@ -65,6 +65,20 @@ jobs:
             --test-coverage-functions=80 \
             tools/ci/check-release-publication.test.mjs
 
+      - name: Fetch immutable Rust slice baselines for planner coverage
+        run: |
+          set -euo pipefail
+          while IFS= read -r revision; do
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+            if ! git cat-file -e "${revision}^{commit}" 2>/dev/null; then
+              git fetch --no-tags origin "$revision"
+            fi
+            git cat-file -e "${revision}^{commit}"
+          done < <(
+            jq -r '.entries[] | select(.kind == "rust-ignored-test-relocation") | .base_revision' \
+              docs/governance/rust-slice-coverage.json | sort -u
+          )
+
       - name: Exact Rust coverage planner coverage
         run: >-
           node --test --experimental-test-coverage
