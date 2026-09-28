@@ -4213,10 +4213,16 @@ mod tests {
         );
         assert!(!inconsistent.required_counters_available);
 
-        let valid = parse_meminfo(
-            "MemTotal: 16384 kB\nMemAvailable: 8192 kB\nSwapTotal: 4096 kB\nSwapFree: 2048 kB\n",
-        );
-        assert!(valid.required_counters_available);
+        // These are parser fixtures, not product capacities or minimums.
+        // Accept different RAM and swap sizes as long as the counters agree.
+        for meminfo in [
+            "MemTotal: 262144 kB\nMemAvailable: 131072 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n",
+            "MemTotal: 7864320 kB\nMemAvailable: 5242880 kB\nSwapTotal: 1703936 kB\nSwapFree: 999424 kB\n",
+            "MemTotal: 268435456 kB\nMemAvailable: 134217728 kB\nSwapTotal: 123456789 kB\nSwapFree: 67108864 kB\n",
+        ] {
+            let valid = parse_meminfo(meminfo);
+            assert!(valid.required_counters_available, "{meminfo}");
+        }
     }
 
     #[test]
