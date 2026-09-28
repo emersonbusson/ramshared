@@ -18,11 +18,13 @@ mod bounded_process;
 mod cascade;
 mod diagnose;
 mod monitor;
+mod resource_config;
 mod stress;
 mod supervisor;
 mod workload;
 
 use monitor::MonitorOptions;
+use resource_config::ConfigMode;
 
 const PROBE_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const KERNEL_CONFIG_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
@@ -1985,6 +1987,53 @@ mod tests {
                     once: false,
                 }
             }
+        );
+    }
+
+    #[test]
+    fn config_command_accepts_only_interactive_or_read_only_show_modes() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config"])).expect("interactive config parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Interactive,
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "show"])).expect("show parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Show { json: false },
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "show", "--json"]))
+                .expect("json show parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Show { json: true },
+            }
+        );
+        assert!(parse_cli_command(&cli_args(&["config", "apply"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "show", "--write"])).is_err());
+    }
+
+    #[test]
+    fn config_show_dispatches_to_read_only_action() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit = run_from_args(
+            &cli_args(&["config", "show", "--json"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(
+            actions.calls,
+            vec![CliCommand::Config {
+                mode: ConfigMode::Show { json: true },
+            }]
         );
     }
 
