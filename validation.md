@@ -8285,6 +8285,57 @@ open evidence recorded in EVD-0106.
 are now visible and tested; selection, mutation, benchmarking, and platform
 qualification remain open.
 
+## 2026-09-28 08:05 -03 — model and plan a not-yet-created native origin request
+
+**What:** Independent review found that `linux_file_origin` required an inode
+and identity hash before a profile could express a new native Linux origin.
+Added the separate `linux_file_origin_request` intent form, which records only
+stable filesystem/device identity, managed relative path, and requested bytes.
+The read-only planner binds that request to a fresh current mount and checked
+capacity; it does not create or open the file and keeps apply disabled.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0109`.
+**Owner role:** resource configuration / independent model review.
+**Observed at:** `2026-09-28T11:05:06Z`.
+**Verified at:** `2026-09-28T11:13:02Z`.
+**Source revision:** `e2c35eb7a36fa70777a4c91ec376f152deaadc4a`.
+**Source state:** The feature and SPEC/IMPL corrections are committed in
+`e2c35eb7`; this validation and active-gap update are recorded with the
+evidence. This remains the v0.15.0 source branch; no install was performed.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0101 through EVD-0108; this closes a model
+representability defect only and does not close the resource-configuration
+gate.
+**Freshness:** Source-only test evidence at 2026-09-28 11:05 UTC. No current
+native Linux hardware, selected Windows volume, GPU adapter, or storage-write
+campaign was used. The installed CLI and kernel were not changed.
+**Category:** source regression / read-only planning / line coverage.
+**How to measure:** Record the initial RED compile failure for the missing
+profile variant, run the config and CLI test suites, both business-logic slice
+coverage gates, strict Clippy, formatting, and docs checks. No swap, origin,
+profile file, WSL setting, GPU allocation, host process, or kernel state was
+mutated.
+
+**Checks:** The RED checkpoint `266a9bd0` failed because the required request
+variant did not exist. After implementation,
+`resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_inode`
+and `native_linux_origin_request_plan_binds_volume_without_claiming_creation`
+pass. `cargo test -j1 -p ramshared-config -p ramshared-cli` passed 392 CLI
+unit tests, 12 CLI integration tests, 15 config unit tests, and 11 profile
+integration tests. Profile coverage passed at 93.1% (312/335 lines); resource
+config coverage passed at 88.7% (1,941/2,189 lines). Strict Clippy, formatting,
+`git diff --check`, validation schema, GAP Register checks, and the full docs
+suite passed.
+
+**Remaining boundary:** The TUI still cannot select a disk or GPU, edit tier
+caps, save a profile, benchmark storage, or apply settings. The plan does not
+prove that the requested path is absent or authorize a write. Native Linux
+before/action/after evidence is still absent. The gate remains `PARTIAL`.
+
+**Verdict:** 🟡 `PARTIAL` — new Linux origin intent is now representable and its
+read-only volume/capacity plan is tested; selection, persistence, provider
+mutation, and live Linux/WSL2 qualification remain open.
+
 ## 2026-09-28 07:22 -03 — independent re-audit of all seven active PARTIAL gates
 
 **What:** Re-read current source and evidence for each active gate instead of
