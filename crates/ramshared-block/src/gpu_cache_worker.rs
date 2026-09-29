@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ramshared_vram::{GpuBudgetSnapshot, GpuBudgetTelemetry, VramError, VramMemory, VramProvider};
 
@@ -28,6 +28,12 @@ pub const STATUS_OK: u8 = 0;
 pub const STATUS_MISS: u8 = 1;
 pub const STATUS_ERROR: u8 = 2;
 pub const RUNTIME_FREE_BUFFER_BYTES: u64 = 640 * 1024 * 1024;
+/// Absolute budget for one complete worker frame read (header plus payload).
+/// Production clients heartbeat at least every few seconds (the daemon serve
+/// loop ticks every five seconds), so a peer silent or mid-frame longer than
+/// this budget is stalled and the worker must fail closed instead of blocking
+/// until process teardown.
+pub const WORKER_FRAME_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 896 * 1024 * 1024;
 const MAX_GPU_BUDGET_PAYLOAD_BYTES: usize = 4096;
 
@@ -339,9 +345,27 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
 }
 
 pub fn run_gpu_worker_loop<P: VramProvider>(
+    socket: UnixStream,
+    provider: P,
+    config: GpuWorkerConfig,
+) -> Result<(), String> {
+    run_gpu_worker_loop_with_frame_read_timeout(
+        socket,
+        provider,
+        config,
+        WORKER_FRAME_READ_TIMEOUT,
+    )
+}
+
+/// Runs the worker loop with an injectable per-frame read budget.
+///
+/// `frame_read_timeout` bounds one complete frame read (header plus payload)
+/// so a stalled peer cannot block the worker until process teardown.
+pub fn run_gpu_worker_loop_with_frame_read_timeout<P: VramProvider>(
     mut socket: UnixStream,
     provider: P,
     config: GpuWorkerConfig,
+    _frame_read_timeout: Duration,
 ) -> Result<(), String> {
     let mut worker = GpuCacheWorker::new(&provider, config);
     let mut hdr_buf = [0u8; FRAME_HEADER_LEN];

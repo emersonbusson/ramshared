@@ -2,12 +2,13 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use ramshared_block::{
     FRAME_HEADER_LEN, FrameHeader, GpuWorkerConfig, IpcCacheClient,
-    gpu_cache_worker::{MSG_HANDSHAKE_REQ, STATUS_OK},
-    run_gpu_worker_loop,
+    gpu_cache_worker::{MSG_HANDSHAKE_REQ, MSG_UPDATE, STATUS_OK},
+    run_gpu_worker_loop, run_gpu_worker_loop_with_frame_read_timeout,
 };
 use ramshared_vram::{GpuBudgetSnapshot, VramError, VramMemory, VramProvider};
 
@@ -158,4 +159,87 @@ fn client_refuses_nonzero_reserved_response_header_bytes() {
 
     assert!(client.perform_handshake().is_err());
     fake_worker.join().expect("fake worker thread");
+}
+
+const STALL_FRAME_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const STALL_WATCHDOG: Duration = Duration::from_secs(5);
+
+fn spawn_worker_with_stall_budget(worker_socket: UnixStream) -> mpsc::Receiver<Result<(), String>> {
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = run_gpu_worker_loop_with_frame_read_timeout(
+            worker_socket,
+            NoopProvider,
+            worker_config(),
+            STALL_FRAME_READ_TIMEOUT,
+        );
+        let _ = done_tx.send(result);
+    });
+    done_rx
+}
+
+fn expect_stalled_worker_fails_closed(
+    done_rx: mpsc::Receiver<Result<(), String>>,
+    case: &str,
+    client: UnixStream,
+) {
+    let result = done_rx
+        .recv_timeout(STALL_WATCHDOG)
+        .unwrap_or_else(|_| panic!("worker must not block forever on {case}"));
+    drop(client);
+    let error = result.expect_err("stalled peer must fail closed");
+    assert!(
+        error.to_ascii_lowercase().contains("deadline"),
+        "stall failure must report the read deadline for {case}: {error}"
+    );
+}
+
+#[test]
+fn worker_frame_read_deadline_fails_closed_on_a_stalled_partial_header() {
+    let (mut client, worker_socket) = UnixStream::pair().expect("socketpair");
+    let done_rx = spawn_worker_with_stall_budget(worker_socket);
+
+    let handshake = FrameHeader {
+        msg_type: MSG_HANDSHAKE_REQ,
+        status: STATUS_OK,
+        correlation_id: 1,
+        offset: 0,
+        payload_len: 0,
+        aux: 0,
+    };
+    let encoded = handshake.encode();
+    client
+        .write_all(&encoded[..FRAME_HEADER_LEN / 2])
+        .expect("write stalled partial header");
+
+    expect_stalled_worker_fails_closed(done_rx, "a stalled partial header", client);
+}
+
+#[test]
+fn worker_frame_read_deadline_fails_closed_on_a_stalled_partial_payload() {
+    let (mut client, worker_socket) = UnixStream::pair().expect("socketpair");
+    let done_rx = spawn_worker_with_stall_budget(worker_socket);
+
+    let update = FrameHeader {
+        msg_type: MSG_UPDATE,
+        status: STATUS_OK,
+        correlation_id: 1,
+        offset: 0,
+        payload_len: 4,
+        aux: 0,
+    };
+    client
+        .write_all(&update.encode())
+        .expect("write frame header");
+    client.write_all(&[1, 2]).expect("write half the payload");
+
+    expect_stalled_worker_fails_closed(done_rx, "a stalled partial payload", client);
+}
+
+#[test]
+fn worker_frame_read_deadline_fails_closed_on_a_silent_peer() {
+    let (client, worker_socket) = UnixStream::pair().expect("socketpair");
+    let done_rx = spawn_worker_with_stall_budget(worker_socket);
+
+    expect_stalled_worker_fails_closed(done_rx, "a silent peer", client);
 }

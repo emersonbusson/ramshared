@@ -29,7 +29,7 @@ pub use elastic_cache::{
 #[cfg(unix)]
 pub use gpu_cache_worker::{
     FRAME_HEADER_LEN, FrameHeader, GpuCacheWorker, GpuWorkerConfig, RUNTIME_FREE_BUFFER_BYTES,
-    run_gpu_worker_loop,
+    WORKER_FRAME_READ_TIMEOUT, run_gpu_worker_loop, run_gpu_worker_loop_with_frame_read_timeout,
 };
 pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
