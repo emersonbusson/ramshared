@@ -82,6 +82,49 @@ function writeLockOwner(lockDir, owner) {
   writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify(owner)}\n`);
 }
 
+test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () => {
+  const parseLlvmCovJson = checkerApi("parseLlvmCovJson");
+  const root = mkdtempSync(join(tmpdir(), "ramshared-cov-cfg-test-"));
+  try {
+    const file = join(root, "src", "lib.rs");
+    const source = [
+      "pub fn production() { consume(); }",
+      "#[cfg(test)]",
+      "mod tests {",
+      '    const BRACES: &str = "} {";',
+      "    // }",
+      "    /* { } */",
+      "    #[test] fn helper() { assert!(true); }",
+      "}",
+    ].join("\n");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(file, source);
+    const report = {
+      data: [
+        {
+          files: [
+            {
+              filename: file,
+              segments: [
+                [1, 1, 1, 1, 1, 0],
+                [1, 35, 0, 0, 0, 0],
+                [7, 5, 0, 1, 1, 0],
+                [7, 41, 0, 0, 0, 0],
+              ],
+              summary: { lines: { count: 2, covered: 1, percent: 50 } },
+            },
+          ],
+        },
+      ],
+    };
+
+    const stats = parseLlvmCovJson(JSON.stringify(report), "lines", root);
+    assert.deepEqual(stats.get("src/lib.rs"), { count: 1, covered: 1, percent: 100 });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("overlapping_checker_invocations_isolate_llvm_cov_target_state", async () => {
   const root = mkdtempSync(join(tmpdir(), "ramshared-cov-overlap-"));
   try {
