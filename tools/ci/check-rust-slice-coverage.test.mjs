@@ -405,6 +405,7 @@ test("coverage_cli_refuses_invalid_arguments_and_malformed_report", () => {
 
 test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs", () => {
   const parseLlvmCovJson = checkerApi("parseLlvmCovJson");
+  const parseUncoveredLlvmCovRegions = checkerApi("parseUncoveredLlvmCovRegions");
   const loadFilesFrom = checkerApi("loadFilesFrom");
   const normRepoPath = checkerApi("normRepoPath");
   const root = mkdtempSync(join(tmpdir(), "ramshared-cov-parser-"));
@@ -439,6 +440,30 @@ test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs
       "lines",
     );
     assert.equal(zero.get(COVERED_FILE).percent, 100);
+    const uncovered = parseUncoveredLlvmCovRegions(
+      JSON.stringify({
+        data: [
+          {
+            files: [
+              {
+                filename: join(REPO_ROOT, COVERED_FILE),
+                regions: [
+                  [12, 3, 12, 9, 0, 0, 0, 0],
+                  [14, 5, 18, 2, 0, 0, 0, 0],
+                  [19, 1, 19, 7, 4, 0, 0, 0],
+                ],
+              },
+              {
+                filename: "crates/ramshared-cli/tests/ignored.rs",
+                regions: [[1, 1, 2, 1, 0, 0, 0, 0]],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    assert.deepEqual(uncovered.get(COVERED_FILE), ["12:3-9", "14:5-18:2"]);
+    assert.equal(uncovered.has("crates/ramshared-cli/tests/ignored.rs"), false);
     assert.throws(() => parseLlvmCovJson("not-json", "lines"), (error) => error?.code === "COVERAGE_REPORT_INVALID");
     assert.throws(() => parseLlvmCovJson(JSON.stringify({ data: [] }), "lines"), (error) => error?.code === "COVERAGE_REPORT_INVALID");
   } finally {
@@ -501,6 +526,8 @@ test("coverage_child_runner_uses_private_target_without_shell_and_propagates_fai
           "cargo",
         ]);
         assert.equal(args.includes("--output-path"), true);
+        assert.equal(args.includes("--summary-only"), false);
+        assert.equal(args.includes("--json"), true);
         assert.deepEqual(args.slice(-2), ["--", "--test-threads=1"]);
         assert.equal(options.env.CARGO_TARGET_DIR, targetPath);
         assert.equal(options.env.SAFE, "yes");

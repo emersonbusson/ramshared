@@ -205,6 +205,43 @@ function parseLlvmCovJson(content, metric, repoRoot = REPO_ROOT) {
   return map;
 }
 
+function parseUncoveredLlvmCovRegions(content, repoRoot = REPO_ROOT) {
+  let data;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    throw new CoverageGateError("COVERAGE_REPORT_INVALID", "failed to parse llvm-cov JSON", 2);
+  }
+  const files = data?.data?.[0]?.files;
+  if (!Array.isArray(files)) {
+    throw new CoverageGateError(
+      "COVERAGE_REPORT_INVALID",
+      "llvm-cov JSON missing data[0].files (use export with per-file summary)",
+      2,
+    );
+  }
+
+  const map = new Map();
+  for (const file of files) {
+    const rawName = file.filename || file.name || "";
+    if (!rawName) continue;
+    const key = normRepoPath(rawName, repoRoot);
+    if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+    const regions = Array.isArray(file.regions) ? file.regions : [];
+    const uncovered = regions
+      .filter((region) => Array.isArray(region) && region.length >= 5 && region[4] === 0)
+      .map(([startLine, startColumn, endLine, endColumn]) => {
+        const start = `${startLine}:${startColumn}`;
+        const end = startLine === endLine ? String(endColumn) : `${endLine}:${endColumn}`;
+        return `${start}-${end}`;
+      });
+    if (uncovered.length === 0) continue;
+    const previous = map.get(key) ?? [];
+    map.set(key, [...new Set([...previous, ...uncovered])]);
+  }
+  return map;
+}
+
 function createLockOwner({
   runId = randomUUID(),
   pid = process.pid,
@@ -543,7 +580,8 @@ function runLlvmCov(
   }
   const cargoArgs = ["llvm-cov"];
   for (const packageName of packages) cargoArgs.push("-p", packageName);
-  cargoArgs.push("--json", "--summary-only", "--output-path", jsonOutPath);
+  // Keep region data so a failed gate can name uncovered source spans.
+  cargoArgs.push("--json", "--output-path", jsonOutPath);
   cargoArgs.push("--", "--test-threads=1");
   if (includeIgnored) cargoArgs.push("--include-ignored");
 
@@ -591,7 +629,7 @@ function runLlvmCov(
   }
 }
 
-function evaluateCoverage({ files, stats, min, allowMissing, metric, repoRoot = REPO_ROOT }) {
+function evaluateCoverage({ files, stats, uncoveredRegions = new Map(), min, allowMissing, metric, repoRoot = REPO_ROOT }) {
   const rows = [];
   const violations = [];
   for (const file of files) {
@@ -630,6 +668,7 @@ function evaluateCoverage({ files, stats, min, allowMissing, metric, repoRoot = 
         file,
         percent: hit.percent,
         reason: `below ${min}% (${hit.covered}/${hit.count} ${metric})`,
+        uncoveredRegions: uncoveredRegions.get(file) ?? [],
       });
     }
   }
@@ -685,9 +724,11 @@ function main(argv = process.argv, { print = console.log, error = console.error 
     }
 
     const stats = parseLlvmCovJson(coverageContent, options.metric);
+    const uncoveredRegions = parseUncoveredLlvmCovRegions(coverageContent);
     const { rows, violations } = evaluateCoverage({
       files,
       stats,
+      uncoveredRegions,
       min: options.min,
       allowMissing: options.allowMissing,
       metric: options.metric,
@@ -706,6 +747,11 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       for (const violation of violations) {
         const percent = typeof violation.percent === "number" ? `${violation.percent.toFixed(1)}% ` : "";
         error(`  - ${violation.file}: ${percent}${violation.reason}`);
+        if (violation.uncoveredRegions?.length) {
+          const visible = violation.uncoveredRegions.slice(0, 20);
+          const remainder = violation.uncoveredRegions.length - visible.length;
+          error(`    Uncovered LLVM regions: ${visible.join(", ")}${remainder > 0 ? ` (+${remainder} more)` : ""}`);
+        }
       }
       error(
         "\nSSDV3 Step 3: business-logic files in the SPEC matrix must be ≥ min% (workspace average does not count).",
@@ -741,6 +787,7 @@ export {
   normRepoPath,
   parseArgs,
   parseLlvmCovJson,
+  parseUncoveredLlvmCovRegions,
   releaseCoverageLock,
   runLlvmCov,
   runWithCoverageIsolation,
