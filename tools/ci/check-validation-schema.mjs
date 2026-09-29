@@ -248,6 +248,13 @@ export function validateGovernanceEntry(entry) {
 }
 
 export function isSecurityRedaction(oldLine, newLine) {
+  const processIds = (line) => [...line.matchAll(/\bPID\s+`?(\d+)`?/gi)].map((match) => match[1])
+  const oldProcessIds = processIds(oldLine)
+  const newProcessIds = processIds(newLine)
+  if (newProcessIds.length > 0 && JSON.stringify(oldProcessIds) !== JSON.stringify(newProcessIds)) {
+    return false
+  }
+
   const signingSecret =
     /-PfxPassword\s+["'][^"']+["']/.test(oldLine) &&
     /-PfxPassword\s+\$env:[A-Z0-9_]+/.test(newLine)
