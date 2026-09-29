@@ -155,6 +155,57 @@ function normRepoPath(path, repoRoot = REPO_ROOT) {
   return normalized;
 }
 
+function isRustUnitTestFunction(fn) {
+  // Rust unit-test functions keep the inline module in their llvm-cov symbol path.
+  return /(?:^|::)tests(?:::|$)/.test(fn.name ?? "");
+}
+
+function rustTestFunctionLineCounts(exportData, repoRoot) {
+  const countsByFile = new Map();
+  for (const fn of exportData.functions ?? []) {
+    if (!isRustUnitTestFunction(fn)) continue;
+    const rawName = fn.filenames?.[0];
+    if (!rawName) continue;
+    const key = normRepoPath(rawName, repoRoot);
+    if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+    const lines = countsByFile.get(key) ?? new Map();
+    for (const region of fn.regions ?? []) {
+      if (!Array.isArray(region) || region.length < 5) continue;
+      const [startLine, , endLine, , rawCount] = region;
+      const executionCount = Number(rawCount);
+      if (
+        !Number.isSafeInteger(startLine) ||
+        !Number.isSafeInteger(endLine) ||
+        endLine < startLine ||
+        !Number.isFinite(executionCount) ||
+        executionCount < 0
+      ) {
+        continue;
+      }
+      for (let line = startLine; line <= endLine; line++) {
+        lines.set(line, Math.max(lines.get(line) ?? 0, executionCount));
+      }
+    }
+    countsByFile.set(key, lines);
+  }
+  return countsByFile;
+}
+
+function subtractRustTestFunctionLines(summary, testLines) {
+  if (!testLines) return summary;
+  const count = summary.count - testLines.size;
+  const coveredTestLines = [...testLines.values()].filter((executionCount) => executionCount > 0).length;
+  const covered = (summary.covered ?? 0) - coveredTestLines;
+  if (count < 0 || covered < 0 || covered > count) {
+    throw new CoverageGateError(
+      "COVERAGE_REPORT_INVALID",
+      "llvm-cov function regions disagree with line summary while excluding unit-test functions",
+      2,
+    );
+  }
+  return { count, covered, percent: count === 0 ? 100 : (100 * covered) / count };
+}
+
 /**
  * @returns {Map<string, { percent: number, covered: number, count: number }>}
  */
@@ -174,32 +225,37 @@ function parseLlvmCovJson(content, metric, repoRoot = REPO_ROOT) {
     );
   }
   const map = new Map();
-  for (const file of files) {
-    const rawName = file.filename || file.name || "";
-    if (!rawName) continue;
-    const key = normRepoPath(rawName, repoRoot);
-    if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
-    const summary = file.summary?.[metric];
-    if (!summary || typeof summary.count !== "number") continue;
-    const count = summary.count;
-    const covered = summary.covered ?? 0;
-    const percent =
-      typeof summary.percent === "number"
-        ? summary.percent
-        : count === 0
-          ? 100
-          : (100 * covered) / count;
-    const previous = map.get(key);
-    if (previous) {
-      const mergedCount = previous.count + count;
-      const mergedCovered = previous.covered + covered;
-      map.set(key, {
-        count: mergedCount,
-        covered: mergedCovered,
-        percent: mergedCount === 0 ? 100 : (100 * mergedCovered) / mergedCount,
-      });
-    } else {
-      map.set(key, { count, covered, percent });
+  for (const exportData of data.data) {
+    const testFunctionLines = rustTestFunctionLineCounts(exportData, repoRoot);
+    for (const file of exportData.files ?? []) {
+      const rawName = file.filename || file.name || "";
+      if (!rawName) continue;
+      const key = normRepoPath(rawName, repoRoot);
+      if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+      const rawSummary = file.summary?.[metric];
+      if (!rawSummary || typeof rawSummary.count !== "number") continue;
+      const summary =
+        metric === "lines" ? subtractRustTestFunctionLines(rawSummary, testFunctionLines.get(key)) : rawSummary;
+      const count = summary.count;
+      const covered = summary.covered ?? 0;
+      const percent =
+        typeof summary.percent === "number"
+          ? summary.percent
+          : count === 0
+            ? 100
+            : (100 * covered) / count;
+      const previous = map.get(key);
+      if (previous) {
+        const mergedCount = previous.count + count;
+        const mergedCovered = previous.covered + covered;
+        map.set(key, {
+          count: mergedCount,
+          covered: mergedCovered,
+          percent: mergedCount === 0 ? 100 : (100 * mergedCovered) / mergedCount,
+        });
+      } else {
+        map.set(key, { count, covered, percent });
+      }
     }
   }
   return map;
@@ -224,6 +280,7 @@ function parseUncoveredLlvmCovLines(content, repoRoot = REPO_ROOT) {
   const countsByFile = new Map();
   for (const exportData of data.data) {
     for (const fn of exportData.functions ?? []) {
+      if (isRustUnitTestFunction(fn)) continue;
       const rawName = fn.filenames?.[0];
       if (!rawName) continue;
       const key = normRepoPath(rawName, repoRoot);

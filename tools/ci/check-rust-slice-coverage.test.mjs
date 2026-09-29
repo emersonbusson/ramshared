@@ -105,13 +105,19 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
           files: [
             {
               filename: file,
-              segments: [
-                [1, 1, 1, 1, 1, 0],
-                [1, 35, 0, 0, 0, 0],
-                [7, 5, 0, 1, 1, 0],
-                [7, 41, 0, 0, 0, 0],
-              ],
               summary: { lines: { count: 2, covered: 1, percent: 50 } },
+            },
+          ],
+          functions: [
+            {
+              name: "fixture::production",
+              filenames: [file],
+              regions: [[1, 1, 1, 35, 1, 0, 0, 0]],
+            },
+            {
+              name: "fixture::tests::helper",
+              filenames: [file],
+              regions: [[7, 5, 7, 41, 0, 0, 0, 0]],
             },
           ],
         },
@@ -120,6 +126,8 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
 
     const stats = parseLlvmCovJson(JSON.stringify(report), "lines", root);
     assert.deepEqual(stats.get("src/lib.rs"), { count: 1, covered: 1, percent: 100 });
+    const uncovered = checkerApi("parseUncoveredLlvmCovLines")(JSON.stringify(report), root);
+    assert.equal(uncovered.has("src/lib.rs"), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
