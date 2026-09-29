@@ -254,6 +254,9 @@ No production file is deleted.
 | `monitor.rs` | `monitor_v4_records_full_pressure_and_sanitized_topn` | unit | #9 | ≥80% |
 | `monitor.rs` | `large_external_footprint_is_reported_as_usage` | unit | #9/#13 | ≥80% |
 | `monitor.rs` | `gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid` | process/timeout | #15/#16 | ≥80% |
+| `stress.rs` | `run_stops_at_an_unreachable_memory_floor_before_allocating` | safety floor | #13/#16 | ≥80% |
+| `stress.rs` | `run_uses_only_injected_telemetry_and_bounded_allocation` | injected telemetry, compaction, and 4-KiB backing | #13/#16 | ≥80% |
+| `stress.rs` | `active_cycle_stays_on_bounded_injected_backing` | one-second active cycle, injected telemetry, and 4-KiB backing | #13/#15/#16 | ≥80% |
 | `bounded_process.rs` | `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_reaps_successful_leader_and_all_stdio_redirected_descendant` | adversarial process/pipe | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_on_spawn_panic_cannot_strand_owned_child` | panic/process | #15/#16 | ≥80% via canonical transport owner |

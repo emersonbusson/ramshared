@@ -1058,25 +1058,96 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
 }
 
 pub fn run(opts: &StressOptions) -> Result<(), String> {
+    run_with_environment(opts, &SystemStressEnvironment)
+}
+
+trait StressEnvironment {
+    fn is_wsl2(&self) -> bool {
+        is_wsl2()
+    }
+
+    fn read_mem_info(&self) -> (u64, u64) {
+        read_mem_info()
+    }
+
+    fn read_swap_tiers(&self) -> (u64, u64, u64, u64) {
+        read_swap_tiers()
+    }
+
+    fn read_swap_tier_capacities(
+        &self,
+    ) -> (TierCapacityStats, TierCapacityStats, TierCapacityStats) {
+        read_swap_tier_capacities()
+    }
+
+    fn read_cache_status_sample(&self) -> Option<CacheSample> {
+        read_cache_status_sample()
+    }
+
+    fn current_kernel_faults(&self) -> Option<u64> {
+        current_kernel_faults()
+    }
+
+    fn read_psi_full(&self) -> Option<f64> {
+        read_psi_full()
+    }
+
+    fn probe_allocation_latency_ms(&self) -> f64 {
+        probe_allocation_latency_ms()
+    }
+
+    fn read_sysctl_min_free_mb(&self) -> u64 {
+        read_sysctl_min_free_mb()
+    }
+
+    fn read_buddyinfo_order_7(&self) -> Option<u64> {
+        read_buddyinfo_order_7()
+    }
+
+    fn trigger_proactive_compaction(&self) {
+        trigger_proactive_compaction();
+    }
+
+    fn read_tier_disk_total_bytes(&self) -> (u64, u64, u64) {
+        read_tier_disk_total_bytes()
+    }
+
+    fn count_kernel_hung_tasks(&self) -> u64 {
+        count_kernel_hung_tasks()
+    }
+
+    fn allocate_buffer(&self, requested_bytes: usize) -> Vec<u8> {
+        vec![0u8; requested_bytes]
+    }
+}
+
+struct SystemStressEnvironment;
+
+impl StressEnvironment for SystemStressEnvironment {}
+
+fn run_with_environment<E: StressEnvironment>(
+    opts: &StressOptions,
+    environment: &E,
+) -> Result<(), String> {
     let cascade_mode = !opts.tier3_only && (opts.cascade || opts.tier3_target_pct.is_some());
     if cascade_mode {
         cascade::stress_readiness()?;
     }
-    let required_psi = is_wsl2() || cascade_mode || opts.tier3_only;
-    if required_psi && stress_psi_sample(read_psi_full(), true).is_none() {
+    let required_psi = environment.is_wsl2() || cascade_mode || opts.tier3_only;
+    if required_psi && stress_psi_sample(environment.read_psi_full(), true).is_none() {
         return Err("required memory PSI telemetry is unavailable or malformed".to_string());
     }
     let initial_cache_sample = if opts.tier3_only {
         None
     } else {
-        read_cache_status_sample()
+        environment.read_cache_status_sample()
     };
     require_physical_cache_before_cascade(
         cascade_mode,
         opts.physical_cache_target_mib,
         initial_cache_sample,
     )?;
-    let (_, _, initial_tier3) = read_swap_tier_capacities();
+    let (_, _, initial_tier3) = environment.read_swap_tier_capacities();
     require_tier3_only_capacity(opts.tier3_only, initial_tier3)?;
     let mut physical_cache_required_mib = opts.physical_cache_target_mib.unwrap_or(0);
     if opts.full_three_tier_profile {
@@ -1087,7 +1158,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     if opts.full_three_tier_profile {
         qualification_opts.physical_cache_target_mib = Some(physical_cache_required_mib);
     }
-    if (cascade_mode || opts.tier3_only) && current_kernel_faults() != Some(0) {
+    if (cascade_mode || opts.tier3_only) && environment.current_kernel_faults() != Some(0) {
         return Err("kernel fault evidence is unavailable or already contains faults".to_string());
     }
     let term_signal = Arc::new(AtomicBool::new(false));
@@ -1127,9 +1198,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
     });
 
-    let (ram_total_mb, ram_avail_init) = read_mem_info();
-    let (swap_init_total, _, _, initial_ssd_used_mb) = read_swap_tiers();
-    let ram_scope_label = if is_wsl2() {
+    let (ram_total_mb, ram_avail_init) = environment.read_mem_info();
+    let (swap_init_total, _, _, initial_ssd_used_mb) = environment.read_swap_tiers();
+    let ram_scope_label = if environment.is_wsl2() {
         "WSL2 RAM"
     } else {
         "Physical Host RAM"
@@ -1185,7 +1256,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut peak_pressure = 1.0f64;
     let mut readings_count = 0usize;
     let mut active_cycles_done = 0usize;
-    let (mut prev_z_bytes, mut prev_v_bytes, mut prev_s_bytes) = read_tier_disk_total_bytes();
+    let (mut prev_z_bytes, mut prev_v_bytes, mut prev_s_bytes) =
+        environment.read_tier_disk_total_bytes();
     let mut prev_sample_time = Instant::now();
     let mut peak_zram_mbs: f64 = 0.0;
     let mut peak_vram_mbs: f64 = 0.0;
@@ -1215,7 +1287,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             safety_halt = true;
             break;
         }
-        if (opts.cascade || opts.tier3_target_pct.is_some()) && current_kernel_faults() != Some(0) {
+        if (opts.cascade || opts.tier3_target_pct.is_some())
+            && environment.current_kernel_faults() != Some(0)
+        {
             eprintln!("[stress] safety_halt: kernel_faults");
             safety_halt = true;
             break;
@@ -1229,20 +1303,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             Ordering::Relaxed,
         );
 
-        let (_, avail_mb) = read_mem_info();
-        let Some(psi_full) = stress_psi_sample(read_psi_full(), required_psi) else {
+        let (_, avail_mb) = environment.read_mem_info();
+        let Some(psi_full) = stress_psi_sample(environment.read_psi_full(), required_psi) else {
             eprintln!("[stress] safety_halt: psi_telemetry_invalid");
             safety_halt = true;
             break;
         };
-        let lat_ms = probe_allocation_latency_ms();
+        let lat_ms = environment.probe_allocation_latency_ms();
         latencies_ms.push(lat_ms);
-        let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
-        let (cap1, cap2, cap3) = read_swap_tier_capacities();
+        let (tot_swap, z_mb, v_mb, s_mb) = environment.read_swap_tiers();
+        let (cap1, cap2, cap3) = environment.read_swap_tier_capacities();
         let cache_sample = if opts.tier3_only {
             None
         } else {
-            read_cache_status_sample()
+            environment.read_cache_status_sample()
         };
         if cascade_mode && cache_sample.is_none() {
             eprintln!("[stress] safety_halt: physical_cache_unavailable");
@@ -1278,7 +1352,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         readings_count += 1;
         append_telemetry_log(&opts.telemetry_log, &reading);
 
-        let sysctl_min_free_mb = read_sysctl_min_free_mb();
+        let sysctl_min_free_mb = environment.read_sysctl_min_free_mb();
         let is_multi_tier = cascade_mode || opts.tier3_only;
         const SWAP_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(150);
         const MAX_SWAP_DRAIN_IDLE_CYCLES: usize = 80; // 80 * 150ms = 12.0s of zero swap growth before declaring limit
@@ -1289,7 +1363,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         // Therefore: physical_headroom = MemAvailable + sysctl_min_free_mb.
         // We calibrate hard_floor against MemAvailable such that:
         //   hard_floor + sysctl_min_free_mb >= target_physical_floor (600 MB on WSL2).
-        let target_physical_floor = if is_wsl2() {
+        let target_physical_floor = if environment.is_wsl2() {
             opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB)
         } else {
             opts.min_ram_mb.max(BARE_METAL_MULTI_TIER_FLOOR_MB)
@@ -1323,9 +1397,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 Ordering::Relaxed,
             );
             thread::sleep(SWAP_DRAIN_POLL_INTERVAL);
-            let (_, new_avail) = read_mem_info();
+            let (_, new_avail) = environment.read_mem_info();
             avail_mb = new_avail;
-            let (cur_swap, _, _, _) = read_swap_tiers();
+            let (cur_swap, _, _, _) = environment.read_swap_tiers();
             if cur_swap > last_swap_val {
                 // kswapd is actively draining dirty pages into VRAM/SSD
                 last_swap_val = cur_swap;
@@ -1372,9 +1446,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             break;
         }
 
-        if is_wsl2() && opts.min_order_7_chunks > 0 {
+        if environment.is_wsl2() && opts.min_order_7_chunks > 0 {
             let mut action = decide_buddyinfo_action_with_threshold(
-                read_buddyinfo_order_7(),
+                environment.read_buddyinfo_order_7(),
                 opts.min_order_7_chunks,
             );
             if let BuddyInterlockAction::CompactionTriggered = action {
@@ -1382,10 +1456,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             } else if let BuddyInterlockAction::Halt { .. } = action {
                 // Before halting, trigger proactive compaction and allow kcompactd to coalesce pages
                 for _ in 0..3 {
-                    trigger_proactive_compaction();
+                    environment.trigger_proactive_compaction();
                     thread::sleep(Duration::from_millis(200));
                     action = decide_buddyinfo_action_with_threshold(
-                        read_buddyinfo_order_7(),
+                        environment.read_buddyinfo_order_7(),
                         opts.min_order_7_chunks,
                     );
                     if !matches!(action, BuddyInterlockAction::Halt { .. }) {
@@ -1451,7 +1525,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             break;
         }
 
-        let (cap1, cap2, cap3) = read_swap_tier_capacities();
+        let (cap1, cap2, cap3) = environment.read_swap_tier_capacities();
         if let Some(t3_target) = opts.tier3_target_pct
             && (opts.tier3_only
                 || (cap1.pct >= opts.tier1_target_pct && cap2.pct >= opts.tier2_target_pct))
@@ -1498,7 +1572,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                     if term_signal.load(Ordering::Relaxed) {
                         break;
                     }
-                    let Some(fresh_psi) = stress_psi_sample(read_psi_full(), required_psi) else {
+                    let Some(fresh_psi) =
+                        stress_psi_sample(environment.read_psi_full(), required_psi)
+                    else {
                         eprintln!("[stress] safety_halt: psi_telemetry_invalid_during_recovery");
                         break;
                     };
@@ -1513,7 +1589,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                             .as_secs(),
                         Ordering::Relaxed,
                     );
-                    let (_, fresh_avail) = read_mem_info();
+                    let (_, fresh_avail) = environment.read_mem_info();
                     let threshold = hard_floor + TIER3_HEADROOM_RESERVE_MB;
                     if fresh_avail > threshold {
                         avail_mb = fresh_avail;
@@ -1542,8 +1618,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         // Allocate and dirty pages with realistic workload entropy
         let num_bytes = (safe_alloc_mb as usize) * 1024 * 1024;
-        let mut slice = vec![0u8; num_bytes];
-        for i in (0..num_bytes).step_by(4096) {
+        let mut slice = environment.allocate_buffer(num_bytes);
+        for i in (0..slice.len()).step_by(4096) {
             let base = (current_target as u8).wrapping_add((i & 0xFF) as u8);
             for offset in (0..4096).step_by(128) {
                 slice[i + offset] = base.wrapping_add((offset as u8) ^ 0xA5);
@@ -1563,10 +1639,11 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             }
         }
 
+        let allocated_mb = (slice.len() as u64) / (1024 * 1024);
         if let Ok(mut guard) = chunks.lock() {
             guard.push(slice);
         }
-        total_allocated_mb += safe_alloc_mb;
+        total_allocated_mb += allocated_mb;
 
         peak_zram = peak_zram.max(z_mb);
         peak_vram = peak_vram.max(v_mb);
@@ -1594,7 +1671,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         // Adaptive StorVSC I/O Pacing:
         // Tier 3 is backed by Hyper-V synthetic SCSI (storvsc) writing to swap.vhdx on NTFS.
         // If Tier 3 is active, pace steps by at least 500ms to allow StorVSC ring buffer completions.
-        let step_interval = step_interval_ms(is_wsl2(), tier3_active, opts.interval_ms);
+        let step_interval = step_interval_ms(environment.is_wsl2(), tier3_active, opts.interval_ms);
         // Heartbeat before the planned sleep so the watchdog (4s stall) does not
         // misclassify a deliberate step_interval as a hang (Kahneman #9).
         last_heartbeat.store(
@@ -1608,7 +1685,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let now = Instant::now();
         let dt = now.duration_since(prev_sample_time).as_secs_f64();
         if dt > 0.05 {
-            let (cur_z_bytes, cur_v_bytes, cur_s_bytes) = read_tier_disk_total_bytes();
+            let (cur_z_bytes, cur_v_bytes, cur_s_bytes) = environment.read_tier_disk_total_bytes();
             let dz = cur_z_bytes.saturating_sub(prev_z_bytes) as f64 / (1024.0 * 1024.0);
             let dv = cur_v_bytes.saturating_sub(prev_v_bytes) as f64 / (1024.0 * 1024.0);
             let ds = cur_s_bytes.saturating_sub(prev_s_bytes) as f64 / (1024.0 * 1024.0);
@@ -1641,7 +1718,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let hold_end = Instant::now() + Duration::from_secs(opts.hold_sec);
         let mut cycle: usize = 0;
-        let (_, _, init_cap3) = read_swap_tier_capacities();
+        let (_, _, init_cap3) = environment.read_swap_tier_capacities();
         let mut hold_cap3_pct = init_cap3.pct;
         while Instant::now() < hold_end && !term_signal.load(Ordering::Relaxed) {
             if cascade_mode && let Err(error) = cascade::stress_readiness() {
@@ -1650,20 +1727,22 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 break;
             }
             if (opts.cascade || opts.tier3_target_pct.is_some())
-                && current_kernel_faults() != Some(0)
+                && environment.current_kernel_faults() != Some(0)
             {
                 safety_halt = true;
                 break;
             }
-            let (_, free_before_touch_mb) = read_mem_info();
-            let Some(psi_at_cycle_start) = stress_psi_sample(read_psi_full(), required_psi) else {
+            let (_, free_before_touch_mb) = environment.read_mem_info();
+            let Some(psi_at_cycle_start) =
+                stress_psi_sample(environment.read_psi_full(), required_psi)
+            else {
                 eprintln!("[stress] safety_halt: psi_telemetry_invalid");
                 safety_halt = true;
                 break;
             };
             if psi_at_cycle_start >= opts.max_psi_full
                 || free_before_touch_mb
-                    <= if is_wsl2() {
+                    <= if environment.is_wsl2() {
                         opts.min_ram_mb.max(WSL2_MIN_PHYSICAL_HEADROOM_MB)
                     } else {
                         opts.min_ram_mb
@@ -1712,25 +1791,26 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 }
             }
 
-            let (_, free_mb) = read_mem_info();
-            let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
+            let (_, free_mb) = environment.read_mem_info();
+            let (tot_swap, z_mb, v_mb, s_mb) = environment.read_swap_tiers();
             peak_zram = peak_zram.max(z_mb);
             peak_vram = peak_vram.max(v_mb);
             peak_ssd = peak_ssd.max(s_mb);
             peak_total_swap = peak_total_swap.max(tot_swap);
-            let Some(psi_full) = stress_psi_sample(read_psi_full(), required_psi) else {
+            let Some(psi_full) = stress_psi_sample(environment.read_psi_full(), required_psi)
+            else {
                 eprintln!("[stress] safety_halt: psi_telemetry_invalid");
                 safety_halt = true;
                 break;
             };
-            let lat_ms = probe_allocation_latency_ms();
+            let lat_ms = environment.probe_allocation_latency_ms();
             latencies_ms.push(lat_ms);
 
-            let (cap1, cap2, cap3) = read_swap_tier_capacities();
+            let (cap1, cap2, cap3) = environment.read_swap_tier_capacities();
             let cache_sample = if opts.tier3_only {
                 None
             } else {
-                read_cache_status_sample()
+                environment.read_cache_status_sample()
             };
             if cascade_mode && cache_sample.is_none() {
                 cache_lost_during_stress = true;
@@ -1793,7 +1873,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             let now = Instant::now();
             let dt = now.duration_since(prev_sample_time).as_secs_f64();
             if dt > 0.05 {
-                let (cur_z_bytes, cur_v_bytes, cur_s_bytes) = read_tier_disk_total_bytes();
+                let (cur_z_bytes, cur_v_bytes, cur_s_bytes) =
+                    environment.read_tier_disk_total_bytes();
                 let dz = cur_z_bytes.saturating_sub(prev_z_bytes) as f64 / (1024.0 * 1024.0);
                 let dv = cur_v_bytes.saturating_sub(prev_v_bytes) as f64 / (1024.0 * 1024.0);
                 let ds = cur_s_bytes.saturating_sub(prev_s_bytes) as f64 / (1024.0 * 1024.0);
@@ -1831,9 +1912,9 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let _ = watchdog_handle.join();
 
     thread::sleep(Duration::from_millis(500));
-    let (_, post_free_ram) = read_mem_info();
-    let (post_swap, _, _, _) = read_swap_tiers();
-    let (cap1, cap2, cap3) = read_swap_tier_capacities();
+    let (_, post_free_ram) = environment.read_mem_info();
+    let (post_swap, _, _, _) = environment.read_swap_tiers();
+    let (cap1, cap2, cap3) = environment.read_swap_tier_capacities();
 
     let (
         avg_cycle_latency_ms,
@@ -1894,7 +1975,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         // PASS_ZERO_PANIC requires a completed run with physical cache and
         // logical tiers observed in the same snapshot.
         status: if stress_passes(
-            current_kernel_faults(),
+            environment.current_kernel_faults(),
             if opts.tier3_only {
                 StressMode::Tier3Only
             } else {
@@ -1927,7 +2008,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         dma_watchdog_trips_count: None,
         tier3_spillover_mb: peak_ssd,
         vram_eviction_p99_latency_ms: None,
-        kernel_d_state_hung_tasks: count_kernel_hung_tasks(),
+        kernel_d_state_hung_tasks: environment.count_kernel_hung_tasks(),
     };
 
     if opts.json {
@@ -2097,6 +2178,98 @@ fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+
+    struct StubStressEnvironment {
+        buddyinfo: RefCell<VecDeque<Option<u64>>>,
+        compaction_calls: Cell<usize>,
+        latency_probes: Cell<usize>,
+        requested_allocations: RefCell<Vec<usize>>,
+        backing_allocations: RefCell<Vec<usize>>,
+    }
+
+    impl StubStressEnvironment {
+        fn new(buddyinfo: impl IntoIterator<Item = Option<u64>>) -> Self {
+            Self {
+                buddyinfo: RefCell::new(buddyinfo.into_iter().collect()),
+                compaction_calls: Cell::new(0),
+                latency_probes: Cell::new(0),
+                requested_allocations: RefCell::new(Vec::new()),
+                backing_allocations: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl StressEnvironment for StubStressEnvironment {
+        fn is_wsl2(&self) -> bool {
+            true
+        }
+
+        fn read_mem_info(&self) -> (u64, u64) {
+            (8192, 8192)
+        }
+
+        fn read_swap_tiers(&self) -> (u64, u64, u64, u64) {
+            (0, 0, 0, 0)
+        }
+
+        fn read_swap_tier_capacities(
+            &self,
+        ) -> (TierCapacityStats, TierCapacityStats, TierCapacityStats) {
+            (
+                TierCapacityStats::default(),
+                TierCapacityStats::default(),
+                TierCapacityStats::default(),
+            )
+        }
+
+        fn read_cache_status_sample(&self) -> Option<CacheSample> {
+            None
+        }
+
+        fn current_kernel_faults(&self) -> Option<u64> {
+            Some(0)
+        }
+
+        fn read_psi_full(&self) -> Option<f64> {
+            Some(0.0)
+        }
+
+        fn probe_allocation_latency_ms(&self) -> f64 {
+            self.latency_probes.set(self.latency_probes.get() + 1);
+            0.25
+        }
+
+        fn read_sysctl_min_free_mb(&self) -> u64 {
+            0
+        }
+
+        fn read_buddyinfo_order_7(&self) -> Option<u64> {
+            self.buddyinfo.borrow_mut().pop_front().unwrap_or(Some(64))
+        }
+
+        fn trigger_proactive_compaction(&self) {
+            self.compaction_calls.set(self.compaction_calls.get() + 1);
+        }
+
+        fn read_tier_disk_total_bytes(&self) -> (u64, u64, u64) {
+            (0, 0, 0)
+        }
+
+        fn count_kernel_hung_tasks(&self) -> u64 {
+            0
+        }
+
+        fn allocate_buffer(&self, requested_bytes: usize) -> Vec<u8> {
+            self.requested_allocations
+                .borrow_mut()
+                .push(requested_bytes);
+            let buffer = vec![0; requested_bytes.min(4096)];
+            self.backing_allocations.borrow_mut().push(buffer.len());
+            buffer
+        }
+    }
 
     #[test]
     fn disk_throughput_uses_the_active_swap_device() {
@@ -2269,6 +2442,78 @@ mod tests {
                 "the safety-floor branch should record its read-only sample"
             );
         }
+    }
+
+    #[test]
+    fn run_uses_only_injected_telemetry_and_bounded_allocation() {
+        let log_path = std::env::temp_dir().join(format!(
+            "ramshared-stress-injected-{}-{}.log",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let options = StressOptions {
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            interval_ms: 1,
+            hold_sec: 0,
+            min_order_7_chunks: 1,
+            telemetry_log: log_path.display().to_string(),
+            ..StressOptions::default()
+        };
+        let environment = StubStressEnvironment::new([Some(0), Some(64)]);
+
+        let result = run_with_environment(&options, &environment);
+        let telemetry = fs::read_to_string(&log_path).expect("injected run writes telemetry");
+        let _ = fs::remove_file(&log_path);
+
+        assert!(result.is_ok(), "bounded injected run failed: {result:?}");
+        assert!(telemetry.contains("RAM:"));
+        assert_eq!(environment.compaction_calls.get(), 1);
+        assert_eq!(
+            environment.requested_allocations.borrow().as_slice(),
+            &[81 * 1024 * 1024]
+        );
+        assert_eq!(environment.backing_allocations.borrow().as_slice(), &[4096]);
+    }
+
+    #[test]
+    fn active_cycle_stays_on_bounded_injected_backing() {
+        let log_path = std::env::temp_dir().join(format!(
+            "ramshared-stress-cycle-{}-{}.log",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let options = StressOptions {
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            interval_ms: 1,
+            hold_sec: 1,
+            min_order_7_chunks: 0,
+            telemetry_log: log_path.display().to_string(),
+            ..StressOptions::default()
+        };
+        let environment = StubStressEnvironment::new([]);
+
+        let result = run_with_environment(&options, &environment);
+        let telemetry = fs::read_to_string(&log_path).expect("injected run writes telemetry");
+        let _ = fs::remove_file(&log_path);
+
+        assert!(result.is_ok(), "bounded active cycle failed: {result:?}");
+        assert!(telemetry.contains("RAM:"));
+        assert!(
+            environment.latency_probes.get() > 1,
+            "hold phase should sample cycles"
+        );
+        assert_eq!(environment.requested_allocations.borrow().len(), 1);
+        assert_eq!(environment.backing_allocations.borrow().as_slice(), &[4096]);
     }
 
     #[test]
