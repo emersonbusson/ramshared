@@ -82,6 +82,16 @@ test('allows historical process-identifier redaction without retaining its numbe
   )
 })
 
+test('rejects changing a historical PID while labeling it a redaction', () => {
+  assert.equal(
+    isSecurityRedaction(
+      'The root confirmed that PID `123456` was terminated; 0 tests ran',
+      'The root confirmed that PID `654321` was terminated; 0 tests ran'
+    ),
+    false
+  )
+})
+
 test('allows historical wrapper-name removal while preserving command coverage', () => {
   assert.equal(
     isSecurityRedaction(
