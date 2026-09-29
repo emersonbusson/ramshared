@@ -344,17 +344,55 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
     }
 }
 
+/// Reads until `buffer` is full against one absolute `deadline`.
+///
+/// Mirrors the client-side `read_exact_until` discipline: the deadline is
+/// absolute across every partial read of the frame, so a peer that trickles
+/// bytes cannot extend it. Returns `Ok(false)` only when the peer closed
+/// cleanly before delivering any byte (the loop's only clean-exit path);
+/// a truncated frame, a stall, or deadline expiry fails closed.
+fn read_exact_until(
+    socket: &mut UnixStream,
+    mut buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<bool, String> {
+    let mut read_any = false;
+    while !buffer.is_empty() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("worker frame read deadline expired".to_string());
+        }
+        socket
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| format!("worker read timeout setup error: {error}"))?;
+        match socket.read(buffer) {
+            Ok(0) if !read_any => return Ok(false),
+            Ok(0) => return Err("worker peer closed mid-frame".to_string()),
+            Ok(read) => {
+                read_any = true;
+                buffer = &mut buffer[read..];
+            }
+            Err(ref error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(ref error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                ) =>
+            {
+                return Err("worker frame read deadline expired".to_string());
+            }
+            Err(error) => return Err(format!("worker read error: {error}")),
+        }
+    }
+    Ok(true)
+}
+
 pub fn run_gpu_worker_loop<P: VramProvider>(
     socket: UnixStream,
     provider: P,
     config: GpuWorkerConfig,
 ) -> Result<(), String> {
-    run_gpu_worker_loop_with_frame_read_timeout(
-        socket,
-        provider,
-        config,
-        WORKER_FRAME_READ_TIMEOUT,
-    )
+    run_gpu_worker_loop_with_frame_read_timeout(socket, provider, config, WORKER_FRAME_READ_TIMEOUT)
 }
 
 /// Runs the worker loop with an injectable per-frame read budget.
@@ -365,18 +403,17 @@ pub fn run_gpu_worker_loop_with_frame_read_timeout<P: VramProvider>(
     mut socket: UnixStream,
     provider: P,
     config: GpuWorkerConfig,
-    _frame_read_timeout: Duration,
+    frame_read_timeout: Duration,
 ) -> Result<(), String> {
     let mut worker = GpuCacheWorker::new(&provider, config);
     let mut hdr_buf = [0u8; FRAME_HEADER_LEN];
 
     loop {
-        match socket.read_exact(&mut hdr_buf) {
-            Ok(()) => {}
-            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                break;
-            }
-            Err(e) => return Err(format!("worker read header error: {e}")),
+        let frame_deadline = Instant::now()
+            .checked_add(frame_read_timeout)
+            .ok_or_else(|| "worker frame read deadline overflow".to_string())?;
+        if !read_exact_until(&mut socket, &mut hdr_buf, frame_deadline)? {
+            break;
         }
 
         let hdr = FrameHeader::decode(&hdr_buf)
@@ -387,8 +424,8 @@ pub fn run_gpu_worker_loop_with_frame_read_timeout<P: VramProvider>(
                 return Err("worker payload len exceeds limit".to_string());
             }
             let mut buf = vec![0u8; hdr.payload_len as usize];
-            if let Err(e) = socket.read_exact(&mut buf) {
-                return Err(format!("worker read payload error: {e}"));
+            if !read_exact_until(&mut socket, &mut buf, frame_deadline)? {
+                return Err("worker peer closed mid-frame".to_string());
             }
             buf
         } else {
