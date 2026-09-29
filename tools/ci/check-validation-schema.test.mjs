@@ -62,6 +62,46 @@ test('allows_nonsecret_environment_credential_label_redaction', () => {
   )
 })
 
+test('allows historical command-wrapper redaction without changing the result', () => {
+  assert.equal(
+    isSecurityRedaction(
+      '`runner launch -- cargo test -p ramshared-block` produced no test result',
+      '`cargo test -p ramshared-block` produced no test result'
+    ),
+    true
+  )
+})
+
+test('allows historical process-identifier redaction without retaining its number', () => {
+  assert.equal(
+    isSecurityRedaction(
+      'The root confirmed that PID `123456` was terminated; 0 tests ran',
+      'The root confirmed that a process was terminated; 0 tests ran'
+    ),
+    true
+  )
+})
+
+test('allows historical wrapper-name removal while preserving command coverage', () => {
+  assert.equal(
+    isSecurityRedaction(
+      'No later Cargo, wrapper execution, rustc, rustfmt, or Rust test/build/check command ran',
+      'No later Cargo, rustc, rustfmt, or Rust test/build/check command ran'
+    ),
+    true
+  )
+})
+
+test('redaction still rejects changed numeric outcomes', () => {
+  assert.equal(
+    isSecurityRedaction(
+      'PID `123456` command wrapper -- cargo test reported 0 failures',
+      'process cargo test reported 1 failures'
+    ),
+    false
+  )
+})
+
 test('rejects unrelated historical rewrites', () => {
   assert.equal(
     isSecurityRedaction(
@@ -199,6 +239,25 @@ test('added_line_inside_existing_entry_is_append_only_violation', () => {
 test('new_entry_separator_blank_is_append_only_safe', () => {
   const root = gitFixture('## 2026-01-01 10:00 — old\n**What:** old\n**Verdict:** ✅\n')
   appendFileSync(path.join(root, 'validation.md'), '\n## 2026-01-01 11:00 — new\n**What:** new\n**Measured data:** 1 run\n**Verdict:** ✅\n')
+  assert.deepEqual(run({ root, baseRef: 'HEAD' }), { ok: true, violations: [] })
+})
+
+test('sanitizing a historical command wrapper remains append-only safe', () => {
+  const root = gitFixture(
+    '## 2026-01-01 10:00 — old\n' +
+      '**What:** old\n' +
+      '**Refusals:** `runner launch -- cargo test -p ramshared-block` produced no test result\n' +
+      '**Measured data:** 0 test results\n' +
+      '**Verdict:** 🟡 PARTIAL\n'
+  )
+  writeFileSync(
+    path.join(root, 'validation.md'),
+    '## 2026-01-01 10:00 — old\n' +
+      '**What:** old\n' +
+      '**Refusals:** `cargo test -p ramshared-block` produced no test result\n' +
+      '**Measured data:** 0 test results\n' +
+      '**Verdict:** 🟡 PARTIAL\n'
+  )
   assert.deepEqual(run({ root, baseRef: 'HEAD' }), { ok: true, violations: [] })
 })
 
