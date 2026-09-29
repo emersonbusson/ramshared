@@ -14,7 +14,7 @@ use ramshared_broker::protocol::SwapEntry;
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
     let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid PSI pressure data"))
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -27,15 +27,36 @@ pub fn read_psi() -> Result<PsiSample> {
 ///
 /// Format: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
 pub fn parse_psi(content: &str) -> Option<PsiSample> {
-    let line = content.lines().find(|l| l.starts_with("some "))?;
+    let mut some_lines = content.lines().filter(|line| line.starts_with("some "));
+    let line = some_lines.next()?;
+    if some_lines.next().is_some() {
+        return None;
+    }
     let (mut avg10, mut avg60, mut total) = (None, None, None);
     for tok in line.split_whitespace() {
         if let Some(v) = tok.strip_prefix("avg10=") {
-            avg10 = v.parse::<f32>().ok();
+            if avg10.is_some() {
+                return None;
+            }
+            let value = v.parse::<f32>().ok()?;
+            if !value.is_finite() || value < 0.0 {
+                return None;
+            }
+            avg10 = Some(value);
         } else if let Some(v) = tok.strip_prefix("avg60=") {
-            avg60 = v.parse::<f32>().ok();
+            if avg60.is_some() {
+                return None;
+            }
+            let value = v.parse::<f32>().ok()?;
+            if !value.is_finite() || value < 0.0 {
+                return None;
+            }
+            avg60 = Some(value);
         } else if let Some(v) = tok.strip_prefix("total=") {
-            total = v.parse::<u64>().ok();
+            if total.is_some() {
+                return None;
+            }
+            total = Some(v.parse::<u64>().ok()?);
         }
     }
     Some(PsiSample {
