@@ -8771,3 +8771,52 @@ stress and upstream submission stay blocked on their named proofs.
 **Verdict:** 🟡 `PARTIAL` — actionable source defects and CI trigger gaps from
 the audits are fixed with test-first evidence; install, runtime, hardware, and
 lab proofs remain open and unclaimed.
+
+## 2026-09-29 20:31 -03 — direct userspace install with BINARY_MATCH
+
+**What:** Installed the clean local RamShared userspace build through
+`scripts/install.sh` from `target/release`, proved exact `BINARY_MATCH` between
+the built and installed CLI/daemon digests, and ran read-only identity,
+status, check, doctor, and monitor probes without activating cascade, stress,
+or GPU cache. Kernel install and WSL restart were explicitly out of scope.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0115`.
+**Owner role:** supervised direct userspace install and identity proof.
+**Observed at:** `2026-09-29T23:31:13Z`.
+**Verified at:** `2026-09-29T23:31:42Z`.
+**Source revision:** `5e6b5845e75cbfe8d9f420abfdfdc97e4fb404e8`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0111 through EVD-0114. This evidence records one
+direct `/usr/local` install and its exact digests; it does not close start/stop
+after reboot, `/opt` product-release promotion, kernel promotion, stress, or
+hardware gates.
+**Freshness:** Install and probes ran in the current WSL boot
+`6.18.40.1-microsoft-standard-WSL2+`. `ramshared check` returned
+`Decision: ready` with CUDA ready and one NVIDIA GeForce RTX 2060 visible.
+Status stayed `phase: Off` / `protection: OFF` with only fallback swap
+`/dev/sdb`. `monitor --once` reported `memory_scope: wsl2`,
+`latency_source: unavailable` on idle tiers, and `binary_version: 0.15.0`.
+No stress, cascade up, GPU allocation, swap change, or WSL shutdown ran.
+**Category:** local install / exact SHA-256 identity / read-only CLI probes.
+**How to measure:** Pre-install `/usr/local/bin/ramshared` was `0.14.1` with
+CLI SHA-256 `49f5a770c1aefcb386ca99a7bb89b8913929ca2fcf5bfa18da28fee60ea41b89`.
+`sudo bash scripts/install.sh` from the clean tree installed
+`target/release` artifacts. Post-install SHA-256 values matched the build
+exactly: CLI `05a556776bc67f700855d8ed28d6c7ef5e6aa6773ea67d2ba3edd1374b4b1639`
+and daemon `5d67e2d108d1c02e7e60e64af3f54966a83cca9a2d1a56acfefbcff90b9141ed`.
+`/usr/local/share/ramshared/INSTALL_METADATA.json` records
+`ramshared-direct-install-metadata/v2` with version `0.15.0`, source commit
+`5e6b5845e75cbfe8d9f420abfdfdc97e4fb404e8`, `source_tree_state=clean`, and
+`installed_at_utc=2026-09-29T23:31:13Z`. `ramshared --build-info` returns the
+same identity. `ramshared status`, `check`, and `doctor` are read-only;
+`check` decision was `ready`.
+**Remaining boundary:** `/opt/ramshared/current` still points at the earlier
+sealed candidate `v0.15.0-b788c17`; product-path promotion with input-bundle
+provenance was not performed. No repeated idempotent start/stop after reboot,
+no cascade activation, no three-tier stress, no live GPU worker allocation, no
+Windows physical campaign, and no custom-kernel install exists. All seven
+reliability gates remain `PARTIAL`; Build #5 stress and upstream submission
+stay blocked on their named proofs.
+**Verdict:** 🟡 `PARTIAL` — clean direct userspace install now has exact
+BINARY_MATCH and live read-only identity proof; lifecycle repetition, product
+release promotion, kernel, stress, and hardware proofs remain open.
