@@ -3173,11 +3173,11 @@ allocated_bytes = {}
     }
 
     #[test]
-    fn config_draft_wizard_saves_only_after_review_and_explicit_confirmation() {
+    fn config_draft_wizard_saves_tier_caps_as_unapplied_ceilings() {
         let snapshot = fixture_snapshot();
         let directory = draft_test_directory("wizard");
         let output_path = directory.join("profile.toml");
-        let mut input = io::Cursor::new("origin\n2\n4096\nswap\n1\n1024\ndone\nSAVE\n");
+        let mut input = io::Cursor::new("origin\n2\n4096\nswap\n1\n1024\ndone\n512\n2048\nSAVE\n");
         let mut output = Vec::new();
 
         run_draft_wizard_with_io(&snapshot, &output_path, &mut input, &mut output)
@@ -3187,6 +3187,11 @@ allocated_bytes = {}
         assert!(output.contains("Windows host RAM"));
         assert!(output.contains("I:\\wsl\\ramshared\\origin.vhdx"));
         assert!(output.contains("Draft only: no swap, origin, GPU, .wslconfig"));
+        assert!(output.contains("ZRAM ceiling: 512 MiB"));
+        assert!(output.contains("SSD origin tier ceiling: 2048 MiB"));
+        assert!(
+            output.contains("VRAM ceiling unavailable: no validated adapter budget was sampled")
+        );
         assert!(output.contains("Validated draft saved"));
         let profile_text = fs::read_to_string(&output_path).expect("saved draft reads");
         let profile = ResourceProfile::parse(&profile_text).expect("saved profile parses");
@@ -3199,13 +3204,25 @@ allocated_bytes = {}
             target,
             ResourceTarget::WslFallback { windows_volume_id, .. } if windows_volume_id == "vol-c"
         )));
+        assert_eq!(profile.caps.zram_bytes, Some(512 * 1024 * 1024));
+        assert_eq!(profile.caps.origin_bytes, Some(2048 * 1024 * 1024));
+        assert!(profile.caps.vram_bytes.is_empty());
 
         let canceled_path = directory.join("canceled.toml");
-        let mut input = io::Cursor::new("swap\n1\n1024\ndone\nNO\n");
+        let mut input = io::Cursor::new("swap\n1\n1024\ndone\n\n\nNO\n");
         let mut output = Vec::new();
         run_draft_wizard_with_io(&snapshot, &canceled_path, &mut input, &mut output)
             .expect("declined draft is a successful cancellation");
         assert!(!canceled_path.exists());
+
+        let invalid_cap_path = directory.join("invalid-cap.toml");
+        let mut input = io::Cursor::new("swap\n1\n1024\ndone\n18446744073709551615\n\nSAVE\n");
+        let mut output = Vec::new();
+        assert!(
+            run_draft_wizard_with_io(&snapshot, &invalid_cap_path, &mut input, &mut output)
+                .is_err()
+        );
+        assert!(!invalid_cap_path.exists());
 
         fs::remove_dir_all(directory).expect("wizard fixtures removed");
     }
