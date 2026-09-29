@@ -179,6 +179,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_psi_rejects_nonfinite_or_negative_pressure() {
+        for value in ["NaN", "inf", "-inf", "-0.01"] {
+            let sample = format!("some avg10={value} avg60=0.0 avg300=0.0 total=1\n");
+            assert!(parse_psi(&sample).is_none(), "accepted avg10={value}");
+
+            let sample = format!("some avg10=0.0 avg60={value} avg300=0.0 total=1\n");
+            assert!(parse_psi(&sample).is_none(), "accepted avg60={value}");
+        }
+    }
+
+    #[test]
+    fn parse_psi_rejects_duplicate_required_fields() {
+        for sample in [
+            "some avg10=1.0 avg10=2.0 avg60=3.0 avg300=4.0 total=5\n",
+            "some avg10=1.0 avg60=2.0 avg60=3.0 avg300=4.0 total=5\n",
+            "some avg10=1.0 avg60=2.0 avg300=4.0 total=5 total=6\n",
+        ] {
+            assert!(
+                parse_psi(sample).is_none(),
+                "accepted duplicate fields: {sample}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_psi_no_some_line_is_none() {
         assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
     }
