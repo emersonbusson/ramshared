@@ -3321,6 +3321,78 @@ allocated_bytes = {}
         fs::remove_dir_all(directory).expect("wizard fixtures removed");
     }
 
+    #[test]
+    fn plan_text_and_json_label_caps_as_unenforced_draft_planned_caps() {
+        let snapshot = fixture_snapshot();
+        let profile_text = r#"
+schema_version = 1
+
+[caps]
+zram_bytes = 536870912
+origin_bytes = 2147483648
+
+[[targets]]
+kind = "wsl_fallback"
+windows_volume_id = "vol-c"
+path = "C:\\wsl\\ramshared\\fallback.vhdx"
+bytes = 1073741824
+"#;
+        let plan = build_resource_plan(&snapshot, Some(profile_text))
+            .expect("draft profile with caps builds a read-only plan");
+        assert!(!plan.apply_enabled);
+        assert!(!plan.writes_performed);
+
+        let text = render_plan_text(&plan);
+        let text_lowered = text.to_ascii_lowercase();
+        assert!(
+            text_lowered.contains("unenforced planned draft caps"),
+            "plan text must label caps as unenforced draft caps: {text}"
+        );
+        assert!(
+            text_lowered.contains("planned cap (unenforced)"),
+            "plan text must mark each cap value unenforced: {text}"
+        );
+        assert!(
+            !text_lowered.contains("ceiling"),
+            "plan text must not present draft caps as ceilings: {text}"
+        );
+        assert!(text.contains("Apply enabled: false"));
+
+        let json = render_plan_json(&plan).expect("plan JSON renders");
+        let json_lowered = json.to_ascii_lowercase();
+        assert!(
+            json.contains("\"unenforced_planned_caps\""),
+            "plan JSON must label caps as unenforced planned caps: {json}"
+        );
+        assert!(
+            !json_lowered.contains("ceiling") && !json.contains("user_caps"),
+            "plan JSON must not present draft caps as enforced user caps: {json}"
+        );
+
+        let directory = draft_test_directory("unenforced-labels");
+        let output_path = directory.join("profile.toml");
+        let mut input = io::Cursor::new("swap\n1\n1024\ndone\n512\n2048\nSAVE\n");
+        let mut output = Vec::new();
+        run_draft_wizard_with_io(&snapshot, &output_path, &mut input, &mut output)
+            .expect("wizard completes");
+        let wizard = String::from_utf8(output).expect("wizard output is UTF-8");
+        let wizard_lowered = wizard.to_ascii_lowercase();
+        assert!(
+            !wizard_lowered.contains("ceiling"),
+            "wizard text must not present draft caps as ceilings: {wizard}"
+        );
+        assert!(
+            wizard_lowered.contains("unenforced") && wizard_lowered.contains("planned cap"),
+            "wizard text must label values as unenforced planned caps: {wizard}"
+        );
+        let saved = fs::read_to_string(&output_path).expect("saved draft reads");
+        assert!(
+            saved.contains("planned_caps"),
+            "saved draft must name the caps table planned_caps: {saved}"
+        );
+        fs::remove_dir_all(directory).expect("label fixtures removed");
+    }
+
     fn draft_test_directory(label: &str) -> PathBuf {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
