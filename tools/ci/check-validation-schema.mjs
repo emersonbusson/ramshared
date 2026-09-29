@@ -264,6 +264,13 @@ export function isSecurityRedaction(oldLine, newLine) {
 
   const unrelatedName = new RegExp(['ad', 'voq'].join(''), 'gi')
   const normalize = (line) => line
+    .replace(/\bPID\s+`\d+`/gi, 'a process')
+    .replace(/\bPID\b/gi, 'process')
+    .replace(/`(?:[\w.-]+\s+){2}-- (?=cargo (?:test|build))/gi, '`')
+    .replace(/(<HOME>\/\.local\/bin\/)(?:[\w.-]+\s+){2}-- (?=cargo (?:test|build))/gi, '$1')
+    .replace(/\b[\p{L}\p{N}_-]+-to-cargo-shim\b/giu, 'local command-shim')
+    .replace(/\bCargo, [\p{L}\p{N}_-]+, (?=Rust test\/build\/check)/gu, 'Cargo, ')
+    .replace(/\bCargo, [\p{L}\p{N}_-]+ execution, (?=rustc)/gu, 'Cargo, ')
     .replace(/\/home\/[A-Za-z0-9._-]+\/fase0/gi, '<private-artifact-root>')
     .replace(/<legacy-private-artifact-root>/gi, '<private-artifact-root>')
     .replace(/\/home\/[A-Za-z0-9._-]+/gi, '<private-root>')
