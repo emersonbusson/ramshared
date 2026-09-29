@@ -8,6 +8,7 @@
 use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -31,8 +32,20 @@ const EIO: i32 = -5;
 const EINVAL: i32 = -22;
 const ERANGE: i32 = -34;
 
+fn open_ublk_char_device(path: impl AsRef<Path>) -> io::Result<std::fs::File> {
+    let file = OpenOptions::new().read(true).write(true).open(path)?;
+    if !file.metadata()?.file_type().is_char_device() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ublk server path is not a character device",
+        ));
+    }
+    Ok(file)
+}
+
 trait QueueServer {
     fn submit_initial_fetch(&mut self) -> io::Result<()>;
+    fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion>;
     fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>>;
     fn io_desc_snapshot(&self, tag: u16) -> io::Result<[u8; ublk::UBLK_IO_DESC_SIZE]>;
     fn buffer_mut(&mut self, tag: u16) -> io::Result<&mut [u8]>;
@@ -42,6 +55,10 @@ trait QueueServer {
 impl QueueServer for ramshared_uring::UblkServer {
     fn submit_initial_fetch(&mut self) -> io::Result<()> {
         ramshared_uring::UblkServer::submit_initial_fetch(self)
+    }
+
+    fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion> {
+        ramshared_uring::UblkServer::drain(self)
     }
 
     fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>> {
@@ -143,7 +160,7 @@ pub fn spawn_server(
     buf_size: usize,
     backend: RamBackend,
 ) -> io::Result<ServerHandle> {
-    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let char_dev = open_ublk_char_device(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
     let thread = thread::spawn(move || {
@@ -155,8 +172,8 @@ pub fn spawn_server(
     Ok(ServerHandle { thread })
 }
 
-fn run_server_loop(
-    mut server: ramshared_uring::UblkServer,
+fn run_server_loop<S: QueueServer>(
+    mut server: S,
     mut backend: RamBackend,
 ) -> io::Result<RamBackend> {
     server.submit_initial_fetch()?;
@@ -293,7 +310,7 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
     buf_size: usize,
     backend: B,
 ) -> io::Result<ServerHandleDt3<B>> {
-    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let char_dev = open_ublk_char_device(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
@@ -474,7 +491,7 @@ pub fn spawn_server_dt3_vram(
     vram_bytes: usize,
     block_size: u32,
 ) -> io::Result<ServerHandleDt3Vram> {
-    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let char_dev = open_ublk_char_device(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
@@ -540,9 +557,10 @@ impl ServerHandleDt3VramResidency {
 ///
 /// Runs **entirely on the calling thread** (context affinity): `backend`,
 /// `probe` and the `mem_free` closure borrow the thread-affine context, which lives in the
-/// caller until this function returns.
-#[allow(clippy::too_many_arguments)] // 8 cohesive args (worker DT-3); same as run_broker
-fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
+/// caller until this function returns. Runtime observations and swapoff are injected so the
+/// state machine can be tested without GPU allocation or host swap effects.
+#[allow(clippy::too_many_arguments)] // explicit worker inputs and runtime observations
+fn serve_ublk_residency<M, F, E, S>(
     mut backend: VramBackend<M>,
     mut probe: CanaryProbe<M>,
     mem_free: F,
@@ -551,7 +569,15 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
     swap_dev: &str,
     residency: ResidencyConfig,
     demotes: Arc<AtomicU32>,
-) -> io::Result<()> {
+    mut elapsed_us: E,
+    mut spawn_swapoff: S,
+) -> io::Result<()>
+where
+    M: VramMemory,
+    F: Fn() -> Option<u64>,
+    E: FnMut(Instant) -> u64,
+    S: FnMut(&str) -> Receiver<bool>,
+{
     // Residency state (mirrors the NBD worker of main.rs).
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
@@ -566,7 +592,7 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
         // serve-only (DT-16): times only the VRAM op, not the queue wait.
         let t0 = Instant::now();
         let result = serve_request(&work.req, &mut backend, &mut work.payload);
-        let lat_us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let lat_us = elapsed_us(t0);
         let is_read = work.req.cmd == Command::Read;
         let reply = WorkerReply {
             qid: work.qid,
@@ -655,7 +681,7 @@ pub fn spawn_server_dt3_vram_with_residency(
     swap_dev: String,
     residency: ResidencyConfig,
 ) -> io::Result<ServerHandleDt3VramResidency> {
-    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let char_dev = open_ublk_char_device(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
@@ -687,6 +713,8 @@ pub fn spawn_server_dt3_vram_with_residency(
             &swap_dev,
             residency,
             demotes_worker,
+            |started| u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            spawn_swapoff,
         )
     });
 
@@ -736,7 +764,7 @@ mod join_tests {
             let _ = tx.send(join());
         });
         rx.recv_timeout(Duration::from_secs(2))
-            .expect("server join deadline")
+            .expect("ublk refusal fixture must terminate promptly")
     }
 
     fn descriptor_bytes(cmd: u8, sectors: u32) -> [u8; ublk::UBLK_IO_DESC_SIZE] {
@@ -776,6 +804,10 @@ mod join_tests {
             Ok(())
         }
 
+        fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion> {
+            self.completions.pop_front().unwrap_or_default()
+        }
+
         fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>> {
             if !self.submitted {
                 return Err(io::Error::other("fetch not submitted"));
@@ -810,19 +842,253 @@ mod join_tests {
     }
 
     #[test]
-    fn regular_file_server_handles_join_after_kernel_refusal() {
+    fn ublk_entrypoints_refuse_regular_files_before_spawning_workers() {
         let path = regular_file_fixture("ublk-server");
-        let ram_handle = spawn_server(&path, 1, 4096, RamBackend::new(4096))
-            .expect("spawn RAM server on refusal fixture");
-        let ram_result = join_with_timeout(move || ram_handle.join());
-        assert!(ram_result.is_err());
-
-        let dt3_handle = spawn_server_dt3(&path, 1, 4096, RamBackend::new(4096))
-            .expect("spawn DT-3 server on refusal fixture");
-        let dt3_result = join_with_timeout(move || dt3_handle.join());
-        assert!(dt3_result.is_err());
+        for result in [
+            spawn_server(&path, 1, 4096, RamBackend::new(4096)).map(|_| ()),
+            spawn_server_dt3(&path, 1, 4096, RamBackend::new(4096)).map(|_| ()),
+            spawn_server_dt3_vram(&path, 1, 4096, 4096, 4096).map(|_| ()),
+            spawn_server_dt3_vram_with_residency(
+                &path,
+                1,
+                4096,
+                4096,
+                4096,
+                "/dev/ublkb-ci-fixture".into(),
+                ResidencyConfig::default(),
+            )
+            .map(|_| ()),
+        ] {
+            assert_eq!(
+                result
+                    .expect_err("regular files must be refused before starting workers")
+                    .kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
 
         fs::remove_file(path).expect("remove regular-file fixture");
+    }
+
+    #[test]
+    fn ublk_entrypoints_refuse_non_ublk_character_device_before_spawning_workers() {
+        let path = Path::new("/dev/null");
+        assert!(
+            path.metadata()
+                .expect("the standard null device exists")
+                .file_type()
+                .is_char_device()
+        );
+
+        assert!(spawn_server(path, 1, 4096, RamBackend::new(4096)).is_err());
+        assert!(spawn_server_dt3(path, 1, 4096, RamBackend::new(4096)).is_err());
+        assert!(spawn_server_dt3_vram(path, 1, 4096, 4096, 4096).is_err());
+        assert!(
+            spawn_server_dt3_vram_with_residency(
+                path,
+                1,
+                4096,
+                4096,
+                4096,
+                "/dev/ublkb-ci-fixture".into(),
+                ResidencyConfig::default(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn server_entrypoint_terminates_on_non_ublk_character_device() {
+        let path = Path::new("/dev/zero");
+        assert!(
+            path.metadata()
+                .expect("the standard zero device exists")
+                .file_type()
+                .is_char_device()
+        );
+
+        let server = spawn_server(path, 1, ramshared_uring::page_size(), RamBackend::new(4096))
+            .expect("the character-device refusal fixture builds the server");
+        let result = join_with_timeout(move || server.join());
+
+        assert!(result.is_err(), "a non-ublk device must refuse FETCH");
+    }
+
+    #[test]
+    fn queue_server_adapter_forwards_operations_without_a_ublk_device() {
+        let page_size = ramshared_uring::page_size();
+        let path = regular_file_fixture("ublk-adapter");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open adapter fixture");
+        let mut server = ramshared_uring::UblkServer::new(file.as_raw_fd(), 1, page_size)
+            .expect("create io_uring adapter fixture");
+
+        assert!(QueueServer::drain(&mut server).is_empty());
+        assert_eq!(
+            QueueServer::io_desc_snapshot(&server, 0).expect("descriptor snapshot"),
+            [0; ublk::UBLK_IO_DESC_SIZE]
+        );
+        assert_eq!(
+            QueueServer::buffer_mut(&mut server, 0)
+                .expect("tag buffer")
+                .len(),
+            page_size
+        );
+
+        QueueServer::submit_initial_fetch(&mut server).expect("submit initial fetch");
+        let fetch = QueueServer::wait_and_drain(&mut server).expect("drain refused fetch");
+        assert_eq!(fetch.len(), 1);
+        assert!(fetch[0].result < 0);
+
+        QueueServer::commit_and_fetch(&mut server, 0, EINVAL).expect("submit refusal");
+        let commit = QueueServer::wait_and_drain(&mut server).expect("drain refused commit");
+        assert_eq!(commit.len(), 1);
+        assert!(commit[0].result < 0);
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove adapter fixture");
+    }
+
+    #[test]
+    fn cuda_errors_convert_to_other_io_errors_with_context() {
+        let error = cuda_to_io(ramshared_cuda::CudaError::InvalidValue(
+            "invalid test input".into(),
+        ));
+
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains("CUDA: invalid argument"));
+    }
+
+    #[test]
+    fn single_thread_server_loop_handles_idle_read_and_terminal_abort() {
+        let commits = Arc::new(Mutex::new(Vec::new()));
+        let mut queue = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
+            vec![
+                Vec::new(),
+                vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }],
+                vec![ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: ublk::UBLK_IO_RES_ABORT,
+                }],
+            ],
+            Arc::clone(&commits),
+        );
+        queue.buffers[0][..512].fill(0x5a);
+
+        let backend = run_server_loop(queue, RamBackend::new(4096))
+            .expect("an abort completion returns the owned backend");
+
+        assert_eq!(backend.size_bytes(), 4096);
+        assert_eq!(*commits.lock().expect("commit mutex"), vec![(0, 512)]);
+    }
+
+    #[test]
+    fn single_thread_server_loop_commits_unsupported_ops_and_rejects_fetch_errors() {
+        let commits = Arc::new(Mutex::new(Vec::new()));
+        let unsupported = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_WRITE_SAME, 1),
+            vec![
+                vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }],
+                vec![ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: ublk::UBLK_IO_RES_ABORT,
+                }],
+            ],
+            Arc::clone(&commits),
+        );
+        run_server_loop(unsupported, RamBackend::new(4096))
+            .expect("unsupported commands are refused without ending the loop");
+        assert_eq!(*commits.lock().expect("commit mutex"), vec![(0, EINVAL)]);
+
+        let failed_fetch = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
+            vec![vec![ramshared_uring::UblkCompletion { tag: 0, result: -5 }]],
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let error = match run_server_loop(failed_fetch, RamBackend::new(4096)) {
+            Err(error) => error,
+            Ok(_) => panic!("a failed FETCH must terminate the single-thread loop"),
+        };
+        assert!(error.to_string().contains("FETCH failed: -5"));
+    }
+
+    #[test]
+    fn single_thread_server_loop_returns_fetch_setup_and_commit_errors() {
+        struct FailingQueue {
+            fail_submit: bool,
+            fail_commit: bool,
+            completions: VecDeque<ramshared_uring::UblkCompletion>,
+            buffer: Vec<u8>,
+        }
+        impl QueueServer for FailingQueue {
+            fn submit_initial_fetch(&mut self) -> io::Result<()> {
+                if self.fail_submit {
+                    Err(io::Error::other("submit refused"))
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion> {
+                self.completions.pop_front().into_iter().collect()
+            }
+
+            fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>> {
+                unreachable!("the single-thread loop does not block in this adapter")
+            }
+
+            fn io_desc_snapshot(&self, _tag: u16) -> io::Result<[u8; ublk::UBLK_IO_DESC_SIZE]> {
+                Ok(descriptor_bytes(ublk::UBLK_IO_OP_READ, 1))
+            }
+
+            fn buffer_mut(&mut self, _tag: u16) -> io::Result<&mut [u8]> {
+                Ok(&mut self.buffer)
+            }
+
+            fn commit_and_fetch(&mut self, _tag: u16, _result: i32) -> io::Result<()> {
+                if self.fail_commit {
+                    Err(io::Error::other("commit refused"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let submit_error = match run_server_loop(
+            FailingQueue {
+                fail_submit: true,
+                fail_commit: false,
+                completions: VecDeque::new(),
+                buffer: vec![0u8; 4096],
+            },
+            RamBackend::new(4096),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("FETCH setup failure must be returned"),
+        };
+        assert!(submit_error.to_string().contains("submit refused"));
+
+        let commit_error = match run_server_loop(
+            FailingQueue {
+                fail_submit: false,
+                fail_commit: true,
+                completions: VecDeque::from([ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: 0,
+                }]),
+                buffer: vec![0u8; 4096],
+            },
+            RamBackend::new(4096),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("COMMIT_AND_FETCH failure must be returned"),
+        };
+        assert!(commit_error.to_string().contains("commit refused"));
     }
 
     #[test]
@@ -899,6 +1165,80 @@ mod join_tests {
             vec![(0, 512)]
         );
         assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn dispatch_refuses_oversized_write_and_disconnected_worker() {
+        let oversized_commits = Arc::new(Mutex::new(Vec::new()));
+        let mut oversized = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_WRITE, 9),
+            Vec::new(),
+            Arc::clone(&oversized_commits),
+        );
+        let (work_tx, work_rx) = mpsc::sync_channel(1);
+        let mut pool = vec![vec![0u8; 4096]];
+        assert!(
+            !dispatch_request(&mut oversized, 0, &work_tx, &mut pool)
+                .expect("oversized write is completed as a refusal")
+        );
+        assert_eq!(
+            *oversized_commits.lock().expect("commit mutex"),
+            vec![(0, EINVAL)]
+        );
+        assert_eq!(pool.len(), 1, "refused buffer returns to its pool");
+        assert!(work_rx.try_recv().is_err());
+
+        let mut read = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
+            Vec::new(),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let (work_tx, work_rx) = mpsc::sync_channel(1);
+        drop(work_rx);
+        let error = dispatch_request(&mut read, 0, &work_tx, &mut pool)
+            .expect_err("worker disconnect fails the request closed");
+        assert!(error.to_string().contains("worker terminated unexpectedly"));
+    }
+
+    #[test]
+    fn worker_loop_stops_when_the_ring_owner_drops_its_reply_receiver() {
+        let (work_tx, work_rx) = mpsc::channel();
+        let (reply_tx, reply_rx) = mpsc::channel();
+        drop(reply_rx);
+        work_tx
+            .send(ublk::IoWork {
+                qid: 0,
+                tag: 0,
+                buffer_addr: 0,
+                req: Request {
+                    flags: 0,
+                    cmd: Command::Read,
+                    handle: 1,
+                    offset: 0,
+                    len: 512,
+                },
+                payload: vec![0; 512],
+            })
+            .expect("queue test request");
+        drop(work_tx);
+
+        worker_loop(&mut RamBackend::new(4096), work_rx, reply_tx);
+    }
+
+    #[test]
+    fn ring_owner_stops_when_worker_reply_channel_is_disconnected() {
+        let queue = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
+            vec![vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }]],
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let (work_tx, _work_rx) = mpsc::sync_channel(1);
+        let (reply_tx, reply_rx) = mpsc::channel();
+        drop(reply_tx);
+
+        let error = run_ring_owner(queue, 1, 4096, work_tx, reply_rx)
+            .expect_err("a stopped worker cannot leave the ring owner waiting forever");
+        assert!(error.to_string().contains("worker terminated unexpectedly"));
     }
 
     #[test]
@@ -1040,6 +1380,7 @@ mod join_tests {
 mod residency_tests {
     use super::*;
     use ramshared_vram::VramError;
+    use std::sync::Mutex;
 
     /// **Fake VRAM backend in RAM (`Vec<u8>`): exercises the generic loop
     /// [`serve_ublk_residency`] (serve + §9.4 + teardown) **without GPU/ublk/root** — safe
@@ -1131,6 +1472,12 @@ mod residency_tests {
                 "/dev/ramshared-no-such-swap",
                 cfg,
                 demotes_t,
+                |started| u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                |_| {
+                    let (tx, rx) = mpsc::channel();
+                    let _ = tx.send(false);
+                    rx
+                },
             )
         });
 
@@ -1169,5 +1516,156 @@ mod residency_tests {
         };
         let demotes = run_loop(cfg, || Some(u64::MAX), 80);
         assert_eq!(demotes, 0, "should not have DEMOTE with healthy VRAM");
+    }
+
+    #[test]
+    fn latency_demote_uses_injected_clock_and_swapoff_result() {
+        let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(32);
+        let (reply_tx, _reply_rx) = mpsc::channel::<WorkerReply>();
+        let demotes = Arc::new(AtomicU32::new(0));
+        let demotes_worker = Arc::clone(&demotes);
+        let swapoff_paths = Arc::new(Mutex::new(Vec::new()));
+        let observed_paths = Arc::clone(&swapoff_paths);
+        let pending_swapoff = Arc::new(Mutex::new(None::<mpsc::Sender<bool>>));
+        let clock_swapoff = Arc::clone(&pending_swapoff);
+        let backend = VramBackend::new(FakeVram::new((BS as usize) * 8), BS);
+        let probe = CanaryProbe::new(FakeVram::new(CANARY_BYTES));
+        let mut sample = 0usize;
+
+        let worker = thread::spawn(move || {
+            serve_ublk_residency(
+                backend,
+                probe,
+                || Some(u64::MAX),
+                work_rx,
+                reply_tx,
+                "/dev/ublkb-test",
+                ResidencyConfig {
+                    latency_mult: 10,
+                    consecutive: 1,
+                    free_floor_bytes: 0,
+                },
+                demotes_worker,
+                move |_| {
+                    sample += 1;
+                    if sample == 18 {
+                        if let Some(tx) =
+                            clock_swapoff.lock().expect("pending swapoff mutex").take()
+                        {
+                            tx.send(true).expect("complete fake swapoff");
+                        }
+                    }
+                    match sample {
+                        1..=16 => 10,
+                        17 => 1_000,
+                        _ => 10,
+                    }
+                },
+                move |swap_dev| {
+                    observed_paths
+                        .lock()
+                        .expect("swapoff path mutex")
+                        .push(swap_dev.to_string());
+                    let (tx, rx) = mpsc::channel();
+                    *pending_swapoff.lock().expect("pending swapoff mutex") = Some(tx);
+                    rx
+                },
+            )
+        });
+
+        for tag in 0..19 {
+            work_tx.send(read_work(tag)).expect("queue read work");
+        }
+        drop(work_tx);
+        worker
+            .join()
+            .expect("residency worker join")
+            .expect("serve ok");
+
+        assert_eq!(demotes.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            *swapoff_paths.lock().expect("swapoff path mutex"),
+            vec!["/dev/ublkb-test"]
+        );
+    }
+
+    #[test]
+    fn residency_clears_a_disconnected_swapoff_observation() {
+        let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(96);
+        let (reply_tx, _reply_rx) = mpsc::channel::<WorkerReply>();
+        let demotes = Arc::new(AtomicU32::new(0));
+        let demotes_worker = Arc::clone(&demotes);
+        let backend = VramBackend::new(FakeVram::new((BS as usize) * 8), BS);
+        let probe = CanaryProbe::new(FakeVram::new(CANARY_BYTES));
+
+        let worker = thread::spawn(move || {
+            serve_ublk_residency(
+                backend,
+                probe,
+                || Some(0),
+                work_rx,
+                reply_tx,
+                "/dev/ublkb-disconnected-test",
+                ResidencyConfig {
+                    latency_mult: 4096,
+                    consecutive: 1,
+                    free_floor_bytes: 1,
+                },
+                demotes_worker,
+                |started| u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                |_| {
+                    let (_tx, rx) = mpsc::channel();
+                    rx
+                },
+            )
+        });
+
+        for tag in 0..80 {
+            work_tx.send(read_work(tag)).expect("queue read work");
+        }
+        drop(work_tx);
+        worker
+            .join()
+            .expect("residency worker join")
+            .expect("serve ok");
+        assert_eq!(demotes.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn residency_ignores_non_vram_flush_for_canary_and_probe() {
+        let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(1);
+        let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
+        let demotes = Arc::new(AtomicU32::new(0));
+        let backend = VramBackend::new(FakeVram::new((BS as usize) * 8), BS);
+        let probe = CanaryProbe::new(FakeVram::new(CANARY_BYTES));
+        let mut flush = read_work(0);
+        flush.req.cmd = Command::Flush;
+        flush.req.len = 0;
+        flush.payload.clear();
+        work_tx.send(flush).expect("queue flush");
+        drop(work_tx);
+
+        serve_ublk_residency(
+            backend,
+            probe,
+            || Some(0),
+            work_rx,
+            reply_tx,
+            "/dev/ublkb-flush-test",
+            ResidencyConfig {
+                latency_mult: 1,
+                consecutive: 1,
+                free_floor_bytes: u64::MAX,
+            },
+            Arc::clone(&demotes),
+            |_| 1_000_000,
+            |_| panic!("flush does not request a swapoff"),
+        )
+        .expect("flush is served without entering VRAM pressure policy");
+
+        let replies = reply_rx.try_iter().collect::<Vec<_>>();
+        assert_eq!(replies.len(), 1);
+        assert_eq!(replies[0].result, 0);
+        assert_eq!(demotes.load(Ordering::Relaxed), 0);
     }
 }

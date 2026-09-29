@@ -144,6 +144,8 @@ the new binding or claim a completed migration.
 | First error | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_executor_stops_on_first_refusal` | hermetic executor | #15, #16 | E2E-gated |
 | Legacy daemon identity | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener` | hermetic | #13, #16 | E2E-gated |
 | Legacy NBD owner | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_nbd_owner_policy_accepts_only_confirmed_absence` | unit | #13, #16 | E2E-gated |
+| Legacy daemon selection | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_daemon_selection_requires_one_proven_process_and_instance` | injected process observations | #13, #16 | source coverage; no signal |
+| Legacy daemon process enumeration | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_daemon_proc_enumeration_uses_injected_fixture_root` | synthetic proc tree; exact PID and comm matching; observation refusal | #13, #16 | no host `/proc` read or process signal |
 | Attended migration | watchdog harness :: before/action/after | live E2E | #13, #16, #17 | required |
 
 ## Kahneman

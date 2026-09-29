@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEFAULT_MAP = 'docs/governance/rust-slice-coverage.json'
 const COVERAGE_SCRIPT = 'tools/ci/check-rust-slice-coverage.mjs'
-const MAP_SCHEMA_VERSION = 2
+const MAP_SCHEMA_VERSION = 3
 const LINE_COVERAGE_KIND = 'rust-line-coverage'
 const WINDOWS_PLATFORM_KIND = 'windows-platform-e2e'
 const LOCALIZATION_KIND = 'rust-localization-comment-differential'
@@ -18,12 +18,14 @@ const TEST_ONLY_LOCALIZATION_KIND = 'rust-test-only-localization-differential'
 const IGNORED_TEST_RELOCATION_KIND = 'rust-ignored-test-relocation'
 const MODULE_EXPORT_GLUE_KIND = 'rust-module-export-glue-differential'
 const STRUCTURAL_KIND = 'rust-structural-contract'
+const ADAPTER_TEST_CONTRACT_KIND = 'rust-adapter-test-contract'
 const PLATFORM_MARKER = 'rust-slice-platform-e2e-v1'
 const LOCALIZATION_MARKER = 'rust-slice-localization-comment-differential-v1'
 const TEST_ONLY_LOCALIZATION_MARKER = 'rust-slice-test-only-localization-differential-v1'
 const IGNORED_TEST_RELOCATION_MARKER = 'rust-slice-ignored-test-relocation-v1'
 const MODULE_EXPORT_GLUE_MARKER = 'rust-slice-module-export-glue-differential-v1'
 const STRUCTURAL_MARKER = 'rust-slice-structural-contract-v1'
+const ADAPTER_TEST_CONTRACT_MARKER = 'rust-slice-adapter-test-contract-v1'
 const WINDOWS_STATIC_WRAPPER = 'scripts/windows/Test-WindowsCiStatic.ps1'
 const VALIDATION_EVIDENCE_PATH = 'validation.md'
 const MODULE_EXPORT_GLUE_PATH = 'crates/ramshared-tier/src/lib.rs'
@@ -231,7 +233,7 @@ function validateCommonEntry(entry, root, errors, ids) {
   ids.add(entry.id)
   if (![LINE_COVERAGE_KIND, WINDOWS_PLATFORM_KIND, LOCALIZATION_KIND, TEST_ONLY_LOCALIZATION_KIND,
     IGNORED_TEST_RELOCATION_KIND,
-    MODULE_EXPORT_GLUE_KIND, STRUCTURAL_KIND].includes(entry.kind)) {
+    MODULE_EXPORT_GLUE_KIND, STRUCTURAL_KIND, ADAPTER_TEST_CONTRACT_KIND].includes(entry.kind)) {
     errors.push(finding('coverage-kind-invalid', entry.id))
     return null
   }
@@ -593,6 +595,94 @@ function validateStructuralEntry(entry, root, specText, errors) {
   }
 }
 
+function validAdapterTestVerification(value) {
+  return exactKeys(value, ['source', 'package', 'binary', 'test_module', 'cargo_test', 'tests']) &&
+    isRustProductionPath(value.source) && typeof value.package === 'string' &&
+    /^[a-z0-9][a-z0-9-]*$/.test(value.package) &&
+    value.source.startsWith(`crates/${value.package}/src/`) &&
+    typeof value.binary === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(value.binary) &&
+    typeof value.test_module === 'string' && TEST_NAME.test(value.test_module) &&
+    Array.isArray(value.cargo_test) && value.cargo_test.length === 8 &&
+    value.cargo_test.every((item) => typeof item === 'string') &&
+    value.cargo_test[0] === 'cargo' && value.cargo_test[1] === 'test' &&
+    value.cargo_test[2] === '-p' && value.cargo_test[3] === value.package &&
+    value.cargo_test[4] === '--bin' && value.cargo_test[5] === value.binary &&
+    value.cargo_test[6] === '--' && value.cargo_test[7] === '--test-threads=1' &&
+    Array.isArray(value.tests) && value.tests.length > 0 &&
+    value.tests.every((name) => typeof name === 'string' && TEST_NAME.test(name)) &&
+    new Set(value.tests).size === value.tests.length
+}
+
+function namedUnitTestExists(source, testModule, testName) {
+  const analysis = testOnlyModuleAnalysis(source, testModule)
+  if (analysis === null || analysis.region === null) return false
+  const { tokens, pairs, region } = analysis
+  const expectedDepth = tokens[region.openIndex].depth + 1
+  for (let index = region.openIndex + 1; index < region.closeIndex - 2; index++) {
+    if (tokens[index].depth !== expectedDepth || tokens[index].value !== 'fn' ||
+        tokens[index + 1]?.value !== testName || tokens[index + 2]?.value !== '(') continue
+    const attributeClose = index - 1
+    // The lexer records closing delimiters before popping their opening
+    // delimiter, so `]` is one level deeper than the following `fn` token.
+    if (tokens[attributeClose]?.value !== ']' || tokens[attributeClose].depth !== expectedDepth + 1) continue
+    const attributeOpen = pairs.get(attributeClose)
+    if (attributeOpen === undefined || tokens[attributeOpen - 1]?.value !== '#' ||
+        tokens[attributeOpen - 1]?.depth !== expectedDepth) continue
+    if (tokens[attributeOpen + 1]?.value === 'test' && attributeOpen + 2 === attributeClose) return true
+  }
+  return false
+}
+
+function expectedAdapterTestContractDeclaration(entry) {
+  return {
+    schema_version: 1,
+    id: entry.id,
+    kind: entry.kind,
+    files: entry.files,
+    verifications: entry.verifications,
+  }
+}
+
+function validateAdapterTestContractEntry(entry, root, specText, errors) {
+  if (!exactKeys(entry, ['id', 'kind', 'spec', 'files', 'verifications'])) {
+    errors.push(finding('adapter-test-contract-entry-fields-invalid', entry.id))
+  }
+  if (!Array.isArray(entry.verifications) || entry.verifications.length !== entry.files.length) {
+    errors.push(finding('adapter-test-contract-verifications-invalid', entry.id))
+    return
+  }
+  const observedSources = []
+  for (const verification of entry.verifications) {
+    if (!validAdapterTestVerification(verification)) {
+      errors.push(finding('adapter-test-contract-verification-invalid', entry.id))
+      continue
+    }
+    observedSources.push(verification.source)
+    const source = readTextInsideRoot(root, verification.source)
+    if (source === null) {
+      errors.push(finding('adapter-test-contract-source-missing', verification.source))
+      continue
+    }
+    for (const testName of verification.tests) {
+      if (!namedUnitTestExists(source, verification.test_module, testName)) {
+        errors.push(finding('adapter-test-contract-test-missing', `${verification.source}#${testName}`))
+      }
+    }
+  }
+  if (JSON.stringify(observedSources) !== JSON.stringify(entry.files) ||
+      new Set(observedSources).size !== observedSources.length) {
+    errors.push(finding('adapter-test-contract-source-files-mismatch', entry.id))
+  }
+  const declaration = parseSpecDeclaration(specText, ADAPTER_TEST_CONTRACT_MARKER)
+  if (declaration.state === 'missing') {
+    errors.push(finding('adapter-test-contract-spec-declaration-missing', entry.id))
+  } else if (declaration.state !== 'ok') {
+    errors.push(finding('adapter-test-contract-spec-declaration-invalid', entry.id))
+  } else if (!sameJson(declaration.value, expectedAdapterTestContractDeclaration(entry))) {
+    errors.push(finding('adapter-test-contract-spec-declaration-mismatch', entry.id))
+  }
+}
+
 function validEntry(entry, root, errors, ids) {
   const specText = validateCommonEntry(entry, root, errors, ids)
   if (specText === null) return
@@ -602,6 +692,7 @@ function validEntry(entry, root, errors, ids) {
   else if (entry.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationEntry(entry, root, specText, errors)
   else if (entry.kind === IGNORED_TEST_RELOCATION_KIND) validateIgnoredTestRelocationEntry(entry, root, specText, errors)
   else if (entry.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueEntry(entry, specText, errors)
+  else if (entry.kind === ADAPTER_TEST_CONTRACT_KIND) validateAdapterTestContractEntry(entry, root, specText, errors)
   else validateStructuralEntry(entry, root, specText, errors)
 }
 
@@ -762,7 +853,6 @@ function quotedStringEnd(source, index) {
       continue
     }
     if (source[cursor] === '"') return cursor + 1
-    if (source[cursor] === '\r' || source[cursor] === '\n') return -1
   }
   return -1
 }
@@ -1502,6 +1592,9 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
       validateIgnoredTestRelocationDifferential(owner, root, options, errors)
     }
     if (owner.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueDifferential(owner, root, options, errors)
+    if (owner.kind === ADAPTER_TEST_CONTRACT_KIND) {
+      validateAdapterTestContractEntry(owner, root, readTextInsideRoot(root, owner.spec) ?? '', errors)
+    }
     validatedSpecialOwners.add(owner.id)
   }
   for (const file of businessFiles) {
@@ -1541,6 +1634,7 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
 export function runCoveragePlan(entries, { root = ROOT, spawn = spawnSync } = {}) {
   const failures = []
   const structuralCommands = new Set()
+  const adapterTestCommands = new Set()
   for (const entry of entries) {
     if (entry.kind === LINE_COVERAGE_KIND) {
       const result = spawn(entry.command[0], entry.command.slice(1), {
@@ -1576,6 +1670,18 @@ export function runCoveragePlan(entries, { root = ROOT, spawn = spawnSync } = {}
           stdio: 'inherit',
         })
         if (result?.status !== 0) failures.push(finding('structural-package-test-failed', verification.source))
+      }
+    } else if (entry.kind === ADAPTER_TEST_CONTRACT_KIND) {
+      for (const verification of entry.verifications) {
+        const key = JSON.stringify(verification.cargo_test)
+        if (adapterTestCommands.has(key)) continue
+        adapterTestCommands.add(key)
+        const result = spawn(verification.cargo_test[0], verification.cargo_test.slice(1), {
+          cwd: root,
+          shell: false,
+          stdio: 'inherit',
+        })
+        if (result?.status !== 0) failures.push(finding('adapter-test-contract-command-failed', verification.source))
       }
     }
   }
@@ -1666,6 +1772,7 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
     }
     if (entry.kind === MODULE_EXPORT_GLUE_KIND) print(`RUST_SLICE_MODULE_EXPORT_GLUE_DIFFERENTIAL_REQUIRED=${entry.id}`)
     if (entry.kind === STRUCTURAL_KIND) print(`RUST_SLICE_STRUCTURAL_CONTRACT_REQUIRED=${entry.id}`)
+    if (entry.kind === ADAPTER_TEST_CONTRACT_KIND) print(`RUST_SLICE_ADAPTER_TEST_CONTRACT_REQUIRED=${entry.id}`)
   }
   if (!options.run || selection.entries.length === 0) return 0
   const execution = runCoveragePlan(selection.entries, { root, spawn })

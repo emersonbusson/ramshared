@@ -131,8 +131,9 @@ it could reset a foreign device before RamShared had recorded ownership. If
 ### DT-T5 — Test-only isolation
 
 The named tests use only a temporary runtime directory, controlled direct
-child fixtures, and scripted command outcomes. They do not call real
-`swapon`, `swapoff`, `nbd-client`, `modprobe`, `/sys`, the product
+child fixtures, temporary sysfs-shaped fixture directories, and scripted
+command outcomes. They do not call real `swapon`, `swapoff`, `nbd-client`,
+`modprobe`, host `/sys`, the product
 `ramsharedd`, or `/run/ramshared`. A test that exercises the bounded runner
 may start a temporary child owned by the test and must reap it before return.
 No test pressure, CUDA allocation, daemon deployment, or host mutation is
@@ -188,7 +189,8 @@ revert this ITEM and keep the cascade disabled pending investigation.
 | --- | --- | --- | --- | --- |
 | bounded runner | #15/#16 | Could a helper, capture worker, or descendant-held pipe outlive the deadline? | `bounded_command_times_out_and_reaps_its_direct_child`; `bounded_command_contains_descendant_that_inherits_output`; `unreaped_group_selects_fatal_controller_containment` | timeout exceeds the deadline, an owned descendant survives, or failed reap returns normally |
 | identity/refusal | #13/#16 | Could a malformed PID, invalid zram output, or pre-attach argument select a different process/device? | `daemon_pid_requires_positive_pid_and_exact_identity`, `zram_output_requires_exact_block_identity`, `connect_nbd_refusal_terminates_exact_daemon_without_detach` | any non-exact identity reaches a command or leaves the spawned child alive |
-| attach rollback | #16/#17 | Does one failure detach/clean up exactly once and preserve the first error? | `connect_nbd_preserves_primary_error_and_rolls_back_once` | duplicate/broad rollback or changed primary error |
+| attach rollback | #16/#17 | Does NBD activate only the exact preprovisioned swap with sealed lifecycle records, and does one failure detach/clean up exactly once while preserving the first error? | `connect_nbd_records_exact_preprovisioned_swap_before_activation`, `connect_nbd_preserves_primary_error_and_rolls_back_once` | unverified UUID/device, missing record, duplicate/broad rollback, or changed primary error |
+| zram format rollback | #16/#17 | Does a format failure reset only the exact newly allocated inactive device and remove its ownership record after confirmed cleanup? | `zram_format_failure_rolls_back_only_the_new_exact_device` | another device is reset, cleanup is uncertain, or the ownership record is removed before proof |
 | cross-tier rollback | #13/#16/#17 | Could a failed NBD setup leave its newly-created zram tier active or reset it after swapoff refusal? | `setup_new_cascade_rolls_back_zram_after_nbd_failure`, `setup_new_cascade_keeps_zram_record_on_swapoff_refusal` | zram record/device persists after successful cleanup, or reset follows refusal, or primary error changes |
 
 ### Files
@@ -196,7 +198,7 @@ revert this ITEM and keep the cascade disabled pending investigation.
 | Path | Change | RF / DT | Tests / cover |
 | --- | --- | --- | --- |
 | `crates/ramshared-cli/src/bounded_process.rs` | private process groups, finite capture, bounded reap, fatal containment seam | RF-T6; DT-T1 | named matrix below; ≥80% line coverage |
-| `crates/ramshared-cli/src/cascade/cascade_io.rs` | shared bounded runner integration, exact daemon identity/cleanup, strict zram output parse, transactional tier records and rollback, English diagnostics | RF-T3..RF-T6; DT-T1..DT-T6 | named matrix below; ≥80% line coverage |
+| `crates/ramshared-cli/src/cascade/cascade_io.rs` | process/device adapters, exact daemon identity/cleanup, strict zram output parse, transactional tier records and rollback | RF-T3..RF-T6; DT-T1..DT-T6 | named adapter-contract suite below; whole-file line coverage is diagnostic because the source combines test-injected and live host effects |
 | `docs/governance/rust-slice-coverage.json` | exact `cascade-transport-orchestration` owner | DT-T1..DT-T6 | canonical command below |
 | `tools/ci/plan-rust-slice-coverage.test.mjs` | exact owner and named-test assertion | DT-T5/DT-T6 | Node planner test |
 | `docs/specs/no-milestone/comment-language-integrity/SPEC.md` | move this path from residual language-only block to its feature owner once the gate is green | DT-T1..DT-T6 | documentation assertion only |
@@ -205,27 +207,41 @@ revert this ITEM and keep the cascade disabled pending investigation.
 
 | Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
 | --- | --- | --- | --- | --- |
-| `crates/ramshared-cli/src/cascade/cascade_io.rs` | `cascade_io.rs` :: `bounded_command_captures_stdout_and_rejects_nonzero` | process/unit | #9 | ≥80% |
-| same | `cascade_io.rs` :: `bounded_command_times_out_and_reaps_its_direct_child` | process/timeout | #15 | ≥80% |
-| same | `cascade_io.rs` :: `bounded_command_contains_descendant_that_inherits_output` | adversarial process/pipe | #15/#16 | ≥80% |
-| same | `cascade_io.rs` :: `zram_output_requires_exact_block_identity` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `daemon_pid_requires_positive_pid_and_exact_identity` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `failed_readiness_terminates_only_spawned_child` | process/cleanup | #15/#16 | ≥80% |
-| same | `cascade_io.rs` :: `connect_nbd_preserves_primary_error_and_rolls_back_once` | unit/rollback | #16/#17 | ≥80% |
-| same | `cascade_io.rs` :: `connect_nbd_refusal_terminates_exact_daemon_without_detach` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `connect_nbd_uncertain_swapon_preserves_backend_and_daemon` | unit/containment | #16/#17 | ≥80% |
-| same | `cascade_io.rs` :: `zram_fallback_refuses_unexpected_device_without_swapon` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `malformed_zram_success_resets_exact_new_device_without_leak` | unit/rollback | #16/#17 | ≥80% |
-| same | `cascade_io.rs` :: `zram_setup_never_mutates_unbound_sysfs_fallback` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `runtime_marker_and_pid_record_refuse_unsafe_identity` | unit/identity | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` | process/orchestration | #15/#16 | ≥80% |
-| same | `cascade_io.rs` :: `setup_new_cascade_rolls_back_zram_after_nbd_failure` | process/rollback | #16/#17 | ≥80% |
-| same | `cascade_io.rs` :: `setup_new_cascade_keeps_zram_record_on_swapoff_refusal` | process/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `down_with_runtime_preserves_swapoff_first_and_cleans_temp_state` | unit/cleanup | #16/#17 | ≥80% |
-| same | `cascade_io.rs` :: `transport_refusal_is_fail_closed_before_command` | unit/refusal | #13/#16 | ≥80% |
-| shared runner | `bounded_process.rs` :: `capture_runner_keeps_legitimate_success_and_nonzero_status_typed` | process/unit | #9 | ≥80% |
-| shared runner | `bounded_process.rs` :: `capture_runner_rejects_bounded_output_overflow` | process/bound | #15 | ≥80% |
-| shared runner | `bounded_process.rs` :: `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% |
+| `crates/ramshared-cli/src/cascade/cascade_io.rs` | `cascade_io.rs` :: `bounded_command_captures_stdout_and_rejects_nonzero` | process/unit | #9 | named adapter contract |
+| same | `cascade_io.rs` :: `bounded_command_times_out_and_reaps_its_direct_child` | process/timeout | #15 | named adapter contract |
+| same | `cascade_io.rs` :: `bounded_command_contains_descendant_that_inherits_output` | adversarial process/pipe | #15/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `zram_output_requires_exact_block_identity` | unit/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `daemon_pid_requires_positive_pid_and_exact_identity` | unit/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `failed_readiness_terminates_only_spawned_child` | process/cleanup | #15/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `connect_nbd_preserves_primary_error_and_rolls_back_once` | unit/rollback | #16/#17 | named adapter contract |
+| same | `cascade_io.rs` :: `connect_nbd_records_exact_preprovisioned_swap_before_activation` | unit/success/lifecycle | #13/#16/#17 | named adapter contract; synthetic command/device seams only |
+| same | `cascade_io.rs` :: `connect_nbd_refusal_terminates_exact_daemon_without_detach` | unit/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `connect_nbd_uncertain_swapon_preserves_backend_and_daemon` | unit/containment | #16/#17 | named adapter contract |
+| same | `cascade_io.rs` :: `zram_fallback_refuses_unexpected_device_without_swapon` | unit/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `malformed_zram_success_resets_exact_new_device_without_leak` | unit/rollback | #16/#17 | named adapter contract |
+| same | `cascade_io.rs` :: `malformed_zram_allocation_refuses_unreadable_post_state_without_reset` | injected sysfs refusal | #13/#16 | named adapter contract; no reset without exact state |
+| same | `cascade_io.rs` :: `malformed_zram_allocation_refuses_ambiguous_delta_without_reset` | injected topology refusal | #13/#16 | named adapter contract; no reset of wrong-kind device |
+| same | `cascade_io.rs` :: `malformed_zram_reset_failure_preserves_sealed_ownership_evidence` | injected rollback refusal | #13/#16/#17 | named adapter contract; exact record retained |
+| same | `cascade_io.rs` :: `malformed_zram_final_snapshot_failure_preserves_sealed_ownership_evidence` | injected post-effect uncertainty | #13/#16/#17 | named adapter contract; exact record retained |
+| same | `cascade_io.rs` :: `zram_setup_never_mutates_unbound_sysfs_fallback` | unit/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `zram_format_failure_rolls_back_only_the_new_exact_device` | injected format failure/rollback | #13/#16/#17 | named adapter contract; no host zram mutation |
+| same | `cascade_io.rs` :: `runtime_marker_and_pid_record_refuse_unsafe_identity` | unit/identity | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` | process/orchestration | #15/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `setup_new_cascade_rolls_back_zram_after_nbd_failure` | process/rollback | #16/#17 | named adapter contract |
+| same | `cascade_io.rs` :: `setup_new_cascade_keeps_zram_record_on_swapoff_refusal` | process/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `down_with_runtime_preserves_swapoff_first_and_cleans_temp_state` | unit/cleanup | #16/#17 | named adapter contract |
+| same | `cascade_io.rs` :: `transport_refusal_is_fail_closed_before_command` | unit/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `up_with_args_refuses_ublk_before_swap_or_device_access` | CLI refusal/orchestration | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `up_with_config_refuses_missing_safety_net_before_runtime_setup` | preflight/refusal | #13/#16 | named adapter contract |
+| same | `cascade_io.rs` :: `sysfs_device_discovery_filters_live_devices_and_rejects_malformed_state` | temporary sysfs fixture | #13/#16 | named adapter contract; no host device mutation |
+| same | `cascade_io.rs` :: `detached_nbd_evidence_requires_exact_idle_unheld_device_identity` | synthetic kernel evidence | #13/#16 | named adapter contract; no live device mutation |
+| same | `cascade_io.rs` :: `bound_device_observation_enforces_sysfs_and_nbd_owner_policy` | synthetic sysfs and owner evidence | #13/#16 | named adapter contract; no live device mutation |
+| same | `cascade_io.rs` :: `production_effect_binding_refuses_non_block_files_after_exact_revalidation` | read-only character-device and missing-path probes exercise the same opened-fd validation helper used by production | #13/#16 | named adapter contract; no block device opened |
+| same | `cascade_io.rs` :: `proc_identity_and_socket_metadata_adapters_share_fail_closed_validation` | temporary input adapters exercise boot ID, daemon invocation ID, and exact Unix socket type checks used by production | #13/#16 | named adapter contract; no host identity or socket path mutation |
+| same | `cascade_io.rs` :: `system_command_runner_uses_bounded_capture_for_success_and_spawn_refusal` | direct harmless commands exercise the production capture adapter's success and spawn-refusal paths without a shell | #9/#13/#16 | named adapter contract; no mutation command invoked |
+| shared runner | `bounded_process.rs` :: `capture_runner_keeps_legitimate_success_and_nonzero_status_typed` | process/unit | #9 | ≥80% line coverage |
+| shared runner | `bounded_process.rs` :: `capture_runner_rejects_bounded_output_overflow` | process/bound | #15 | ≥80% line coverage |
+| shared runner | `bounded_process.rs` :: `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% line coverage |
 | package | `cargo test -p ramshared-cli` | package | #9 | all pass |
 
 **Canonical cover gate:**
@@ -233,10 +249,75 @@ revert this ITEM and keep the cascade disabled pending investigation.
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-cli \
-  --files crates/ramshared-cli/src/bounded_process.rs,crates/ramshared-cli/src/cascade/cascade_io.rs \
+  --files crates/ramshared-cli/src/bounded_process.rs \
   --min 80 \
   --report-json tmp/cascade-transport-orchestration-cov.json
 ```
+
+### Adapter contract and coverage boundary
+
+`cascade_io.rs` remains in the executable package test suite through the exact
+`rust-adapter-test-contract` declaration below. The contract checks the named
+safety tests and runs the complete `ramshared` binary test target. This makes
+no numeric line-coverage claim for the mixed adapter/orchestration file: the
+current full-file diagnostic is 75.9% (2,707/3,567 production lines), while
+113 focused cascade tests pass. The 80% source-slice gate measures the bounded
+process implementation; transactional behavior remains covered by the named
+adapter tests, and real host NBD/daemon behavior remains a separate live-E2E
+requirement.
+
+<!-- rust-slice-adapter-test-contract-v1
+{
+  "schema_version": 1,
+  "id": "cascade-transport-adapter-contract",
+  "kind": "rust-adapter-test-contract",
+  "files": [
+    "crates/ramshared-cli/src/cascade/cascade_io.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-cli/src/cascade/cascade_io.rs",
+      "package": "ramshared-cli",
+      "binary": "ramshared",
+      "test_module": "tests",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-cli",
+        "--bin",
+        "ramshared",
+        "--",
+        "--test-threads=1"
+      ],
+      "tests": [
+        "bounded_command_captures_stdout_and_rejects_nonzero",
+        "bounded_command_times_out_and_reaps_its_direct_child",
+        "bounded_command_contains_descendant_that_inherits_output",
+        "zram_output_requires_exact_block_identity",
+        "daemon_pid_requires_positive_pid_and_exact_identity",
+        "failed_readiness_terminates_only_spawned_child",
+        "connect_nbd_preserves_primary_error_and_rolls_back_once",
+        "connect_nbd_records_exact_preprovisioned_swap_before_activation",
+        "connect_nbd_refusal_terminates_exact_daemon_without_detach",
+        "connect_nbd_refuses_invalid_target_and_zero_connections_before_runner",
+        "connect_nbd_uncertain_swapon_preserves_backend_and_daemon",
+        "zram_fallback_refuses_unexpected_device_without_swapon",
+        "malformed_zram_success_resets_exact_new_device_without_leak",
+        "zram_setup_never_mutates_unbound_sysfs_fallback",
+        "zram_zero_capacity_skips_commands_and_successful_setup_seals_exact_device",
+        "runtime_marker_and_pid_record_refuse_unsafe_identity",
+        "setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture",
+        "setup_new_cascade_rolls_back_zram_after_nbd_failure",
+        "setup_new_cascade_keeps_zram_record_on_swapoff_refusal",
+        "down_with_runtime_preserves_swapoff_first_and_cleans_temp_state",
+        "transport_refusal_is_fail_closed_before_command",
+        "ensure_origin_attached_rejects_unreadable_and_noncanonical_manifests_before_host_call"
+      ]
+    }
+  ]
+}
+-->
 
 ### Later live E2E gap (not exercised by this ITEM)
 
@@ -266,6 +347,8 @@ gap, not a completed deployment claim.
 | V5 | systemd unit enabled after install --enable |
 | V6 | every `cascade_io` short-lived helper is group-bounded, no timeout uses a broad process name, and failed reap selects fatal containment |
 | V7 | failed NBD attach preserves its first error and cleans up only the invocation-owned daemon/device |
+| V8 | `detached_nbd_sysfs_proof_reads_exact_identity_and_rejects_unsafe_state` uses temporary sysfs-shaped files to verify dev_t, PID, size, holders, and post-read node identity without touching host `/sys` or block devices |
+| V9 | `sysfs_bound_device_observation_checks_node_owner_and_dev_t` exercises exact-node, sysfs, owner-process, and dev_t checks against temporary fixtures |
 
 ## Kahneman
 
