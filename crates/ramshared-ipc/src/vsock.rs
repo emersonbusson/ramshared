@@ -724,10 +724,34 @@ mod tests {
 
     #[test]
     fn vsock_error_display_is_informative() {
-        let err = VsockError::ConnectTimeout;
-        assert!(err.to_string().contains("timed out"));
-        let err = VsockError::Unsupported;
-        assert!(err.to_string().contains("not supported"));
+        let cases = [
+            (VsockError::ConnectTimeout, "vsock connect timed out"),
+            (
+                VsockError::ConnectFailed("fixture".into()),
+                "vsock connect failed: fixture",
+            ),
+            (
+                VsockError::ListenFailed("fixture".into()),
+                "vsock listen failed: fixture",
+            ),
+            (VsockError::AcceptTimeout, "vsock accept timed out"),
+            (
+                VsockError::AcceptFailed("fixture".into()),
+                "vsock accept failed: fixture",
+            ),
+            (
+                VsockError::IoError("fixture".into()),
+                "vsock io error: fixture",
+            ),
+            (
+                VsockError::Unsupported,
+                "vsock not supported on this platform",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
     }
 
     #[test]

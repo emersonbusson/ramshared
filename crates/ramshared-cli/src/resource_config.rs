@@ -3251,7 +3251,12 @@ allocated_bytes = {}
             let windows = json
                 .get("windows")
                 .and_then(serde_json::Value::as_object)
-                .expect("WSL2 inventory includes a Windows provider result");
+                .unwrap_or_else(|| {
+                    panic!(
+                        "WSL2 inventory omitted the optional Windows provider; warnings={}",
+                        json.get("warnings").unwrap_or(&serde_json::Value::Null)
+                    )
+                });
             assert!(windows["host_memory"]["free_bytes"].is_number());
             assert!(windows["host_memory"]["commit_limit_bytes"].is_number());
             assert!(!windows["volumes"].as_array().unwrap().is_empty());

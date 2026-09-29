@@ -912,6 +912,95 @@ mod tests {
     }
 
     #[test]
+    fn reap_observation_retries_then_fails_closed_if_still_unreaped() {
+        struct DelayedReapTarget {
+            reaps: usize,
+        }
+
+        impl ReapTarget for DelayedReapTarget {
+            fn id(&self) -> u32 {
+                43
+            }
+
+            fn signal_group_kill(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn signal_direct_kill(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+
+            fn observe_exit(&mut self) -> io::Result<bool> {
+                Ok(true)
+            }
+
+            fn reap_observed(&mut self) -> io::Result<Option<ExitStatus>> {
+                self.reaps += 1;
+                Ok((self.reaps > 1).then(|| ExitStatus::from_raw(0)))
+            }
+        }
+
+        let fatal = RecordingFatal::default();
+        let mut delayed = DelayedReapTarget { reaps: 0 };
+        let status =
+            reap_observed_target(&mut delayed, "delayed reap", Duration::from_secs(1), &fatal)
+                .expect("a transiently unavailable wait status should be retried");
+        assert!(status.success());
+        assert_eq!(delayed.reaps, 2);
+
+        let mut never_reaped = NeverReaped {
+            id: 44,
+            group_kills: Cell::new(0),
+            direct_kills: Cell::new(0),
+        };
+        let error = reap_observed_target(
+            &mut never_reaped,
+            "unreaped fixture",
+            Duration::ZERO,
+            &fatal,
+        )
+        .expect_err("a child without a reap proof must remain fatal");
+        assert!(error.to_string().contains("was not reaped"));
+        assert_eq!(fatal.0.borrow().len(), 1);
+    }
+
+    #[test]
+    fn exit_controller_terminates_only_its_test_child() {
+        const CHILD_MARKER: &str = "RAMSHARED_TEST_EXIT_CONTROLLER_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            ExitController.contain("test-only containment fixture");
+            unreachable!("the exit controller must terminate its isolated child");
+        }
+
+        let output = std::process::Command::new(
+            std::env::current_exe().expect("test executable path must be available"),
+        )
+        .args([
+            "--exact",
+            "bounded_process::tests::exit_controller_terminates_only_its_test_child",
+            "--nocapture",
+        ])
+        .env(CHILD_MARKER, "1")
+        .output()
+        .expect("the isolated test child must start");
+
+        assert_eq!(output.status.code(), Some(FATAL_EXIT_CODE));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("test-only containment fixture"));
+    }
+
+    #[test]
+    fn fatal_process_errors_are_classified_separately() {
+        let fatal = ProcessSpawnError::fatal("containment proof failed");
+        assert!(fatal.is_fatal());
+        assert!(fatal.to_string().contains("containment proof failed"));
+
+        let generic = ProcessSpawnError::new("ordinary fixture error");
+        assert!(!generic.is_fatal());
+        let pipe = ProcessSpawnError::new("capture pipe fixture error");
+        assert!(!pipe.is_fatal());
+    }
+
+    #[test]
     fn reap_policy_covers_preinspection_races_and_signal_failures() {
         let fatal = RecordingFatal::default();
         let mut already_observed = ScriptedTarget::new(vec![Ok(true)], None);
