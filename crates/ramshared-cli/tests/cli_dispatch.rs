@@ -151,7 +151,10 @@ fn cli_resource_config_plan_loads_an_explicit_profile_without_applying_it() {
         value["status"].as_str(),
         Some("profile_loaded_no_storage_targets")
     );
-    assert_eq!(value["user_caps"]["zram_bytes"].as_u64(), Some(0));
+    assert_eq!(
+        value["unenforced_planned_caps"]["zram_bytes"].as_u64(),
+        Some(0)
+    );
     assert_eq!(value["writes_performed"].as_bool(), Some(false));
     assert_eq!(value["apply_enabled"].as_bool(), Some(false));
 }
