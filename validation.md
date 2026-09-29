@@ -8666,3 +8666,52 @@ so this result does not identify the earlier freeze trigger.
 kernel and RamShared candidates are not installed on the WSL host, and all
 live host, freeze-attribution, UIO/GPADL, and CoCo qualification boundaries
 remain open.
+
+**Evidence ID:** `EVD-0113`.
+**Owner role:** resource-configuration source and test audit.
+**Observed at:** `2026-09-29T14:46:31Z`.
+**Verified at:** `2026-09-29T14:46:31Z`.
+**Source revision:** `245146e5dc63e8c8ff734cbfc785405e25c8dcec`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0111 and EVD-0112. This advances only the
+resource-configuration source/UI evidence; it does not close any active
+reliability gate or replace platform qualification.
+**Freshness:** Source and tests were checked at the recorded verification time.
+No WSL service, kernel, swap setting, GPU allocation, or installed binary was
+changed.
+**Category:** source audit / focused Rust unit tests / Clippy / documentation
+checks.
+**What:** Re-read the memory parser, the user-draft wizard, profile model, and
+the cross-platform resource-configuration PRD/SPEC/AUDIT/IMPL. The values
+`4096` and `8192` in `meminfo_missing_or_inconsistent_core_values_are_unavailable`
+are parser fixtures in kB. The test intentionally pairs a 4 MiB total with an
+8 MiB available value (and a 4 MiB swap total with 8 MiB free) to prove that
+inconsistent counters are rejected; those values are not RAM/swap limits. The
+production parser reads the current `/proc/meminfo` counters and checks their
+relationships. `meminfo_accepts_user_sized_ram_and_swap_without_product_minima`
+accepts separate 256 MiB RAM / 128 MiB swap and 48 GiB RAM / 20 GiB swap
+fixtures, also demonstrating that no product minimum is encoded there.
+**How to measure:** The new wizard test first failed on the pre-fix source
+because no ZRAM ceiling was collected or rendered. On source revision
+`245146e5dc63e8c8ff734cbfc785405e25c8dcec`,
+`CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli --bin ramshared config_draft_wizard_saves_tier_caps_as_unapplied_ceilings -- --nocapture`
+passed 1/1 and
+`CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli --bin ramshared config_draft_`
+passed 6/6. The wizard now accepts optional positive variable ZRAM and SSD-origin
+ceilings, shows exact values in the read-only plan, leaves blank ceilings
+unset, and refuses zero, negative, malformed, or overflowing sizes before
+writing. VRAM remains unavailable in this wizard because it does not sample a
+fresh budget bound to a stable adapter identity; users cannot type an
+unverified adapter ID.
+`CARGO_BUILD_JOBS=1 cargo clippy -p ramshared-cli --bin ramshared --tests -- -D warnings`, `cargo fmt --all -- --check`,
+`node tools/ci/check-validation-schema.mjs --all`, and `./scripts/docs-check.sh`
+passed. No full workspace suite, exact slice-coverage run, live TTY E2E, install,
+stress, or GPU context was run.
+**Remaining boundary:** This is an unprivileged profile draft and test-fixture
+result. It neither applies the ceilings nor proves current runtime budgets. GPU
+inventory/selection, measured disk recommendation, provider transactions,
+native Linux live qualification, and WSL before/action/after qualification
+remain open. All seven active reliability gates remain `PARTIAL`.
+**Verdict:** 🟡 `PARTIAL` — variable ZRAM/SSD-origin ceilings are now reviewable
+in drafts and the fixed-value interpretation of the parser test is disproved
+by source and tests; GPU, mutation, and live-platform gates remain open.
