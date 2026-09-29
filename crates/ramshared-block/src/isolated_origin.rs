@@ -20,6 +20,10 @@ pub enum CacheRead {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheMutation {
+    /// The cache implementation accepted the mutation. For the process-isolated
+    /// GPU cache this means the complete frame was queued to the worker; it does
+    /// not prove that the worker applied it or allocated VRAM. Origin data stays
+    /// authoritative regardless of this result.
     Accepted,
     Skipped,
     Failed,

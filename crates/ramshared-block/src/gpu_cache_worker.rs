@@ -71,7 +71,11 @@ impl FrameHeader {
         buf
     }
 
-    pub fn decode(buf: &[u8; FRAME_HEADER_LEN]) -> Self {
+    pub fn decode(buf: &[u8; FRAME_HEADER_LEN]) -> Option<Self> {
+        if buf[2..8].iter().any(|byte| *byte != 0) {
+            return None;
+        }
+
         let msg_type = buf[0];
         let status = buf[1];
         let correlation_id = u64::from_le_bytes([
@@ -82,14 +86,14 @@ impl FrameHeader {
         ]);
         let payload_len = u32::from_le_bytes([buf[24], buf[25], buf[26], buf[27]]);
         let aux = u32::from_le_bytes([buf[28], buf[29], buf[30], buf[31]]);
-        Self {
+        Some(Self {
             msg_type,
             status,
             correlation_id,
             offset,
             payload_len,
             aux,
-        }
+        })
     }
 }
 
@@ -346,7 +350,8 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
             Err(e) => return Err(format!("worker read header error: {e}")),
         }
 
-        let hdr = FrameHeader::decode(&hdr_buf);
+        let hdr = FrameHeader::decode(&hdr_buf)
+            .ok_or_else(|| "worker received nonzero reserved header bytes".to_string())?;
 
         let payload = if hdr.payload_len > 0 {
             if hdr.payload_len as usize > MAX_IPC_PAYLOAD_BYTES {
@@ -456,7 +461,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                     correlation_id: hdr.correlation_id,
                     offset: worker.target_bytes(),
                     payload_len: budget_payload.len() as u32,
-                    aux: (worker.cached_bytes() >> 10) as u32,
+                    aux: cached_kib_aux(worker.cached_bytes()),
                 };
                 if let Err(e) = socket.write_all(&resp.encode()) {
                     return Err(format!("worker write heartbeat error: {e}"));

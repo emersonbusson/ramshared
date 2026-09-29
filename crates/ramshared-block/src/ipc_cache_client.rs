@@ -170,7 +170,10 @@ impl IpcCacheClient {
             return Err(format!("handshake timeout restore failed: {error}"));
         }
 
-        let resp = FrameHeader::decode(&buf);
+        let Some(resp) = FrameHeader::decode(&buf) else {
+            self.fail("handshake response header malformed");
+            return Err("invalid handshake response header".to_string());
+        };
         if resp.msg_type != MSG_HANDSHAKE_RESP || resp.correlation_id != self.seq {
             self.fail("handshake response mismatched");
             return Err("invalid handshake response".to_string());
@@ -224,7 +227,10 @@ impl IpcCacheClient {
             self.fail("heartbeat I/O failed");
             return Err("GPU cache worker heartbeat timed out");
         }
-        let resp = FrameHeader::decode(&buf);
+        let Some(resp) = FrameHeader::decode(&buf) else {
+            self.fail("heartbeat response header malformed");
+            return Err("GPU cache worker heartbeat header malformed");
+        };
         if resp.msg_type != MSG_HEARTBEAT_RESP
             || resp.correlation_id != self.seq
             || resp.status != STATUS_OK
@@ -320,7 +326,10 @@ impl BestEffortCache for IpcCacheClient {
             return CacheRead::Failed;
         }
 
-        let resp = FrameHeader::decode(&hdr_buf);
+        let Some(resp) = FrameHeader::decode(&hdr_buf) else {
+            self.fail("read response header malformed");
+            return CacheRead::Failed;
+        };
         if resp.msg_type != MSG_READ_RESP || resp.correlation_id != self.seq {
             self.fail("read response identity mismatched");
             return CacheRead::Failed;
@@ -406,7 +415,10 @@ impl BestEffortCache for IpcCacheClient {
             return CacheMutation::Failed;
         }
 
-        let resp = FrameHeader::decode(&hdr_buf);
+        let Some(resp) = FrameHeader::decode(&hdr_buf) else {
+            self.state = CacheState::Stuck;
+            return CacheMutation::Failed;
+        };
         if resp.msg_type == MSG_DISABLE_RESP && resp.status == STATUS_OK {
             self.state = CacheState::Off;
             self.cached_bytes = 0;
@@ -611,7 +623,7 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let mut request = [0u8; FRAME_HEADER_LEN];
             worker_sock.read_exact(&mut request).unwrap();
-            let request = FrameHeader::decode(&request);
+            let request = FrameHeader::decode(&request).expect("valid request header");
             let response = FrameHeader {
                 msg_type: MSG_HEARTBEAT_RESP,
                 status: STATUS_OK,

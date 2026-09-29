@@ -1,10 +1,13 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use ramshared_block::{
-    FRAME_HEADER_LEN, FrameHeader, GpuWorkerConfig, run_gpu_worker_loop,
+    FRAME_HEADER_LEN, FrameHeader, GpuWorkerConfig, IpcCacheClient,
     gpu_cache_worker::{MSG_HANDSHAKE_REQ, STATUS_OK},
+    run_gpu_worker_loop,
 };
 use ramshared_vram::{GpuBudgetSnapshot, VramError, VramMemory, VramProvider};
 
@@ -69,7 +72,9 @@ fn worker_rejects_unknown_message_types_instead_of_silently_dropping_them() {
         payload_len: 0,
         aux: 0,
     };
-    client.write_all(&invalid.encode()).expect("write invalid frame");
+    client
+        .write_all(&invalid.encode())
+        .expect("write invalid frame");
     client
         .set_read_timeout(Some(Duration::from_secs(1)))
         .expect("set timeout");
@@ -79,8 +84,14 @@ fn worker_rejects_unknown_message_types_instead_of_silently_dropping_them() {
     drop(client);
     let worker_result = worker.join().expect("worker thread");
 
-    assert!(matches!(response_len, Ok(0)), "invalid frame must close the worker stream: {response_len:?}");
-    assert!(worker_result.is_err(), "invalid frame must fail the worker loop");
+    assert!(
+        matches!(response_len, Ok(0)),
+        "invalid frame must close the worker stream: {response_len:?}"
+    );
+    assert!(
+        worker_result.is_err(),
+        "invalid frame must fail the worker loop"
+    );
 }
 
 #[test]
@@ -110,6 +121,41 @@ fn worker_rejects_nonzero_reserved_header_bytes() {
     drop(client);
     let worker_result = worker.join().expect("worker thread");
 
-    assert!(matches!(response_len, Ok(0)), "malformed header must close the worker stream: {response_len:?}");
-    assert!(worker_result.is_err(), "malformed header must fail the worker loop");
+    assert!(
+        matches!(response_len, Ok(0)),
+        "malformed header must close the worker stream: {response_len:?}"
+    );
+    assert!(
+        worker_result.is_err(),
+        "malformed header must fail the worker loop"
+    );
+}
+
+#[test]
+fn client_refuses_nonzero_reserved_response_header_bytes() {
+    let (client_socket, mut worker_socket) = UnixStream::pair().expect("socketpair");
+    let fake_worker = std::thread::spawn(move || {
+        let mut request = [0; FRAME_HEADER_LEN];
+        worker_socket
+            .read_exact(&mut request)
+            .expect("read handshake request");
+        let request = FrameHeader::decode(&request).expect("valid handshake request");
+        let response = FrameHeader {
+            msg_type: ramshared_block::gpu_cache_worker::MSG_HANDSHAKE_RESP,
+            status: STATUS_OK,
+            correlation_id: request.correlation_id,
+            offset: 4096,
+            payload_len: 0,
+            aux: 0,
+        };
+        let mut malformed = response.encode();
+        malformed[7] = 1;
+        worker_socket
+            .write_all(&malformed)
+            .expect("write malformed response");
+    });
+    let mut client = IpcCacheClient::new(client_socket, Duration::from_secs(1), 4096);
+
+    assert!(client.perform_handshake().is_err());
+    fake_worker.join().expect("fake worker thread");
 }
