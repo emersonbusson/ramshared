@@ -233,7 +233,7 @@ check; apply does not disable prior swap.
   storage targets without performing host or guest mutations.
 - RF / DT: RF-3, RF-5, RF-7..RF-9, RF-12; DT-2..DT-3, DT-6..DT-8,
   DT-10..DT-13, DT-19..DT-20.
-- Types / fns: `ResourceProfile`, `TierCaps`, `ResourceTarget`,
+- Types / fns: `ResourceProfile`, `PlannedTierCaps`, `ResourceTarget`,
   `ResourcePlatform`, `StorageVolumeIdentity`, `validate_for()`, and checked
   per-volume capacity arithmetic.
 - Implemented tests in `crates/ramshared-config/tests/resource_profile.rs`:
@@ -471,7 +471,7 @@ in place.
 | `crates/ramshared-cli/src/resource_config.rs` | `config_draft_builds_wsl_volume_guid_target_without_drive_letter` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_draft_refuses_ineligible_ambiguous_stale_and_overflowed_targets` | unit | #13/#16 | ≥80% |
 | `crates/ramshared-cli/src/resource_config.rs` | `config_draft_save_requires_owned_parent_uses_mode_0600_and_never_overwrites` | unit | #13/#17 | ≥80% |
-| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_wizard_saves_tier_caps_as_unapplied_ceilings` | unit | #13/#17 | ≥80% |
+| `crates/ramshared-cli/src/resource_config.rs` | `config_draft_wizard_saves_planned_caps_as_unenforced_draft_policy` | unit | #13/#17 | ≥80% |
 | `crates/ramshared-cli/tests/cli_dispatch.rs` | `cli_resource_config_draft_refuses_non_tty_before_writing` | CLI refusal E2E | #13/#16 | N/A — dispatch |
 | `crates/ramshared-cli/src/resource_config.rs` | `resource_plan_aggregates_case_aliases_before_capacity_check` | unit | #9/#13/#16 | ≥80% |
 | `crates/ramshared-config/tests/resource_profile.rs` | `resource_profile_groups_windows_volume_ids_case_insensitively_for_capacity` | unit | #9/#13 | ≥80% |

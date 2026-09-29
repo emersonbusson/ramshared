@@ -10,8 +10,8 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ramshared_config::resource_profile::{
-    MAX_RESOURCE_PROFILE_BYTES, RESOURCE_PROFILE_SCHEMA_VERSION, ResourcePlatform, ResourceProfile,
-    ResourceTarget, StorageVolumeIdentity, TierCaps,
+    MAX_RESOURCE_PROFILE_BYTES, PlannedTierCaps, RESOURCE_PROFILE_SCHEMA_VERSION, ResourcePlatform,
+    ResourceProfile, ResourceTarget, StorageVolumeIdentity,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -213,7 +213,7 @@ struct ResourcePlan {
     observed_unix_ms: u64,
     profile_state: &'static str,
     profile_sha256: Option<String>,
-    user_caps: Option<TierCaps>,
+    unenforced_planned_caps: Option<PlannedTierCaps>,
     targets: Vec<PlannedTarget>,
     gpu_budget_status: String,
     warnings: Vec<String>,
@@ -1371,7 +1371,7 @@ fn unconfigured_resource_plan(snapshot: &ResourceSnapshot) -> ResourcePlan {
         observed_unix_ms: snapshot.observed_unix_ms,
         profile_state: "not_configured",
         profile_sha256: None,
-        user_caps: None,
+        unenforced_planned_caps: None,
         targets: Vec::new(),
         gpu_budget_status: snapshot.gpu_budget_status.clone(),
         warnings: snapshot.warnings.clone(),
@@ -1473,11 +1473,11 @@ fn plan_status(targets: &[PlannedTarget]) -> &'static str {
     }
 }
 
-fn profile_warnings(snapshot: &ResourceSnapshot, caps: &TierCaps) -> Vec<String> {
+fn profile_warnings(snapshot: &ResourceSnapshot, caps: &PlannedTierCaps) -> Vec<String> {
     let mut warnings = snapshot.warnings.clone();
     if caps.zram_bytes.is_some() || !caps.vram_bytes.is_empty() || caps.origin_bytes.is_some() {
         warnings.push(
-            "tier ceilings are displayed only; this plan does not sample their owning runtime budgets or authorize increases".into(),
+            "planned draft caps are unenforced; this plan does not sample their owning runtime budgets, limit any tier, or authorize increases".into(),
         );
     }
     warnings
@@ -1528,14 +1528,14 @@ fn build_resource_plan(
 
     let status = plan_status(&targets);
     let profile_sha256 = profile_digest(profile_text);
-    let warnings = profile_warnings(snapshot, &profile.caps);
+    let warnings = profile_warnings(snapshot, &profile.planned_caps);
     Ok(ResourcePlan {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
         platform: snapshot.platform,
         observed_unix_ms: snapshot.observed_unix_ms,
         profile_state: "validated",
         profile_sha256: Some(profile_sha256),
-        user_caps: Some(profile.caps),
+        unenforced_planned_caps: Some(profile.planned_caps),
         targets,
         gpu_budget_status: snapshot.gpu_budget_status.clone(),
         warnings,
@@ -1552,25 +1552,28 @@ fn render_plan_text(plan: &ResourcePlan) -> String {
     if let Some(digest) = &plan.profile_sha256 {
         let _ = writeln!(output, "Profile SHA-256: {digest}");
     }
-    if let Some(caps) = &plan.user_caps {
-        let _ = writeln!(output, "Tier ceilings (profile only; not reservations):");
+    if let Some(caps) = &plan.unenforced_planned_caps {
         let _ = writeln!(
             output,
-            "  ZRAM ceiling: {}",
+            "Unenforced planned draft caps (profile policy only; not reservations or limits):"
+        );
+        let _ = writeln!(
+            output,
+            "  ZRAM planned cap (unenforced): {}",
             format_cap_mib(caps.zram_bytes)
         );
         let _ = writeln!(
             output,
-            "  SSD origin tier ceiling: {}",
+            "  SSD origin planned cap (unenforced): {}",
             format_cap_mib(caps.origin_bytes)
         );
         if caps.vram_bytes.is_empty() {
-            let _ = writeln!(output, "  VRAM ceilings: not configured");
+            let _ = writeln!(output, "  VRAM planned caps (unenforced): not configured");
         } else {
             for (adapter_id, bytes) in &caps.vram_bytes {
                 let _ = writeln!(
                     output,
-                    "  VRAM ceiling for {adapter_id}: {}",
+                    "  VRAM planned cap (unenforced) for {adapter_id}: {}",
                     format_cap_mib(Some(*bytes))
                 );
             }
@@ -2025,7 +2028,7 @@ fn draft_wsl_target_path_is_valid(volume_id: &str, drive_letter: Option<&str>) -
     };
     let profile = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
-        caps: TierCaps::default(),
+        planned_caps: PlannedTierCaps::default(),
         targets: vec![ResourceTarget::WslFallback {
             windows_volume_id: volume_id.into(),
             path,
@@ -2098,7 +2101,7 @@ fn parse_optional_draft_cap_mib(value: &str) -> Result<Option<u64>, InventoryErr
     }
     parse_draft_size_mib(value)
         .map(Some)
-        .map_err(|error| InventoryError(format!("invalid tier ceiling: {error}")))
+        .map_err(|error| InventoryError(format!("invalid draft planned cap: {error}")))
 }
 
 fn read_draft_line(
@@ -2349,7 +2352,7 @@ fn collect_draft_profile(
 ) -> Result<ResourceProfile, InventoryError> {
     let mut profile = ResourceProfile {
         schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
-        caps: TierCaps::default(),
+        planned_caps: PlannedTierCaps::default(),
         targets: Vec::new(),
     };
     loop {
@@ -2368,27 +2371,27 @@ fn collect_draft_profile(
     let zram_text = read_draft_line(
         input,
         output,
-        "ZRAM tier ceiling (MiB; blank leaves it unset): ",
+        "ZRAM planned cap (MiB, unenforced draft; blank leaves it unset): ",
     )?;
-    profile.caps.zram_bytes = parse_optional_draft_cap_mib(&zram_text)?;
+    profile.planned_caps.zram_bytes = parse_optional_draft_cap_mib(&zram_text)?;
 
     let origin_text = read_draft_line(
         input,
         output,
-        "SSD origin tier ceiling (MiB; blank leaves it unset): ",
+        "SSD origin planned cap (MiB, unenforced draft; blank leaves it unset): ",
     )?;
-    profile.caps.origin_bytes = parse_optional_draft_cap_mib(&origin_text)?;
+    profile.planned_caps.origin_bytes = parse_optional_draft_cap_mib(&origin_text)?;
 
     writeln!(
         output,
-        "VRAM ceiling unavailable: no validated adapter budget was sampled; this wizard will not accept a manual adapter ID."
+        "VRAM planned cap unavailable: no validated adapter budget was sampled; this wizard will not accept a manual adapter ID."
     )
     .map_err(|error| InventoryError(format!("cannot explain VRAM cap availability: {error}")))?;
     writeln!(
         output,
-        "Tier ceilings are profile policy only; no RAM, GPU, swap, origin, or disk capacity is reserved."
+        "Planned caps are unenforced draft policy only; no RAM, GPU, swap, origin, or disk capacity is reserved or limited by this plan."
     )
-    .map_err(|error| InventoryError(format!("cannot explain tier ceiling behavior: {error}")))?;
+    .map_err(|error| InventoryError(format!("cannot explain planned cap behavior: {error}")))?;
 
     profile
         .validate_for(profile_platform(snapshot.platform))
@@ -2987,7 +2990,7 @@ mod tests {
         .expect("native origin request materializes");
         let profile = ResourceProfile {
             schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
-            caps: TierCaps::default(),
+            planned_caps: PlannedTierCaps::default(),
             targets: vec![swap, origin],
         };
         let profile_text = profile.to_toml().expect("draft profile encodes");
@@ -3036,7 +3039,7 @@ mod tests {
         .expect("WSL origin selection materializes");
         let profile = ResourceProfile {
             schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
-            caps: TierCaps::default(),
+            planned_caps: PlannedTierCaps::default(),
             targets: vec![swap, origin],
         };
         let profile_text = profile.to_toml().expect("WSL draft profile encodes");
@@ -3096,7 +3099,7 @@ mod tests {
         .expect("volume-GUID origin request materializes");
         let profile = ResourceProfile {
             schema_version: RESOURCE_PROFILE_SCHEMA_VERSION,
-            caps: TierCaps::default(),
+            planned_caps: PlannedTierCaps::default(),
             targets: vec![target],
         };
         let profile_text = profile.to_toml().expect("volume-GUID profile encodes");
@@ -3245,7 +3248,7 @@ allocated_bytes = {}
     }
 
     #[test]
-    fn config_draft_wizard_saves_tier_caps_as_unapplied_ceilings() {
+    fn config_draft_wizard_saves_planned_caps_as_unenforced_draft_policy() {
         let snapshot = fixture_snapshot();
         let directory = draft_test_directory("wizard");
         let output_path = directory.join("profile.toml");
@@ -3259,11 +3262,13 @@ allocated_bytes = {}
         assert!(output.contains("Windows host RAM"));
         assert!(output.contains("I:\\wsl\\ramshared\\origin.vhdx"));
         assert!(output.contains("Draft only: no swap, origin, GPU, .wslconfig"));
-        assert!(output.contains("ZRAM ceiling: 512 MiB"));
-        assert!(output.contains("SSD origin tier ceiling: 2048 MiB"));
+        assert!(output.contains("ZRAM planned cap (unenforced): 512 MiB"));
+        assert!(output.contains("SSD origin planned cap (unenforced): 2048 MiB"));
         assert!(
-            output.contains("VRAM ceiling unavailable: no validated adapter budget was sampled")
+            output
+                .contains("VRAM planned cap unavailable: no validated adapter budget was sampled")
         );
+        assert!(output.contains("Planned caps are unenforced draft policy only"));
         assert!(output.contains("Validated draft saved"));
         let profile_text = fs::read_to_string(&output_path).expect("saved draft reads");
         let profile = ResourceProfile::parse(&profile_text).expect("saved profile parses");
@@ -3276,9 +3281,9 @@ allocated_bytes = {}
             target,
             ResourceTarget::WslFallback { windows_volume_id, .. } if windows_volume_id == "vol-c"
         )));
-        assert_eq!(profile.caps.zram_bytes, Some(512 * 1024 * 1024));
-        assert_eq!(profile.caps.origin_bytes, Some(2048 * 1024 * 1024));
-        assert!(profile.caps.vram_bytes.is_empty());
+        assert_eq!(profile.planned_caps.zram_bytes, Some(512 * 1024 * 1024));
+        assert_eq!(profile.planned_caps.origin_bytes, Some(2048 * 1024 * 1024));
+        assert!(profile.planned_caps.vram_bytes.is_empty());
 
         let canceled_path = directory.join("canceled.toml");
         let mut input = io::Cursor::new("swap\n1\n1024\ndone\n\n\nNO\n");
@@ -3312,11 +3317,11 @@ allocated_bytes = {}
         let mut input = io::Cursor::new("swap\n1\n1024\ndone\n\n\nSAVE\n");
         let mut output = Vec::new();
         run_draft_wizard_with_io(&snapshot, &unset_caps_path, &mut input, &mut output)
-            .expect("blank tier ceilings remain unset");
+            .expect("blank planned caps remain unset");
         let profile_text = fs::read_to_string(&unset_caps_path).expect("unset draft reads");
         let profile = ResourceProfile::parse(&profile_text).expect("unset profile parses");
-        assert_eq!(profile.caps.zram_bytes, None);
-        assert_eq!(profile.caps.origin_bytes, None);
+        assert_eq!(profile.planned_caps.zram_bytes, None);
+        assert_eq!(profile.planned_caps.origin_bytes, None);
 
         fs::remove_dir_all(directory).expect("wizard fixtures removed");
     }

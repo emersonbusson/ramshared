@@ -1,8 +1,15 @@
-//! Versioned end-user resource ceilings and stable storage targets.
+//! Versioned end-user planned draft tier caps and stable storage targets.
 //!
 //! This module only parses and validates profile data. It performs no host or
 //! guest mutation; providers must revalidate live identity and capacity before
 //! acting on a target.
+//!
+//! [`PlannedTierCaps`] values are unenforced draft policy: no admission,
+//! budget, or allocation path reads them, and `apply_enabled` remains false
+//! until an apply path exists. Draft TOML keeps its historical field names
+//! (`zram_bytes`, `vram_bytes`, `origin_bytes`); the caps table is now written
+//! as `planned_caps`, and v1 drafts that used `[caps]` remain readable through
+//! a serde alias.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -31,9 +38,14 @@ impl ResourcePlatform {
     }
 }
 
+/// Unenforced planned draft tier caps recorded in a resource profile.
+///
+/// These values are display and planning policy only. No admission, budget,
+/// or allocation path enforces them, so they must not be described as live
+/// ceilings or reservations until an apply path exists.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct TierCaps {
+pub struct PlannedTierCaps {
     #[serde(default)]
     pub zram_bytes: Option<u64>,
     #[serde(default)]
@@ -46,8 +58,11 @@ pub struct TierCaps {
 #[serde(deny_unknown_fields)]
 pub struct ResourceProfile {
     pub schema_version: u32,
-    #[serde(default)]
-    pub caps: TierCaps,
+    /// Unenforced planned draft caps. Drafts written before the rename used
+    /// the table name `caps`; the alias keeps those drafts readable while new
+    /// drafts serialize `planned_caps`.
+    #[serde(default, alias = "caps")]
+    pub planned_caps: PlannedTierCaps,
     #[serde(default)]
     pub targets: Vec<ResourceTarget>,
 }
@@ -162,8 +177,8 @@ impl ResourceProfile {
             ));
         }
 
-        for identity in self.caps.vram_bytes.keys() {
-            validate_identity("caps.vram_bytes adapter identity", identity)?;
+        for identity in self.planned_caps.vram_bytes.keys() {
+            validate_identity("planned_caps.vram_bytes adapter identity", identity)?;
         }
 
         let mut managed_paths = HashSet::new();
