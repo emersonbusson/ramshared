@@ -89,11 +89,12 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
     const file = join(root, "src", "lib.rs");
     const source = [
       "pub fn production() { consume(); }",
+      "pub fn production_uncovered() { panic!(); }",
       "#[cfg(test)]",
       "mod tests {",
-      '    const BRACES: &str = "} {";',
+      '    const BRACES: &str = "} { #[cfg(test)] mod fake {";',
       "    // }",
-      "    /* { } */",
+      "    /* outer /* { } */ { } */",
       "    #[test] fn helper() { assert!(true); }",
       "}",
     ].join("\n");
@@ -105,7 +106,7 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
           files: [
             {
               filename: file,
-              summary: { lines: { count: 2, covered: 1, percent: 50 } },
+              summary: { lines: { count: 3, covered: 1, percent: 33.33 } },
             },
           ],
           functions: [
@@ -115,9 +116,14 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
               regions: [[1, 1, 1, 35, 1, 0, 0, 0]],
             },
             {
+              name: "fixture::production_uncovered",
+              filenames: [file],
+              regions: [[2, 1, 2, 45, 0, 0, 0, 0]],
+            },
+            {
               name: "_RNvNtCsave46upGGgk_7fixture5testss_9unit_test",
               filenames: [file],
-              regions: [[7, 5, 7, 41, 0, 0, 0, 0]],
+              regions: [[8, 5, 8, 41, 0, 0, 0, 0]],
             },
           ],
         },
@@ -125,9 +131,9 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
     };
 
     const stats = parseLlvmCovJson(JSON.stringify(report), "lines", root);
-    assert.deepEqual(stats.get("src/lib.rs"), { count: 1, covered: 1, percent: 100 });
+    assert.deepEqual(stats.get("src/lib.rs"), { count: 2, covered: 1, percent: 50 });
     const uncovered = checkerApi("parseUncoveredLlvmCovLines")(JSON.stringify(report), root);
-    assert.equal(uncovered.has("src/lib.rs"), false);
+    assert.deepEqual(uncovered.get("src/lib.rs"), ["2"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
