@@ -1548,12 +1548,11 @@ mod residency_tests {
                 demotes_worker,
                 move |_| {
                     sample += 1;
-                    if sample == 18 {
-                        if let Some(tx) =
+                    if sample == 18
+                        && let Some(tx) =
                             clock_swapoff.lock().expect("pending swapoff mutex").take()
-                        {
-                            tx.send(true).expect("complete fake swapoff");
-                        }
+                    {
+                        tx.send(true).expect("complete fake swapoff");
                     }
                     match sample {
                         1..=16 => 10,
