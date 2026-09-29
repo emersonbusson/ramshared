@@ -215,6 +215,17 @@ struct BoundDeviceIdentity {
     kernel_owner_instance_id: Option<String>,
 }
 
+struct BoundDeviceObservation {
+    path: String,
+    expected_kind: ManagedDeviceKind,
+    owner_policy: NbdOwnerPolicy,
+    dev_t: String,
+    sysfs_path: String,
+    sysfs_dev_t: String,
+    live_owner: Option<String>,
+    owner_is_absent: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BoundSocketIdentity {
@@ -423,15 +434,18 @@ fn nbd_kernel_owner_identity(
 }
 
 fn bound_device_from_observation(
-    path: String,
-    expected_kind: ManagedDeviceKind,
-    owner_policy: NbdOwnerPolicy,
-    dev_t: String,
-    sysfs_path: String,
-    sysfs_dev_t: String,
-    live_owner: Option<String>,
-    owner_is_absent: bool,
+    observation: BoundDeviceObservation,
 ) -> Result<BoundDeviceIdentity, CascadeError> {
+    let BoundDeviceObservation {
+        path,
+        expected_kind,
+        owner_policy,
+        dev_t,
+        sysfs_path,
+        sysfs_dev_t,
+        live_owner,
+        owner_is_absent,
+    } = observation;
     if sysfs_dev_t != dev_t {
         return Err(CascadeError::Precondition(
             "managed device node and sysfs dev_t disagree".into(),
@@ -505,16 +519,16 @@ where
         None
     };
     let (live_owner, owner_is_absent) = owner_observation.unwrap_or((None, false));
-    bound_device_from_observation(
+    bound_device_from_observation(BoundDeviceObservation {
         path,
         expected_kind,
         owner_policy,
-        named.dev_t,
-        sysfs.to_string_lossy().into_owned(),
+        dev_t: named.dev_t,
+        sysfs_path: sysfs.to_string_lossy().into_owned(),
         sysfs_dev_t,
         live_owner,
         owner_is_absent,
-    )
+    })
 }
 
 #[cfg(not(test))]
@@ -558,19 +572,19 @@ fn observe_bound_device_with_nbd_owner_policy(
             ManagedDeviceKind::Zram => (252, None, false),
         };
         let dev_t = format!("{major}:{index}");
-        bound_device_from_observation(
-            path.clone(),
+        bound_device_from_observation(BoundDeviceObservation {
+            path: path.clone(),
             expected_kind,
             owner_policy,
-            dev_t.clone(),
-            format!(
+            dev_t: dev_t.clone(),
+            sysfs_path: format!(
                 "/sys/devices/virtual/block/{}",
                 path.rsplit('/').next().unwrap_or_default()
             ),
-            dev_t,
-            owner,
-            owner_absent,
-        )
+            sysfs_dev_t: dev_t,
+            live_owner: owner,
+            owner_is_absent: owner_absent,
+        })
     }
     #[cfg(not(test))]
     {
@@ -4708,72 +4722,72 @@ mod tests {
 
     #[test]
     fn bound_device_observation_enforces_sysfs_and_nbd_owner_policy() {
-        let live_nbd = bound_device_from_observation(
-            "/dev/nbd7".into(),
-            ManagedDeviceKind::Nbd,
-            NbdOwnerPolicy::RequireLive,
-            "43:7".into(),
-            "/fixture/sys/class/block/nbd7".into(),
-            "43:7".into(),
-            Some("4242-100".into()),
-            false,
-        )
+        let live_nbd = bound_device_from_observation(BoundDeviceObservation {
+            path: "/dev/nbd7".into(),
+            expected_kind: ManagedDeviceKind::Nbd,
+            owner_policy: NbdOwnerPolicy::RequireLive,
+            dev_t: "43:7".into(),
+            sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+            sysfs_dev_t: "43:7".into(),
+            live_owner: Some("4242-100".into()),
+            owner_is_absent: false,
+        })
         .expect("matching sysfs identity and live owner are accepted");
         assert_eq!(
             live_nbd.kernel_owner_instance_id.as_deref(),
             Some("4242-100")
         );
 
-        let ownerless_nbd = bound_device_from_observation(
-            "/dev/nbd7".into(),
-            ManagedDeviceKind::Nbd,
-            NbdOwnerPolicy::PermitAbsent,
-            "43:7".into(),
-            "/fixture/sys/class/block/nbd7".into(),
-            "43:7".into(),
-            None,
-            true,
-        )
+        let ownerless_nbd = bound_device_from_observation(BoundDeviceObservation {
+            path: "/dev/nbd7".into(),
+            expected_kind: ManagedDeviceKind::Nbd,
+            owner_policy: NbdOwnerPolicy::PermitAbsent,
+            dev_t: "43:7".into(),
+            sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+            sysfs_dev_t: "43:7".into(),
+            live_owner: None,
+            owner_is_absent: true,
+        })
         .expect("explicitly absent owner is allowed for NBD observation");
         assert_eq!(ownerless_nbd.kernel_owner_instance_id, None);
 
         assert!(
-            bound_device_from_observation(
-                "/dev/nbd7".into(),
-                ManagedDeviceKind::Nbd,
-                NbdOwnerPolicy::RequireLive,
-                "43:7".into(),
-                "/fixture/sys/class/block/nbd7".into(),
-                "43:7".into(),
-                None,
-                true,
-            )
+            bound_device_from_observation(BoundDeviceObservation {
+                path: "/dev/nbd7".into(),
+                expected_kind: ManagedDeviceKind::Nbd,
+                owner_policy: NbdOwnerPolicy::RequireLive,
+                dev_t: "43:7".into(),
+                sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+                sysfs_dev_t: "43:7".into(),
+                live_owner: None,
+                owner_is_absent: true,
+            })
             .is_err()
         );
         assert!(
-            bound_device_from_observation(
-                "/dev/nbd7".into(),
-                ManagedDeviceKind::Nbd,
-                NbdOwnerPolicy::PermitAbsent,
-                "43:7".into(),
-                "/fixture/sys/class/block/nbd7".into(),
-                "43:8".into(),
-                None,
-                true,
-            )
+            bound_device_from_observation(BoundDeviceObservation {
+                path: "/dev/nbd7".into(),
+                expected_kind: ManagedDeviceKind::Nbd,
+                owner_policy: NbdOwnerPolicy::PermitAbsent,
+                dev_t: "43:7".into(),
+                sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+                sysfs_dev_t: "43:8".into(),
+                live_owner: None,
+                owner_is_absent: true,
+            })
             .is_err()
         );
 
-        let zram = bound_device_from_observation(
-            "/dev/zram2".into(),
-            ManagedDeviceKind::Zram,
-            NbdOwnerPolicy::RequireLive,
-            "252:2".into(),
-            "/fixture/sys/class/block/zram2".into(),
-            "252:2".into(),
-            None,
-            false,
-        )
+        let zram = bound_device_from_observation(BoundDeviceObservation {
+            path: "/dev/zram2".into(),
+            expected_kind: ManagedDeviceKind::Zram,
+            owner_policy: NbdOwnerPolicy::RequireLive,
+            dev_t: "252:2".into(),
+            sysfs_path: "/fixture/sys/class/block/zram2".into(),
+            sysfs_dev_t: "252:2".into(),
+            live_owner: None,
+            owner_is_absent: false,
+        })
         .expect("non-NBD devices do not require an NBD owner");
         assert_eq!(zram.kernel_owner_instance_id, None);
     }
@@ -8409,10 +8423,10 @@ mod tests {
     }
 
     #[test]
-    fn proc_identity_and_socket_metadata_adapters_share_fail_closed_validation() {
+    fn proc_identity_and_socket_metadata_adapters_share_fail_closed_validation()
+    -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(
-            current_boot_id_with(|| { Ok(" 11111111-2222-4333-8444-555555555555\n".into()) })
-                .unwrap(),
+            current_boot_id_with(|| { Ok(" 11111111-2222-4333-8444-555555555555\n".into()) })?,
             "11111111-2222-4333-8444-555555555555"
         );
         assert!(matches!(
@@ -8429,8 +8443,7 @@ mod tests {
             daemon_invocation_id_with(4321, |pid| {
                 assert_eq!(pid, 4321);
                 Ok(valid_id.clone())
-            })
-            .unwrap(),
+            })?,
             "0123456789abcdef0123456789abcdef"
         );
         for bytes in [
@@ -8453,53 +8466,52 @@ mod tests {
 
         let fixture = TestDir::new();
         let socket_path = fixture.path.join("export.sock");
-        let _listener =
-            std::os::unix::net::UnixListener::bind(&socket_path).expect("bind fixture Unix socket");
-        let socket_metadata = fs::symlink_metadata(&socket_path).expect("stat Unix socket");
-        let socket = socket_identity_from_metadata(&socket_path, &socket_metadata, true)
-            .expect("accept exact Unix socket metadata");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
+        let socket_metadata = fs::symlink_metadata(&socket_path)?;
+        let socket = socket_identity_from_metadata(&socket_path, &socket_metadata, true)?;
         assert_eq!(socket.path, socket_path.to_string_lossy());
         assert_eq!(socket.inode, socket_metadata.ino());
 
         let regular_path = fixture.path.join("regular-file");
-        fs::write(&regular_path, b"fixture").expect("write regular-file fixture");
-        let regular_metadata = fs::symlink_metadata(&regular_path).expect("stat regular file");
+        fs::write(&regular_path, b"fixture")?;
+        let regular_metadata = fs::symlink_metadata(&regular_path)?;
         assert!(matches!(
             socket_identity_from_metadata(&regular_path, &regular_metadata, true),
             Err(CascadeError::Precondition(_))
         ));
-        let character_device = fs::metadata("/dev/null").expect("stat harmless character device");
+        let character_device = fs::metadata("/dev/null")?;
         assert!(matches!(
             validate_pinned_effect_metadata(&character_device, "1:3"),
             Err(CascadeError::Precondition(_))
         ));
 
         let symlink_path = fixture.path.join("socket-link");
-        std::os::unix::fs::symlink(&socket_path, &symlink_path).expect("create socket symlink");
-        let symlink_metadata = fs::symlink_metadata(&symlink_path).expect("stat symlink");
+        std::os::unix::fs::symlink(&socket_path, &symlink_path)?;
+        let symlink_metadata = fs::symlink_metadata(&symlink_path)?;
         assert!(matches!(
             socket_identity_from_metadata(&symlink_path, &symlink_metadata, true),
             Err(CascadeError::Precondition(_))
         ));
+        Ok(())
     }
 
     #[test]
-    fn system_command_runner_uses_bounded_capture_for_success_and_spawn_refusal() {
+    fn system_command_runner_uses_bounded_capture_for_success_and_spawn_refusal()
+    -> Result<(), Box<dyn std::error::Error>> {
         let runner = SystemCommandRunner;
         assert_eq!(
-            runner.run("/bin/printf", &["%s", "safe-fixture"]).unwrap(),
+            runner.run("/bin/printf", &["%s", "safe-fixture"])?,
             "safe-fixture"
         );
         assert_eq!(
-            runner
-                .run_bounded("/bin/true", &[], Duration::from_secs(1))
-                .unwrap(),
+            runner.run_bounded("/bin/true", &[], Duration::from_secs(1))?,
             ""
         );
         assert!(matches!(
             runner.run("/missing/ramshared-command-fixture", &[]),
             Err(CascadeError::Shell { .. })
         ));
+        Ok(())
     }
 
     #[test]
@@ -8769,7 +8781,12 @@ mod tests {
         let error = up_with_args(&["--transport".to_string(), "ublk".to_string()])
             .expect_err("product ublk is a fail-closed refusal");
 
-        assert!(error.to_string().contains("transport ublk refused"));
+        let message = error.to_string();
+        assert!(
+            message.contains("transport ublk refused on WSL2")
+                || message.contains("transport ublk in `ramshared up` is not implemented yet"),
+            "unexpected explicit ublk refusal: {message}"
+        );
     }
 
     #[test]

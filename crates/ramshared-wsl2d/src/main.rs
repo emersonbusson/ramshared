@@ -2047,19 +2047,10 @@ impl DaemonActionRunner for ProductionDaemonRunner {
                 }
                 match backend {
                     BackendKind::Vram | BackendKind::Auto => {
-                        let cuda = match Cuda::load() {
-                            Ok(cuda) => cuda,
-                            Err(error) => return Err(error.into()),
-                        };
-                        let dev = match cuda.device(0) {
-                            Ok(device) => device,
-                            Err(error) => return Err(error.into()),
-                        };
+                        let cuda = Cuda::load()?;
+                        let dev = cuda.device(0)?;
                         eprintln!("[ramsharedd] GPU: {}", dev.name());
-                        let provider = match cuda.create_context(&dev) {
-                            Ok(provider) => provider,
-                            Err(error) => return Err(error.into()),
-                        };
+                        let provider = cuda.create_context(&dev)?;
                         run_nbd(provider, None, size, sock, force, nbd_dev, true)
                     }
                     BackendKind::Vulkan => match VulkanProvider::open(0) {
@@ -7708,7 +7699,7 @@ mod tests {
                             flags: 0,
                             cmd: Command::Write,
                             handle,
-                            offset: u64::from(handle) * u64::from(BLOCK_SIZE),
+                            offset: handle * u64::from(BLOCK_SIZE),
                             len: BLOCK_SIZE,
                         },
                         payload: vec![0xA5; BLOCK_SIZE as usize],
@@ -11651,11 +11642,11 @@ mod tests {
     fn zero_window_clears_only_the_requested_range_and_propagates_backend_errors() {
         let size = (1 << 20) + 64;
         let mut backend = RamBackend::new(size);
-        let initial = vec![0xA5; size as usize];
+        let initial = vec![0xA5; size];
         backend.write_at(0, &initial).unwrap();
         zero_window(&mut backend, 8, (1 << 20) + 16).unwrap();
 
-        let mut actual = vec![0; size as usize];
+        let mut actual = vec![0; size];
         backend.read_at(0, &mut actual).unwrap();
         assert_eq!(&actual[..8], &initial[..8]);
         assert!(actual[8..(1 << 20) + 24].iter().all(|byte| *byte == 0));

@@ -2445,7 +2445,7 @@ mod tests {
     }
 
     #[test]
-    fn run_uses_only_injected_telemetry_and_bounded_allocation() {
+    fn run_uses_only_injected_telemetry_and_bounded_allocation() -> std::io::Result<()> {
         let log_path = std::env::temp_dir().join(format!(
             "ramshared-stress-injected-{}-{}.log",
             std::process::id(),
@@ -2467,8 +2467,9 @@ mod tests {
         let environment = StubStressEnvironment::new([Some(0), Some(64)]);
 
         let result = run_with_environment(&options, &environment);
-        let telemetry = fs::read_to_string(&log_path).expect("injected run writes telemetry");
+        let telemetry = fs::read_to_string(&log_path);
         let _ = fs::remove_file(&log_path);
+        let telemetry = telemetry?;
 
         assert!(result.is_ok(), "bounded injected run failed: {result:?}");
         assert!(telemetry.contains("RAM:"));
@@ -2478,10 +2479,11 @@ mod tests {
             &[81 * 1024 * 1024]
         );
         assert_eq!(environment.backing_allocations.borrow().as_slice(), &[4096]);
+        Ok(())
     }
 
     #[test]
-    fn active_cycle_stays_on_bounded_injected_backing() {
+    fn active_cycle_stays_on_bounded_injected_backing() -> std::io::Result<()> {
         let log_path = std::env::temp_dir().join(format!(
             "ramshared-stress-cycle-{}-{}.log",
             std::process::id(),
@@ -2503,8 +2505,9 @@ mod tests {
         let environment = StubStressEnvironment::new([]);
 
         let result = run_with_environment(&options, &environment);
-        let telemetry = fs::read_to_string(&log_path).expect("injected run writes telemetry");
+        let telemetry = fs::read_to_string(&log_path);
         let _ = fs::remove_file(&log_path);
+        let telemetry = telemetry?;
 
         assert!(result.is_ok(), "bounded active cycle failed: {result:?}");
         assert!(telemetry.contains("RAM:"));
@@ -2514,6 +2517,7 @@ mod tests {
         );
         assert_eq!(environment.requested_allocations.borrow().len(), 1);
         assert_eq!(environment.backing_allocations.borrow().as_slice(), &[4096]);
+        Ok(())
     }
 
     #[test]
