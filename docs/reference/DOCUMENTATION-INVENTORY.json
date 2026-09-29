@@ -894,18 +894,6 @@
       "freshnessDays": 90
     },
     {
-      "path": "docs/mimoaudite.md",
-      "disposition": "classified",
-      "ruleId": "top-level-docs",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "documentation-governance",
-      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
-    {
       "path": "docs/packaging/INSTALLABLES.md",
       "disposition": "classified",
       "ruleId": "packaging-documents",
@@ -1157,6 +1145,18 @@
     },
     {
       "path": "docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/MIMO-SOURCE-AUDIT-20260929.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
       "verification": {

@@ -8715,3 +8715,59 @@ remain open. All seven active reliability gates remain `PARTIAL`.
 **Verdict:** 🟡 `PARTIAL` — variable ZRAM/SSD-origin ceilings are now reviewable
 in drafts and the fixed-value interpretation of the parser test is disproved
 by source and tests; GPU, mutation, and live-platform gates remain open.
+
+## 2026-09-29 20:24 -03 — source-gap fixes after adversarial audits
+
+**What:** Continued the open campaign against the adversarial source audits
+and landed the remaining actionable source-gap fixes that do not require
+hardware or a lab. In RamShared, draft tier caps were honestly renamed to
+unenforced planned caps, and the isolated GPU worker frame reads became
+absolute-deadline bounded. In the kernel fork, the source-confirmed DXG/UIO/
+NetVSC defects and the VMBus workflow path-filter gap received focused fixes.
+External hardware and platform qualification gates were not claimed closed.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0114`.
+**Owner role:** source-gap fix and test-first verification.
+**Observed at:** `2026-09-29T23:24:21Z`.
+**Verified at:** `2026-09-29T23:24:21Z`.
+**Source revision:** `6cb276efff6ac2e00fb5fecec7a25aeb45446a9a`.
+**Kernel candidate revision:** `850f55bc0c2840501b8ebbe32a59060822f1d058`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0111 through EVD-0113 and the source-audit
+documents in `docs/reliability/`. This evidence records local source fixes and
+hermetic test results only; it does not close install, runtime, freeze,
+hardware, CoCo, or physical Windows gates.
+**Freshness:** Suites and static checks were re-run at the verification time
+against the recorded source revision. Host identity remained
+`6.18.40.1-microsoft-standard-WSL2+` with installed RamShared CLI `0.14.1`
+and `--build-info` unsupported; no install, stress, GPU allocation, WSL
+shutdown, or kernel boot change was performed.
+**Category:** source fix / focused Rust unit and integration tests / kernel
+object compile / documentation checks.
+**How to measure:** RamShared test-first pairs: `3d7400f5` then `ad663272`
+relabel draft caps as unenforced planned caps (`PlannedTierCaps`, plan JSON
+`unenforced_planned_caps`, legacy `[caps]` alias kept); `87614914` then
+`48649d23` bound worker frame reads with a 30s absolute deadline. Kernel
+commits `d9a1a3a8d6f6`, `b99248f63e43`, `4ea7c35d2cd8`, `68700eb5aa8a`, and
+`805418bd7021` fix BUG-1, BUG-8, BUG-5, BUG-11, and the PR path filter G2.
+`CARGO_BUILD_JOBS=1 cargo test -p ramshared-block` passed 126 unit plus 6
+protocol integration tests; `cargo test -p ramshared-cli` passed 434 unit plus
+13 integration tests; `cargo test -p ramshared-config` passed 15 unit plus 13
+integration tests. `cargo fmt --all -- --check`, strict Clippy on the three
+touched crates, `node --test tools/ci/check-validation-schema.test.mjs` (26),
+and `./scripts/docs-check.sh` passed. Kernel verification used
+`scripts/checkpatch.pl --strict --no-tree` with 0 errors/warnings and targeted
+`make W=1` of the three touched objects. Named stall tests
+(`worker_frame_read_deadline_fails_closed_on_a_silent_peer` and partial
+header/payload siblings) failed before the deadline fix and pass after it.
+**Remaining boundary:** Planned caps remain unenforced and have no apply or
+rollback path. Worker writes remain unbounded against a non-reading peer.
+Kernel BUG-2, BUG-3, and BUG-9 race/ownership issues need designed
+synchronization and runtime reproducers. No live Hyper-V GPADL interleaving,
+UIO mmap race, DXG greater-than-4-GiB allocation, CoCo transition, multi-vendor
+GPU campaign, Windows physical lifecycle, BINARY_MATCH install, or freeze
+attribution proof was produced. All seven reliability gates remain `PARTIAL`;
+stress and upstream submission stay blocked on their named proofs.
+**Verdict:** 🟡 `PARTIAL` — actionable source defects and CI trigger gaps from
+the audits are fixed with test-first evidence; install, runtime, hardware, and
+lab proofs remain open and unclaimed.
