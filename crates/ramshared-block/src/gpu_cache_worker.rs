@@ -31,6 +31,11 @@ pub const RUNTIME_FREE_BUFFER_BYTES: u64 = 640 * 1024 * 1024;
 const RUNTIME_RECOVERY_BUFFER_BYTES: u64 = 896 * 1024 * 1024;
 const MAX_GPU_BUDGET_PAYLOAD_BYTES: usize = 4096;
 
+/// Encodes cached bytes as KiB in the legacy `u32` IPC field without wrapping.
+fn cached_kib_aux(cached_bytes: u64) -> u32 {
+    u32::try_from(cached_bytes >> 10).unwrap_or(u32::MAX)
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -374,7 +379,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                     correlation_id: hdr.correlation_id,
                     offset: worker.target_bytes(),
                     payload_len: 0,
-                    aux: (worker.cached_bytes() >> 10) as u32,
+                    aux: cached_kib_aux(worker.cached_bytes()),
                 };
                 if let Err(e) = socket.write_all(&resp.encode()) {
                     return Err(format!("worker write handshake resp error: {e}"));
@@ -391,7 +396,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                         correlation_id: hdr.correlation_id,
                         offset: hdr.offset,
                         payload_len: data.len() as u32,
-                        aux: (worker.cached_bytes() >> 10) as u32,
+                        aux: cached_kib_aux(worker.cached_bytes()),
                     };
                     if let Err(e) = socket.write_all(&resp.encode()) {
                         return Err(format!("worker write read resp error: {e}"));
@@ -407,7 +412,7 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                         correlation_id: hdr.correlation_id,
                         offset: hdr.offset,
                         payload_len: 0,
-                        aux: (worker.cached_bytes() >> 10) as u32,
+                        aux: cached_kib_aux(worker.cached_bytes()),
                     };
                     if let Err(e) = socket.write_all(&resp.encode()) {
                         return Err(format!("worker write read resp error: {e}"));
@@ -472,7 +477,12 @@ pub fn run_gpu_worker_loop<P: VramProvider>(
                     ));
                 }
             }
-            _ => {}
+            _ => {
+                return Err(format!(
+                    "worker received unsupported message type {}",
+                    hdr.msg_type
+                ));
+            }
         }
     }
 
@@ -504,6 +514,17 @@ mod tests {
             source: GpuBudgetSource::DriverReported,
             sampled_at: Instant::now(),
         }
+    }
+
+    #[test]
+    fn cached_kib_aux_saturates_instead_of_wrapping_at_wire_limit() {
+        let max_kib = u64::from(u32::MAX);
+        let max_bytes = max_kib * 1024;
+
+        assert_eq!(cached_kib_aux(max_bytes - 1024), u32::MAX - 1);
+        assert_eq!(cached_kib_aux(max_bytes), u32::MAX);
+        assert_eq!(cached_kib_aux(max_bytes + 1024), u32::MAX);
+        assert_eq!(cached_kib_aux(4 * 1024 * 1024 * 1024 * 1024), u32::MAX);
     }
 
     #[test]
