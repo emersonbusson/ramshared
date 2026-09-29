@@ -265,7 +265,9 @@ No production file is deleted.
 ## Validation checklist
 
 The incident slice owns line coverage only for `workload.rs`, `supervisor.rs`,
-and `monitor.rs`. The required `main.rs` and `cascade/lifecycle.rs` tests above
+`monitor.rs`, and `stress.rs`. The `monitor_pressure_tests.rs` module is compiled
+and run through `monitor.rs`; it is test code rather than a production line
+coverage target. The required `main.rs` and `cascade/lifecycle.rs` tests above
 remain incident evidence under the single `cascade-lifecycle-observability`
 owner. The `bounded_process.rs` tests likewise remain incident evidence under
 `cascade-transport-orchestration`. This avoids counting the same production
@@ -274,7 +276,7 @@ source under two active SPECs.
 - [x] `cargo fmt --all -- --check`
 - [x] `cargo clippy -p ramshared-cli --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-cli`
-- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs,crates/ramshared-cli/src/monitor_pressure_tests.rs --min 80 --report-json tmp/wsl2-control-plane-pressure-incident-cov.json`
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs --min 80 --report-json tmp/wsl2-control-plane-pressure-incident-cov.json`
 - [x] PowerShell parser and full Windows static suite
 - [x] systemd shell static tests and docs-check
 - [ ] source-only `/bin/true` before/action/after where authorization permits

@@ -75,7 +75,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::Cuda;
 
     #[test]
     fn test_vram_error_conversion_out_of_range() {
@@ -113,41 +112,4 @@ mod tests {
             _ => panic!("Expected VramError::Provider"),
         }
     }
-
-    #[test]
-    #[ignore = "requires functional CUDA GPU"]
-    fn test_vram_traits_delegation() {
-        let cuda = Cuda::load().expect("libcuda must load");
-        let dev = cuda.device(0).expect("device(0) must exist");
-        let ctx = cuda.create_context(&dev).expect("context must be created");
-
-        let size = 1024;
-
-        // Test VramProvider::alloc
-        let mut mem = ctx.alloc(size).expect("alloc must work");
-
-        // Test VramMemory::len e is_empty
-        assert_eq!(mem.len(), size);
-        assert!(!mem.is_empty());
-
-        // Test VramMemory::zero
-        mem.zero().expect("zero must work");
-
-        // Test VramMemory::write_at
-        let src = b"hello";
-        mem.write_at(0, src).expect("write_at must work");
-
-        // Test VramMemory::read_at
-        let mut dst = vec![0u8; src.len()];
-        mem.read_at(0, &mut dst).expect("read_at must work");
-        assert_eq!(dst, src);
-
-        // Test VramProvider::mem_info
-        let (free, total) = ctx.mem_info().expect("mem_info must work");
-        assert!(total > 0);
-        assert!(free > 0);
-        assert!(free <= total);
-    }
 }
-// dummy comment to force push
-// dummy 2

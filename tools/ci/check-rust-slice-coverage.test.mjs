@@ -405,7 +405,7 @@ test("coverage_cli_refuses_invalid_arguments_and_malformed_report", () => {
 
 test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs", () => {
   const parseLlvmCovJson = checkerApi("parseLlvmCovJson");
-  const parseUncoveredLlvmCovRegions = checkerApi("parseUncoveredLlvmCovRegions");
+  const parseUncoveredLlvmCovLines = checkerApi("parseUncoveredLlvmCovLines");
   const loadFilesFrom = checkerApi("loadFilesFrom");
   const normRepoPath = checkerApi("normRepoPath");
   const root = mkdtempSync(join(tmpdir(), "ramshared-cov-parser-"));
@@ -440,13 +440,16 @@ test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs
       "lines",
     );
     assert.equal(zero.get(COVERED_FILE).percent, 100);
-    const uncovered = parseUncoveredLlvmCovRegions(
+    const uncovered = parseUncoveredLlvmCovLines(
       JSON.stringify({
         data: [
           {
             files: [
+              { filename: join(REPO_ROOT, COVERED_FILE) },
+            ],
+            functions: [
               {
-                filename: join(REPO_ROOT, COVERED_FILE),
+                filenames: [join(REPO_ROOT, COVERED_FILE)],
                 regions: [
                   [12, 3, 12, 9, 0, 0, 0, 0],
                   [14, 5, 18, 2, 0, 0, 0, 0],
@@ -454,7 +457,11 @@ test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs
                 ],
               },
               {
-                filename: "crates/ramshared-cli/tests/ignored.rs",
+                filenames: [join(REPO_ROOT, COVERED_FILE)],
+                regions: [[17, 1, 17, 7, 1, 0, 0, 0]],
+              },
+              {
+                filenames: ["crates/ramshared-cli/tests/ignored.rs"],
                 regions: [[1, 1, 2, 1, 0, 0, 0, 0]],
               },
             ],
@@ -462,7 +469,7 @@ test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs
         ],
       }),
     );
-    assert.deepEqual(uncovered.get(COVERED_FILE), ["12:3-9", "14:5-18:2"]);
+    assert.deepEqual(uncovered.get(COVERED_FILE), ["12", "14-16", "18"]);
     assert.equal(uncovered.has("crates/ramshared-cli/tests/ignored.rs"), false);
     assert.throws(() => parseLlvmCovJson("not-json", "lines"), (error) => error?.code === "COVERAGE_REPORT_INVALID");
     assert.throws(() => parseLlvmCovJson(JSON.stringify({ data: [] }), "lines"), (error) => error?.code === "COVERAGE_REPORT_INVALID");

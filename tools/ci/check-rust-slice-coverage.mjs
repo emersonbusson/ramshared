@@ -205,7 +205,7 @@ function parseLlvmCovJson(content, metric, repoRoot = REPO_ROOT) {
   return map;
 }
 
-function parseUncoveredLlvmCovRegions(content, repoRoot = REPO_ROOT) {
+function parseUncoveredLlvmCovLines(content, repoRoot = REPO_ROOT) {
   let data;
   try {
     data = JSON.parse(content);
@@ -221,25 +221,51 @@ function parseUncoveredLlvmCovRegions(content, repoRoot = REPO_ROOT) {
     );
   }
 
-  const map = new Map();
-  for (const file of files) {
-    const rawName = file.filename || file.name || "";
-    if (!rawName) continue;
-    const key = normRepoPath(rawName, repoRoot);
-    if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
-    const regions = Array.isArray(file.regions) ? file.regions : [];
-    const uncovered = regions
-      .filter((region) => Array.isArray(region) && region.length >= 5 && region[4] === 0)
-      .map(([startLine, startColumn, endLine, endColumn]) => {
-        const start = `${startLine}:${startColumn}`;
-        const end = startLine === endLine ? String(endColumn) : `${endLine}:${endColumn}`;
-        return `${start}-${end}`;
-      });
-    if (uncovered.length === 0) continue;
-    const previous = map.get(key) ?? [];
-    map.set(key, [...new Set([...previous, ...uncovered])]);
+  const countsByFile = new Map();
+  for (const exportData of data.data) {
+    for (const fn of exportData.functions ?? []) {
+      const rawName = fn.filenames?.[0];
+      if (!rawName) continue;
+      const key = normRepoPath(rawName, repoRoot);
+      if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+      const lines = countsByFile.get(key) ?? new Map();
+      for (const region of fn.regions ?? []) {
+        if (!Array.isArray(region) || region.length < 5) continue;
+        const [startLine, , endLine, , rawCount] = region;
+        const executionCount = Number(rawCount);
+        if (!Number.isSafeInteger(startLine) || !Number.isSafeInteger(endLine) || endLine < startLine ||
+            !Number.isFinite(executionCount) || executionCount < 0) continue;
+        for (let line = startLine; line <= endLine; line++) {
+          lines.set(line, (lines.get(line) ?? 0) + executionCount);
+        }
+      }
+      countsByFile.set(key, lines);
+    }
   }
-  return map;
+
+  const uncoveredByFile = new Map();
+  for (const [file, counts] of countsByFile) {
+    const uncoveredLines = [...counts]
+      .filter(([, count]) => count === 0)
+      .map(([line]) => line)
+      .sort((left, right) => left - right);
+    if (uncoveredLines.length === 0) continue;
+    const ranges = [];
+    let start = uncoveredLines[0];
+    let end = start;
+    for (const line of uncoveredLines.slice(1)) {
+      if (line === end + 1) {
+        end = line;
+        continue;
+      }
+      ranges.push(start === end ? String(start) : `${start}-${end}`);
+      start = line;
+      end = line;
+    }
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+    uncoveredByFile.set(file, ranges);
+  }
+  return uncoveredByFile;
 }
 
 function createLockOwner({
@@ -629,7 +655,7 @@ function runLlvmCov(
   }
 }
 
-function evaluateCoverage({ files, stats, uncoveredRegions = new Map(), min, allowMissing, metric, repoRoot = REPO_ROOT }) {
+function evaluateCoverage({ files, stats, uncoveredLines = new Map(), min, allowMissing, metric, repoRoot = REPO_ROOT }) {
   const rows = [];
   const violations = [];
   for (const file of files) {
@@ -668,7 +694,7 @@ function evaluateCoverage({ files, stats, uncoveredRegions = new Map(), min, all
         file,
         percent: hit.percent,
         reason: `below ${min}% (${hit.covered}/${hit.count} ${metric})`,
-        uncoveredRegions: uncoveredRegions.get(file) ?? [],
+        uncoveredLines: uncoveredLines.get(file) ?? [],
       });
     }
   }
@@ -724,11 +750,11 @@ function main(argv = process.argv, { print = console.log, error = console.error 
     }
 
     const stats = parseLlvmCovJson(coverageContent, options.metric);
-    const uncoveredRegions = parseUncoveredLlvmCovRegions(coverageContent);
+    const uncoveredLines = parseUncoveredLlvmCovLines(coverageContent);
     const { rows, violations } = evaluateCoverage({
       files,
       stats,
-      uncoveredRegions,
+      uncoveredLines,
       min: options.min,
       allowMissing: options.allowMissing,
       metric: options.metric,
@@ -747,10 +773,10 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       for (const violation of violations) {
         const percent = typeof violation.percent === "number" ? `${violation.percent.toFixed(1)}% ` : "";
         error(`  - ${violation.file}: ${percent}${violation.reason}`);
-        if (violation.uncoveredRegions?.length) {
-          const visible = violation.uncoveredRegions.slice(0, 20);
-          const remainder = violation.uncoveredRegions.length - visible.length;
-          error(`    Uncovered LLVM regions: ${visible.join(", ")}${remainder > 0 ? ` (+${remainder} more)` : ""}`);
+        if (violation.uncoveredLines?.length) {
+          const visible = violation.uncoveredLines.slice(0, 20);
+          const remainder = violation.uncoveredLines.length - visible.length;
+          error(`    Uncovered source lines: ${visible.join(", ")}${remainder > 0 ? ` (+${remainder} more ranges)` : ""}`);
         }
       }
       error(
@@ -787,7 +813,7 @@ export {
   normRepoPath,
   parseArgs,
   parseLlvmCovJson,
-  parseUncoveredLlvmCovRegions,
+  parseUncoveredLlvmCovLines,
   releaseCoverageLock,
   runLlvmCov,
   runWithCoverageIsolation,
