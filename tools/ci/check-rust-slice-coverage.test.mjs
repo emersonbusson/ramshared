@@ -355,6 +355,29 @@ test("coverage_cli_report_only_preserves_per_file_threshold_and_allow_missing_co
       ),
       1,
     );
+
+    report.data[0].functions = [
+      {
+        filenames: [join(REPO_ROOT, COVERED_FILE)],
+        regions: Array.from({ length: 170 }, (_, index) => {
+          const line = index * 2 + 1;
+          return [line, 1, line, 2, 0, 0, 0, 0];
+        }),
+      },
+    ];
+    writeFileSync(reportPath, `${JSON.stringify(report)}\n`);
+    const failureOutput = [];
+    assert.equal(
+      coverageChecker.main(
+        ["node", "checker", "--report-only", reportPath, "--files", COVERED_FILE, "--min", "81"],
+        { print: () => {}, error: (line) => failureOutput.push(line) },
+      ),
+      1,
+    );
+    assert.equal(failureOutput.some((line) => line.includes("Uncovered source lines (1-80 of 170)")), true);
+    assert.equal(failureOutput.some((line) => line.includes("Uncovered source lines (81-160 of 170)")), true);
+    assert.equal(failureOutput.some((line) => line.includes("Uncovered source lines (161-170 of 170)")), true);
+
     assert.equal(
       coverageChecker.main(
         ["node", "checker", "--report-only", reportPath, "--files", "crates/no-such-production-file.rs"],

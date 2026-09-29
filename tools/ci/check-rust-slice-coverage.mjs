@@ -774,9 +774,12 @@ function main(argv = process.argv, { print = console.log, error = console.error 
         const percent = typeof violation.percent === "number" ? `${violation.percent.toFixed(1)}% ` : "";
         error(`  - ${violation.file}: ${percent}${violation.reason}`);
         if (violation.uncoveredLines?.length) {
-          const visible = violation.uncoveredLines.slice(0, 20);
-          const remainder = violation.uncoveredLines.length - visible.length;
-          error(`    Uncovered source lines: ${visible.join(", ")}${remainder > 0 ? ` (+${remainder} more ranges)` : ""}`);
+          const chunkSize = 80;
+          for (let offset = 0; offset < violation.uncoveredLines.length; offset += chunkSize) {
+            const visible = violation.uncoveredLines.slice(offset, offset + chunkSize);
+            const end = Math.min(offset + visible.length, violation.uncoveredLines.length);
+            error(`    Uncovered source lines (${offset + 1}-${end} of ${violation.uncoveredLines.length}): ${visible.join(", ")}`);
+          }
         }
       }
       error(

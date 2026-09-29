@@ -2352,6 +2352,39 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_tier_targets_and_unsafe_profile_combinations() {
+        for args in [
+            vec!["--tier3-target-pct"],
+            vec!["--tier3-target-pct", "101"],
+            vec!["--tier1-target-pct"],
+            vec!["--tier1-target-pct", "invalid"],
+            vec!["--tier2-target-pct"],
+            vec!["--tier2-target-pct", "invalid"],
+            vec!["--physical-cache-target-mib"],
+            vec!["--physical-cache-target-mib", "invalid"],
+            vec!["--min-order-7-chunks"],
+            vec!["--min-order-7-chunks", "invalid"],
+            vec!["--tier3-only", "--cascade", "--tier3-target-pct", "99"],
+            vec!["--tier3-only"],
+            vec![
+                "--tier3-only",
+                "--tier3-target-pct",
+                "99",
+                "--physical-cache-target-mib",
+                "1",
+            ],
+            vec!["--full-three-tier", "--start", "101"],
+            vec!["--tier1-target-pct", "101"],
+        ] {
+            let args = args.into_iter().map(str::to_string).collect::<Vec<_>>();
+            assert!(
+                parse_stress_args(&args).is_err(),
+                "accepted invalid args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
     fn computes_telemetry_reading_accurately() {
         let s0 = compute_telemetry_reading(0.01, 0.0, 1000, 0, 0);
         assert!(s0.pressure_index >= 1.0);
