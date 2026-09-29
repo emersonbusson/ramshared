@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { TextDecoder } from 'node:util'
@@ -693,8 +693,40 @@ export function validateCoverageMap(map, root = ROOT) {
   return { ok: errors.length === 0, errors: sortFindings(errors) }
 }
 
-function isBusinessRustPath(file) {
-  return isRustProductionPath(file)
+function isTestOnlyPathModule(file, root) {
+  if (!isRustProductionPath(file) || !file.endsWith('_tests.rs')) return false
+
+  const directory = path.posix.dirname(file)
+  const target = path.basename(file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pathAttribute = new RegExp(`#\\s*\\[\\s*path\\s*=\\s*(["'])${target}\\1\\s*\\]`)
+  const testAttribute = /#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]/
+  const moduleDeclaration = /((?:^[ \t]*#\s*\[[^\r\n]*\][ \t]*\r?\n)+)[ \t]*mod\s+[A-Za-z_][A-Za-z0-9_]*\s*;/gm
+  let declarations = 0
+
+  let siblings
+  try {
+    siblings = readdirSync(path.join(root, directory), { withFileTypes: true })
+  } catch {
+    return false
+  }
+
+  for (const sibling of siblings) {
+    if (!sibling.isFile() || !sibling.name.endsWith('.rs') || sibling.name === path.basename(file)) continue
+    const source = readTextInsideRoot(root, path.posix.join(directory, sibling.name))
+    if (source === null) continue
+
+    for (const match of source.matchAll(moduleDeclaration)) {
+      if (!pathAttribute.test(match[1])) continue
+      declarations++
+      if (!testAttribute.test(match[1])) return false
+    }
+  }
+
+  return declarations > 0
+}
+
+function isBusinessRustPath(file, root = ROOT) {
+  return isRustProductionPath(file) && !isTestOnlyPathModule(file, root)
 }
 
 function decodeUtf8(value) {
@@ -1454,7 +1486,7 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
       errors.push(finding('changed-path-unsafe'))
       continue
     }
-    if (isBusinessRustPath(file)) businessFiles.push(file)
+    if (isBusinessRustPath(file, root)) businessFiles.push(file)
     else if (map.entries.some((entry) =>
       entry.kind === IGNORED_TEST_RELOCATION_KIND && entry.verification.ignored_test_source === file)) {
       integrationFiles.push(file)
