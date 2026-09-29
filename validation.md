@@ -8820,3 +8820,52 @@ stay blocked on their named proofs.
 **Verdict:** 🟡 `PARTIAL` — clean direct userspace install now has exact
 BINARY_MATCH and live read-only identity proof; lifecycle repetition, product
 release promotion, kernel, stress, and hardware proofs remain open.
+
+## 2026-09-29 20:50 -03 — idempotent cascade start/stop cycles
+
+**What:** After the EVD-0115 direct install, attached the sealed origin VHDX
+through the attended `Manage-RamSharedOrigin.ps1` attach action, refreshed the
+Windows Guardian task to a HEALTHY proof with a canonical guest boot ID, ran
+the host gate to `NORMAL_BOOT`, and executed three `ramshared up` /
+`ramshared down` cycles with swapoff-first teardown. Cascade was left Armed
+after the final start. No stress campaign and no GPU cache allocation ran.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0116`.
+**Owner role:** supervised cascade lifecycle start/stop evidence.
+**Observed at:** `2026-09-29T23:50:02Z`.
+**Verified at:** `2026-09-29T23:50:02Z`.
+**Source revision:** `1b73c989eadfd929e4cde708d713fe1ddfcd1154`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0115 and the legacy handoff row. This records
+same-boot idempotent start/stop against the EVD-0115 install; it does not
+replace a post-reboot repetition, product `/opt` promotion, kernel promotion,
+or stress qualification.
+**Freshness:** Host `6.18.40.1-microsoft-standard-WSL2+`; installed CLI
+`v0.15.0 · 5e6b5845` with CLI SHA-256
+`05a556776bc67f700855d8ed28d6c7ef5e6aa6773ea67d2ba3edd1374b4b1639`.
+Guardian health refreshed to `HEALTHY` / `watching` with boot ID
+`641971fd-a2af-41c8-9e21-fba04f8d870d`. After the final up, `/proc/swaps`
+listed `/dev/zram0` prio 200 (2097148 KiB), `/dev/nbd0` prio 100 (4194300
+KiB), and the WSL fallback `/dev/sdb` prio -2. Status reported
+`phase: Armed (armed_low_vram_used)` and `protection: READY`.
+**Category:** live lifecycle / before-action-after swap topology /
+attended origin attach.
+**How to measure:** Elevated attach produced
+`state=ATTACHED` with PARTUUID `5039dca1-61a0-41ff-aa08-221f49326a1b`.
+`sudo bash scripts/safety/ramshared-host-gate.sh` printed
+`RAMSHARED_HOST_GATE=NORMAL_BOOT` and published `/etc/ramshared/origin.conf`.
+Each `sudo ramshared up --vram 4096 --zram 2048` armed zram then the
+SSD-authoritative NBD device and reported `ok: true`. Each
+`sudo ramshared down` printed `swapoff ok: /dev/nbd0`, `swapoff ok: /dev/zram0`,
+then `cascade unmounted (swapoff-first, no broad kill)`, leaving only the WSL
+fallback swap and `daemon: dead`. Three complete up/down/up cycles ran without
+hang, panic, or residual managed swap. `ublk` remained refused on WSL2 by the
+existing teardown-safety policy.
+**Remaining boundary:** Cycles were same-boot, not after a full WSL restart.
+No three-tier stress, simultaneous 100% ZRAM / 100% NBD / 99% SSD
+qualification, live GPU worker allocation, physical multi-vendor GPU campaign,
+Windows physical lifecycle/matrix, custom-kernel promotion, or CoCo evidence
+was produced. `/opt/ramshared/current` remains on `v0.15.0-b788c17`.
+**Verdict:** 🟡 `PARTIAL` — repeated idempotent start/stop and swapoff-first
+teardown now have live proof on the EVD-0115 install; post-reboot repetition,
+product-path promotion, stress, kernel, and hardware gates remain open.
