@@ -12,8 +12,8 @@ storage targets to fresh inventory, and reports capacity/refusal reasons.
 `ramshared config draft --output PATH` now offers an attended TTY volume/role/
 size wizard and saves only a new user-owned draft with mode `0600`. The draft
 is not the protected system profile and does not apply settings. There is still
-no adapter selection, tier-cap editor, disk benchmark, provider apply/rollback,
-or native Linux target qualification on a native host.
+no adapter-bound VRAM selection, disk benchmark, provider apply/rollback, or
+native Linux target qualification on a native host.
 
 ## Delivered contract
 
@@ -27,11 +27,17 @@ or native Linux target qualification on a native host.
 - `config draft --output PATH` requires terminal input and output. It lists all
   storage rows and their eligibility reasons, selects fresh eligible Linux
   filesystems or uniquely identified Windows volumes, accepts variable MiB
-  sizes for fallback swap and SSD origin, and checks the combined target-plus-
-  reserve plan before asking for the exact `SAVE` confirmation. It creates a
-  new user-owned file with mode `0600`, verifies its exact bytes after write,
-  syncs file and parent, and refuses overwrite. A draft can be reviewed with
-  `config plan --profile PATH`; it is never treated as applied configuration.
+  sizes for fallback swap and SSD origin, plus optional positive ZRAM and SSD-
+  origin tier ceilings. Blank cap input leaves the value unset; zero, malformed,
+  and overflowing values refuse before any file is written. The final plan
+  displays the exact ceilings and states that they do not reserve resources.
+  VRAM cap input stays unavailable until inventory can bind a fresh budget to a
+  stable adapter ID; the wizard refuses manual IDs. It checks the combined
+  target-plus-reserve plan before asking for the exact `SAVE` confirmation. It
+  creates a new user-owned file with mode `0600`, verifies its exact bytes after
+  write, syncs file and parent, and refuses overwrite. A draft can be reviewed
+  with `config plan --profile PATH`; it is never treated as applied
+  configuration.
 - Linux reads RAM and swap counters from the active guest and enumerates block
   devices with `lsblk`. It joins devices to `/proc/self/mountinfo` by
   `MAJ:MIN` and samples filesystem total/free capacity through `statvfs`.
@@ -104,7 +110,7 @@ or native Linux target qualification on a native host.
 | Path | Change |
 | --- | --- |
 | `crates/ramshared-cli/src/main.rs` | `config` parsing, dispatch, help text, read-only planning, and guarded draft-mode parsing; unsupported apply actions remain rejected. |
-| `crates/ramshared-cli/src/resource_config.rs` | Platform inventory and planning, Linux/WSL volume selection, target sizing, combined-capacity review, safe user-draft creation, and read-only TUI. |
+| `crates/ramshared-cli/src/resource_config.rs` | Platform inventory and planning, Linux/WSL volume selection, target sizing, optional ZRAM/SSD-origin ceilings, combined-capacity review, safe user-draft creation, and read-only TUI. |
 | `crates/ramshared-cli/tests/cli_dispatch.rs` | Executes JSON discovery, explicit-profile plan, and non-TTY draft refusal; verifies no draft is written without a terminal. |
 | `crates/ramshared-config/src/resource_profile.rs` | Versioned bounded policy model, platform-bound storage targets, variable tier caps, checked capacity arithmetic, case-insensitive Windows volume grouping, and canonical target paths. |
 | `crates/ramshared-config/tests/resource_profile.rs` | Tests variable caps, overflow, round trips, native origin intent, platform mismatch, malformed identity, duplicate targets, and case-insensitive volume capacity grouping. |
@@ -137,7 +143,12 @@ or native Linux target qualification on a native host.
   request through TOML. `native_linux_origin_request_plan_binds_volume_without_claiming_creation`
   verifies the planner binds the current mount and reserve calculation while
   keeping `writes_performed=false` and `apply_enabled=false`.
-- RED/GREEN: `resource_profile_groups_windows_volume_ids_case_insensitively_for_capacity`
+- RED/GREEN: `config_draft_wizard_saves_tier_caps_as_unapplied_ceilings`
+  failed because the wizard treated the first cap input as the final `SAVE`
+  confirmation. It now captures optional variable ZRAM and SSD-origin ceilings,
+  renders their exact values in the read-only plan, and leaves VRAM unselected
+  without a fresh adapter-bound budget. The same test covers blank caps, zero,
+  negative, malformed, and overflowing input and proves refusal writes no file.
   found that case variants were counted as separate disks.
   `resource_plan_aggregates_case_aliases_before_capacity_check` verifies the
   planner now adds both allocations and one reserve before checking capacity.
@@ -216,9 +227,10 @@ or native Linux target qualification on a native host.
 ## Gaps
 
 - The read-only TUI cannot edit settings. The separate `config draft` wizard
-  selects storage targets and saves an unprivileged user draft, but cannot edit
-  ZRAM/VRAM/origin caps, run the bounded disk benchmark, recommend a measured
-  leader, or apply/rollback changes. GPU inventory is not adapter-structured.
+  selects storage targets and optional ZRAM/SSD-origin ceilings, then saves an
+  unprivileged user draft. It cannot select a GPU adapter or set a VRAM cap,
+  run the bounded disk benchmark, recommend a measured leader, or apply/
+  rollback changes. GPU inventory is not adapter-structured.
 - The WSL memory ceiling stays read-only by SPEC. The typed profile contains
   no host-RAM setting; only ZRAM, per-adapter VRAM, origin, and platform-owned
   fallback swap targets are in its scope.

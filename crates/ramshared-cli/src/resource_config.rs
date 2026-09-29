@@ -1,4 +1,4 @@
-//! Read-only discovery and display for the cross-platform resource settings UI.
+//! Resource discovery, read-only planning, and user-draft creation.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as FmtWrite};
@@ -31,6 +31,7 @@ const STORAGE_SAMPLE_MAX_AGE_MS: u64 = 30_000;
 const STORAGE_SAMPLE_FUTURE_TOLERANCE_MS: u64 = 5_000;
 const MAX_DRAFT_LINE_BYTES: usize = 128;
 const MAX_DRAFT_TARGETS: usize = 16;
+const BYTES_PER_MIB: u64 = 1024 * 1024;
 const DRAFT_LINUX_SWAP_PATH: &str = "swap/ramshared-fallback.swap";
 const DRAFT_LINUX_ORIGIN_PATH: &str = "origin/ramshared-origin.img";
 
@@ -1551,6 +1552,30 @@ fn render_plan_text(plan: &ResourcePlan) -> String {
     if let Some(digest) = &plan.profile_sha256 {
         let _ = writeln!(output, "Profile SHA-256: {digest}");
     }
+    if let Some(caps) = &plan.user_caps {
+        let _ = writeln!(output, "Tier ceilings (profile only; not reservations):");
+        let _ = writeln!(
+            output,
+            "  ZRAM ceiling: {}",
+            format_cap_mib(caps.zram_bytes)
+        );
+        let _ = writeln!(
+            output,
+            "  SSD origin tier ceiling: {}",
+            format_cap_mib(caps.origin_bytes)
+        );
+        if caps.vram_bytes.is_empty() {
+            let _ = writeln!(output, "  VRAM ceilings: not configured");
+        } else {
+            for (adapter_id, bytes) in &caps.vram_bytes {
+                let _ = writeln!(
+                    output,
+                    "  VRAM ceiling for {adapter_id}: {}",
+                    format_cap_mib(Some(*bytes))
+                );
+            }
+        }
+    }
     for target in &plan.targets {
         let _ = writeln!(
             output,
@@ -1589,6 +1614,19 @@ fn format_gib(bytes: Option<u64>) -> String {
     bytes.map_or_else(
         || "unavailable".into(),
         |bytes| format!("{:.2} GiB", bytes as f64 / (1024_f64 * 1024_f64 * 1024_f64)),
+    )
+}
+
+fn format_cap_mib(bytes: Option<u64>) -> String {
+    bytes.map_or_else(
+        || "not set".into(),
+        |bytes| {
+            if bytes % BYTES_PER_MIB == 0 {
+                format!("{} MiB", bytes / BYTES_PER_MIB)
+            } else {
+                format!("{bytes} bytes")
+            }
+        },
     )
 }
 
@@ -2050,8 +2088,17 @@ fn parse_draft_size_mib(value: &str) -> Result<u64, InventoryError> {
     if mib == 0 {
         return Err(InventoryError("size must be greater than zero".into()));
     }
-    mib.checked_mul(1024 * 1024)
+    mib.checked_mul(BYTES_PER_MIB)
         .ok_or_else(|| InventoryError("size exceeds the supported byte range".into()))
+}
+
+fn parse_optional_draft_cap_mib(value: &str) -> Result<Option<u64>, InventoryError> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_draft_size_mib(value)
+        .map(Some)
+        .map_err(|error| InventoryError(format!("invalid tier ceiling: {error}")))
 }
 
 fn read_draft_line(
@@ -2318,6 +2365,31 @@ fn collect_draft_profile(
     if profile.targets.is_empty() {
         return Err(InventoryError("no draft targets were selected".into()));
     }
+    let zram_text = read_draft_line(
+        input,
+        output,
+        "ZRAM tier ceiling (MiB; blank leaves it unset): ",
+    )?;
+    profile.caps.zram_bytes = parse_optional_draft_cap_mib(&zram_text)?;
+
+    let origin_text = read_draft_line(
+        input,
+        output,
+        "SSD origin tier ceiling (MiB; blank leaves it unset): ",
+    )?;
+    profile.caps.origin_bytes = parse_optional_draft_cap_mib(&origin_text)?;
+
+    writeln!(
+        output,
+        "VRAM ceiling unavailable: no validated adapter budget was sampled; this wizard will not accept a manual adapter ID."
+    )
+    .map_err(|error| InventoryError(format!("cannot explain VRAM cap availability: {error}")))?;
+    writeln!(
+        output,
+        "Tier ceilings are profile policy only; no RAM, GPU, swap, origin, or disk capacity is reserved."
+    )
+    .map_err(|error| InventoryError(format!("cannot explain tier ceiling behavior: {error}")))?;
+
     profile
         .validate_for(profile_platform(snapshot.platform))
         .map_err(|error| InventoryError(format!("draft profile is invalid: {error}")))?;
@@ -3223,6 +3295,28 @@ allocated_bytes = {}
                 .is_err()
         );
         assert!(!invalid_cap_path.exists());
+
+        for (index, invalid_cap) in ["0", "-1", "not-a-size"].iter().enumerate() {
+            let invalid_path = directory.join(format!("invalid-cap-{index}.toml"));
+            let input_text = format!("swap\n1\n1024\ndone\n{invalid_cap}\n\nSAVE\n");
+            let mut input = io::Cursor::new(input_text);
+            let mut output = Vec::new();
+            assert!(
+                run_draft_wizard_with_io(&snapshot, &invalid_path, &mut input, &mut output)
+                    .is_err()
+            );
+            assert!(!invalid_path.exists());
+        }
+
+        let unset_caps_path = directory.join("unset-caps.toml");
+        let mut input = io::Cursor::new("swap\n1\n1024\ndone\n\n\nSAVE\n");
+        let mut output = Vec::new();
+        run_draft_wizard_with_io(&snapshot, &unset_caps_path, &mut input, &mut output)
+            .expect("blank tier ceilings remain unset");
+        let profile_text = fs::read_to_string(&unset_caps_path).expect("unset draft reads");
+        let profile = ResourceProfile::parse(&profile_text).expect("unset profile parses");
+        assert_eq!(profile.caps.zram_bytes, None);
+        assert_eq!(profile.caps.origin_bytes, None);
 
         fs::remove_dir_all(directory).expect("wizard fixtures removed");
     }

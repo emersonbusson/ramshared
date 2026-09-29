@@ -38,6 +38,22 @@ fallback/origin storage and persists only a new mode-`0600` user draft;
 system-profile apply, GPU selection, benchmarking, privileged creation, and
 native Linux live qualification remain open.
 
+## Implementation recheck — 2026-09-29
+
+The next direct UI review found that the profile model already represented
+variable ZRAM, per-adapter VRAM, and origin ceilings, but the draft wizard
+exposed only storage sizes. DT-24 now permits optional variable ZRAM and
+SSD-origin ceilings in an unprivileged draft, prints the exact values in the
+read-only plan, rejects zero/malformed/overflowing input before a write, and
+keeps VRAM selection unavailable until a fresh budget is bound to a stable
+adapter identity. RED/GREEN test
+`config_draft_wizard_saves_tier_caps_as_unapplied_ceilings` failed on the old
+flow and passed after the change; it also checks blank values and that invalid
+values create no file. This is a fixture test, not a live TTY run or runtime
+settings change. No GPU context or allocation is opened. Provider apply/rollback,
+GPU selection, disk comparison, and native/WSL live qualification remain open;
+the overall implementation stays partial.
+
 ## Open questions
 
 - No product-contract question blocks implementation. Native Linux and WSL2 are separate providers behind one CLI; WSL host memory remains read-only, and native Linux is not routed through Windows disk or swap policy.
