@@ -1333,6 +1333,13 @@ mod tests {
             x,
             Outbound::ZeroSlice { slice: 0, base: 0, len } if *len == 64 * 1024 * 1024
         )));
+        // A failed zero keeps the slice draining and schedules another exact zero attempt.
+        let failed_zero = c.handle(CoreEvent::ZeroDone(0, false), Instant::now());
+        assert!(failed_zero.iter().any(|x| matches!(
+            x,
+            Outbound::ZeroSlice { slice: 0, base: 0, len } if *len == 64 * 1024 * 1024
+        )));
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Draining);
         // ZeroDone → release → Free
         c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
         assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
@@ -1648,6 +1655,7 @@ mod tests {
         assert_eq!(dev_to_slice("/dev/nbd0"), Some(0));
         assert_eq!(dev_to_slice("/nbd7"), Some(7));
         assert_eq!(dev_to_slice("nbd9"), Some(9));
+        assert_eq!(dev_to_slice("tmp/nbd5"), None);
         assert_eq!(dev_to_slice("/dev/sda"), None);
         assert_eq!(dev_to_slice("/dev/sda5"), None);
         assert_eq!(dev_to_slice("/tmp/nbd5"), None);

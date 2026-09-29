@@ -604,4 +604,32 @@ mod tests {
         assert!(client.perform_handshake().is_err());
         assert_eq!(client.read(0, &mut [0u8; 16]), CacheRead::Miss);
     }
+
+    #[test]
+    fn oversized_heartbeat_telemetry_fails_closed() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            let mut request = [0u8; FRAME_HEADER_LEN];
+            worker_sock.read_exact(&mut request).unwrap();
+            let request = FrameHeader::decode(&request);
+            let response = FrameHeader {
+                msg_type: MSG_HEARTBEAT_RESP,
+                status: STATUS_OK,
+                correlation_id: request.correlation_id,
+                offset: 1024 * 1024,
+                payload_len: MAX_GPU_BUDGET_PAYLOAD_BYTES + 1,
+                aux: 64,
+            };
+            worker_sock.write_all(&response.encode()).unwrap();
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+
+        assert_eq!(
+            client.refresh_cached_bytes(),
+            Err("GPU cache worker heartbeat telemetry exceeded its limit")
+        );
+        assert_eq!(client.state(), CacheState::Unavailable);
+        assert_eq!(client.cached_bytes(), 0);
+        worker.join().unwrap();
+    }
 }
