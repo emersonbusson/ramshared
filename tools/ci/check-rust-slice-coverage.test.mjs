@@ -115,7 +115,7 @@ test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () =
               regions: [[1, 1, 1, 35, 1, 0, 0, 0]],
             },
             {
-              name: "fixture::tests::helper",
+              name: "_RNvNtCsave46upGGgk_7fixture5testss_9unit_test",
               filenames: [file],
               regions: [[7, 5, 7, 41, 0, 0, 0, 0]],
             },
