@@ -39,6 +39,7 @@ The source of truth for architecture and coding rules is:
 
 - `README.md` and `README.pt-BR.md` have a fixed scope ceiling. When a new benchmark qualification is added, superseded historical benchmarks must be pruned from the README and archived in `docs/benchmarks/history/`.
 - The public READMEs must never mention internal agent/bot names ("Jules", "Codex", "Aider") or intermediate bot PR batch censuses. All audit census records belong exclusively in `docs/reliability/`.
+- Tracked files and local session memory must not name external host-monitor tooling or preserve its operator-only telemetry and status output. The public-hygiene gate rejects the protected external label from candidate files and checks local session memory when present.
 - One-off dispatch scripts and ephemeral utilities must NEVER be committed to the production tree (enforced by CI via `.ci-ephemeral-blocklist` and `tools/ci/check-ephemeral-blocklist.mjs`). Use local scratch directories instead.
 
 ## Commits and patches

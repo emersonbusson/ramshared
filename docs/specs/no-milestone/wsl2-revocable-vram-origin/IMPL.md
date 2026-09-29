@@ -128,8 +128,8 @@ Workspace all-targets tests, rustfmt, and Clippy with `-D warnings` passed after
 clean process preflights. Canonical current-worktree line coverage passed:
 `isolated_origin.rs` 629/644 (97.7%) and `wsl2d/main.rs` 5860/7185 (81.6%).
 The wsl2d all-targets gate discovered but did not execute 19 explicitly ignored
-root/device/GPU/live-platform tests. No Guard service was started or installed,
-and no live device, swap, GPU, storage, WSL, or VM action occurred.
+root/device/GPU/live-platform tests. No host monitoring service was started or
+installed, and no live device, swap, GPU, storage, WSL, or VM action occurred.
 
 ## Legacy-preallocation source gate
 

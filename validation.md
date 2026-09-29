@@ -5031,11 +5031,11 @@ benchmark evidence, and SPEC evidence passed. The aggregate docs check remains
 the out-of-scope capability-observations catalog is also out of sync. Global
 `git diff --check` remains nonzero only for trailing whitespace in the
 out-of-scope superseded cascade PRD/IMPL.
-**Refusals:** The queued command
-`guard exec -- cargo test -p ramshared-block` produced no test result and its
-exact queued process was terminated by the root after a confirmed reentrant
-Guard-to-cargo-shim self-deadlock. It was not retried. No
-further Cargo, Guard, Rust test/build/check, Clippy, or rustfmt command ran.
+**Refusals:** The queued `cargo test -p ramshared-block` request produced no
+test result because the local command shim re-entered itself. The exact queued
+process was terminated after process inspection confirmed the deadlock. It was
+not retried. No
+further Rust test/build/check, Clippy, or rustfmt command ran.
 Focused Rust tests, `cargo fmt --all -- --check`, and affected-package
 all-target Clippy with `-D warnings` remain pending. No service, `/opt`, WSL,
 Windows, device, swap, GPU, pressure, activation, commit, or publication action
@@ -5149,11 +5149,11 @@ Windows PowerShell environment does not provide `Get-FileHash`; this is not a
 PASS. The aggregate docs check is `NO-GO` because the out-of-scope localization
 manifest contains stale README hashes; the remaining independently invoked
 docs-check components pass.
-**Refusals:** The root confirmed that PID `558934` was exactly the queued
-`<HOME>/.local/bin/guard exec -- cargo test -p ramshared-block` command and
-terminated only that PID with `TERM` after confirming the reentrant
-Guard-to-cargo-shim self-deadlock. It produced no Rust test result and was not
-retried. No later Cargo, Guard execution, rustc, rustfmt, Clippy, or Rust
+**Refusals:** Process inspection confirmed that PID `558934` was the local
+command shim handling the queued `cargo test -p ramshared-block` request. Only
+that PID was terminated with `TERM` after the reentrant shim deadlock was
+confirmed. It produced no Rust test result and was not
+retried. No later Cargo test/build, rustc, rustfmt, Clippy, or Rust
 test/build/check command ran. Focused affected-crate Rust tests,
 `cargo fmt --all -- --check`, and affected-package all-target Clippy with
 `-D warnings` remain pending. No service, `/opt`, WSL, Windows host, device,

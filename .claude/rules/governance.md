@@ -46,6 +46,9 @@ The root `README.md` and its localized counterpart `README.pt-BR.md` are public-
 3. **Ephemeral Tooling & Maintainer Scripts**:
    - One-off dispatch scripts, temporary helpers, and maintenance utilities must NEVER be committed to the production tree. They belong exclusively in local scratch spaces (`scratch/` or agent data directories).
    - Enforced by CI via `.ci-ephemeral-blocklist` and `tools/ci/check-ephemeral-blocklist.mjs`.
+4. **External Host Telemetry**:
+   - Tracked files and local session memory must not name external host-monitor tooling or retain its operator-only telemetry and status output.
+   - The public-hygiene gate rejects the protected external label from candidate files and checks local session memory when present.
 
 ## Commit visibility rule
 
