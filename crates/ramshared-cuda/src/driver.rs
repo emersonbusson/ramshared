@@ -618,6 +618,25 @@ mod tests {
         unsafe { *device = ordinal };
         CUDA_SUCCESS
     }
+    unsafe extern "C" fn success_device_uuid(uuid: *mut [i8; 16], _: CuDevice) -> CuResult {
+        unsafe { *uuid = [0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_device_luid(
+        luid: *mut c_char,
+        node_mask: *mut u32,
+        _: CuDevice,
+    ) -> CuResult {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                [0xAA_u8, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44].as_ptr(),
+                luid.cast::<u8>(),
+                8,
+            );
+            *node_mask = 1;
+        }
+        CUDA_SUCCESS
+    }
     unsafe extern "C" fn success_device_name(name: *mut c_char, _: i32, _: CuDevice) -> CuResult {
         unsafe { core::ptr::copy_nonoverlapping(c"mock-gpu".as_ptr(), name, 9) };
         CUDA_SUCCESS
@@ -892,5 +911,62 @@ mod tests {
             check(&no_symbol.syms, 7, "mock"),
             Err(CudaError::Driver { .. })
         ));
+    }
+
+    #[test]
+    fn device_lookup_preserves_ordinal_and_driver_adapter_identity() {
+        let mut cuda = mock_cuda(Some(success_host_pointer));
+        cuda.syms.device_get_uuid = Some(success_device_uuid);
+        cuda.syms.device_get_luid = Some(success_device_luid);
+
+        let device = cuda.device(3).unwrap();
+        assert_eq!(device.ordinal(), 3);
+        let context = cuda.create_context(&device).unwrap();
+        let identity = context.adapter_identity().unwrap();
+        assert_eq!(identity.backend, "cuda");
+        assert_eq!(identity.key, "12000000000000000000000000000000");
+        assert_eq!(identity.luid.as_deref(), Some("44332211:ddccbbaa"));
+    }
+
+    #[test]
+    fn cuda_error_display_keeps_each_error_context() {
+        let cases = [
+            (
+                CudaError::Load("missing library".into()),
+                "failed to load CUDA library: missing library",
+            ),
+            (
+                CudaError::Symbol("cuInit".into()),
+                "required CUDA symbol missing: cuInit",
+            ),
+            (
+                CudaError::Driver {
+                    op: "cuInit",
+                    code: 7,
+                    msg: "mock error".into(),
+                },
+                "cuInit failed (CUresult=7): mock error",
+            ),
+            (
+                CudaError::OutOfRange {
+                    off: 8,
+                    len: 4,
+                    size: 10,
+                },
+                "out of bounds access: off=8 len=4 > size=10",
+            ),
+            (
+                CudaError::InvalidValue("bad pointer".into()),
+                "invalid argument: bad pointer",
+            ),
+            (
+                CudaError::Unsupported("host pinning".into()),
+                "unsupported driver feature: host pinning",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
     }
 }

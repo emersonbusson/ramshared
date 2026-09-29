@@ -286,6 +286,10 @@
 | `crates/ramshared-ipc/src/vsock.rs` | `tests::hyperv_linux_service_guid_requires_the_port_template` | unit | #13 | ≥ 80% |
 | `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_stream_read_timeout_is_bounded` | unit | #16 | ≥ 80% |
 | `crates/ramshared-ipc/src/vsock.rs` | `tests::vsock_disconnect_detected_within_interval` | unit | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::connect_wait_retries_interrupted_poll_and_times_out_when_not_writable` | unit/timeout | #15 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::unix_vsock_stream_forwards_io_timeouts_and_shutdown` | local stream lifecycle | #15/#16 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::socket_connect_error_rejects_an_invalid_descriptor` | unit/refusal | #13 | ≥ 80% |
+| `crates/ramshared-ipc/src/vsock.rs` | `tests::listener_exposes_its_endpoint_and_refuses_accept_off_windows` | platform refusal | #13 | ≥ 80% |
 | `crates/ramshared-wsl2d/src/host_gate.rs` | `tests::validate_origin_manifest_matches_script` | unit | #17 | ≥ 80% |
 | `crates/ramshared-wsl2d/src/host_gate.rs` | `tests::check_guardian_health_rejects_stale` | unit | #13 | ≥ 80% |
 | `crates/ramshared-wsl2d/src/host_gate.rs` | `tests::evaluate_safe_mode_refuses_foreign_boot_id` | unit | #13 | ≥ 80% |

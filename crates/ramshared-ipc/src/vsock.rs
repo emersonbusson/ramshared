@@ -654,6 +654,31 @@ mod tests {
     }
 
     #[test]
+    fn connect_wait_retries_interrupted_poll_and_times_out_when_not_writable() {
+        let attempts = std::cell::Cell::new(0);
+        let result = wait_for_connect_until(
+            Duration::from_secs(1),
+            |_| {
+                if attempts.replace(attempts.get() + 1) == 0 {
+                    Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+                } else {
+                    Ok(true)
+                }
+            },
+            || Ok(()),
+        );
+        assert!(result.is_ok());
+        assert_eq!(attempts.get(), 2);
+
+        let result = wait_for_connect_until(
+            Duration::from_secs(1),
+            |_| Ok(false),
+            || panic!("socket error must not be queried before the socket is writable"),
+        );
+        assert!(matches!(result, Err(VsockError::ConnectTimeout)));
+    }
+
+    #[test]
     fn connect_timeout_is_capped_at_spec_limit() {
         assert_eq!(
             bounded_connect_timeout(Duration::MAX),
@@ -863,5 +888,60 @@ mod tests {
         assert_eq!(ep.cid, 3);
         assert_eq!(ep.port, 5000);
         assert_eq!(ep.guid, [1; 16]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unix_vsock_stream_forwards_io_timeouts_and_shutdown() {
+        use std::io::{Read, Write};
+        use std::os::unix::net::UnixStream;
+
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let mut stream = UnixVsockStream(client);
+        stream
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        peer.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+
+        stream.write_all(b"request").unwrap();
+        stream.flush().unwrap();
+        let mut request = [0; 7];
+        peer.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"request");
+
+        peer.write_all(b"reply").unwrap();
+        let mut reply = [0; 5];
+        stream.read_exact(&mut reply).unwrap();
+        assert_eq!(&reply, b"reply");
+
+        stream.shutdown_both().unwrap();
+        let mut trailing = [0; 1];
+        assert_eq!(peer.read(&mut trailing).unwrap(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn socket_connect_error_rejects_an_invalid_descriptor() {
+        assert!(socket_connect_error(-1).is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn listener_exposes_its_endpoint_and_refuses_accept_off_windows() {
+        let endpoint = VsockEndpoint {
+            cid: 0,
+            port: 5000,
+            guid: [7; 16],
+        };
+        let listener = VsockListener { endpoint };
+        assert_eq!(listener.endpoint(), endpoint);
+        assert!(matches!(
+            listener.accept(Duration::ZERO),
+            Err(VsockError::Unsupported)
+        ));
     }
 }

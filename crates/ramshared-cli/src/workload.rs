@@ -3635,4 +3635,63 @@ mod tests {
             fs::remove_dir_all(root).unwrap();
         }
     }
+
+    #[test]
+    fn workload_classes_keep_distinct_default_memory_limits() {
+        for (name, class, expected_mib) in [
+            ("interactive", WorkloadClass::Interactive, 2 * 1024),
+            ("build", WorkloadClass::Build, 6 * 1024),
+            ("browser-test", WorkloadClass::BrowserTest, 4 * 1024),
+            ("batch", WorkloadClass::Batch, 8 * 1024),
+        ] {
+            assert_eq!(WorkloadClass::parse(name), Some(class));
+            assert_eq!(class.as_str(), name);
+            assert_eq!(class.default_memory_mib(), expected_mib);
+
+            let request =
+                parse_run_args(&["--class".into(), name.into(), "--".into(), "true".into()])
+                    .unwrap();
+            assert_eq!(request.class, class);
+            assert_eq!(request.memory_max_bytes, expected_mib * MIB_BYTES);
+        }
+    }
+
+    #[test]
+    fn exact_scope_status_parser_fails_closed_and_preserves_terminal_result() {
+        let unit = "ramshared-interactive-fixture.scope";
+        let valid = format!(
+            "Id={unit}\nInvocationID={FIXTURE_INVOCATION_ID}\nLoadState=loaded\nActiveState=inactive\nExecMainCode=exited\nExecMainStatus=17\n"
+        );
+        let status = parse_scope_status(unit, &valid).unwrap();
+        assert_eq!(status.id, unit);
+        assert_eq!(status.invocation_id, FIXTURE_INVOCATION_ID);
+        assert_eq!(status.terminal_exit_status(), Ok(Some(Some(17))));
+
+        for malformed in [
+            "not-a-property\n",
+            "Unexpected=value\n",
+            "Id=first\nId=second\n",
+            "Id=ramshared-other.scope\n",
+            "Id=ramshared-interactive-fixture.scope\nInvocationID=invalid\n",
+            "Id=ramshared-interactive-fixture.scope\nInvocationID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nLoadState=loaded\nActiveState=active\nExecMainCode=exited\nExecMainStatus=bad\n",
+        ] {
+            assert!(
+                parse_scope_status(unit, malformed).is_err(),
+                "{malformed:?}"
+            );
+        }
+
+        let active = ScopeStatus::active(unit);
+        assert_eq!(active.terminal_exit_status(), Ok(None));
+        let mut unloaded = ScopeStatus::active(unit);
+        unloaded.load_state = "not-found".into();
+        assert!(unloaded.terminal_exit_status().is_err());
+        let mut killed = ScopeStatus::active(unit);
+        killed.active_state = "failed".into();
+        killed.exec_main_code = "killed".into();
+        assert_eq!(killed.terminal_exit_status(), Ok(Some(None)));
+        let mut unexpected = ScopeStatus::active(unit);
+        unexpected.active_state = "stopping".into();
+        assert!(unexpected.terminal_exit_status().is_err());
+    }
 }

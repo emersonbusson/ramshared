@@ -106,6 +106,7 @@
 | `crates/ramshared-cli/src/stress.rs` | `tests::tier3_only_requires_storage_swap_but_not_gpu_cache` | unit | #16 | $\ge 80\%$ |
 | `crates/ramshared-cli/src/stress.rs` | `tests::tier3_only_target_ignores_gpu_and_higher_tier_fill` | unit | #9/#16 | $\ge 80\%$ |
 | `crates/ramshared-cli/src/stress.rs` | `tests::full_profile_uses_active_cache_target_not_fixed_size` | unit | #13 | $\ge 80\%$ |
+| `crates/ramshared-cli/src/stress.rs` | `stress::tests::run_stops_at_an_unreachable_memory_floor_before_allocating` | read-only safety refusal | #13/#16 | $\ge 80\%$ |
 
 ## 10. Validation Checklist
 

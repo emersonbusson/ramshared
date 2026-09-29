@@ -2235,6 +2235,43 @@ mod tests {
     }
 
     #[test]
+    fn run_stops_at_an_unreachable_memory_floor_before_allocating() {
+        for json in [true, false] {
+            let log_path = std::env::temp_dir().join(format!(
+                "ramshared-stress-floor-{}-{}-{json}.log",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+            let options = StressOptions {
+                start_pct: 1,
+                target_pct: 1,
+                hold_sec: 0,
+                min_ram_mb: u64::MAX,
+                telemetry_log: log_path.display().to_string(),
+                json,
+                min_order_7_chunks: 0,
+                ..StressOptions::default()
+            };
+
+            let result = run(&options);
+            let telemetry = fs::read_to_string(&log_path).unwrap_or_default();
+            let _ = fs::remove_file(&log_path);
+
+            assert!(
+                result.is_ok(),
+                "read-only safety-floor run failed: {result:?}"
+            );
+            assert!(
+                telemetry.contains("RAM"),
+                "the safety-floor branch should record its read-only sample"
+            );
+        }
+    }
+
+    #[test]
     fn cascade_stress_refuses_missing_physical_cache_before_allocation() {
         assert!(require_physical_cache_before_cascade(true, None, None).is_err());
         assert!(require_physical_cache_before_cascade(true, None, None).is_err());

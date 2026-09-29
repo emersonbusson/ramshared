@@ -230,6 +230,7 @@ No production file is deleted.
 | `workload.rs` | `pid_reuse_cannot_own_or_release_reservation` | unit | #13/#17 | ≥80% |
 | `workload.rs` | `managed_scope_uses_aggregate_ceiling` | unit | #9 | ≥80% |
 | `workload.rs` | `scope_invocation_id_is_persisted` | unit | #13 | ≥80% |
+| `workload.rs` | `exact_scope_status_parser_fails_closed_and_preserves_terminal_result` | parser/state refusal | #13/#16 | ≥80% |
 | `workload.rs` | `scope_ack_timeout_reaps_group_and_owned_descendant` | process/timeout | #15/#16 | ≥80% |
 | `supervisor.rs` | `supervisor_transitions_and_hysteresis_are_exact` | unit | #16 | ≥80% |
 | `supervisor.rs` | `supervisor_delay_enters_emergency` | unit | #16 | ≥80% |
@@ -242,6 +243,8 @@ No production file is deleted.
 | `supervisor.rs` | `freeze_applied_write_failure_recovers_exact_pending_identity_after_restart` | unit/restart | #13/#16/#17 | ≥80% |
 | `supervisor.rs` | `reconstructed_supervisor_kills_only_durable_termed_identity_after_grace` | unit/restart | #13/#16/#17 | ≥80% |
 | `supervisor.rs` | `supervisor_action_errors_are_bounded_single_line_and_control_free` | unit/adversarial | #13/#16 | ≥80% |
+| `supervisor.rs` | `action_error_deserialization_accepts_only_sanitized_bounded_values` | serialization/refusal | #13/#16 | ≥80% |
+| `supervisor.rs` | `successful_action_results_commit_only_their_owned_state` | unit/state | #13/#17 | ≥80% |
 | `supervisor.rs` | `bounded_systemctl_adapter_reaps_its_owned_timeout_fixture` | process/timeout | #15/#16 | ≥80% |
 | systemd lifecycle | `backend_lifecycle_has_no_pre_swapoff_kill_path` | static | #13/#16 | N/A |
 | `workload.rs` | `recovery_releases_gates_only_with_a_current_resume_lease` | unit | #16/#17 | ≥80% |

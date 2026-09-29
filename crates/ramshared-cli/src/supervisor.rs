@@ -2803,4 +2803,75 @@ mod tests {
             assert!(error.contains("timed out"), "{error}");
         });
     }
+
+    #[test]
+    fn successful_action_results_commit_only_their_owned_state() {
+        let mut supervisor = Supervisor::default();
+        let action_results = [
+            SupervisorActionResult {
+                action: SupervisorAction::FreezeDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::ThawDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::TerminateDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::KillDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::CloseAdmission,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::ReduceVramCache,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::RequestReclaim,
+                status: SupervisorActionStatus::Failed,
+                error: Some(SupervisorActionError::new("retry later".into())),
+            },
+        ];
+
+        supervisor.commit_action_results(&action_results, 1_234);
+
+        assert!(!supervisor.discardable_frozen);
+        assert!(!supervisor.discardable_freeze_pending);
+        assert_eq!(
+            supervisor.emergency_kill_eligible_ms,
+            Some(1_234 + EMERGENCY_TERM_GRACE_MS)
+        );
+        assert!(supervisor.emergency_kill_sent);
+    }
+
+    #[test]
+    fn action_error_deserialization_accepts_only_sanitized_bounded_values() {
+        assert_eq!(SupervisorState::Healthy.as_str(), "HEALTHY");
+        assert_eq!(SupervisorState::Guarded.as_str(), "GUARDED");
+        assert_eq!(SupervisorState::Critical.as_str(), "CRITICAL");
+        assert_eq!(SupervisorState::Emergency.as_str(), "EMERGENCY");
+
+        let sanitized = SupervisorActionError::new("first\tline".into());
+        assert_eq!(&*sanitized, "first line");
+        let encoded = serde_json::to_string(&sanitized).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SupervisorActionError>(&encoded).unwrap(),
+            sanitized
+        );
+        assert!(serde_json::from_str::<SupervisorActionError>("\"raw\\nline\"").is_err());
+        let oversized = format!("\"{}\"", "x".repeat(ACTION_ERROR_MAX_BYTES + 1));
+        assert!(serde_json::from_str::<SupervisorActionError>(&oversized).is_err());
+    }
 }
