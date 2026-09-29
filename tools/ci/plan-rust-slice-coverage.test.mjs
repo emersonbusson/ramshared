@@ -857,6 +857,44 @@ test('changed_business_rust_file_requires_mapped_spec_command', () => {
   assert.equal(unmapped.errors.some((item) => item.rule === 'changed-rust-file-unmapped'), true)
 })
 
+test('changed_rust_file_in_cfg_test_path_module_is_not_a_production_coverage_slice', () => {
+  const root = fixtureRoot('```bash\nnode tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80\n```\n')
+  writeFixtureFile(
+    root,
+    'crates/fixture/src/monitor.rs',
+    '#[cfg(test)]\n#[path = "monitor_pressure_tests.rs"]\nmod pressure_classification_tests;\n',
+  )
+  writeFixtureFile(
+    root,
+    'crates/fixture/src/monitor_pressure_tests.rs',
+    '#[test]\nfn classifies_pressure() {}\n',
+  )
+
+  const selected = selectCoverageEntries(
+    coverageMap(),
+    ['crates/fixture/src/monitor_pressure_tests.rs'],
+    root,
+  )
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'NO_CHANGE')
+
+  writeFixtureFile(
+    root,
+    'crates/fixture/src/monitor.rs',
+    '#[path = "monitor_pressure_tests.rs"]\nmod pressure_classification_tests;\n',
+  )
+  const unguarded = selectCoverageEntries(
+    coverageMap(),
+    ['crates/fixture/src/monitor_pressure_tests.rs'],
+    root,
+  )
+  assert.equal(unguarded.ok, false)
+  assert.deepEqual(unguarded.errors, [{
+    rule: 'changed-rust-file-unmapped',
+    detail: 'crates/fixture/src/monitor_pressure_tests.rs',
+  }])
+})
+
 test('microsoft_native_vram_n3_state_has_exact_coverage_owner', () => {
   const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
   const entry = map.entries.find((item) => item.id === MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY.id)
