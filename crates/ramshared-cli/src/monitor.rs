@@ -234,6 +234,15 @@ fn detect_memory_scope(osrelease: &str, wsl_interop_available: bool) -> MemorySc
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatencySource {
+    #[default]
+    Unavailable,
+    Estimated,
+    Measured,
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 pub struct TierIoStats {
     pub read_bytes: u64,
@@ -249,6 +258,8 @@ pub struct TierIoStats {
     pub min_lat_us: f64,
     pub avg_lat_us: f64,
     pub max_lat_us: f64,
+    #[serde(default)]
+    pub latency_source: LatencySource,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1302,6 +1313,7 @@ fn update_tier_latencies(
     vram_count: u64,
     disk_count: u64,
 ) {
+    cp.zram_io.latency_source = LatencySource::Estimated;
     cp.zram_io.min_lat_us = 0.04;
     cp.zram_io.avg_lat_us = if zram_count > 0 {
         0.04 + (cp.zram_io.avg_mbs / 2000.0) * 0.08
@@ -1314,6 +1326,7 @@ fn update_tier_latencies(
         0.15
     };
 
+    cp.vram_io.latency_source = LatencySource::Estimated;
     cp.vram_io.min_lat_us = 0.85;
     cp.vram_io.avg_lat_us = if vram_count > 0 {
         0.85 + (cp.vram_io.avg_mbs / 1000.0) * 1.20
@@ -1326,6 +1339,7 @@ fn update_tier_latencies(
         3.20
     };
 
+    cp.disk_io.latency_source = LatencySource::Estimated;
     cp.disk_io.min_lat_us = 85.0;
     cp.disk_io.avg_lat_us = if disk_count > 0 {
         85.0 + (cp.disk_io.avg_mbs / 100.0) * 120.0
@@ -2869,7 +2883,9 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
 }
 
 fn format_tier_latency(io: &TierIoStats, suffix: &str) -> String {
-    if io.min_lat_us <= 0.0 && io.avg_lat_us <= 0.0 && io.max_lat_us <= 0.0 {
+    if io.latency_source == LatencySource::Unavailable
+        || (io.min_lat_us <= 0.0 && io.avg_lat_us <= 0.0 && io.max_lat_us <= 0.0)
+    {
         return format!("not measured ({suffix})");
     }
 
@@ -2882,8 +2898,13 @@ fn format_tier_latency(io: &TierIoStats, suffix: &str) -> String {
             format!("{value:.2}µs")
         }
     };
+    let source = match io.latency_source {
+        LatencySource::Estimated => "estimated",
+        LatencySource::Measured => "measured",
+        LatencySource::Unavailable => return format!("not measured ({suffix})"),
+    };
     format!(
-        "{}..{}..{} ({suffix})",
+        "{source}: {}..{}..{} ({suffix})",
         display(io.min_lat_us),
         display(io.avg_lat_us),
         display(io.max_lat_us),
@@ -3114,7 +3135,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " ║   ├─ Real-Time Speed:    {z_speed}\n",
                     " ║   ├─ Throughput Stats:   {z_rate}\n",
                     " ║   ├─ Lifetime Traffic:   {z_vol}\n",
-                    " ║   ├─ Hardware Latency:   {z_lat}\n",
+                    " ║   ├─ I/O Latency:         {z_lat}\n",
                     " ║   └─ Speedup Factor:     {zram_speedup}\n",
                     " ╠{sep}\n",
                     " ║   🚀 TIER 2: GPU VRAM (nbd0) ── Priority: 100 ── {vram_s}\n",
@@ -3122,7 +3143,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " ║   ├─ Real-Time Speed:    {v_speed}\n",
                     " ║   ├─ Throughput Stats:   {v_rate}\n",
                     " ║   ├─ Lifetime Traffic:   {v_vol}\n",
-                    " ║   ├─ Hardware Latency:   {v_lat}\n",
+                    " ║   ├─ I/O Latency:         {v_lat}\n",
                     " ║   └─ Speedup Factor:     {vram_speedup}\n",
                     " ╠{sep}\n",
                     " ║   💾 TIER 3: WSL2 System Disk ── Priority:  -2 ── {disk_s}\n",
@@ -3130,7 +3151,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " ║   ├─ Real-Time Speed:    {d_speed}\n",
                     " ║   ├─ Throughput Stats:   {d_rate}\n",
                     " ║   ├─ Lifetime Traffic:   {d_vol}\n",
-                    " ║   ├─ Hardware Latency:   {d_lat}\n",
+                    " ║   ├─ I/O Latency:         {d_lat}\n",
                     " ║   └─ Speedup Factor:     {disk_speedup}\n",
                     " ╚{sep}",
                 ),
@@ -3254,10 +3275,10 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     };
 
     let pf_lat = observation.control_plane.estimated_page_fault_lat_us;
-    let pf_lat_info = if pf_lat >= 10.0 {
-        format!("🐢 {:.1} µs (Disk Fallback Pressure)", pf_lat)
+    let pf_lat_info = if pf_lat > 0.0 {
+        format!("estimated {:.2} µs", pf_lat)
     } else {
-        format!("⚡ {:.2} µs (Hardware Accelerated)", pf_lat)
+        "not measured".to_string()
     };
 
     let text = format!(
@@ -3268,7 +3289,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             " Safety Guard:             🛡️  Fail-Closed (Zero Panic)\n",
             " Swap I/O Protocol:        ⚡ Synchronous Zero-Copy (.rw_page)\n",
             " Reclaim Performance:      {bench_info}\n",
-            " Page Fault Latency:       {pf_lat_info}\n",
+            " Estimated Page Fault Latency: {pf_lat_info}\n",
             " {sep}\n",
             " Real-Time Speed:          Read: {read_mbs:>5} │ Write: {write_mbs:>5} MB/s {speed_state}\n",
             " Peak Recorded Speed:      🚀 {peak_mbs:>5.1} MB/s (⬇️ {swap_read_peak:>4.0} │ ⬆️ {swap_write_peak:>4.0} MB/s)\n",
@@ -4905,6 +4926,34 @@ mod tests {
     }
 
     #[test]
+    fn tier_latency_estimates_are_identified_in_ui_data() {
+        let mut control_plane = ControlPlaneObservation::default();
+        update_tier_latencies(&mut control_plane, 0, 0, 0);
+
+        let rendered = format_tier_latency(&control_plane.disk_io, "disk");
+        assert!(
+            rendered.starts_with("estimated:"),
+            "derived latency was not identified as an estimate: {rendered}"
+        );
+
+        let serialized = serde_json::to_value(&control_plane).unwrap();
+        assert_eq!(serialized["disk_io"]["latency_source"], "estimated");
+
+        let mut legacy_json = serde_json::to_value(TierIoStats::default()).unwrap();
+        let legacy_object = legacy_json.as_object_mut().unwrap();
+        legacy_object.remove("latency_source");
+        legacy_object.insert("min_lat_us".to_string(), 85.0.into());
+        legacy_object.insert("avg_lat_us".to_string(), 180.0.into());
+        legacy_object.insert("max_lat_us".to_string(), 1200.0.into());
+        let legacy = serde_json::from_value::<TierIoStats>(legacy_json).unwrap();
+        assert_eq!(legacy.latency_source, LatencySource::Unavailable);
+        assert_eq!(
+            format_tier_latency(&legacy, "legacy disk"),
+            "not measured (legacy disk)"
+        );
+    }
+
+    #[test]
     fn parses_diskstats_and_startup_ms() {
         let stats = " 252       0 zram0 10 0 200 0 20 0 400 0 0 0 0\n  43       0 nbd0 5 0 100 0 15 0 300 0 0 0 0\n   8      32 sdc 2 0 40 0 4 0 80 0 0 0 0\n";
         let (tot_r, tot_w) = parse_swap_diskstats(stats);
@@ -4942,19 +4991,24 @@ mod tests {
             min_lat_us: 0.04,
             avg_lat_us: 0.08,
             max_lat_us: 0.15,
+            latency_source: LatencySource::Measured,
             ..TierIoStats::default()
         };
         let lat_str = format_tier_latency(&io_sample, "In-RAM LZ4");
-        assert_eq!(lat_str, "0.04µs..0.08µs..0.15µs (In-RAM LZ4)");
+        assert_eq!(lat_str, "measured: 0.04µs..0.08µs..0.15µs (In-RAM LZ4)");
 
         let io_disk = TierIoStats {
             min_lat_us: 85.0,
             avg_lat_us: 180.0,
             max_lat_us: 1200.0,
+            latency_source: LatencySource::Measured,
             ..TierIoStats::default()
         };
         let disk_lat_str = format_tier_latency(&io_disk, "Host VHDX");
-        assert_eq!(disk_lat_str, "85.00µs..180.00µs..1.2ms (Host VHDX)");
+        assert_eq!(
+            disk_lat_str,
+            "measured: 85.00µs..180.00µs..1.2ms (Host VHDX)"
+        );
         assert_eq!(
             format_tier_latency(&TierIoStats::default(), "GPU cache"),
             "not measured (GPU cache)"
