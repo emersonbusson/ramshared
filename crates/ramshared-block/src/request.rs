@@ -364,4 +364,169 @@ mod tests {
             NBD_ERANGE
         );
     }
+
+    struct FailingBackend;
+
+    impl BlockBackend for FailingBackend {
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+
+        fn block_size(&self) -> u32 {
+            4096
+        }
+
+        fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), IoError> {
+            Err(IoError("read failure".into()))
+        }
+
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), IoError> {
+            Err(IoError("write failure".into()))
+        }
+
+        fn flush(&mut self) -> Result<(), IoError> {
+            Err(IoError("flush failure".into()))
+        }
+    }
+
+    #[test]
+    fn backend_failures_return_eio_and_clear_failed_read_data() {
+        let mut backend = FailingBackend;
+
+        let read = serve(&req(Command::Read, 0, 4096), &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([read.reply[4], read.reply[5], read.reply[6], read.reply[7]]),
+            NBD_EIO
+        );
+        assert!(read.read_data.is_empty());
+
+        let write = serve(&req(Command::Write, 0, 4096), &[0xAA; 4096], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                write.reply[4],
+                write.reply[5],
+                write.reply[6],
+                write.reply[7]
+            ]),
+            NBD_EIO
+        );
+
+        let flush = serve(&req(Command::Flush, 0, 0), &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                flush.reply[4],
+                flush.reply[5],
+                flush.reply[6],
+                flush.reply[7]
+            ]),
+            NBD_EIO
+        );
+    }
+
+    #[test]
+    fn unsupported_flags_are_rejected_before_backend_access() {
+        let mut backend = MemBackend {
+            data: vec![0u8; 4096],
+            bs: 4096,
+        };
+        let mut write = req(Command::Write, 0, 4096);
+        write.flags = NBD_CMD_FLAG_FUA | (1 << 1);
+        let rejected_write = serve(&write, &[0xAA; 4096], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                rejected_write.reply[4],
+                rejected_write.reply[5],
+                rejected_write.reply[6],
+                rejected_write.reply[7]
+            ]),
+            NBD_EINVAL
+        );
+        assert_eq!(backend.data, vec![0; 4096]);
+
+        let mut read = req(Command::Read, 0, 4096);
+        read.flags = NBD_CMD_FLAG_FUA;
+        let rejected_read = serve(&read, &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                rejected_read.reply[4],
+                rejected_read.reply[5],
+                rejected_read.reply[6],
+                rejected_read.reply[7]
+            ]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn write_requires_payload_matching_declared_length() {
+        let mut backend = MemBackend {
+            data: vec![0u8; 4096],
+            bs: 4096,
+        };
+        let outcome = serve(&req(Command::Write, 0, 4096), &[0xAA; 512], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                outcome.reply[4],
+                outcome.reply[5],
+                outcome.reply[6],
+                outcome.reply[7]
+            ]),
+            NBD_EINVAL
+        );
+        assert_eq!(backend.data, vec![0; 4096]);
+    }
+
+    #[test]
+    fn trim_validates_range_and_disc_disconnects() {
+        let mut backend = MemBackend {
+            data: vec![0u8; 4096],
+            bs: 4096,
+        };
+        let valid_trim = serve(&req(Command::Trim, 0, 4096), &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                valid_trim.reply[4],
+                valid_trim.reply[5],
+                valid_trim.reply[6],
+                valid_trim.reply[7]
+            ]),
+            NBD_OK
+        );
+        assert!(!valid_trim.disconnect);
+
+        let invalid_trim = serve(&req(Command::Trim, 4096, 4096), &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                invalid_trim.reply[4],
+                invalid_trim.reply[5],
+                invalid_trim.reply[6],
+                invalid_trim.reply[7]
+            ]),
+            NBD_ERANGE
+        );
+
+        let disconnect = serve(&req(Command::Disc, 0, 0), &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                disconnect.reply[4],
+                disconnect.reply[5],
+                disconnect.reply[6],
+                disconnect.reply[7]
+            ]),
+            NBD_OK
+        );
+        assert!(disconnect.disconnect);
+
+        let unknown = serve(&req(Command::Unknown(0xffff), 0, 0), &[], &mut backend);
+        assert_eq!(
+            u32::from_be_bytes([
+                unknown.reply[4],
+                unknown.reply[5],
+                unknown.reply[6],
+                unknown.reply[7]
+            ]),
+            NBD_EINVAL
+        );
+        assert!(!unknown.disconnect);
+    }
 }
