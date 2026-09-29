@@ -61,7 +61,7 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and isol
 | Priority | Milestone Target | Focus |
 | :--- | :--- | :--- |
 | Upstream Linux & WSL2 | LKML driver review & WSL merge (#41054) | Complete lifecycle qualification without presenting `ublk`/`io_uring` as the stock WSL2 default |
-| Multi-vendor Acceleration | Vulkan Memory Allocator (VMA) multi-vendor tier | AMD Radeon & Intel Arc hardware qualification |
+| Multi-vendor Acceleration | Mature the Vulkan VRAM provider and reserve policy | AMD Radeon and Intel Arc physical cache qualification |
 
 ---
 

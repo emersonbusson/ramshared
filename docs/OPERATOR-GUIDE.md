@@ -9,7 +9,7 @@ This guide is the authoritative operations manual for installing, running, monit
 | Component | Minimum Requirement | Recommended |
 | :--- | :--- | :--- |
 | **Operating System** | Linux Kernel ≥ 5.15 or WSL2 (Windows 10 Build 19044+ / Windows 11) | WSL2 on Windows 11 23H2+ or native Linux 6.x |
-| **GPU / Acceleration** | Any NVIDIA GPU (Pascal+) or AMD/Intel with Vulkan 1.2+ support | NVIDIA RTX 30/40/50 series with CUDA 12+ |
+| **GPU / Acceleration** | A working CUDA provider or a Vulkan 1.1+ adapter with a transfer queue, stable identity, and fresh `VK_EXT_memory_budget` data | Use only an adapter whose exact driver and workload have passed the documented physical qualification |
 | **Host System RAM** | 8 GiB physical DDR4/DDR5 | 16 GiB+ DDR5 |
 | **Host Storage** | NVMe PCIe Gen3 SSD with at least 16 GiB free space | NVMe PCIe Gen4/Gen5 SSD |
 | **Kernel Subsystems** | Standard WSL2: `nbd`; native Linux or compatible WSL2 custom kernel: `ublk`/`io_uring` | Use the transport qualified for the exact kernel surface |
@@ -18,6 +18,10 @@ This guide is the authoritative operations manual for installing, running, monit
 > In **GPU-less / headless mode**, the GPU cache target is zero. Whether the
 > remaining ZRAM and SSD-origin topology can start depends on the preflight and
 > configured transport; no uninterrupted-service guarantee is implied.
+>
+> Having VRAM alone does not make an adapter compatible. CUDA/Vulkan discovery
+> is implemented, but physical multi-vendor cache qualification is still open;
+> an unqualified or unmeasurable adapter must remain origin-only.
 
 Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is
 qualified on native Linux or WSL2 with a compatible custom kernel.
@@ -104,7 +108,10 @@ $ ramshared demote
 - Broker/NBD capacity reserve: `max(1536 MiB, 20% of physical VRAM)`.
 - Broker/NBD runtime free buffer: a separate `768 MiB` held back from reported
   free VRAM before admitting new allocations.
-- Origin-cache capacity reserve: `max(2 GiB, 20%)`.
+- Origin-cache reserve: `max(configured floor, 20% of measured capacity)`;
+  production currently defaults the configured floor to `512 MiB` (clamped to
+  `128–4096 MiB`) and keeps a separate `640 MiB` runtime buffer. The active
+  qualification gate tracks the mismatch with the `1536 MiB` PRD/SPEC default.
 - Windows StorPort reserve: `max(configured reserve, 512 MiB, 10%)`.
 
 The capacity reserve limits the cache target. The runtime buffer protects a

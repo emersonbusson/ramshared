@@ -1,6 +1,7 @@
-//! Implementation of `ramshared_vram` traits for CUDA types (RF-G1): CUDA is the first VRAM
-//! backend behind `VramProvider`/`VramMemory`. A future `ramshared-vulkan` would do the same,
-//! without modifying the daemon. Orphan rule OK: the types (`Context`/`DeviceMem`) are local to this crate.
+//! Implementation of `ramshared_vram` traits for CUDA types (RF-G1). Vulkan
+//! has a separate provider in `ramshared-vulkan`; both providers implement the
+//! same cache-facing contract. Orphan rule OK: the types (`Context`/`DeviceMem`)
+//! are local to this crate.
 
 use ramshared_vram::{GpuBudgetSnapshot, GpuBudgetSource, VramError, VramMemory, VramProvider};
 use std::time::Instant;

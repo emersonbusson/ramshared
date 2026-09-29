@@ -139,7 +139,8 @@ Como os níveis trabalham juntos:
 A reserva varia deliberadamente por superfície. O broker/NBD mantém
 `max(1536 MiB, 20% da VRAM física)` como reserva de capacidade e preserva,
 separadamente, `768 MiB` da VRAM livre reportada como buffer de runtime. O
-cache de origem usa `max(2 GiB, 20%)`; o StorPort usa
+cache de origem usa `max(piso de reserva configurado, 20% da capacidade medida)`
+e mantém um buffer de runtime separado de `640 MiB`; o StorPort usa
 `max(reserva configurada, 512 MiB, 10%)`. Os valores não são intercambiáveis:
 a reserva de capacidade limita o alvo do cache, enquanto o buffer de runtime
 protege novas alocações contra mudanças no uso externo da GPU.
@@ -246,7 +247,7 @@ Para pacotes brutos de amostras, traces de execução em hardware, histogramas d
 | `ramsharedd` | Serviço de bloco acelerado por GPU (motor multi-tier em cascata com ublk/NBD) |
 | `ramshared-tier` | Política de camadas, histerese e segurança de despromoção |
 | `ramshared-cuda` | Wrapper seguro e FFI direto em memória para o driver NVIDIA CUDA |
-| `ramshared-vulkan` | Motor de memória GPU multi-vendor para AMD Radeon e Intel Arc via VMA |
+| `ramshared-vulkan` | Provedor de VRAM via Vulkan para adaptadores compatíveis; qualificação física AMD/Intel ainda aberta |
 | `ramshared-dxg` | Camada de abstração e paravirtualização D3D12/dxgkrnl para Windows e WSL2 |
 | `ramshared-vram` | Alocação DMA travada em página e gerenciamento de memória |
 | `ramshared-wsl2d` | Coordenação de pressão e telemetria do host WSL2 |

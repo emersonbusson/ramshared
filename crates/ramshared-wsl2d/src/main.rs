@@ -109,9 +109,10 @@ enum Transport {
     Ublk,
 }
 
-/// VRAM/tier backend: `Vram` (CUDA, with residency §9/§9.4), `Vulkan` (any GPU via
-/// `ramshared-vulkan`, RF-G2) or `Ram` (without GPU). `Ram` exists to validate the **lifecycle/teardown**
-/// of the ublk daemon in **QEMU** (where there is no GPU); the teardown bug that hung
+/// VRAM/tier backend: `Vram` (CUDA, with residency §9/§9.4), `Vulkan`
+/// (compatible Vulkan adapters via `ramshared-vulkan`, RF-G2), or `Ram`
+/// (without GPU). `Ram` exists to validate the **lifecycle/teardown** of the
+/// ublk daemon in **QEMU** (where there is no GPU); the teardown bug that hung
 /// WSL2 is independent of the backend. `Vulkan` covers broker + NBD single (generic paths); ublk
 /// with Vulkan is deferred (DT-11: the ublk residency server is CUDA-fixed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

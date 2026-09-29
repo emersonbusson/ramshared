@@ -9,7 +9,7 @@ license=('GPL2')
 depends=('systemd' 'glibc')
 optdepends=(
     'cuda: NVIDIA GPU hardware DMA acceleration'
-    'vulkan-icd-loader: Vulkan Memory Allocator backend'
+    'vulkan-icd-loader: Vulkan GPU cache provider for compatible adapters'
 )
 install=ramshared.install
 source=("$pkgname-$pkgver.tar.gz::https://github.com/emersonbusson/ramshared/archive/refs/tags/v$pkgver.tar.gz")

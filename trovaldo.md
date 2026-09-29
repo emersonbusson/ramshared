@@ -43,8 +43,9 @@ primitives and open interfaces:
    * Operates safely in userspace without risking out-of-tree kernel panics.
 
 2. **Zero-Copy Page-Locked Hardware DMA & Vulkan:**
-   * Direct PCIe DMA via host pinned memory (`cuMemHostAlloc` for NVIDIA) and
-     Vulkan Memory Allocator (`ramshared-vulkan` for AMD Radeon and Intel Arc).
+   * GPU cache allocation through CUDA or the Vulkan provider. Vulkan uses
+     staging-buffer transfers; AMD/Intel physical cache qualification remains
+     open and is not implied by the provider abstraction.
 
 3. **Autonomous `udev` & `systemd` Activation:**
    * `/lib/udev/rules.d/99-ramshared.rules` triggers service startup whenever a
@@ -65,7 +66,7 @@ primitives and open interfaces:
 | --- | --- | --- | --- |
 | **A. Microsoft WSL2** | `microsoft/WSL` & `WSL2-Linux-Kernel` | Candidate submitted ([#41054](https://github.com/microsoft/WSL/issues/41054)) | Microsoft triage to enable `CONFIG_BLK_DEV_UBLK=m` in standard release |
 | **B. Native Linux Distros** | Ubuntu, Debian, Fedora, Arch AUR | Complete multi-distro packaging (`.deb`, `.rpm`, `PKGBUILD`, `.tar.gz`) & `udev` auto-activation | PPA / OBS repository setup for `apt install` / `dnf install` |
-| **C. Linux Mainline & Cross-GPU** | `torvalds/linux`, AMD, Intel, NVIDIA | NVIDIA CUDA + AMD/Intel Vulkan (`ramshared-vulkan`) operational | Upstream LKML patchset submission for kernel-native HMM |
+| **C. Linux Mainline & Cross-GPU** | `torvalds/linux`, AMD, Intel, NVIDIA | CUDA and Vulkan provider paths implemented; AMD/Intel physical cache qualification remains PARTIAL | Complete per-vendor, capacity, and driver/runtime validation before advertising broad hardware support |
 
 ---
 
@@ -102,7 +103,7 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-08-26 | Packaging | Built Debian (`.deb`), RedHat (`.rpm`), and Arch (`PKGBUILD`) packaging | `scripts/package/` |
 | 2026-08-26 | Auto-Activation | Implemented `udev` rules & systemd service for zero-config GPU discovery | `packaging/systemd/` |
 | 2026-08-26 | Kernel CI | Implemented `checkpatch.pl`, `sparse`, `smatch`, and adversarial invariants | `scripts/ci/` |
-| 2026-08-26 | Cross-GPU | Verified `ramshared-vulkan` backend for AMD Radeon & Intel Arc GPUs | `crates/ramshared-vulkan` |
+| 2026-08-26 | Cross-GPU | Implemented the Vulkan provider and tested its API path with lavapipe; no AMD/Intel physical cache campaign was run | `crates/ramshared-vulkan` / current status in `docs/reliability/GAP-REGISTER.md` |
 | 2026-08-26 | In-Tree Driver | Built `drivers/block/ramshared/` with `gendisk` and synchronous `.rw_page` swap fast-path | `drivers/block/` |
 | 2026-08-26 | Anti-Fragility | Integrated DKMS auto-signing, UEFI MOK enrollment, and multi-kernel `compat.h` (5.15–6.13+) | `UPSTREAM-ANTI-FRAGILITY-FORMS.md` |
 | 2026-08-26 | LKML Upstream | Formatted patchset series for linux-block subsystem & submission guide | `docs/upstream/` |

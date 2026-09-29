@@ -1,7 +1,8 @@
 //! `ramshared-vulkan` — Vulkan backend of `VramProvider` (RF-G2).
 //!
-//! Second implementation of the `ramshared_vram::VramProvider` trait (the first one, CUDA, remains intact),
-//! unlocking "any GPU" support + a native Linux host where ublk+VRAM and eviction-under-load run e2e.
+//! Vulkan implementation of the `ramshared_vram::VramProvider` trait, alongside
+//! the CUDA provider. It can serve compatible Vulkan adapters; it does not
+//! guarantee support for every GPU vendor or every device with VRAM.
 //!
 //! **Complete IMPL (RF-V1..V3):** `open` initializes the loader, instance, physical device, logical device,
 //! transfer queue, and staging buffer (`HOST_VISIBLE|HOST_COHERENT`). `impl VramProvider` covers `alloc`
@@ -9,9 +10,12 @@
 //! `vkCmdCopyBuffer` + `VkFence`) and `zero` (`vkCmdFillBuffer`). According to
 //! `docs/vulkan-backend/SPEC.md` (DT-1..DT-10).
 //!
-//! Validated via software rendering (lavapipe/llvmpipe) without a GPU — all unsafe blocks (FFI `ash`) are isolated here
-//! with `// SAFETY:` for each block; the trait boundary is safe. `mem_info` uses `VK_EXT_memory_budget`
-//! when present; otherwise, it falls back to DT-10 (largest `DEVICE_LOCAL` heap − sum allocated).
+//! Unit and software-ICD tests exercise the Vulkan API path. Automatic cache
+//! admission requires a stable adapter identity and a fresh positive
+//! `VK_EXT_memory_budget` report; the local heap estimate used when that
+//! extension is absent is informational only. Physical vendor qualification
+//! remains a separate requirement. Unsafe `ash` calls are isolated here with
+//! `// SAFETY:` proofs; the trait boundary is safe.
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};

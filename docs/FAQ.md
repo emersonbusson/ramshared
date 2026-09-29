@@ -37,7 +37,10 @@ The three current reserve policies serve different consumers:
 
 - **Broker/NBD:** capacity reserve `max(1536 MiB, 20%)`, plus a separate
   `768 MiB` runtime free buffer.
-- **Origin cache:** capacity reserve `max(2 GiB, 20%)`.
+- **Origin cache:** `max(configured floor, 20% of measured capacity)`, with a
+  separate `640 MiB` runtime buffer. The current production floor defaults to
+  `512 MiB` and is configurable within `128–4096 MiB`; the qualification gate
+  tracks a mismatch with the `1536 MiB` default stated in the active PRD/SPEC.
 - **Windows StorPort:** `max(configured reserve, 512 MiB, 10%)`.
 
 The reserve bounds cache capacity. The runtime buffer protects a future
@@ -93,20 +96,29 @@ The Windows StorPort driver is designed for high-performance hardware storage ac
 No. GPU and system memory are managed by different controllers; data crosses
 PCIe. Transport observations reflect high-throughput DMA transfers across the physical bus.
 
-## Does RamShared only work with NVIDIA GPUs?
+## Does RamShared work with every GPU that has VRAM?
 
-No. While NVIDIA CUDA (`cuMemHostAlloc` pinned host memory) was the initial
-qualified MVP path because of mature GPU-PV under WSL2, RamShared is
-hardware-agnostic:
+No. The cache has a provider interface and currently enumerates CUDA and
+Vulkan adapters, but that does not make every VRAM device compatible. CUDA
+requires a working CUDA driver. The Vulkan path requires a usable transfer
+queue, a stable adapter identity, and a fresh, positive driver-reported budget
+from `VK_EXT_memory_budget`; a local estimate cannot authorize cache
+allocation. Adapters that fail those checks keep the cache target at zero and
+use the authoritative origin instead.
 
-- **AMD Radeon and Intel Arc**: Supported via `crates/ramshared-vulkan` using
-  the Vulkan Memory Allocator (VMA) and cross-process external memory handles.
-- **Linux block driver and ublk**: Native Linux block drivers
-  (`drivers/block/ramshared/`) and `ublk` (`io_uring`) operate upstream
-  independently of GPU vendors.
-- **Headless or GPU-less systems**: If no GPU is detected or if GPU headroom is
-  exhausted, the GPU cache target is zero and the remaining host-memory and
-  origin paths determine whether the requested topology can operate.
+AMD and Intel adapters are possible Vulkan candidates, but the current
+multi-vendor physical cache lifecycle has not been qualified. The Vulkan
+backend uses Vulkan allocations and a host-visible staging buffer; it does not
+use VMA or cross-process external-memory handles. Read the current hardware
+qualification boundary in the [reliability gap register](reliability/GAP-REGISTER.md)
+before treating a specific adapter as supported.
+
+The Linux block and `ublk` transports do not depend on a GPU vendor. That
+transport independence does not qualify every GPU cache backend.
+
+On headless systems or when no adapter passes the budget checks, the GPU cache
+target is zero. The origin path remains authoritative; whether the requested
+topology can start still depends on its other preflight checks.
 
 ## Why use GPU memory when NVMe striped arrays reach 28 GB/s and DDR5 reaches 70 GB/s?
 

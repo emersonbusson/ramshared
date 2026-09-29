@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 344,
-    "classified": 341,
+    "total": 345,
+    "classified": 342,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -890,6 +890,18 @@
       },
       "owner": "methodology",
       "canonicalSource": "docs/methodology/kahneman-disciplines.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/mimoaudite.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },

@@ -97,7 +97,7 @@
 - [x] IRQ/atomic: all GPU operations occur in user-space worker context. Driver calls themselves do not have a hard cancellation deadline.
 - [x] Lifetime: socket closure revokes the cache; shutdown is bounded and transfers an unconfirmed child to a background reaper. Physical allocation release is not claimed until exit.
 - [x] Hot-unplug: if a device error returns, the client marks `Unavailable` and origin continues; a call stuck in the driver remains isolated but may not exit promptly.
-- [x] Host safety: mathematical reserve floor enforced (`max(1536 MiB, 20%)`).
+- [ ] Host safety: the worker enforces `max(configured floor, 20%)` plus the separate 640 MiB runtime buffer, but the production origin-cache caller currently defaults the configured floor to 512 MiB while the PRD mitigation requires 1536 MiB. Reconcile the contract and production default, then rerun capacity-boundary and live-adapter qualification.
 - [ ] Bounded DMA: only parent IPC waits are bounded; a driver ioctl that has entered an uninterruptible wait cannot be cancelled in userspace.
 - [x] Origin fallback: cache miss or failure proceeds through the authoritative origin backend; origin storage errors can still fail I/O. Simultaneous physical tier saturation is not qualified by this unit contract.
 - [x] Replayable ops: `Disable` and cleanup are fully idempotent (#17).

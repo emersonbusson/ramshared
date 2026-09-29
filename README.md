@@ -120,7 +120,8 @@ How the tiers work together:
 The reserve is deliberately surface-specific. Broker/NBD sizing retains
 `max(1536 MiB, 20% of physical VRAM)` as capacity reserve and separately keeps
 `768 MiB` of reported free VRAM as a runtime allocation buffer. The origin
-cache uses `max(2 GiB, 20%)`; Windows StorPort uses
+cache uses `max(configured reserve floor, 20% of measured capacity)` and keeps
+a separate `640 MiB` runtime buffer; Windows StorPort uses
 `max(configured reserve, 512 MiB, 10%)`. These values are not interchangeable:
 a capacity reserve bounds the cache target, while the runtime buffer protects
 new allocations against changing external GPU use.
@@ -227,7 +228,7 @@ For raw sample bundles, hardware execution traces, latency histograms, and exact
 | `ramsharedd` | GPU-backed block service (multi-tier ublk/NBD cascade engine) |
 | `ramshared-tier` | Tier policy, hysteresis, and demotion safety |
 | `ramshared-cuda` | Safe wrapper and direct in-process C-FFI for NVIDIA CUDA driver |
-| `ramshared-vulkan` | Multi-vendor GPU memory engine for AMD Radeon and Intel Arc via VMA |
+| `ramshared-vulkan` | Vulkan VRAM provider for compatible adapters; AMD/Intel physical qualification remains open |
 | `ramshared-dxg` | Windows D3D12 and WSL2 dxgkrnl paravirtualization abstraction |
 | `ramshared-vram` | Page-locked DMA allocation and memory management |
 | `ramshared-wsl2d` | WSL2 host-pressure coordination and telemetry |
