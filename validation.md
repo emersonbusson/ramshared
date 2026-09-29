@@ -8615,3 +8615,54 @@ physical Windows qualification.
 **Verdict:** 🟡 `PARTIAL` — one real selected WSL volume now passes the draft
 and capacity-plan E2E. The seven gates were audited afresh; kernel, transport,
 release, hardware, and physical Windows qualification gaps remain open.
+
+**Evidence ID:** `EVD-0112`.
+**Owner role:** source and hosted-kernel-CI re-audit.
+**Observed at:** `2026-09-29T13:25:01Z`.
+**Verified at:** `2026-09-29T13:47:43Z`.
+**Source revision:** `8a64b9dddda8af61933be8030aeaf6890f3a939a`.
+**Kernel candidate revision:** `b85e21326a41314047bd6e1ac864db39869315a4`.
+**Kernel base revision:** `93f51579e7df248780214094418f205253383cc5`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0111 and the earlier VMBus records. This record
+updates the current candidate's build and KUnit evidence; it does not close
+live-runtime, installed-image provenance, freeze-causality, or CoCo gates.
+**Freshness:** Hosted run and read-only host identity were checked at
+`2026-09-29T13:47:43Z`. Host readings describe that WSL boot only; the hosted
+CI result is retained by GitHub Actions.
+**Category:** source review / hosted x86_64 and arm64 kernel object builds /
+KUnit / read-only installed identity check.
+**What:** Re-read the tracked VMBus candidate and the exact hosted workflow run.
+The public series contains seven patch files. The candidate adds a retained
+buffer owner workqueue and reclaims only after the host-revoke gate and page
+reference gate allow it. This updates EVD-0111's statement that the dirty
+candidate then under review had no build or KUnit result; that earlier
+statement remains historically accurate for candidate
+`a022ac393ecaab845682f5afe2be6be792aedde2`.
+**How to measure:** Inspect kernel-fork source commit
+`b85e21326a41314047bd6e1ac864db39869315a4`, patch files, workflow, and artifacts
+from [hosted run 36574925363](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36574925363).
+The workflow pinned Linux base `93f51579e7df248780214094418f205253383cc5`,
+recorded per-patch SHA-256 values, configurations, and logs, and passed all
+seven staged mainline patch builds on x86_64 and arm64 with `W=1`, Sparse, and
+strict checkpatch. Mainline x86_64 KUnit passed 24/24; arm64 KUnit was skipped.
+The separate WSL 6.18.40.1 source at the same candidate revision passed the
+Hyper-V/NetVSC/UIO `W=1` and Sparse object build, the DXG object build, and
+KUnit 14/14. The run artifacts include the pinned base SHA, source SHA, all
+seven patch hashes, resolved configurations, and logs. A read-only host check
+at verification time returned `6.18.40.1-microsoft-standard-WSL2+ #6`,
+`/usr/local/bin/ramshared --version` returned `0.14.1`,
+`--build-info` was unsupported, and `ramshared.service` was not installed.
+No host install, WSL shutdown/restart, host build, stress, or GPU allocation
+was performed.
+**Remaining boundary:** KUnit validates named state, allocation, and mapping
+preparation cases; it does not demonstrate a live `/dev/uio` mmap-close and
+unregister race, host GPADL response/rescind interleaving, order-zero behavior
+under real fragmentation, channel allocation/free balance, Hyper-V execution
+of this exact WSL backport, or SEV-SNP/TDX/Arm CCA memory-state transitions.
+The active Build #6 source is still not matched to an immutable source receipt,
+so this result does not identify the earlier freeze trigger.
+**Verdict:** 🟡 `PARTIAL` — hosted compile and KUnit evidence improved; the
+kernel and RamShared candidates are not installed on the WSL host, and all
+live host, freeze-attribution, UIO/GPADL, and CoCo qualification boundaries
+remain open.

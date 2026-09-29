@@ -4,16 +4,9 @@
 
 ## Status
 
-**PARTIAL — an earlier four-commit snapshot builds, boots, and passes ordinary x86_64 Hyper-V runtime tests in a disposable VM. The current public v2 draft has six patches and passes hosted x86_64/arm64 builds, WSL backport checks, and KUnit 14/14. Upstream submission remains blocked on live response/rescind and CoCo platform evidence.**
+**PARTIAL — the current public v2 candidate has seven tracked patches. Hosted run 36574925363 passed all seven staged x86_64/arm64 builds, the WSL 6.18.40.1 backport build, and KUnit 24/24 on x86_64 plus 14/14 on the WSL backport. The candidate is not installed on the daily WSL host. Live GPADL/UIO lifecycle, source-matched host behavior, and SEV-SNP/TDX/Arm CCA evidence remain open.**
 
-The September 27 source review found an uncovered GPADL retention path and
-rejected an attempted cleanup helper: `channel->rescind` is also set by
-synthetic hibernation cleanup and local unload, partial GPADL establishment
-bypasses the teardown helper, and teardown metadata allocation can fail before
-the rescind check. The helper was removed. The tracked series still has six
-patches; the ignored local `0007` artifact is not part of the branch and has
-no lifecycle qualification. See `AUDIT-2.5.md` and EVD-0087. No source build,
-kernel install, or pressure test was performed for this audit.
+EVD-0111 reviewed a dirty candidate at `a022ac393ecaab845682f5afe2be6be792aedde2` and found that its attempted cleanup helper confused host rescind with local unload and missed partial GPADL establishment. That audit's statement that no candidate build or KUnit had run described that dirty snapshot at that time. The current public series tracks patch `0007-gpadl-lifetime-reclaim.patch`; EVD-0112 records its hosted build and KUnit results. Those tests do not establish live VMBus protocol behavior or CoCo safety.
 
 EVD-0088 and EVD-0089 record cumulative read-only growth in
 `vmbus_alloc_buffer` vmalloc entries: 14,003 at 12:21, 15,821 at 12:38, and
@@ -46,11 +39,13 @@ continuous exhaustion of Windows physical RAM. It still does not prove that
 the running Build #6 contains the audited rescind path or that this was the
 freeze trigger.
 
-The versioned six-patch draft is based on Linux `v7.3-rc4`
+The versioned seven-patch draft is based on Linux `v7.3-rc4`
 (`93f51579e7df248780214094418f205253383cc5`). The local draft at
-`docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` remains a working diff;
-the booted candidate was built from the versioned series in the public kernel
-fork. It is not a distribution backport or an upstream submission.
+`docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` remains a separate
+working diff. The ordinary Hyper-V boot evidence below is for an earlier
+four-commit snapshot; it is not a boot of this seven-patch candidate. The
+current public series is not a distribution backport or an upstream
+submission.
 
 ## Implemented draft
 
@@ -63,6 +58,10 @@ fork. It is not a distribution backport or an upstream submission.
 | `drivers/uio/uio_hv_generic.c` | Map noncontiguous ring pages through virtual UIO and sysfs paths. |
 
 ## Evidence so far
+
+The bullets below retain earlier implementation milestones. EVD-0112 is the
+current hosted build/KUnit result; it does not replace live Hyper-V or CoCo
+qualification.
 
 - A scratch structural contract test was RED on the unmodified source and
   GREEN (6/6) after the first draft edits. Two additional ownership regressions
@@ -108,19 +107,22 @@ fork. It is not a distribution backport or an upstream submission.
 
 ## Blocking gaps
 
-1. Hosted run 36148296003 passed all six patches on x86_64 and arm64, the
-   WSL backport, and KUnit 14/14 (VMBus suite 10/10). Patch 6 injects failure
-   above order zero, performs and frees a real order-zero allocation, then
-   checks clean order-zero exhaustion. This does not simulate live allocator
-   fragmentation or host response/rescind interleaving.
-2. The exact v7.3-rc4 series has been linked and booted on ordinary x86_64
-   Hyper-V. This does not qualify the separate WSL backport or a CoCo platform.
-3. Normal GPADL create/teardown succeeded in Hyper-V. KUnit now injects
-   outgoing header/body/teardown post failures and tests response-state
-   mapping. Live host response/error delivery and rescind interleavings remain
-   untested.
-4. Ordinary Hyper-V UIO and sysfs ring mmap passed. CoCo memory-state tests for
-   SEV-SNP, TDX, and Arm CCA, plus a matched performance run, remain absent.
+1. Hosted run 36574925363 passed all seven patch stages on x86_64 and arm64,
+   the WSL 6.18.40.1 backport build, and x86_64 KUnit 24/24; the WSL backport
+   KUnit run passed 14/14. Patch 6 exercises order-zero fallback with injected
+   allocation failures. These hosted tests do not simulate live allocator
+   fragmentation or host response/rescind interleaving. Arm64 KUnit is skipped.
+2. An earlier four-commit v7.3-rc4 snapshot was linked and booted on ordinary
+   x86_64 Hyper-V. This does not qualify the current seven-patch v2 series, the
+   separate WSL backport, or a CoCo platform.
+3. Normal GPADL create/teardown succeeded on that earlier snapshot. Current
+   KUnit injects outgoing header/body/teardown post failures and tests
+   response-state mapping, but live host response/error delivery and rescind
+   interleavings remain untested.
+4. Ordinary Hyper-V UIO and sysfs ring mmap passed on the earlier snapshot.
+   The current KUnit mapping-preparation tests do not exercise a real
+   mmap-close/unregister lifecycle. CoCo memory-state tests for SEV-SNP, TDX,
+   and Arm CCA, plus a matched performance run, remain absent.
 
 ## September 24 candidate update
 
@@ -201,18 +203,21 @@ API. It adds checked `u32` page rounding, a fallback-order helper with order-0 K
 coverage, the `cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)` selection guard,
 and a null guard before `vunmap()` during partial-allocation cleanup. It also
 adds KUnit coverage for overflow, ownership refusal, and repeatable partial
-cleanup. `git diff --check` and strict `checkpatch.pl` pass. No compile, boot,
-fault injection, commit, or push has been performed for this branch.
+cleanup. The original `418653fde` snapshot was not compiled or pushed when it
+was first audited. The currently validated public-branch snapshot and hosted
+results are recorded below; they must not be confused with the active WSL
+kernel image.
 
-The backport has since been built with `W=1`, booted under QEMU, and exercised
-with KUnit and module loading in isolated QEMU guests. The running Build #6
-image and `.wslconfig` remain unchanged because the promotion receipt and
-module-to-VHDX provenance gate are still unresolved.
+An earlier backport snapshot was built with `W=1`, booted under generic QEMU,
+and exercised with KUnit and module loading in isolated guests. This does not
+establish that the current public snapshot at `b85e21326a41` was booted. The
+running Build #6 image and `.wslconfig` remain unchanged because the promotion
+receipt and module-to-VHDX provenance gate are unresolved.
 
 The local WSL build has `CONFIG_KUNIT` unset, so its active kernel does not run
-the new KUnit cases. A separate temporary x86_64 KUnit build against the same
-backport source ran all five named `hyperv-vmbus-buffer-wsl` cases: 5 passed,
-0 failed. In another QEMU boot of the exact WSL image, `modprobe` loaded
+the new KUnit cases. A historical temporary x86_64 KUnit build against the
+then-current backport source ran all five named `hyperv-vmbus-buffer-wsl`
+cases: 5 passed, 0 failed. In another QEMU boot of the exact WSL image, `modprobe` loaded
 `zsmalloc`, `zram`, and `ublk_drv`; `/dev/zram0` and `/dev/ublk-control` were
 present. This closes the earlier initramfs packaging failure only. QEMU used
 a generic virtual machine, so this is not a Hyper-V VMBus, WSL integration,
@@ -224,9 +229,9 @@ VMBus driver context-imbalance warning and a flexible-array warning in the
 GPADL header declaration. Strict checkpatch reports zero warnings for the
 patches.
 
-The WSL 6.18 backport remains a separate tree with its own DXG GPADL
-consumer audit. The exact source candidate has not been booted there. The
-The initial series was unversioned: its cover is `[PATCH 0/2]` with
+The WSL 6.18 backport remains a separate source tree with its own DXG GPADL
+consumer audit. The exact current candidate has not been booted on the daily
+WSL host. The initial series was unversioned: its cover is `[PATCH 0/2]` with
 `Message-ID` stem `20260918014017.2536753` with cover suffix `-1` and patch
 2/2 suffix `-3`. The archive headers
 confirm these were sent on September 17, 2026 (local time); the archive
@@ -277,24 +282,55 @@ Those gates remain open; do not claim universal architecture or CoCo support.
 
 ## September 25, 2026 order-zero fallback candidate
 
-The public kernel fork now carries six ordered `[PATCH v2 n/6]` patches and a
-matching consolidated snapshot. Patch 6 factors the production allocation
+At the September 25 snapshot, the public kernel fork carried six ordered
+`[PATCH v2 n/6]` patches and a matching consolidated snapshot. Patch 6 factors the production allocation
 order-descent loop behind a private callback. Its KUnit test injects failure
 at every order above zero, then performs and frees a real order-zero page
 allocation; a second pass injects order-zero failure and checks clean
-exhaustion. The patch applies exactly after patches 1–5 and passes local strict
-checkpatch. Hosted run 36148296003 passed all six build stages on x86_64 and
+exhaustion. The patch applied exactly after patches 1–5 and passed local strict
+checkpatch. Hosted run 36148296003 passed those six build stages on x86_64 and
 arm64, the WSL backport, and 14/14 x86_64 KUnit tests (10/10 in the VMBus
 suite). Artifacts record the pinned base and exact series SHA. The workflow
-requires all six patch stages and the new named case.
+required all six patch stages and the new named case at that time.
+
+## September 29, 2026 hosted CI and source re-audit (EVD-0112)
+
+Public kernel-fork commit `b85e21326a41314047bd6e1ac864db39869315a4`
+contains the tracked seven-patch series and the separate WSL 6.18.40.1
+backport source. Hosted run
+[36574925363](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36574925363)
+used Linux `v7.3-rc4` base
+`93f51579e7df248780214094418f205253383cc5`. It applied and built each patch
+stage on x86_64 and arm64 with `W=1`, Sparse (`C=2`), and strict checkpatch;
+all required tools, seven stages, and artifacts were enforced by the workflow.
+The x86_64 KUnit run passed 24/24 (16 VMBus-buffer cases and four UIO-mmap
+cases, plus four interrupt tests). The WSL backport build passed `W=1` and
+Sparse for Hyper-V, NetVSC, and UIO, then passed its KUnit run 14/14 (11
+GPADL-lifetime and three UIO-mmap cases). Arm64 KUnit was skipped. The run
+artifacts record the base SHA, source SHA, series patch hashes, configs, and
+logs.
+
+Patch 0007 adds a retained-owner workqueue, a host-revoke state gate, and a
+page-reference check before reclamation. The named tests exercise those gates
+and simulated page references; they do not run an actual `/dev/uio` map/close
+and unregister race, a live host response/rescind interleaving, or a full
+channel open/close balance campaign. The build and KUnit run occurred on
+hosted runners and did not produce or install a kernel image on the daily WSL
+host. The active host remains `6.18.40.1-microsoft-standard-WSL2+ #6`; its
+RamShared CLI remains `0.14.1`, with no `ramshared.service` unit registered.
+The active image still has no immutable source receipt. No freeze cause is
+attributed to this candidate.
 
 ## Next gate
 
-Exercise real host response/rescind interleavings and order-zero fallback
-during allocation. Obtain a suitable platform/lab for SEV-SNP, TDX, and Arm
-CCA memory-state tests. Keep the series unsent until those required gates pass and
-maintainers review it. The disposable ordinary Hyper-V runtime does not qualify
-the WSL backport or the actual WSL host kernel.
+Exercise real host response/rescind interleavings, an actual UIO mmap-close and
+unregister lifecycle, and order-zero fallback under live fragmentation. Obtain
+a suitable platform/lab for SEV-SNP, TDX, and Arm CCA memory-state tests. Match
+the running WSL image to an immutable source/modules receipt before attributing
+the prior freeze or promoting the separate backport. Keep the series unsent
+until required runtime gates pass and maintainers review it. The disposable
+ordinary Hyper-V runtime does not qualify the WSL backport or the actual WSL
+host kernel.
 
 ## Rollback trigger
 
