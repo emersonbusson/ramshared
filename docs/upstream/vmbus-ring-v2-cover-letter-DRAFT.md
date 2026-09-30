@@ -21,14 +21,14 @@
 ## Mail header (as it would be sent)
 
 ```
-From: Emerson Busson <emersonbusson@gmail.com>
+From: Emerson Busson <author-address-at-send-time>
 Subject: [PATCH v2 0/7] hv: vmbus: fragment-resilient ring allocation
  via vmbus_alloc_buffer()
 ```
 
-Target: `linux-hyperv@vger.kernel.org`, `kys@microsoft.com`, `haiyangz@microsoft.com`,
-`wei.liu@kernel.org`, `decui@microsoft.com`
-Suggested-by on the series: `Michael Kelley <mhklinux@outlook.com>`
+Target: linux-hyperv list, the Hyper-V maintainers,
+and the hyperv mailing-list reviewers (addresses from MAINTAINERS at send time).
+Suggested-by on the series: `Michael Kelley`
 
 ---
 
@@ -45,7 +45,7 @@ on Intel TDX without a paravisor. On those platforms the naive fallback is
 guest-fatal.
 
 I have rebuilt the series around Kameron Carr's `vmbus_alloc_buffer()`
-(lore 2026081160447.2529876-1-kameroncarr@linux.microsoft.com), which
+(lore 2026081160447.2529876-1-kameron.carr (Microsoft)), which
 already allocates decryptable direct-map chunks and joins them with
 `vmap()`. The redesign follows the five points from that review.
 
