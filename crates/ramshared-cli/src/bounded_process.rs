@@ -1229,10 +1229,25 @@ mod tests {
     #[test]
     // TestName: capture_runner_reaps_successful_leader_and_all_stdio_redirected_descendant
     fn capture_runner_reaps_successful_leader_and_all_stdio_redirected_descendant() {
+        // `cmd &` forks the descendant before its redirections apply, so that
+        // descendant briefly holds the capture pipes; the close-grace can expire
+        // inside that window under load and the run then fails closed as a stuck
+        // pipe. `exec` redirects the leader's own stdio first (releasing the pipe
+        // write end), so the descendant is forked already detached from the
+        // capture and the close is deterministic. The PID cannot ride the capture
+        // stdout after that redirect, so it lands in a pid file.
+        let pid_path = std::env::temp_dir().join(format!(
+            "ramshared-bounded-process-descendant-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pid_path);
+        let pid_arg = pid_path.to_string_lossy().into_owned();
         let mut command = Command::new("/bin/sh");
         command.args([
             "-c",
-            "sleep 10 </dev/null >/dev/null 2>&1 & printf '%s\\n' \"$!\"",
+            "printf '%s\\n' 'leader-output'; exec </dev/null >/dev/null 2>/dev/null; sleep 10 & printf '%s\\n' \"$!\" > \"$1\"; exit 0",
+            "sh",
+            pid_arg.as_str(),
         ]);
         let output = run_capture_command(
             &mut command,
@@ -1242,8 +1257,10 @@ mod tests {
             |_| {},
         )
         .expect("a successful leader remains a legitimate success");
-        let descendant = String::from_utf8(output.stdout)
-            .expect("fixture PID output is UTF-8")
+        let pid_text = std::fs::read_to_string(&pid_path)
+            .expect("fixture writes its exact descendant PID to the pid file");
+        let _ = std::fs::remove_file(&pid_path);
+        let descendant = pid_text
             .trim()
             .parse::<u32>()
             .expect("fixture prints its exact descendant PID");
@@ -1254,6 +1271,11 @@ mod tests {
         }
 
         assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "leader-output",
+            "the leader must still be captured before it releases the pipes"
+        );
         assert!(
             gone,
             "a descendant with every stdio stream redirected survived its successful leader"
