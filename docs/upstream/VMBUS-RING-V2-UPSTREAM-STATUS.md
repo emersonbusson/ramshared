@@ -9,6 +9,7 @@
 - **Target Repository:** [`microsoft/WSL#41634`](https://github.com/microsoft/WSL/issues/41634) (combined proposal) · [`microsoft/WSL#40795`](https://github.com/microsoft/WSL/issues/40795#issuecomment-5716513649) (solution comment) & Linux Hyper-V Subsystem (LKML)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Synthetic Transport)
 - **Patch Reference:** [seven-patch v2 series](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series) (in the contribution fork) · [older consolidated draft](patches/vmbus-ring-buffer-v2-draft.patch)
+- **Cover letter:** [DRAFT — do not send](vmbus-ring-v2-cover-letter-DRAFT.md). Prepared so the send is mechanical once the gates close; the PRD send gate is closed and the draft carries its own checklist.
 - **Status (2026-09-30):** v1 proposal submitted 2026-09-17 and reviewed by
   Michael Kelley on 2026-09-22. The seven-patch v2 candidate is an **unsent
   draft by policy**. It is source-complete against the maintainer's five-point
