@@ -106,6 +106,11 @@ Proven on this candidate, in hosted CI on x86_64 and arm64:
   establish and teardown signatures are preserved, so in-tree and
   out-of-tree consumers are unaffected while migrated callers use the
   descriptor-aware `_owned` entry points.
+- Six CoCo static invariants hold on the patched tree, and the CI step that
+  enforces them injects the rejected vmalloc-decryption pattern and
+  requires the gate to reject it on every run. Full inventory of all five
+  `set_memory_*` sites and what each is reachable from is recorded in
+  `COCO-STATIC-PROOF.md` in my working notes.
 
 **Not proven, and not claimed:**
 
@@ -116,12 +121,31 @@ Proven on this candidate, in hosted CI on x86_64 and arm64:
   been forced on hardware. The KUnit tests inject deterministic failures
   at each order; that is not physical fragmentation.
 - **No SEV-SNP, Intel TDX, or Arm CCA page-state transition has been
-  observed.** The redesign decrypts on direct-map chunk addresses before
-  joining them with `vmap()`, and retains pages whose page-state
-  transition cannot be proven, which is the behaviour the review asked
-  for. It is a design argument that matches the objection. It is not
-  platform evidence, and I do not have access to those platforms. I am
-  not asking anyone to accept a CoCo correctness claim from me.
+  observed.** What I can show is that the pattern you rejected has no code
+  path in any allocation this series introduces: every encryption
+  transition on a buffer this series allocates operates on
+  `page_address()` of an `alloc_pages_node()` chunk, taken *before* the
+  `vmap()` join, and an unknown page-state is retained rather than freed or
+  re-encrypted. That is a machine-checked negative proof, not platform
+  evidence. I am not asking anyone to accept a CoCo correctness claim from
+  me.
+
+Two related notes from the source audit, for completeness:
+
+1. `vmbus_establish_gpadl()` — the pre-existing exported API for
+   caller-managed buffers — still decrypts the caller's address in place,
+   exactly as it does in mainline today. This series does not change that
+   contract and does not route any buffer it allocates through it: all such
+   buffers go through `vmbus_alloc_buffer_owned()` and
+   `vmbus_establish_gpadl_owned()` / the ring path with
+   `memory_prepared = true`. After this series, `netvsc.c` and
+   `uio_hv_generic.c` have zero call sites of the legacy symbol. Whether
+   that export should reject vmalloc callers is a pre-existing mainline
+   question and, if you agree it is worth fixing, I would send it as a
+   separate patch rather than fold it in here.
+2. A checker that only ever passes is not a checker, so the CI step that
+   enforces the invariants injects the rejected pattern on every run and
+   requires the gate to reject it.
 
 I am sending the design for review before investing in confidential-guest
 lab time, because the failing mode you named is the one the redesign most

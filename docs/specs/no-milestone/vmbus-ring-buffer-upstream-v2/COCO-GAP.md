@@ -91,6 +91,11 @@ qualified — the following are **true and separately evidenced**:
   (`vmbus_alloc_buffer()` for all rings, `struct vmbus_buffer` grouping,
   `struct vmbus_gpadl` folded in, `gpadl.leak` on unproven transitions,
   `HV_GPADL_BUFFER_DECRYPTED` removed). See [`IMPL.md`](IMPL.md).
+- A **static negative proof** shows the guest-fatal pattern has no code path
+  in any allocation this series introduces, and CI machine-checks that on
+  every run including a gate self-test. See
+  [`COCO-STATIC-PROOF.md`](COCO-STATIC-PROOF.md). This is stronger than a
+  design argument and **still does not close any row of the table above**.
 - Hosted build/Sparse/checkpatch/KUnit gates pass for the seven patches
   (runs 36574925363, 36590352003).
 - Ordinary x86_64 Hyper-V runtime on an earlier four-commit snapshot passed
@@ -108,12 +113,22 @@ So the series is a well-founded draft. It is not a sendable v2.
 **Do not send.** Until COCO-1..5 are satisfied on real hardware, the series
 stays a draft and the send gate in the PRD remains closed.
 
-Two acceptable resolutions, in order of preference:
+Three acceptable resolutions, in order of preference:
 
 1. **Obtain a CoCo lab** — AMD SEV-SNP (EPYC 7003+), Intel TDX without a
    paravisor, or Arm CCA — and run COCO-1..5 on the exact candidate. This is
    the only route that satisfies the PRD's first branch.
-2. **Keep it a draft indefinitely** — the PRD explicitly permits this. The
+2. **Rent one, do not buy one.** Buying the silicon is not required and is
+   not realistic for this work. Azure Confidential VMs expose exactly the
+   target platforms on an hourly rate: SEV-SNP on `DCasv5` / `ECasv5`, Intel
+   TDX on `DCesv5` / `ECesv5`. A few hours of a confidential guest booting
+   the exact candidate would close COCO-1, COCO-2, COCO-4 and COCO-5. Arm
+   CCA (COCO-3) has no equivalent cloud SKU at the time of writing and
+   remains the one row that likely needs partner or lab hardware. This path
+   needs an Azure subscription and someone to run the guest-side drills
+   (`scripts/kernel/vmbus-lifecycle-drill.sh` already refuses to run on the
+   daily WSL2 host).
+3. **Keep it a draft indefinitely** — the PRD explicitly permits this. The
    work is not lost: the design, the source fixes, and the non-CoCo evidence
    all remain valid and reusable the moment a lab appears.
 
