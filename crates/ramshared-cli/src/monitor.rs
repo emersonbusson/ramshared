@@ -20,7 +20,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::{cascade, workload};
-use ramshared_vram::{GpuBudgetSource, GpuBudgetTelemetry};
+use ramshared_vram::{
+    GpuBudgetSource, GpuBudgetTelemetry, TELEMETRY_MAX_AGE_MS, WorkerCacheTelemetry,
+};
 
 const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_HISTORY_SECONDS: u64 = 300;
@@ -1084,11 +1086,53 @@ fn gpu_observation_from_status(
     })
 }
 
+/// Parses the published cache telemetry and drops anything malformed or stale
+/// (DT-8). A stale sample is omitted, never rendered as if it were live.
+fn cache_telemetry_from_value(
+    value: Option<&Value>,
+    now_unix_ms: u64,
+) -> Option<WorkerCacheTelemetry> {
+    let cache = serde_json::from_value::<WorkerCacheTelemetry>(value?.clone()).ok()?;
+    (cache.schema_version == 1 && cache.is_fresh_at(now_unix_ms, TELEMETRY_MAX_AGE_MS))
+        .then_some(cache)
+}
+
+/// Formats cache occupancy with explicit VRAM-cache labels (DT-8).
+///
+/// Every figure here is cache occupancy in the worker's logical address space
+/// or in provider VRAM. None of them is guest or host RAM, and no label may
+/// suggest otherwise: the logical figure is always rendered as "VRAM cache
+/// logical", never as memory available to the host.
+fn format_cache_telemetry_labels(cache: &WorkerCacheTelemetry) -> String {
+    let mib = |bytes: u64| format!("{} MiB", bytes / (1024 * 1024));
+    let refusal = cache
+        .codec
+        .refusal_reason
+        .as_deref()
+        .map(|reason| format!(" ({reason})"))
+        .unwrap_or_default();
+    format!(
+        "VRAM cache logical: {} | VRAM cache slabs: {} | codec workspace: {} | compressed payload: {} | raw payload: {} | raw bypass: {} | metadata: {} | codec: {}/{}{} | codec errors: integrity={} decode={} timeout={}",
+        mib(cache.logical_cached_bytes),
+        mib(cache.physical_cache_slab_bytes),
+        mib(cache.codec_workspace_bytes),
+        mib(cache.compressed_payload_bytes),
+        mib(cache.raw_payload_bytes),
+        mib(cache.raw_bypass_bytes),
+        mib(cache.metadata_bytes),
+        cache.codec.capability.as_str(),
+        cache.codec.state.as_str(),
+        refusal,
+        cache.codec_integrity_errors,
+        cache.codec_decode_errors,
+        cache.codec_timeouts,
+    )
+}
+
 fn collect_process_snapshot(
     proc_root: &Path,
     limit: usize,
-) -> (Vec<ProcessObservation>, ProcessMemoryTotals) {
-    let mut processes = fs::read_dir(proc_root)
+) -> (Vec<ProcessObservation>, ProcessMemoryTotals) {    let mut processes = fs::read_dir(proc_root)
         .ok()
         .into_iter()
         .flatten()
@@ -1250,6 +1294,12 @@ fn run_compact(options: &MonitorOptions) -> Result<(), MonitorError> {
             memory_pressure,
             observation.string("overall_state")
         );
+        // DT-8: cache occupancy is rendered on its own line with explicit
+        // VRAM-cache labels, never merged into the guest/host memory figures.
+        match cache_telemetry_from_value(observation.value("gpu_cache"), unix_epoch_ms()) {
+            Some(cache) => println!("{}", format_cache_telemetry_labels(&cache)),
+            None => println!("VRAM cache codec telemetry: omitted (stale or malformed)"),
+        }
         if options.once {
             return Ok(());
         }
@@ -5213,5 +5263,93 @@ mod tests {
                 "reserve field {key} must be labeled as VRAM"
             );
         }
+    }
+
+    fn sample_cache(logical_cached_bytes: u64, sampled_at_unix_ms: u64) -> WorkerCacheTelemetry {
+        use ramshared_vram::{CodecCapability, CodecState, CodecTelemetry};
+
+        WorkerCacheTelemetry {
+            schema_version: 1,
+            sampled_at_unix_ms,
+            codec: CodecTelemetry::new(
+                CodecCapability::Available,
+                CodecState::Ready,
+                Some("codec-subdeadline"),
+            ),
+            logical_cached_bytes,
+            physical_cache_slab_bytes: 8 * 1024 * 1024,
+            codec_workspace_bytes: 1024 * 1024,
+            compressed_payload_bytes: 32 * 1024 * 1024,
+            raw_payload_bytes: 4 * 1024 * 1024,
+            metadata_bytes: 64 * 1024,
+            raw_bypass_bytes: 16 * 1024 * 1024,
+            codec_integrity_errors: 2,
+            codec_decode_errors: 1,
+            codec_timeouts: 3,
+        }
+    }
+
+    #[test]
+    fn monitor_labels_logical_cache_separately_from_ram() {
+        const LOGICAL: u64 = 256 * 1024 * 1024;
+        let line = format_cache_telemetry_labels(&sample_cache(LOGICAL, 1_000));
+
+        // The logical figure is labelled as VRAM cache occupancy.
+        assert!(
+            line.contains("VRAM cache logical: 256 MiB"),
+            "logical cache bytes must be labelled as VRAM cache occupancy, got: {line}"
+        );
+        assert!(line.contains("VRAM cache slabs: 8 MiB"));
+        assert!(line.contains("codec workspace: 1 MiB"));
+
+        // No non-VRAM RAM label exists anywhere on the line. "VRAM" itself is
+        // the only permitted occurrence of that substring.
+        let without_vram = line.to_uppercase().replace("VRAM", "");
+        assert!(
+            !without_vram.contains("RAM"),
+            "cache telemetry must never be labelled as RAM: {line}"
+        );
+        assert!(!line.contains("host RAM"), "{line}");
+        assert!(!line.contains("guest RAM"), "{line}");
+        assert!(!line.contains("available RAM"), "{line}");
+
+        // Codec counters are present and named as codec counters, not memory.
+        assert!(line.contains("codec errors: integrity=2 decode=1 timeout=3"));
+    }
+
+    #[test]
+    fn monitor_omits_stale_codec_telemetry() {
+        let now = 10_000u64;
+        let fresh = sample_cache(4096, now);
+        let fresh_value = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(
+            cache_telemetry_from_value(Some(&fresh_value), now).map(|c| c.logical_cached_bytes),
+            Some(4096),
+            "a fresh sample is kept"
+        );
+
+        let stale = sample_cache(4096, now - TELEMETRY_MAX_AGE_MS - 1);
+        let stale_value = serde_json::to_value(&stale).unwrap();
+        assert_eq!(
+            cache_telemetry_from_value(Some(&stale_value), now),
+            None,
+            "a stale sample must be omitted, never rendered as live"
+        );
+
+        // Unknown schema version and malformed bodies are omitted the same way.
+        let mut unknown = sample_cache(4096, now);
+        unknown.schema_version = 9;
+        let unknown_value = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(cache_telemetry_from_value(Some(&unknown_value), now), None);
+        assert_eq!(cache_telemetry_from_value(None, now), None);
+        assert_eq!(
+            cache_telemetry_from_value(Some(&Value::String("nope".into())), now),
+            None
+        );
+
+        // The rendered line for a kept sample still carries the bounded refusal
+        // reason and never a payload.
+        let line = format_cache_telemetry_labels(&cache_telemetry_from_value(Some(&fresh_value), now).unwrap());
+        assert!(line.contains("codec-subdeadline"));
     }
 }

@@ -556,6 +556,7 @@ mod tests {
             target_bytes: 4_000,
             chunk_bytes: 512,
             reserve_floor_bytes: 1_000,
+            compression_enabled: false,
         };
 
         assert_eq!(
@@ -776,6 +777,7 @@ mod tests {
                 target_bytes: 1024,
                 chunk_bytes: 64,
                 reserve_floor_bytes: 0,
+                compression_enabled: false,
             },
         );
         worker.handle_update(0, &[0x5a; 64]);

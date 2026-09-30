@@ -84,7 +84,7 @@ pub(super) fn validate_host_registration(
 }
 
 /// RAII wrapper for the loaded dynamic library handle: calls close on `Drop`.
-struct Lib(*mut c_void);
+pub(crate) struct Lib(pub(crate) *mut c_void);
 
 impl Drop for Lib {
     fn drop(&mut self) {
@@ -96,9 +96,14 @@ impl Drop for Lib {
 }
 
 /// CUDA library loaded and initialized successfully (`cuInit(0)`).
+///
+/// Holds NVML alongside it: on WSL2 GPU-PV `cuMemGetInfo` is scoped to the
+/// calling process's channel and does not observe other processes, so the
+/// VRAM budget must be read from the device-wide NVML authority.
 pub struct Cuda {
     _lib: Lib,
     syms: Syms,
+    nvml: crate::nvml::Nvml,
 }
 
 #[cfg(unix)]
@@ -162,7 +167,16 @@ impl Cuda {
         let r = unsafe { (syms.init)(0) };
         check(&syms, r, "cuInit")?;
 
-        Ok(Cuda { _lib: lib, syms })
+        // Fail closed when NVML is missing. Without it the budget would come
+        // from the per-process `cuMemGetInfo` view and the cache would refuse
+        // to yield to another VRAM consumer, which is the wrong safe default.
+        let nvml = crate::nvml::Nvml::load().map_err(|e| CudaError::Load(e.to_string()))?;
+
+        Ok(Cuda {
+            _lib: lib,
+            syms,
+            nvml,
+        })
     }
 
     /// Returns the number of CUDA-capable devices visible to the system.
@@ -226,6 +240,7 @@ impl Cuda {
             cuda: self,
             raw,
             adapter: cuda_adapter_identity(device.uuid, device.luid.clone()),
+            ordinal: device.ordinal,
         })
     }
 }
@@ -261,6 +276,7 @@ pub struct Context<'a> {
     cuda: &'a Cuda,
     raw: CuContext,
     adapter: Option<GpuAdapterIdentity>,
+    ordinal: i32,
 }
 
 fn cuda_adapter_identity(
@@ -287,7 +303,29 @@ impl<'a> Context<'a> {
         self.adapter.as_ref()
     }
 
+    /// Device ordinal this context was created on.
+    pub fn ordinal(&self) -> i32 {
+        self.ordinal
+    }
+
+    /// Device-wide VRAM occupancy across every process on this adapter (NVML).
+    pub fn device_memory(&self) -> Result<crate::nvml::NvmlMemory, CudaError> {
+        self.cuda
+            .nvml
+            .device_memory(self.ordinal)
+            .map_err(|e| CudaError::Driver {
+                op: "nvmlDeviceGetMemoryInfo",
+                code: -1,
+                msg: e.to_string(),
+            })
+    }
+
     /// Returns the free and total VRAM capacities in bytes (`cuMemGetInfo`).
+    ///
+    /// Scope is the calling process's GPU-PV channel, not the whole adapter:
+    /// other processes' allocations are invisible here. Use
+    /// [`Context::device_memory`] for device-wide occupancy; the VRAM budget
+    /// does so, and this method remains only as the raw allocator-local view.
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
         let (mut free, mut total) = (0_usize, 0_usize);
         // SAFETY: out-parameters are valid local pointers; CUDA context is current on the calling thread.
@@ -508,7 +546,7 @@ impl Drop for DeviceMem<'_, '_> {
 
 /// SAFETY: `handle` must refer to a valid open library; `name` must be a valid C-string;
 /// type `T` must be a C function pointer of pointer size.
-unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaError> {
+pub(crate) unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaError> {
     // SAFETY: caller contract (valid handle, null-terminated symbol name).
     let sym = unsafe { crate::loader::sym(handle, name.as_ptr()) };
     if sym.is_null() {
@@ -522,7 +560,7 @@ unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaE
 }
 
 /// Optional symbol resolution (symbol may be missing in legacy stubs).
-fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
+pub(crate) fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
     // SAFETY: same preconditions as load_sym.
     unsafe { load_sym(handle, name).ok() }
 }
@@ -553,7 +591,7 @@ fn err_string(syms: &Syms, r: CuResult) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use core::cell::{Cell, RefCell};
@@ -770,9 +808,12 @@ mod tests {
         7
     }
 
-    fn mock_cuda(host_pointer: Option<crate::ffi::FnMemHostGetDevicePointer>) -> Cuda {
+    pub(crate) fn mock_cuda(host_pointer: Option<crate::ffi::FnMemHostGetDevicePointer>) -> Cuda {
+        // Allocator-local view from the mocked cuMemGetInfo: free=4096 total=8192.
+        crate::nvml::mock::set_device_memory(4096, 4096, 8192);
         Cuda {
             _lib: Lib(core::ptr::null_mut()),
+            nvml: crate::nvml::mock::build(),
             syms: Syms {
                 init: success_init,
                 device_get_count: success_device_count,

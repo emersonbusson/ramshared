@@ -9,9 +9,12 @@ use crate::gpu_cache_worker::{
     MSG_HANDSHAKE_REQ, MSG_HANDSHAKE_RESP, MSG_HEARTBEAT_REQ, MSG_HEARTBEAT_RESP, MSG_PROMOTE,
     MSG_READ_REQ, MSG_READ_RESP, MSG_UPDATE, STATUS_MISS, STATUS_OK,
 };
-use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
+use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead, MAX_CACHE_MUTATION_BYTES};
 use crate::origin_cache::CacheState;
-use ramshared_vram::GpuBudgetTelemetry;
+use ramshared_vram::{
+    GpuBudgetTelemetry, MAX_WORKER_TELEMETRY_PAYLOAD_BYTES, WorkerCacheTelemetry,
+    WorkerTelemetryEnvelope,
+};
 
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// Handshake allows extra time for the worker to initialize CUDA/Vulkan
@@ -20,8 +23,15 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Disable/teardown uses a longer timeout to accommodate GPU context cleanup.
 /// SPEC: DT-5 (5s bounded supervisor teardown).
 pub const DISABLE_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_GPU_BUDGET_PAYLOAD_BYTES: u32 = 4096;
-const MAX_MUTATION_FRAME_DATA_BYTES: usize = 64 * 1024;
+/// Heartbeat payload ceiling (DT-8). An envelope larger than this is rejected
+/// whole — never truncated into a plausible-looking sample.
+const MAX_GPU_BUDGET_PAYLOAD_BYTES: u32 = MAX_WORKER_TELEMETRY_PAYLOAD_BYTES as u32;
+
+/// Largest payload a single cache mutation frame may carry. One frame is one
+/// nonblocking send: the origin path must never block on the GPU worker, so a
+/// logical mutation larger than this is split by the caller into one frame per
+/// slice (see `AuthoritativeOriginBackend::update_cache`).
+pub const MAX_MUTATION_FRAME_DATA_BYTES: usize = MAX_CACHE_MUTATION_BYTES;
 
 fn deadline_after(timeout: Duration) -> io::Result<Instant> {
     Instant::now()
@@ -104,6 +114,7 @@ pub struct IpcCacheClient {
     cached_bytes: u64,
     target_bytes: u64,
     gpu_budget: Option<GpuBudgetTelemetry>,
+    cache_telemetry: Option<WorkerCacheTelemetry>,
     seq: u64,
 }
 
@@ -127,6 +138,7 @@ impl IpcCacheClient {
             cached_bytes: 0,
             target_bytes,
             gpu_budget: None,
+            cache_telemetry: None,
             seq: 0,
         }
     }
@@ -197,6 +209,7 @@ impl IpcCacheClient {
         self.state = CacheState::Unavailable;
         self.cached_bytes = 0;
         self.gpu_budget = None;
+        self.cache_telemetry = None;
         let _ = self.socket.shutdown(std::net::Shutdown::Both);
     }
 
@@ -239,28 +252,54 @@ impl IpcCacheClient {
             self.fail("heartbeat response mismatched");
             return Err("GPU cache worker heartbeat mismatched");
         }
+        // Physical occupancy stays in the frame header fields and is never
+        // re-derived from the envelope (DT-8).
         self.cached_bytes = (resp.aux as u64) << 10;
-        if resp.payload_len == 0 || resp.payload_len > MAX_GPU_BUDGET_PAYLOAD_BYTES {
+        if resp.payload_len > MAX_GPU_BUDGET_PAYLOAD_BYTES {
             self.gpu_budget = None;
-            if resp.payload_len > MAX_GPU_BUDGET_PAYLOAD_BYTES {
-                self.fail("heartbeat GPU telemetry exceeded its size limit");
-                return Err("GPU cache worker heartbeat telemetry exceeded its limit");
-            }
+            self.cache_telemetry = None;
+            self.fail("heartbeat worker telemetry exceeded its size limit");
+            return Err("GPU cache worker heartbeat telemetry exceeded its limit");
+        }
+        if resp.payload_len == 0 {
+            self.gpu_budget = None;
+            self.cache_telemetry = None;
         } else {
             let mut payload = vec![0; resp.payload_len as usize];
             if read_exact_until(&mut self.socket, &mut payload, deadline).is_err() {
-                self.fail("heartbeat GPU telemetry was truncated");
+                self.fail("heartbeat worker telemetry was truncated");
                 return Err("GPU cache worker heartbeat telemetry was truncated");
             }
-            self.gpu_budget = serde_json::from_slice::<GpuBudgetTelemetry>(&payload)
-                .ok()
-                .filter(|telemetry| telemetry.schema_version == 1);
+            // Unknown envelope versions and malformed samples are **omitted**,
+            // not accepted and not turned into a client failure: the physical
+            // header fields above are already authoritative.
+            match WorkerTelemetryEnvelope::from_bounded_payload(&payload) {
+                Some(envelope) => {
+                    self.gpu_budget = envelope
+                        .budget
+                        .filter(|telemetry| telemetry.schema_version == 1);
+                    self.cache_telemetry = envelope.cache;
+                }
+                None => {
+                    self.gpu_budget = None;
+                    self.cache_telemetry = None;
+                }
+            }
         }
         Ok(self.cached_bytes)
     }
 
+    /// Adapter budget from the last heartbeat (its own schema, unchanged).
     pub fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
         self.gpu_budget.as_ref()
+    }
+
+    /// Cache occupancy and codec health from the last heartbeat.
+    ///
+    /// Logical cache bytes are cache occupancy in the worker's address space —
+    /// never guest or host RAM (DT-8).
+    pub fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
+        self.cache_telemetry.as_ref()
     }
 
     fn send_mutation_frame(&mut self, header: FrameHeader, payload: &[u8]) -> CacheMutation {
@@ -286,6 +325,7 @@ impl IpcCacheClient {
         // Accepted bytes are queued, not evidence of GPU allocation.
         self.cached_bytes = 0;
         self.gpu_budget = None;
+        self.cache_telemetry = None;
         CacheMutation::Accepted
     }
 }
@@ -452,6 +492,10 @@ impl BestEffortCache for IpcCacheClient {
     fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
         IpcCacheClient::gpu_budget_telemetry(self)
     }
+
+    fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
+        IpcCacheClient::cache_telemetry(self)
+    }
 }
 
 #[cfg(test)]
@@ -590,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn oversize_read_is_a_cache_miss_without_waiting_for_ipc() {
+    fn oversized_cache_read_is_miss_before_frame_send() {
         let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
         worker_sock.set_nonblocking(true).unwrap();
         let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
@@ -603,7 +647,8 @@ mod tests {
         let mut byte = [0u8; 1];
         assert_eq!(
             worker_sock.read(&mut byte).unwrap_err().kind(),
-            ErrorKind::WouldBlock
+            ErrorKind::WouldBlock,
+            "an oversize cache read must never reach the worker"
         );
     }
 
@@ -643,5 +688,276 @@ mod tests {
         assert_eq!(client.state(), CacheState::Unavailable);
         assert_eq!(client.cached_bytes(), 0);
         worker.join().unwrap();
+    }
+
+    /// Serves one heartbeat response carrying `payload` after reading the
+    /// request, so the client sees a well-formed frame with a caller-chosen body.
+    fn serve_heartbeat_payload(mut worker_sock: UnixStream, payload: Vec<u8>, aux: u32) {
+        let mut request = [0u8; FRAME_HEADER_LEN];
+        worker_sock.read_exact(&mut request).expect("heartbeat request");
+        let request = FrameHeader::decode(&request).expect("valid request header");
+        let response = FrameHeader {
+            msg_type: MSG_HEARTBEAT_RESP,
+            status: STATUS_OK,
+            correlation_id: request.correlation_id,
+            offset: 1024 * 1024,
+            payload_len: payload.len() as u32,
+            aux,
+        };
+        worker_sock.write_all(&response.encode()).expect("heartbeat header");
+        worker_sock.write_all(&payload).expect("heartbeat body");
+    }
+
+    fn sample_cache_telemetry(logical_cached_bytes: u64, sampled_at_unix_ms: u64) -> WorkerCacheTelemetry {
+        use ramshared_vram::{CodecCapability, CodecState, CodecTelemetry};
+
+        WorkerCacheTelemetry {
+            schema_version: 1,
+            sampled_at_unix_ms,
+            codec: CodecTelemetry::new(CodecCapability::Available, CodecState::Ready, None),
+            logical_cached_bytes,
+            physical_cache_slab_bytes: 2 * 1024 * 1024,
+            codec_workspace_bytes: 0,
+            compressed_payload_bytes: 128,
+            raw_payload_bytes: 64,
+            metadata_bytes: 32,
+            raw_bypass_bytes: 2048,
+            codec_integrity_errors: 0,
+            codec_decode_errors: 0,
+            codec_timeouts: 0,
+        }
+    }
+
+    #[test]
+    fn telemetry_envelope_rejects_unknown_version_or_oversize() {
+        // Unknown envelope version: the sample is omitted, never accepted and
+        // never turned into a client failure. Physical header fields survive.
+        let mut unknown = WorkerTelemetryEnvelope::new(
+            1_000,
+            None,
+            Some(sample_cache_telemetry(4096, 1_000)),
+        );
+        unknown.schema_version = 99;
+        let unknown_payload = serde_json::to_vec(&unknown).unwrap();
+
+        let (client_sock, worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            serve_heartbeat_payload(worker_sock, unknown_payload, 64);
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        assert_eq!(client.refresh_cached_bytes(), Ok(64 << 10));
+        assert_eq!(
+            client.cache_telemetry(),
+            None,
+            "an unknown envelope version must not be accepted as cache telemetry"
+        );
+        assert_eq!(client.gpu_budget_telemetry(), None);
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "an unknown envelope version is omitted, not a transport failure"
+        );
+        worker.join().unwrap();
+
+        // Oversize: rejected whole. The client fails closed and never truncates
+        // an oversize payload into a plausible-looking sample.
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            let mut request = [0u8; FRAME_HEADER_LEN];
+            worker_sock.read_exact(&mut request).unwrap();
+            let request = FrameHeader::decode(&request).expect("valid request header");
+            let response = FrameHeader {
+                msg_type: MSG_HEARTBEAT_RESP,
+                status: STATUS_OK,
+                correlation_id: request.correlation_id,
+                offset: 1024 * 1024,
+                payload_len: MAX_GPU_BUDGET_PAYLOAD_BYTES + 1,
+                aux: 64,
+            };
+            worker_sock.write_all(&response.encode()).unwrap();
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        assert!(client.refresh_cached_bytes().is_err());
+        assert_eq!(client.state(), CacheState::Unavailable);
+        assert_eq!(client.cache_telemetry(), None);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn logical_bytes_never_replace_physical_cached_bytes() {
+        // The envelope reports 1 GiB of logical cache occupancy. The frame
+        // header reports 64 KiB of physical cached bytes. They must never be
+        // swapped: `cached_bytes()` is physical and comes from `aux` alone.
+        use crate::isolated_origin::BestEffortCache;
+
+        const LOGICAL: u64 = 1 << 30;
+        let envelope = WorkerTelemetryEnvelope::new(
+            1_000,
+            None,
+            Some(sample_cache_telemetry(LOGICAL, 1_000)),
+        );
+        let payload = envelope.to_bounded_payload().expect("envelope fits");
+
+        let (client_sock, worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            serve_heartbeat_payload(worker_sock, payload, 64);
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        // Refresh through the trait surface the daemon uses, so the forwards
+        // stay exercised and cannot silently re-derive either figure.
+        assert_eq!(
+            BestEffortCache::refresh_cached_bytes(&mut client),
+            Ok(64 << 10)
+        );
+
+        assert_eq!(
+            client.cached_bytes(),
+            64 << 10,
+            "physical cached bytes must stay the frame-header value"
+        );
+        let cache = client.cache_telemetry().expect("cache telemetry present");
+        assert_eq!(cache.logical_cached_bytes, LOGICAL);
+        assert_ne!(
+            cache.logical_cached_bytes,
+            client.cached_bytes(),
+            "logical cache occupancy must never be reported as physical cached bytes"
+        );
+
+        // The same separation holds on every read-only trait forward.
+        assert_eq!(BestEffortCache::cached_bytes(&client), 64 << 10);
+        assert_eq!(BestEffortCache::target_bytes(&client), 1024 * 1024);
+        let trait_cache =
+            BestEffortCache::cache_telemetry(&client).expect("trait cache telemetry");
+        assert_eq!(trait_cache.logical_cached_bytes, LOGICAL);
+        assert_ne!(
+            trait_cache.logical_cached_bytes,
+            BestEffortCache::cached_bytes(&client)
+        );
+        assert!(BestEffortCache::gpu_budget_telemetry(&client).is_none());
+
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn heartbeat_telemetry_truncation_fails_closed() {
+        // The worker advertises a payload and then never sends it. The client
+        // must fail closed rather than accept a partial sample.
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            let mut request = [0u8; FRAME_HEADER_LEN];
+            worker_sock.read_exact(&mut request).unwrap();
+            let request = FrameHeader::decode(&request).expect("valid request header");
+            let response = FrameHeader {
+                msg_type: MSG_HEARTBEAT_RESP,
+                status: STATUS_OK,
+                correlation_id: request.correlation_id,
+                offset: 1024 * 1024,
+                payload_len: 128,
+                aux: 64,
+            };
+            worker_sock.write_all(&response.encode()).unwrap();
+            // Body deliberately omitted.
+            drop(worker_sock);
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+
+        assert_eq!(
+            client.refresh_cached_bytes(),
+            Err("GPU cache worker heartbeat telemetry was truncated")
+        );
+        assert_eq!(client.state(), CacheState::Unavailable);
+        assert_eq!(client.cache_telemetry(), None);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn heartbeat_mismatched_correlation_fails_closed() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            let mut request = [0u8; FRAME_HEADER_LEN];
+            worker_sock.read_exact(&mut request).unwrap();
+            let request = FrameHeader::decode(&request).expect("valid request header");
+            let response = FrameHeader {
+                msg_type: MSG_HEARTBEAT_RESP,
+                status: STATUS_OK,
+                correlation_id: request.correlation_id.wrapping_add(1),
+                offset: 1024 * 1024,
+                payload_len: 0,
+                aux: 64,
+            };
+            worker_sock.write_all(&response.encode()).unwrap();
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+
+        assert_eq!(
+            client.refresh_cached_bytes(),
+            Err("GPU cache worker heartbeat mismatched")
+        );
+        assert_eq!(client.state(), CacheState::Unavailable);
+        assert_eq!(client.cache_telemetry(), None);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn codec_timeout_falls_back_to_origin() {
+        use crate::isolated_origin::AuthoritativeOriginBackend;
+        use crate::origin_cache::OriginStorage;
+        use crate::{BlockBackend, IoError};
+
+        struct MemoryOrigin(Vec<u8>);
+        impl OriginStorage for MemoryOrigin {
+            fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<usize, IoError> {
+                let start = off as usize;
+                let end = (start + buf.len()).min(self.0.len());
+                if start >= self.0.len() {
+                    return Ok(0);
+                }
+                buf[..end - start].copy_from_slice(&self.0[start..end]);
+                Ok(end - start)
+            }
+            fn write_at(&mut self, off: u64, data: &[u8]) -> Result<usize, IoError> {
+                let start = off as usize;
+                let end = start + data.len();
+                if end > self.0.len() {
+                    self.0.resize(end, 0);
+                }
+                self.0[start..end].copy_from_slice(data);
+                Ok(data.len())
+            }
+            fn sync_data(&mut self) -> Result<(), IoError> {
+                Ok(())
+            }
+        }
+
+        // A worker that accepts the read request and never answers: the decoder
+        // is stuck in a driver call that DT-3 explicitly cannot preempt.
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let stalled = std::thread::spawn(move || {
+            let mut request = [0u8; FRAME_HEADER_LEN];
+            if worker_sock.read_exact(&mut request).is_ok() {
+                // Hold the stream open and never respond.
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        });
+
+        let client = IpcCacheClient::new(client_sock, Duration::from_millis(30), 1024 * 1024);
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(b"origin!!".to_vec()), client, 8, 4)
+                .expect("origin backend");
+
+        let start = Instant::now();
+        let mut destination = [0u8; 8];
+        backend.read_at(0, &mut destination).expect("origin read");
+        let elapsed = start.elapsed();
+
+        // The origin is authoritative: the reader gets the durable bytes, and
+        // the stalled cache path did not extend the cache read deadline.
+        assert_eq!(&destination, b"origin!!");
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "a stalled decoder must fall back to the origin within the cache deadline, not hang ({elapsed:?})"
+        );
+        assert_eq!(backend.telemetry().fallback_reads, 1);
+        stalled.join().unwrap();
     }
 }

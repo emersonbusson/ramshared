@@ -57,13 +57,26 @@ impl<'a> VramProvider for Context<'a> {
             .map_err(Into::into)
     }
 
+    /// Device-wide budget: NVML occupancy across every process on the adapter.
+    ///
+    /// `cuMemGetInfo` is deliberately not used here. On WSL2 GPU-PV it accounts
+    /// only the calling process's channel, so an external VRAM consumer (a game)
+    /// would never appear and `safe_cache_target` would refuse to shrink. The
+    /// budget must describe the adapter, because that is what the cache has to
+    /// get out of the way of.
     fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
-        let (available, total) = Context::mem_info(self).map_err(VramError::from)?;
+        let memory = Context::device_memory(self).map_err(VramError::from)?;
+        if memory.used > memory.total {
+            return Err(VramError::Provider(format!(
+                "device occupancy inverted: used={} total={}",
+                memory.used, memory.total
+            )));
+        }
         Ok(GpuBudgetSnapshot {
             adapter: self.adapter_identity().cloned(),
-            total_bytes: Some(total as u64),
-            budget_bytes: total as u64,
-            used_bytes: (total.saturating_sub(available)) as u64,
+            total_bytes: Some(memory.total),
+            budget_bytes: memory.total,
+            used_bytes: memory.used,
             source: GpuBudgetSource::DriverReported,
             sampled_at: Instant::now(),
         })
@@ -76,6 +89,42 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    /// Regression: the budget must follow device-wide NVML occupancy, not the
+    /// per-process `cuMemGetInfo` view. Under WSL2 GPU-PV those diverge the
+    /// moment another process allocates VRAM, and a budget that follows
+    /// `cuMemGetInfo` never yields to a GPU application.
+    #[test]
+    fn budget_follows_device_wide_nvml_not_allocator_local_mem_info() {
+        let cuda = crate::driver::tests::mock_cuda(None);
+        let device = cuda.device(0).unwrap();
+        let context = cuda.create_context(&device).unwrap();
+
+        // Allocator-local `cuMemGetInfo` is mocked at free=4096 total=8192.
+        // Device-wide NVML reports a larger, differently-partitioned adapter.
+        crate::nvml::mock::set_device_memory(6000, 2144, 8144);
+
+        let budget = ramshared_vram::VramProvider::budget_snapshot(&context).unwrap();
+        assert_eq!(budget.total_bytes, Some(8144));
+        assert_eq!(budget.used_bytes, 6000);
+        assert_eq!(budget.available_bytes(), 2144);
+        assert_eq!(
+            budget.source,
+            ramshared_vram::GpuBudgetSource::DriverReported
+        );
+    }
+
+    /// The raw allocator-local view stays available, and stays honest about
+    /// being a different scope from the device-wide budget.
+    #[test]
+    fn raw_mem_info_stays_allocator_local() {
+        let cuda = crate::driver::tests::mock_cuda(None);
+        let device = cuda.device(0).unwrap();
+        let context = cuda.create_context(&device).unwrap();
+        crate::nvml::mock::set_device_memory(6000, 2144, 8144);
+
+        assert_eq!(context.mem_info().unwrap(), (4096, 8192));
+    }
 
     #[test]
     fn test_vram_error_conversion_out_of_range() {

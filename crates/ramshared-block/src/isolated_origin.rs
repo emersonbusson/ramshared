@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use crate::origin_cache::{CacheState, CacheTelemetry, OriginState, OriginStorage};
 use crate::{BlockBackend, IoError, WriteOptions};
-use ramshared_vram::GpuBudgetTelemetry;
+use ramshared_vram::{GpuBudgetTelemetry, WorkerCacheTelemetry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheRead {
@@ -61,6 +61,30 @@ pub struct IsolatedCacheWorker {
     pub control: Receiver<IsolatedCacheControl>,
 }
 
+/// Largest payload a single `BestEffortCache::update` / `promote` call carries.
+///
+/// The GPU cache transport frames each mutation as one nonblocking send, so the
+/// origin write path must split any larger write into consecutive slices of at
+/// most this size. A block-layer request can be far larger (the NBD queue on
+/// this surface admits up to 4 MiB), and forwarding one of those whole would
+/// permanently revoke the cache on the first frame that does not fit.
+pub const MAX_CACHE_MUTATION_BYTES: usize = 64 * 1024;
+
+/// Split a logical cache mutation into consecutive transport-sized frames.
+///
+/// Yields `(offset, slice)` pairs covering `data` exactly, each slice at most
+/// `MAX_CACHE_MUTATION_BYTES`. Empty `data` yields nothing: a zero-length
+/// mutation is a no-op and must not occupy a frame.
+fn mutation_frames(offset: u64, data: &[u8]) -> impl Iterator<Item = (u64, &[u8])> {
+    data.chunks(MAX_CACHE_MUTATION_BYTES)
+        .enumerate()
+        .map(move |(index, slice)| {
+            let slice_offset = offset
+                .saturating_add((index as u64).saturating_mul(MAX_CACHE_MUTATION_BYTES as u64));
+            (slice_offset, slice)
+        })
+}
+
 pub trait BestEffortCache {
     fn read(&mut self, offset: u64, destination: &mut [u8]) -> CacheRead;
     fn update(&mut self, offset: u64, data: &[u8]) -> CacheMutation;
@@ -81,6 +105,14 @@ pub trait BestEffortCache {
     }
 
     fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        None
+    }
+
+    /// Cache occupancy and codec health from the last heartbeat (DT-8).
+    ///
+    /// Logical cache bytes are cache occupancy in the worker's address space —
+    /// never guest or host RAM.
+    fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
         None
     }
 }
@@ -286,6 +318,11 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
         self.cache.gpu_budget_telemetry()
     }
 
+    /// Cache occupancy and codec health from the underlying cache client.
+    pub fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
+        self.cache.cache_telemetry()
+    }
+
     pub fn telemetry(&self) -> CacheTelemetry {
         self.telemetry
     }
@@ -389,11 +426,18 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
         Ok(())
     }
 
+    /// Mirror an already-authorized origin write into the cache, one
+    /// `MAX_CACHE_MUTATION_BYTES` frame at a time. The origin is already
+    /// committed, so a mid-write failure revokes the cache and leaves reads
+    /// falling back to origin — correctness never depends on the mirror.
     fn update_cache(&mut self, offset: u64, data: &[u8]) {
-        if self.cache.update(offset, data) == CacheMutation::Failed {
-            self.telemetry.cache_write_failures =
-                self.telemetry.cache_write_failures.saturating_add(1);
-            let _ = self.revoke_cache();
+        for (offset, slice) in mutation_frames(offset, data) {
+            if self.cache.update(offset, slice) == CacheMutation::Failed {
+                self.telemetry.cache_write_failures =
+                    self.telemetry.cache_write_failures.saturating_add(1);
+                let _ = self.revoke_cache();
+                return;
+            }
         }
     }
 }
@@ -433,9 +477,13 @@ impl<O: OriginStorage, C: BestEffortCache> BlockBackend for AuthoritativeOriginB
             return Err(error);
         }
         self.telemetry.fallback_reads = self.telemetry.fallback_reads.saturating_add(1);
-        if self.cache.promote(offset, destination) == CacheMutation::Failed {
-            self.telemetry.promotion_refusals = self.telemetry.promotion_refusals.saturating_add(1);
-            let _ = self.revoke_cache();
+        for (offset, slice) in mutation_frames(offset, destination) {
+            if self.cache.promote(offset, slice) == CacheMutation::Failed {
+                self.telemetry.promotion_refusals =
+                    self.telemetry.promotion_refusals.saturating_add(1);
+                let _ = self.revoke_cache();
+                break;
+            }
         }
         Ok(())
     }
@@ -539,6 +587,58 @@ mod tests {
         assert_eq!(backend.cache_state(), CacheState::Stuck);
         assert_eq!(backend.telemetry().cache_read_failures, 1);
         assert_eq!(backend.telemetry().fallback_reads, 1);
+    }
+
+    /// A codec/decode fault inside the compressed cache must serve the SSD
+    /// origin bytes, never the refused payload and never a fabricated one
+    /// (RF-1, DT-1, DT-7, DT-11).
+    ///
+    /// Unlike a transport timeout or a disconnect, a codec integrity failure
+    /// surfaces as a cache **miss** with the corrupt payload left unread. The
+    /// origin stays authoritative and the cache client is not revoked (DT-11).
+    #[test]
+    fn compressed_cache_fault_falls_back_to_origin() {
+        let counters = Rc::new(CacheCounters::default());
+        let mut codec_fault_cache = ScriptedCache::active(Rc::clone(&counters));
+        // The worker refused this entry before decode (stored-checksum
+        // mismatch), so the read is a miss. The payload the slab still holds
+        // is deliberately wrong: it must never reach the reader.
+        codec_fault_cache.read = CacheRead::Miss;
+        codec_fault_cache.hit = b"corrupt!".to_vec();
+
+        let bytes = Rc::new(RefCell::new(b"origin!!".to_vec()));
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(Rc::clone(&bytes)), codec_fault_cache, 8, 4)
+                .unwrap();
+
+        let mut destination = [0; 8];
+        backend.read_at(0, &mut destination).unwrap();
+
+        // The origin is authoritative: the durable bytes are what the reader
+        // gets, not the refused compressed payload.
+        assert_eq!(&destination, b"origin!!");
+        assert_ne!(&destination, b"corrupt!");
+        assert_eq!(backend.telemetry().fallback_reads, 1);
+        assert_eq!(
+            backend.telemetry().cache_read_failures, 0,
+            "a codec integrity miss is not a transport failure"
+        );
+        assert_eq!(
+            backend.cache_state(),
+            CacheState::Active,
+            "a codec fault must not revoke the cache client (DT-11)"
+        );
+
+        // A later real hit is still served from the cache, proving the client
+        // survived the codec fault and the raw path keeps working.
+        let mut hit_cache = ScriptedCache::active(counters);
+        hit_cache.read = CacheRead::Hit;
+        hit_cache.hit = b"cache!!!".to_vec();
+        let mut after =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), hit_cache, 8, 4).unwrap();
+        after.read_at(0, &mut destination).unwrap();
+        assert_eq!(&destination, b"cache!!!");
+        assert_eq!(after.telemetry().fallback_reads, 0);
     }
 
     #[test]
@@ -892,6 +992,117 @@ mod tests {
         assert_eq!(update.telemetry().batched_writes, 1);
         assert_eq!(update.telemetry().cache_write_failures, 1);
         assert_eq!(update.cache_state(), CacheState::Unavailable);
+    }
+
+    /// Records every cache mutation frame so tests can assert the framing.
+    struct RecordingCache {
+        updates: RefCell<Vec<(u64, usize)>>,
+        promotes: RefCell<Vec<(u64, usize)>>,
+    }
+
+    impl RecordingCache {
+        fn new() -> Self {
+            Self {
+                updates: RefCell::new(Vec::new()),
+                promotes: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl BestEffortCache for RecordingCache {
+        fn read(&mut self, _offset: u64, destination: &mut [u8]) -> CacheRead {
+            destination.fill(0);
+            CacheRead::Miss
+        }
+
+        fn update(&mut self, offset: u64, data: &[u8]) -> CacheMutation {
+            self.updates.borrow_mut().push((offset, data.len()));
+            CacheMutation::Accepted
+        }
+
+        fn promote(&mut self, offset: u64, data: &[u8]) -> CacheMutation {
+            self.promotes.borrow_mut().push((offset, data.len()));
+            CacheMutation::Accepted
+        }
+
+        fn disable(&mut self) -> CacheMutation {
+            CacheMutation::Accepted
+        }
+
+        fn state(&self) -> CacheState {
+            CacheState::Active
+        }
+    }
+
+    /// A block-layer write can be far larger than one mutation frame (the NBD
+    /// queue on this surface admits up to 4 MiB). Each frame must stay within
+    /// `MAX_CACHE_MUTATION_BYTES` or the transport fails closed and revokes the
+    /// cache, which is what used to leave `cache_state: UNAVAILABLE`.
+    #[test]
+    fn large_write_is_framed_to_the_cache_mutation_limit() {
+        let capacity = 4 * 1024 * 1024;
+        let bytes = Rc::new(RefCell::new(vec![0u8; capacity]));
+        let cache = RecordingCache::new();
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, capacity as u64, 512)
+                .unwrap();
+
+        let payload = vec![0xA5u8; capacity];
+        backend.write_at(0, &payload).unwrap();
+
+        let frames = backend.cache.updates.borrow();
+        assert_eq!(
+            frames.len(),
+            capacity / MAX_CACHE_MUTATION_BYTES,
+            "one frame per MAX_CACHE_MUTATION_BYTES slice"
+        );
+        let mut expected_offset = 0u64;
+        for (offset, len) in frames.iter() {
+            assert_eq!(*offset, expected_offset, "frames must be consecutive");
+            assert!(
+                *len <= MAX_CACHE_MUTATION_BYTES,
+                "frame of {len} bytes exceeds the mutation limit"
+            );
+            expected_offset += *len as u64;
+        }
+        assert_eq!(
+            expected_offset, capacity as u64,
+            "frames must cover the write"
+        );
+        assert_eq!(backend.cache_state(), CacheState::Active);
+        assert_eq!(backend.telemetry().cache_write_failures, 0);
+    }
+
+    /// The read-miss fallback promotes origin data back into the cache with the
+    /// same framing constraint as `update`.
+    #[test]
+    fn large_promote_is_framed_to_the_cache_mutation_limit() {
+        let capacity = MAX_CACHE_MUTATION_BYTES * 3 + 512;
+        let bytes = Rc::new(RefCell::new(vec![0x5Au8; capacity]));
+        let cache = RecordingCache::new();
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, capacity as u64, 512)
+                .unwrap();
+
+        let mut destination = vec![0u8; capacity];
+        backend.read_at(0, &mut destination).unwrap();
+
+        let frames = backend.cache.promotes.borrow();
+        assert_eq!(frames.len(), 4, "three full frames plus a 512-byte tail");
+        assert_eq!(frames[0], (0, MAX_CACHE_MUTATION_BYTES));
+        assert_eq!(
+            frames[1],
+            (MAX_CACHE_MUTATION_BYTES as u64, MAX_CACHE_MUTATION_BYTES)
+        );
+        assert_eq!(
+            frames[2],
+            (
+                2 * MAX_CACHE_MUTATION_BYTES as u64,
+                MAX_CACHE_MUTATION_BYTES
+            )
+        );
+        assert_eq!(frames[3], (3 * MAX_CACHE_MUTATION_BYTES as u64, 512));
+        assert_eq!(backend.telemetry().promotion_refusals, 0);
     }
 
     #[test]

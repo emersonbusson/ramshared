@@ -18,7 +18,18 @@ use serde::{Deserialize, Serialize};
 /// The single configured-reserve authority for every VRAM admission surface.
 ///
 /// SPEC: `docs/specs/no-milestone/gpu-reserve-floor-authority/SPEC.md`.
+pub mod codec;
 pub mod reserve_policy;
+pub mod worker_telemetry;
+pub use codec::{
+    CodecAlignments, CodecChunkResult, CodecId, CodecStatus, FakeCodec, GpuCacheCodec,
+    VramOutputReservation, VramSpan, crc32,
+};
+pub use worker_telemetry::{
+    CodecCapability, CodecState, CodecTelemetry, MAX_CODEC_REFUSAL_REASON_BYTES,
+    MAX_WORKER_TELEMETRY_PAYLOAD_BYTES, TELEMETRY_MAX_AGE_MS, WORKER_TELEMETRY_SCHEMA_VERSION,
+    WorkerCacheTelemetry, WorkerTelemetryEnvelope,
+};
 pub use reserve_policy::{
     ReserveFloorEnv, ReserveFloorError, ReserveFloorPolicy, ReserveFloorSource,
     SEALED_PERCENT_SAFETY_FLOOR, enforced_free_floor_from_configured,
@@ -256,6 +267,17 @@ pub trait VramProvider {
 
     /// Returns adapter-bound admission telemetry. The default is deliberately marked as a local
     /// estimate because legacy providers cannot prove adapter identity or external usage.
+    /// Optional GPU cache codec capability (DT-2 / RF-7).
+    ///
+    /// Returns `None` unless the provider's optional runtime is loaded **and**
+    /// the selected adapter supports it. The worker calls this only when
+    /// compression is explicitly enabled (DT-9); an absent capability means
+    /// raw-only operation. Adding compression methods to raw `VramMemory` is
+    /// deliberately avoided — the capability is a separate opt-in surface.
+    fn cache_codec(&self) -> Option<&dyn GpuCacheCodec<Self::Mem<'_>>> {
+        None
+    }
+
     fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
         let (available, total) = self.mem_info()?;
         Ok(GpuBudgetSnapshot {

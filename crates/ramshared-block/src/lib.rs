@@ -9,6 +9,7 @@
 //! root + device) — this lib is only the protocol and logic.
 #![forbid(unsafe_code)]
 
+pub mod compressed_cache;
 pub mod elastic_cache;
 #[cfg(unix)]
 pub mod gpu_cache_worker;

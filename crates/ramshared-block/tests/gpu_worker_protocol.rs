@@ -55,6 +55,7 @@ fn worker_config() -> GpuWorkerConfig {
         target_bytes: 0,
         chunk_bytes: 4096,
         reserve_floor_bytes: 0,
+        compression_enabled: false,
     }
 }
 

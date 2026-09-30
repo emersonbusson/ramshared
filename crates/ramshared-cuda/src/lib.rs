@@ -21,17 +21,18 @@
 //! ```
 
 #[cfg(unix)]
-mod loader_unix;
+pub(crate) mod loader_unix;
 #[cfg(unix)]
 use loader_unix as loader;
 
 #[cfg(windows)]
-mod loader_win;
+pub(crate) mod loader_win;
 #[cfg(windows)]
 use loader_win as loader;
 
 mod driver;
 mod ffi;
+pub mod nvml;
 pub mod probe;
 mod vram_impl; // impl VramProvider/VramMemory for CUDA types (RF-G1)
 
@@ -40,6 +41,7 @@ pub use ffi::{
     CU_MEMHOSTREGISTER_DEVICEMAP, CU_MEMHOSTREGISTER_IOMEMORY, CU_MEMHOSTREGISTER_PORTABLE,
     CU_MEMHOSTREGISTER_READ_ONLY,
 };
+pub use nvml::{Nvml, NvmlError, NvmlMemory};
 pub use probe::{PROBE_PATTERN_LEN, ProbePlanError, pattern_for_offset, plan_probe_offsets};
 
 #[cfg(test)]

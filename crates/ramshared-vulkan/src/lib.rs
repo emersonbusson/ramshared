@@ -106,6 +106,18 @@ struct DeviceBits {
     staging_mapped: *mut u8,
 }
 
+/// Selection result of `after_instance`: physical device, display name, adapter
+/// identity, whether `VK_EXT_memory_budget` is present, whether the device is a
+/// hardware GPU, and the created device resources.
+type AfterInstance = (
+    vk::PhysicalDevice,
+    String,
+    Option<GpuAdapterIdentity>,
+    bool,
+    bool,
+    DeviceBits,
+);
+
 /// RAII guard for the `goto out_err` (kernel idiom) in device creation: on error (any `?`),
 /// destroys the already created resources in reverse order **and** the device. On success, `disarm()` prevents
 /// cleanup and the handles are passed to the `VulkanProvider`.
@@ -181,6 +193,7 @@ pub struct VulkanProvider {
     name: String,
     adapter: Option<GpuAdapterIdentity>,
     memory_budget_extension: bool,
+    hardware_gpu: bool,
 }
 
 impl VulkanProvider {
@@ -225,7 +238,7 @@ impl VulkanProvider {
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
         match Self::after_instance(&instance, ordinal, exact) {
-            Ok((phys, name, adapter, memory_budget_extension, bits)) => Ok(Self {
+            Ok((phys, name, adapter, memory_budget_extension, hardware_gpu, bits)) => Ok(Self {
                 instance,
                 _entry: entry,
                 phys,
@@ -241,6 +254,7 @@ impl VulkanProvider {
                 name,
                 adapter,
                 memory_budget_extension,
+                hardware_gpu,
             }),
             Err(e) => {
                 // SAFETY: `instance` created above and destroyed exactly once here.
@@ -255,16 +269,7 @@ impl VulkanProvider {
         instance: &ash::Instance,
         ordinal: u32,
         exact: bool,
-    ) -> Result<
-        (
-            vk::PhysicalDevice,
-            String,
-            Option<GpuAdapterIdentity>,
-            bool,
-            DeviceBits,
-        ),
-        VramError,
-    > {
+    ) -> Result<AfterInstance, VramError> {
         // SAFETY: `instance` valid.
         let pdevs = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| vk_err("enumerate_physical_devices", e))?;
@@ -292,6 +297,12 @@ impl VulkanProvider {
         let name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
             .to_string_lossy()
             .into_owned();
+        // A software rasterizer (llvmpipe/lavapipe) exposes host RAM as a device
+        // heap. That heap is not GPU VRAM and must never be offered as a cache.
+        let hardware_gpu = matches!(
+            props.device_type,
+            vk::PhysicalDeviceType::DISCRETE_GPU | vk::PhysicalDeviceType::INTEGRATED_GPU
+        );
         let mut id_props = vk::PhysicalDeviceIDProperties::default();
         let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut id_props);
         // SAFETY: physical device was enumerated from this instance; properties2 is initialized.
@@ -330,12 +341,25 @@ impl VulkanProvider {
         let qf = pick_transfer_family(instance, phys)
             .ok_or_else(|| VramError::Provider("sem queue family de transfer".into()))?;
         let bits = create_device_resources(instance, phys, qf, memory_budget_extension)?;
-        Ok((phys, name, adapter, memory_budget_extension, bits))
+        Ok((
+            phys,
+            name,
+            adapter,
+            memory_budget_extension,
+            hardware_gpu,
+            bits,
+        ))
     }
 
     /// Name of the selected device (e.g., \"NVIDIA GeForce RTX 2060\" or \"llvmpipe\" in software).
     pub fn device_name(&self) -> &str {
         &self.name
+    }
+
+    /// Whether this is a real GPU (`DISCRETE_GPU` / `INTEGRATED_GPU`). A CPU
+    /// software rasterizer such as llvmpipe is not a VRAM source.
+    pub fn is_hardware_gpu(&self) -> bool {
+        self.hardware_gpu
     }
 
     /// Size of the largest `DEVICE_LOCAL` heap, which is also the heap used by allocations.
@@ -593,7 +617,10 @@ impl VramProvider for VulkanProvider {
     }
 
     fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
-        if self.memory_budget_extension {
+        // Only a hardware GPU's heap is VRAM. A software rasterizer reports host
+        // RAM here; treating that as `DriverReported` would advertise system
+        // memory as a GPU cache budget.
+        if self.memory_budget_extension && self.hardware_gpu {
             let mut budget_props = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
             let mut memory_props =
                 vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget_props);

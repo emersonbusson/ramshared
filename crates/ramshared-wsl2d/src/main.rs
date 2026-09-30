@@ -42,6 +42,7 @@ use ramshared_cuda::Cuda;
 use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
 use ramshared_vram::{
     GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetTelemetry, VramMemory, VramProvider,
+    WorkerCacheTelemetry,
 };
 use ramshared_vulkan::VulkanProvider;
 #[cfg(test)]
@@ -2316,6 +2317,13 @@ impl BestEffortCache for OriginCache {
             Self::Disabled(c) => c.gpu_budget_telemetry(),
         }
     }
+
+    fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
+        match self {
+            Self::Ipc(c) => c.cache_telemetry(),
+            Self::Disabled(c) => c.cache_telemetry(),
+        }
+    }
 }
 
 enum WorkerChildHandle {
@@ -2861,6 +2869,9 @@ fn publish_origin_cache_status<S: NbdRuntimeStarter>(
     }
     let physical_cached_bytes = cache.refresh_cached_bytes();
     let gpu_budget = cache.gpu_budget_telemetry().cloned();
+    // DT-8: cache occupancy is published beside the adapter budget, never
+    // merged into it and never labelled as RAM.
+    let gpu_cache = cache.cache_telemetry().cloned();
     let gpu_headroom_kib = unix_time_ms().and_then(|now| {
         gpu_budget
             .as_ref()?
@@ -2881,6 +2892,7 @@ fn publish_origin_cache_status<S: NbdRuntimeStarter>(
         vram_cached_kib: physical_cached_bytes.unwrap_or_default() >> 10,
         gpu_headroom_kib,
         gpu_budget,
+        gpu_cache,
         ssd_origin_written_kib: telemetry.origin_written_bytes >> 10,
         cache_fallback_reads: telemetry.fallback_reads,
         cache_invalidations: telemetry.invalidations,
@@ -2905,6 +2917,9 @@ struct OriginCacheStatus {
     vram_cached_kib: u64,
     gpu_headroom_kib: Option<u64>,
     gpu_budget: Option<GpuBudgetTelemetry>,
+    /// Cache occupancy and codec health (DT-8). Logical cache bytes are cache
+    /// occupancy in the worker's address space, never guest or host RAM.
+    gpu_cache: Option<WorkerCacheTelemetry>,
     ssd_origin_written_kib: u64,
     cache_fallback_reads: u64,
     cache_invalidations: u64,
@@ -5799,6 +5814,41 @@ mod tests {
         }
     }
 
+    /// Provider that advertises a GPU cache codec (DT-2 / RF-7). Used to prove
+    /// codec capability never bypasses adapter revalidation.
+    struct CodecCapableProvider {
+        snapshot: GpuBudgetSnapshot,
+        codec: ramshared_vram::FakeCodec,
+    }
+
+    impl VramProvider for CodecCapableProvider {
+        type Mem<'a>
+            = TestMemory
+        where
+            Self: 'a;
+
+        fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+            Ok(TestMemory::new(bytes))
+        }
+
+        fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+            Ok((
+                self.snapshot.available_bytes(),
+                self.snapshot
+                    .total_bytes
+                    .unwrap_or(self.snapshot.budget_bytes),
+            ))
+        }
+
+        fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, ramshared_vram::VramError> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn cache_codec(&self) -> Option<&dyn ramshared_vram::GpuCacheCodec<TestMemory>> {
+            Some(&self.codec)
+        }
+    }
+
     fn daemon_argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_string()).collect()
     }
@@ -6446,6 +6496,7 @@ mod tests {
             vram_cached_kib: backend.cached_bytes() >> 10,
             gpu_headroom_kib: None,
             gpu_budget: None,
+            gpu_cache: None,
             ssd_origin_written_kib: backend.telemetry().origin_written_bytes >> 10,
             cache_fallback_reads: backend.telemetry().fallback_reads,
             cache_invalidations: backend.telemetry().invalidations,
@@ -11714,6 +11765,140 @@ mod tests {
     }
 
     #[test]
+    fn selected_provider_without_codec_starts_raw_only() {
+        use ramshared_block::GpuCacheWorker;
+        use ramshared_vram::{CodecCapability, CodecState};
+
+        // Compression is explicitly enabled, but the selected provider has no
+        // `cache_codec()` capability. DT-2 / RF-7: the worker must be raw-only
+        // and never attempt compression or fault the codec.
+        let provider = BudgetSnapshotProvider {
+            snapshot: adapter_budget_snapshot(Some(test_gpu_identity()), Instant::now()),
+        };
+        let config = GpuWorkerConfig {
+            target_bytes: 8 * 1024 * 1024,
+            chunk_bytes: 64,
+            reserve_floor_bytes: 0,
+            compression_enabled: true,
+        };
+        let mut worker = GpuCacheWorker::new(&provider, config);
+
+        worker.handle_update(0, &[0x5a; 64]);
+
+        assert_eq!(
+            worker.compressed_entries_count(),
+            0,
+            "a provider without a codec must never publish compressed extents"
+        );
+        assert_eq!(
+            worker.codec_faults(),
+            0,
+            "raw-only is the absence of a codec, not a codec failure"
+        );
+        let telemetry = worker.cache_telemetry(1_000);
+        assert_eq!(telemetry.codec.capability, CodecCapability::RawOnly);
+        assert_eq!(telemetry.codec.state, CodecState::RawOnly);
+        assert_eq!(telemetry.compressed_payload_bytes, 0);
+        assert_eq!(telemetry.codec_integrity_errors, 0);
+
+        // The raw cache still serves: raw-only is a working product, not an
+        // empty one (DT-9).
+        assert_eq!(worker.handle_read(0, 64).as_deref(), Some(&[0x5a; 64][..]));
+        assert_eq!(worker.cached_bytes(), 64);
+        assert_eq!(
+            telemetry.logical_cached_bytes, 64,
+            "logical cache bytes are cache occupancy, not RAM"
+        );
+    }
+
+    #[test]
+    fn selected_codec_provider_revalidates_exact_adapter() {
+        use ramshared_block::GpuCacheWorker;
+
+        // A codec-capable provider is selected and starts with compression.
+        let provider = CodecCapableProvider {
+            snapshot: adapter_budget_snapshot(Some(test_gpu_identity()), Instant::now()),
+            codec: ramshared_vram::FakeCodec::new(),
+        };
+        let config = GpuWorkerConfig {
+            target_bytes: 8 * 1024 * 1024,
+            chunk_bytes: 64,
+            reserve_floor_bytes: 0,
+            compression_enabled: true,
+        };
+        let mut worker = GpuCacheWorker::new(&provider, config);
+        worker.handle_update(0, &[0x11; 64]);
+        let telemetry = worker.cache_telemetry(1_000);
+        assert_ne!(
+            telemetry.codec.capability,
+            ramshared_vram::CodecCapability::RawOnly,
+            "a codec-capable provider must not silently degrade to raw-only"
+        );
+
+        // Codec capability must not bypass exact-adapter revalidation: the
+        // same identity and a fresh safe budget are still required.
+        let expected = test_gpu_identity();
+        assert!(
+            revalidate_selected_adapter(
+                adapter_budget_snapshot(Some(expected.clone()), Instant::now()),
+                &expected,
+                config,
+            )
+            .is_ok()
+        );
+
+        let mut replacement = expected.clone();
+        replacement.key = "uuid:codec-imposter".into();
+        assert!(
+            revalidate_selected_adapter(
+                adapter_budget_snapshot(Some(replacement), Instant::now()),
+                &expected,
+                config,
+            )
+            .unwrap_err()
+            .contains("identity changed"),
+            "codec capability must never waive the identity check"
+        );
+
+        assert!(
+            revalidate_selected_adapter(
+                adapter_budget_snapshot(
+                    Some(expected.clone()),
+                    Instant::now() - Duration::from_secs(30),
+                ),
+                &expected,
+                config,
+            )
+            .unwrap_err()
+            .contains("fresh safe cache budget"),
+            "codec capability must never waive the fresh-budget check"
+        );
+
+        // A provider that loses its safe cache budget is refused even though it
+        // still advertises a codec.
+        let starving = CodecCapableProvider {
+            snapshot: GpuBudgetSnapshot {
+                total_bytes: Some(8 * GIB),
+                budget_bytes: 8 * GIB,
+                used_bytes: 8 * GIB,
+                adapter: Some(expected.clone()),
+                source: ramshared_vram::GpuBudgetSource::DriverReported,
+                sampled_at: Instant::now(),
+            },
+            codec: ramshared_vram::FakeCodec::new(),
+        };
+        assert!(
+            revalidate_selected_adapter(
+                starving.budget_snapshot().unwrap(),
+                &expected,
+                config,
+            )
+            .unwrap_err()
+            .contains("fresh safe cache budget")
+        );
+    }
+
+    #[test]
     fn selected_gpu_worker_uses_allocator_budget_without_matching_wddm_luid() {
         let provider = BudgetSnapshotProvider {
             snapshot: adapter_budget_snapshot(Some(test_gpu_identity()), Instant::now()),
@@ -12757,6 +12942,25 @@ Filename Type Size Used Priority
                 source: ramshared_vram::GpuBudgetSource::DriverReported,
                 sampled_at_unix_ms: 1234567890,
             }),
+            gpu_cache: Some(WorkerCacheTelemetry {
+                schema_version: 1,
+                sampled_at_unix_ms: 1234567890,
+                codec: ramshared_vram::CodecTelemetry::new(
+                    ramshared_vram::CodecCapability::Available,
+                    ramshared_vram::CodecState::Ready,
+                    None,
+                ),
+                logical_cached_bytes: 256 * 1024 * 1024,
+                physical_cache_slab_bytes: 8 * 1024 * 1024,
+                codec_workspace_bytes: 1024 * 1024,
+                compressed_payload_bytes: 32 * 1024 * 1024,
+                raw_payload_bytes: 4 * 1024 * 1024,
+                metadata_bytes: 64 * 1024,
+                raw_bypass_bytes: 16 * 1024 * 1024,
+                codec_integrity_errors: 0,
+                codec_decode_errors: 1,
+                codec_timeouts: 0,
+            }),
             ssd_origin_written_kib: 8192,
             cache_fallback_reads: 3,
             cache_invalidations: 0,
@@ -12779,6 +12983,17 @@ Filename Type Size Used Priority
         assert_eq!(parsed["vram_cached_kib"], 131072);
         assert_eq!(parsed["gpu_budget"]["adapter"]["backend"], "vulkan");
         assert_eq!(parsed["gpu_budget"]["available_bytes"], 512 * 1024 * 1024);
+        // DT-8: cache occupancy is published beside the adapter budget and is
+        // never the same field as the physical `vram_cached_kib`.
+        assert_eq!(parsed["gpu_cache"]["logical_cached_bytes"], 256 * 1024 * 1024);
+        assert_eq!(parsed["gpu_cache"]["physical_cache_slab_bytes"], 8 * 1024 * 1024);
+        assert_eq!(parsed["gpu_cache"]["codec_decode_errors"], 1);
+        assert_eq!(parsed["gpu_cache"]["codec"]["state"], "ready");
+        assert_ne!(
+            parsed["gpu_cache"]["logical_cached_bytes"],
+            parsed["vram_cached_kib"],
+            "logical cache occupancy must never be published as physical cached KiB"
+        );
         assert_eq!(parsed["cache_target_kib"], 262144);
         assert_eq!(parsed["cache_fallback_reads"], 3);
 
