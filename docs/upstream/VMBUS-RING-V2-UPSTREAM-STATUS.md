@@ -10,13 +10,16 @@
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Synthetic Transport)
 - **Patch Reference:** [seven-patch v2 series](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series) (in the contribution fork) · [older consolidated draft](patches/vmbus-ring-buffer-v2-draft.patch)
 - **Cover letter:** [DRAFT — do not send](vmbus-ring-v2-cover-letter-DRAFT.md). Prepared so the send is mechanical once the gates close; the PRD send gate is closed and the draft carries its own checklist.
+- **CoCo static proof:** [`COCO-STATIC-PROOF.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-STATIC-PROOF.md) — machine-checked negative proof that the guest-fatal vmalloc-decryption pattern is unreachable from any allocation this series introduces. Enforced in CI with a self-test. Does **not** close [`COCO-GAP.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md).
 - **Status (2026-09-30):** v1 proposal submitted 2026-09-17 and reviewed by
   Michael Kelley on 2026-09-22. The seven-patch v2 candidate is an **unsent
   draft by policy**. It is source-complete against the maintainer's five-point
   refactor request and its hosted build/KUnit gates pass (run 36574925363, and
-  run 36590352003 for audit SHA `de5138b5`), but live GPADL/UIO lifecycle,
-  forced order-zero fallback under real fragmentation, and SEV-SNP/TDX/Arm CCA
-  evidence are all open. **Not ready to send.** Blocking gates live in
+  run 36590352003 for audit SHA `de5138b5`); the series bytes are pinned by
+  `series/SHA256SUMS` and the CoCo static invariants are machine-checked in
+  CI. Live GPADL/UIO lifecycle, forced order-zero fallback under real
+  fragmentation, and SEV-SNP/TDX/Arm CCA evidence remain open. **Not ready
+  to send.** Blocking gates live in
   [`GAP-REGISTER.md`](../reliability/GAP-REGISTER.md) and the SSDV3 suite at
   [`docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/).
 

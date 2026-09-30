@@ -195,6 +195,13 @@ partial tick is a refusal.
       (`vmbus_channel_lifecycle_buffer_balance`).
 - [ ] `scripts/checkpatch.pl --strict --no-tree` clean at all seven
       stages on the exact bytes to be sent.
+- [ ] `series/SHA256SUMS` matches those exact bytes (`sha256sum -c`), so
+      the CI evidence binds to the sendable series.
+- [ ] `Enforce CoCo static invariants` CI step green on the send SHA,
+      **including both gate self-tests**. If the step is red, the answer
+      is to fix the regression, not to skip the step.
+- [ ] The static proof document matches the candidate source. If any
+      `set_memory_*` site moved, re-run the inventory before sending.
 - [ ] Every patch carries `Subject:`, `From:`, `Date:` and
       `Signed-off-by:`; patches that implement a reviewer's suggestion
       carry `Suggested-by:`.
