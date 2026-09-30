@@ -2,16 +2,17 @@
 
 ## Scope
 
-Maintain the upstream v2 against Linux v7.3-rc4 and separately port its
-allocation, GPADL ownership, and UIO guarantees to a source-matched WSL
-6.18.40.1 tree. The running Build #6 image has allocator symbols, but its
-source revision is not yet matched (EVD-0089). The raw upstream patches are
-not expected to apply to the WSL tree. In scope: `drivers/hv/channel.c`,
-`drivers/hv/ring_buffer.c`, `drivers/hv/hyperv_vmbus.h`,
-`include/linux/hyperv.h`, `drivers/uio/uio_hv_generic.c`, the netvsc buffer
-owner, and WSL-specific DXG GPADL ownership. Out of scope: balloon/watermark
-changes from the former 1/2 patch and upstream transmission. The upstream tag
-already contains Kameron Carr's `vmbus_alloc_buffer()` series.
+Prepare a locally testable upstream v2 against Linux v7.3-rc4, maintain it,
+and separately port its allocation, GPADL ownership, and UIO guarantees to a
+source-matched WSL 6.18.40.1 tree. The running Build #6 image has allocator
+symbols, but its source revision is not yet matched (EVD-0089). The raw
+upstream patches are not expected to apply to the WSL tree. In scope:
+`drivers/hv/channel.c`, `drivers/hv/ring_buffer.c`,
+`drivers/hv/hyperv_vmbus.h`, `include/linux/hyperv.h`,
+`drivers/uio/uio_hv_generic.c`, the netvsc buffer owner, and WSL-specific DXG
+GPADL ownership. Out of scope: balloon/watermark changes from the former 1/2
+patch, WSL deployment, and upstream transmission. The upstream tag already
+contains Kameron Carr's `vmbus_alloc_buffer()` series.
 
 ## Traceability
 
@@ -35,40 +36,48 @@ already contains Kameron Carr's `vmbus_alloc_buffer()` series.
 | DT-3 | GPADL layout (`BUFFER` vs `RING`) is separate from whether the caller already handled encryption | A ring needs gap/offset encoding but may already be decrypted. |
 | DT-4 | Ring wraparound maps `vmalloc_to_page()` results from the virtual buffer | The allocator no longer promises one contiguous `struct page` array. |
 | DT-5 | Failed teardown or unknown re-encryption retains backing pages; cleanup is idempotent | The host may still access them, or their private/shared state may be unknown. |
-| DT-6 | Keep exported legacy GPADL interfaces only where existing external consumers require them | Avoid an unrelated exported-API migration in this series. |
-| DT-7 | Give the ring owner a page-pointer array for UIO/sysfs mapping, and expose UIO memory as virtual | A single physical range is no longer valid. |
+| DT-6 | Preserve the existing exported GPADL and buffer allocator/free signatures; keep exported legacy GPADL interfaces only where existing external consumers require them, and add descriptor-aware `_owned` entry points for migrated in-tree users | Avoid an unrelated exported-API migration while keeping owned lifetime state attached to the new call sites. |
+| DT-7 | Give each owned buffer (ring owner included) a page-pointer array for UIO/sysfs mapping, and expose UIO memory as virtual with page protections matching each backing page's encryption state | A single physical range is no longer valid, and userspace aliases must agree with the shared/private page state. |
 | DT-8 | Keep the WSL 6.18.40.1 backport in a separate source branch | The exact v7.3-rc4 series fails to apply to the WSL tree. |
 | DT-9 | Promote only a sealed kernel/modules/QEMU pair through `wsl-kernel.sh apply` | The host reports `NEED_ARM`; manual image replacement is not admitted. |
 | DT-10 | Preserve buffer ownership and encryption state across rescind until a teardown acknowledgement or protocol-proven terminal host revocation; distinguish remote rescind from local unload | The current rescind path can report success while retaining a nonzero GPADL handle, after which release skips the free and clears the owner structure. |
 | DT-11 | Attribute runtime results only to an image, modules, and exact source revision bound by one manifest | The Build #6 image hash is known, but its source commit is not matched to the local source or candidate artifacts. |
 | DT-12 | Reconcile buffer ownership with stable device GUID, channel relid, role, and allocate/free/retain result; never log kernel addresses | EVD-0089 shows growing VMBus mappings far exceed the live channel count, but `/proc/vmallocinfo` alone cannot identify owners. |
+| DT-13 | Keep backing pages on a channel-keyed retained-owner list until GPADL ownership is resolved, page-state is known, and page references return to the allocator's baseline | Close the asynchronous UIO mapping and GPADL lifetime gap without freeing pages still mapped or host-visible. |
 
 ## Atomicity and rollback
 
 Allocation, GPADL messages, and `vmap`/`vunmap` run in sleepable process
 context. No spinlock is held across allocation or host response wait.
-The host-ownership frontier is successful GPADL establishment, but a posted
-request with an uncertain result must also retain its pending handle. Before
-returning pages, teardown must be acknowledged or a terminal host revocation
-must be established from explicit message origin. A generic
-`channel->rescind` flag alone is insufficient: local unload can set it, and
-the current code can return success from its rescind branch without clearing
-the handle. That leaves `vmbus_release_buffer()` skipping the free before it
-clears the owner structure. Preserve the owner until the disposition is
-proven; never re-encrypt while the host may still reference a shared buffer.
-Apply the same ownership rule when a partial GPADL post fails and before
-allocating teardown metadata. On ambiguity, retain and account for the pages.
-CoCo re-encryption failure remains an independent reason to retain the
-affected chunk. No userspace or persistent host state changes occur during
-patch preparation. A test kernel is rolled back only after a fresh boot
-proves the previous kernel identity. The attended host test must not enable
-swap, run memory pressure, or change RamShared lifecycle state.
+The host-ownership frontier begins when the first GPADL post may have reached
+the host; successful GPADL establishment is the frontier, but a posted request
+with an uncertain result must also retain its pending handle. Backing pages
+remain retained after an ambiguous post or teardown. Before returning pages,
+teardown must be acknowledged or a terminal host revocation must be
+established from explicit message origin. A generic `channel->rescind` flag
+alone is insufficient: local unload can set it, and the current code can
+return success from its rescind branch without clearing the handle. That
+leaves `vmbus_release_buffer()` skipping the free before it clears the owner
+structure. The current implementation treats a host-generated channel rescind
+as a revocation event; the upstream VMBus documentation describes device
+removal but does not spell out the GPADL page-revocation ordering. That
+assumption remains a runtime/protocol qualification gate. Preserve the owner
+until the disposition is proven; never re-encrypt while the host may still
+reference a shared buffer. Before reclaim, page-state must be known and all
+mapping references must be gone. Apply the same ownership rule when a partial
+GPADL post fails and before allocating teardown metadata. On ambiguity,
+retain and account for the pages. CoCo re-encryption failure remains an
+independent reason to retain the affected chunk. No userspace or persistent
+host state changes occur during patch preparation. A test kernel is rolled
+back only after a fresh boot proves the previous kernel identity (equivalently,
+by rebooting the prior image). The attended host test must not enable swap,
+run memory pressure, or change RamShared lifecycle state.
 
 ## Kahneman map
 
 | Stage | Discipline | Question | Minimum executable evidence | Abort |
 | --- | --- | --- | --- | --- |
-| ITEM-2 | #13 refusal/legitimate | Do both private and shared rings map through the correct page state? | Named KUnit allocation/mapping tests plus CoCo lab | Any decryption on `vmap` address |
+| ITEM-2 | #13 refusal/legitimate | Do private and shared ring/UIO mappings use the correct backing pages and page protections? | Named KUnit allocation, map-selection, and page-protection tests plus CoCo lab | Any decryption on a `vmap()` alias or encrypted mapping of shared pages |
 | ITEM-3 | #16 exhaustion | Does a high-order allocation failure fall to smaller chunks without exposing partial pages? | Fault-injection allocation test | Any freed page with unknown encryption state |
 | ITEM-3 / ITEM-5 | #13 refusal/legitimate | Which rescind source proves host GPADL revocation? | KUnit: host rescind reclaims, synthetic hibernation and local unload retain, partial-post rescind and teardown-allocation failure paths | Any generic `channel->rescind` path frees host-referenced pages |
 | ITEM-3 / ITEM-5 | #17 replay | Can a successful-looking rescind teardown erase the only owner while the GPADL handle remains live? | `vmbus_gpadl_rescind_handle_state_test`: assert pending handle, owner, and encryption state survive until explicit release; repeat cleanup | Nonzero handle with a cleared owner or premature re-encryption |
@@ -85,9 +94,10 @@ swap, run memory pressure, or change RamShared lifecycle state.
 - Host revocation: only confirmed teardown or host-originated rescind clears
   GPADL ownership; local and synthetic rescind retain pages without separate
   proof.
-- Host safety: one attended test promotion is allowed only after its immutable
-  kernel/modules/QEMU pair passes pre-install gates; no pressure or RamShared
-  swap activation is allowed on the daily WSL2 environment.
+- Host safety: no pressure or kernel install on the daily WSL2 environment.
+  The single exception is one attended test promotion, allowed only after its
+  immutable kernel/modules/QEMU pair passes pre-install gates; no pressure or
+  RamShared swap activation is allowed on the daily WSL2 environment.
 - Replay: a cleaned buffer cannot be freed a second time.
 
 ## Files and implementation order
@@ -105,15 +115,20 @@ swap, run memory pressure, or change RamShared lifecycle state.
 
 | Production path | Named test | Kind | Cover |
 | --- | --- | --- | --- |
+| Page rounding | `vmbus_buffer_size_rounding_test` | KUnit | N/A — kernel slice |
+| Page-rounding overflow | `vmbus_buffer_size_overflow_test` | KUnit | N/A — kernel slice |
 | Ring allocation and mapping | `vmbus_ring_buffer_noncontiguous_pages` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
-| Allocation-order fallback | `vmbus_ring_fallback_order_zero_test`, `vmbus_buffer_order_zero_allocation_test` | KUnit helper plus injected allocation failures; patch 6 passed hosted KUnit run 36148296003 | N/A — kernel slice; live fragmentation drill still required |
-| GPADL post failure | `vmbus_gpadl_post_failure_test`, `vmbus_gpadl_post_success_test`, `vmbus_gpadl_response_state_test`, `vmbus_gpadl_teardown_post_failure_test` | Callback-injected KUnit; prior five-patch hosted run passed | N/A — kernel slice; live host response/rescind interleaving remains required |
-| Confidential ring GPADL | `vmbus_ring_buffer_coco_decrypt_once` | KUnit / CoCo lab | N/A — kernel slice; CoCo evidence |
-| GPADL teardown and buffer free | `vmbus_buffer_failed_teardown_leaks` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
+| Allocation-order fallback / descent | `vmbus_ring_fallback_order_zero_test`, `vmbus_buffer_order_zero_allocation_test` | KUnit helper test plus injected failures above order 0; exercises a real order-0 allocation and order-0 exhaustion | N/A — kernel slice; live fragmentation drill remains required |
+| GPADL post failure / message post ordering and failure ownership | `vmbus_gpadl_post_failure_test`, `vmbus_gpadl_post_success_test`, `vmbus_gpadl_response_state_test`, `vmbus_gpadl_teardown_post_failure_test` | KUnit with injected post callback; exercises header, each body position, teardown, host rejection status, and rescind status | N/A — kernel slice; live Hyper-V response/rescind interleaving remains required |
+| Confidential ring GPADL | `vmbus_ring_buffer_coco_decrypt_once` | KUnit / CoCo lab; not implemented | N/A — kernel slice; CCA/TDX/SNP evidence |
+| GPADL teardown and buffer free / release ownership predicate | `vmbus_buffer_failed_teardown_leaks_test` (`vmbus_buffer_failed_teardown_leaks`) | KUnit predicate test / failure injection; callback-injected header/body/teardown post failures and response-state mapping are covered separately | N/A — kernel slice; targeted build + live response/rescind drill |
+| Retained GPADL lifetime | `vmbus_buffer_owner_reclaim_gate_test`, `vmbus_buffer_reclaim_schedule_gate_test`, `vmbus_buffer_host_revoke_state_test`, `vmbus_buffer_repeated_owner_release_test` | KUnit state/scheduling tests; does not prove concurrent host protocol behavior | N/A — kernel slice; live acknowledgment/rescind interleaving |
 | GPADL rescind ownership | `vmbus_gpadl_host_rescind_reclaims_test`, `vmbus_gpadl_synthetic_rescind_retains_test`, `vmbus_gpadl_unload_rescind_retains_test`, `vmbus_gpadl_partial_post_rescind_test`, `vmbus_gpadl_teardown_alloc_failure_test`, `vmbus_gpadl_rescind_handle_state_test` | Callback-injected KUnit plus host-origin runtime trace | N/A — kernel slice; tests and runtime proof remain open |
-| Partial allocation | `vmbus_buffer_partial_allocation_cleanup` | KUnit / failure injection | N/A — kernel slice; targeted build + live drill |
+| UIO backing-page lifetime and page state | `vmbus_buffer_mapping_reference_test`, `hv_uio_ring_mmap_prepare_test`, `hv_uio_mmap_region_select_test`, `hv_uio_mmap_prepare_test` | KUnit verifies range checks, UIO map selection, MAP_SHARED refusal, private/shared page protection, and page-reference reclamation gate | N/A — kernel slice; live UIO mmap close/unregister race |
+| Legacy exported API compatibility | `vmbus_alloc_buffer`, `vmbus_free_buffer`, `vmbus_establish_gpadl`, `vmbus_establish_gpadl_caller_decrypted`, `vmbus_teardown_gpadl` | Hosted compile and symbol/prototype checks; adapters preserve the legacy signatures | N/A — compile/static contract; external module integration remains untested |
+| Partial allocation / cleanup | `vmbus_buffer_partial_allocation_cleanup_test` (`vmbus_buffer_partial_allocation_cleanup`) | KUnit / failure injection | N/A — kernel slice; allocation fault injection still required |
 | Netvsc buffer migration | `netvsc_buffer_lifecycle` | integration / Hyper-V lab | N/A — kernel slice; live drill |
-| UIO ring mapping | `uio_hv_ring_noncontiguous_mmap` | integration / Hyper-V lab | N/A — kernel slice; live drill |
+| UIO ring and buffer mapping | `hv_uio_mmap_prepare_test`, `uio_hv_ring_noncontiguous_mmap` | Four named KUnit cases cover sysfs ring offsets and UIO ring/control/receive/send map selection and protection; integration / Hyper-V lab | N/A — kernel slice; Hyper-V runtime drill; live mmap/close/unregister drill remains unqualified |
 | VMBus buffer ownership | `vmbus_channel_lifecycle_buffer_balance` | isolated Hyper-V drill; 100 normal open/close cycles, then injected uncertain teardown | N/A — kernel slice; runtime owner accounting and vmalloc reconciliation |
 
 ## Observability and living docs
@@ -130,7 +145,7 @@ new qualification exists.
 
 - [ ] RED tests execute against unmodified upstream source.
 - [ ] Named tests above execute and pass.
-- [ ] `scripts/checkpatch.pl` accepts every patch.
+- [ ] `scripts/checkpatch.pl` accepts every patch and each cumulative source diff after patch application; `git diff --check` passes after each patch.
 - [ ] Targeted Hyper-V and netvsc build succeeds; sparse succeeds if enabled.
 - [ ] Isolated Hyper-V normal, failure, rescind and pressure tests pass.
 - [ ] Build #6 image, modules, and source revision are bound in one manifest before host attribution or promotion.

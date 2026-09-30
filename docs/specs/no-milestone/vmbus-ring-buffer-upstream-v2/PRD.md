@@ -120,9 +120,10 @@ daily host. Publish no email until those gates and manual review pass.
 
 ## Out of scope
 
-Changing the WSL2 global memory watermark, balloon policy, or RamShared swap
-activation. The requested kernel test is a single attended WSL promotion, not
-production qualification or automatic boot activation. It requires a sealed
+Changing the WSL2 global memory watermark, balloon policy, RamShared swap
+activation, or installing an unqualified kernel on the daily host. The
+requested kernel test is a single attended WSL promotion, not production
+qualification or automatic boot activation. It requires a sealed
 kernel/modules/QEMU manifest, successful pre-install gates, and a proved
 rollback path; memory-pressure stress remains out of scope on the daily host.
 

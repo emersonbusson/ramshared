@@ -52,10 +52,10 @@ submission.
 | Path | Intended change |
 | --- | --- |
 | `include/linux/hyperv.h` | Aggregate ring buffer ownership and separate GPADL layout from decryption. |
-| `drivers/hv/channel.c` | Allocate every ring with the accepted chunk allocator; preserve teardown errors and unsafe-to-free state. |
+| `drivers/hv/channel.c` | Allocate every ring with the accepted chunk allocator; preserve teardown errors and unsafe-to-free state; reclaim retained pages only after GPADL, page-state, and mapping-reference gates pass. |
 | `drivers/hv/ring_buffer.c`, `drivers/hv/hyperv_vmbus.h` | Resolve each wraparound page from a virtual mapping. |
 | `drivers/net/hyperv/hyperv_net.h`, `drivers/net/hyperv/netvsc.c` | Group netvsc allocation fields and retain memory after failed revoke/teardown. |
-| `drivers/uio/uio_hv_generic.c` | Map noncontiguous ring pages through virtual UIO and sysfs paths. |
+| `drivers/uio/uio_hv_generic.c` | Map noncontiguous ring pages (ring, control, receive, and send) through virtual UIO and sysfs paths with page protection matching shared/private backing. |
 
 ## Evidence so far
 

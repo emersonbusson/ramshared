@@ -9645,3 +9645,55 @@ identity claims. No code, config, kernel, or host state was changed.
 **Verdict:** 🟡 `PARTIAL` — audit complete; phantom blockers removed. The
 upstream send remains blocked on the eight open items above. No runtime or
 CoCo claim is made by this entry.
+
+## 2026-09-30 14:22 -03 — contribution fork slimmed and internal dossiers relocated
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-30T17:22:00Z`.
+**Category:** `governance`.
+**What:** The public kernel contribution fork `emersonbusson/WSL2-Linux-Kernel`
+carried RamShared internal process documents inside Linux kernel documentation
+namespace at `Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/`. Those
+files were relocated to their canonical RamShared homes and removed from the
+fork, which now holds only the machine-consumed patch series and its workflow.
+**How to measure:** Compare `git ls-files Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/`
+in the fork before and after; verify the hosted workflow still resolves
+`PATCH_DIR`; semantic presence check of hard constraints and named SPEC tests
+in RamShared; `node tools/generate-docs-index.mjs --check` and
+`node tools/check-broken-links.mjs`.
+**Measured data:** The four SSDV3 documents had **diverged in both directions**.
+Line-diff against the fork copies showed PRD 60, SPEC 126, IMPL 492 and
+AUDIT-2.5 122 divergent lines. The fork held real unique content (the full
+named-test matrix with 14 cases, host-safety constraints, and three dated
+2026-09-28 re-audit sections) that the RamShared copies lacked, while RamShared
+held the current host state (Build #9 / `a5cedb4de6f8`, hosted run 36574925363)
+that the fork copies lacked. Rather than overwrite, the unique fork blocks were
+merged into the RamShared files first. Post-merge semantic check: 16/16 hard
+constraints present and 14/14 named SPEC test cases present. The fork copies
+were then deleted (`fb6b0b7403bb`), removing 1025 lines across six files;
+`series/0001..0007`, `vmbus-ring-buffer-v2.patch` and
+`.github/workflows/vmbus-upstream.yml` were kept because the workflow applies
+those patch files by path and hashes them. Grep confirms the workflow
+references none of the removed paths and its directory glob still matches
+`series/`. `mimoaudite.md` was renamed to `AUDIT-source.md` (the filename
+carried an author/agent name, which project naming and the Zero-Sum README
+policy forbid in shared documentation) with content unchanged apart from a
+provenance header. `UPSTREAM-STATUS.md` became
+`docs/upstream/VMBUS-RING-V2-UPSTREAM-STATUS.md`, beside `LKML-PATCHSET.md`;
+its live status header was refreshed (it still claimed "six patches, not yet
+run hosted build") while its dated September sections were left as
+point-in-time records. `COCO-GAP.md` was added as the formal record that the
+CoCo acceptance disjunction is unsatisfied. Two guest-side drill scripts were
+added for the isolated Hyper-V lab. Docs index regenerated (54 specs, in
+sync); broken-link scan clean.
+**Residual blockers:** The docs and fork hygiene gap is closed. This does not
+advance the runtime or CoCo gates: live GPADL/UIO lifecycle, forced order-zero
+fallback under real fragmentation, and SEV-SNP/TDX/Arm CCA evidence remain
+open, and no drill has been executed yet — only its harness exists. Hyper-V
+management from this session required elevated PowerShell and was refused
+without it; the drills have not run. The CoCo rows cannot be closed on this
+host (`EVD-0056`: Ryzen 5 3600, Zen 2, no SEV-SNP, no TDX, no Arm).
+**Verdict:** 🟡 `PARTIAL` — documentation and contribution-fork hygiene are
+DONE and merged; runtime qualification, the sealed kernel/modules pair, and
+CoCo evidence remain open, so the v2 series is still an unsent draft.
