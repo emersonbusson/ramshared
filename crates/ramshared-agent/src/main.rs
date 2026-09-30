@@ -56,6 +56,7 @@ enum ParsedArgs {
     Config(Config),
 }
 
+#[derive(Debug)]
 enum CliExit {
     Help,
     Usage(String),
@@ -63,6 +64,7 @@ enum CliExit {
 }
 
 /// Command from the main loop to the execution thread.
+#[derive(Debug)]
 enum ExecCmd {
     On {
         slice: SliceId,
@@ -78,6 +80,7 @@ enum ExecCmd {
 }
 
 /// Result returned by the execution thread to the main loop.
+#[derive(Debug)]
 enum ExecResult {
     On {
         slice: SliceId,
@@ -356,30 +359,13 @@ fn session(
                     }
                 }
                 (s, sw) => {
+                    // Transient /proc failure: skip the cycle. Never fabricate telemetry —
+                    // a dummy PSI would make the broker budget on invented numbers.
                     eprintln!(
                         "[agent] PSI unreadable (psi={:?} swaps={:?}); skipping cycle",
                         s.err(),
                         sw.err()
                     );
-                    #[cfg(test)]
-                    {
-                        // In tests, if PSI fails we still send a dummy PSI message so that expect_register_and_psi doesn't block/panic.
-                        let _ = write_msg(
-                            &mut w,
-                            &Msg::Psi {
-                                sample: ramshared_broker::model::PsiSample {
-                                    avg10: 0.0,
-                                    avg60: 0.0,
-                                    stall_us: 0,
-                                },
-                                swaps: vec![],
-                                mem: Some(ramshared_broker::protocol::TenantMem {
-                                    swap_current: None,
-                                    diskstats_io: 0,
-                                }),
-                            },
-                        );
-                    }
                 }
             }
             next_psi = now + PSI_PERIOD;
@@ -503,31 +489,46 @@ fn handle_msg(
     }
 }
 
+/// Maps one [`ExecCmd`] onto one [`ExecResult`] through the supplied attach/detach
+/// runners. Pure with respect to the host: the runners own every mutation, so the
+/// mapping and its failure text are unit-testable without touching swap (DT-27).
+fn execute_command<Attach, Detach>(
+    cmd: ExecCmd,
+    attach: &mut Attach,
+    detach: &mut Detach,
+) -> ExecResult
+where
+    Attach: FnMut(&NbdEndpoint, &str, &str, Option<i32>) -> Result<(), swap::SwapError>,
+    Detach: FnMut(&str) -> Result<(), swap::SwapError>,
+{
+    match cmd {
+        ExecCmd::On {
+            slice,
+            export,
+            endpoint,
+            dev,
+            prio,
+        } => {
+            let (ok, detail) = match attach(&endpoint, &export, &dev, prio) {
+                Ok(()) => (true, dev),
+                Err(e) => (false, e.to_string()),
+            };
+            ExecResult::On { slice, ok, detail }
+        }
+        ExecCmd::Off { slice, dev } => {
+            let (ok, detail) = match detach(&dev) {
+                Ok(()) => (true, dev),
+                Err(e) => (false, e.to_string()),
+            };
+            ExecResult::Off { slice, ok, detail }
+        }
+    }
+}
+
 /// Execution thread loop: runs attach/detach (blocking) and returns the result.
 fn exec_loop(cmd_rx: Receiver<ExecCmd>, res_tx: Sender<ExecResult>) {
     for cmd in cmd_rx.iter() {
-        let res = match cmd {
-            ExecCmd::On {
-                slice,
-                export,
-                endpoint,
-                dev,
-                prio,
-            } => {
-                let (ok, detail) = match swap::attach_swap(&endpoint, &export, &dev, prio) {
-                    Ok(()) => (true, dev),
-                    Err(e) => (false, e.to_string()),
-                };
-                ExecResult::On { slice, ok, detail }
-            }
-            ExecCmd::Off { slice, dev } => {
-                let (ok, detail) = match swap::detach_swap(&dev) {
-                    Ok(()) => (true, dev),
-                    Err(e) => (false, e.to_string()),
-                };
-                ExecResult::Off { slice, ok, detail }
-            }
-        };
+        let res = execute_command(cmd, &mut swap::attach_swap, &mut swap::detach_swap);
         if res_tx.send(res).is_err() {
             break; // main loop is gone; nothing to do
         }
@@ -557,6 +558,8 @@ fn reader_loop(mut reader: BufReader<TcpStream>, msg_tx: Sender<Msg>) {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use ramshared_broker::model::{PsiSample, Slice, SliceState};
+    use ramshared_broker::protocol::{SliceIo, TenantStatus};
     use std::net::TcpListener;
 
     fn args(v: &[&str]) -> Vec<String> {
@@ -774,6 +777,50 @@ mod tests {
     }
 
     #[test]
+    fn demote_all_stops_when_the_execution_thread_is_gone() {
+        // A drained DemoteAll whose first send already fails must report the
+        // refusal instead of looping over a dead channel.
+        let cfg = test_config("127.0.0.1:1".to_string(), Duration::from_secs(1));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        drop(cmd_rx);
+        let mut active = HashMap::from([(1, "/dev/ramshared-test-nbd1".to_string())]);
+
+        assert!(
+            !handle_msg(&cfg, Msg::DemoteAll, &mut active, &cmd_tx),
+            "a dead execution thread must fail the dispatch"
+        );
+        assert!(
+            active.is_empty(),
+            "DemoteAll must drain active before failing"
+        );
+    }
+
+    #[test]
+    fn reader_loop_stops_when_the_main_loop_is_gone() {
+        // The reader is a pure forwarder: when the main loop drops the channel
+        // the reader must exit rather than spin on a closed socket pair.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener address must be available");
+        let writer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("reader must connect");
+            write_msg(&mut stream, &Msg::Ack).expect("Ack must write");
+            // Keep the socket open long enough for the reader to observe the send.
+            thread::sleep(Duration::from_millis(50));
+        });
+
+        let stream = TcpStream::connect(addr).expect("reader must connect to the fixture");
+        let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
+        drop(msg_rx); // main loop is gone before the first frame arrives
+        reader_loop(
+            BufReader::new(stream.try_clone().expect("stream must clone")),
+            msg_tx,
+        );
+        writer.join().expect("fixture writer must finish");
+    }
+
+    #[test]
     fn session_registers_dispatches_commands_and_stops_on_refusal() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
         let broker = listener
@@ -906,5 +953,251 @@ mod tests {
         assert!(err.to_string().starts_with("watchdog: broker silent"));
         assert!(started.elapsed() < Duration::from_secs(1));
         server.join().expect("silent broker fixture must finish");
+    }
+
+    /// One `StatusReply` with one tenant, one slice, and one IO counter, so the
+    /// three formatting loops in `run_status` all take their non-empty branch.
+    fn fixture_status_reply() -> Msg {
+        Msg::StatusReply {
+            tenants: vec![TenantStatus {
+                id: 42,
+                name: "test-tenant".to_string(),
+                psi: PsiSample {
+                    avg10: 1.5,
+                    avg60: 0.5,
+                    stall_us: 7,
+                },
+                slices: vec![3],
+                present: true,
+                bytes_served: 1024,
+            }],
+            slices: vec![Slice {
+                id: 3,
+                offset: 4096,
+                len: 8192,
+                tenant: Some(42),
+                state: SliceState::Active,
+            }],
+            slice_io: vec![SliceIo {
+                id: 3,
+                bytes_served: 1024,
+                io_count: 2,
+            }],
+            last_rebalance_secs: Some(11),
+        }
+    }
+
+    #[test]
+    fn run_status_prints_a_complete_status_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let broker = listener
+            .local_addr()
+            .expect("listener address must be available")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("status client must connect");
+            let mut reader = BufReader::new(stream.try_clone().expect("stream must clone"));
+            assert!(matches!(
+                read_msg(&mut reader).expect("status request must decode"),
+                Some(Msg::Status)
+            ));
+            write_msg(&mut stream, &fixture_status_reply()).expect("StatusReply must write");
+        });
+        let cfg = Config {
+            broker,
+            tenant: String::new(),
+            swap_prio: None,
+            nbd_base: "/dev/nbd".to_string(),
+            transport: TransportKind::NbdTcp,
+            watchdog: Duration::from_secs(1),
+            status_only: true,
+        };
+        run_status(&cfg).expect("a complete StatusReply must print and succeed");
+        server.join().expect("status fixture must finish");
+    }
+
+    #[test]
+    fn run_status_reports_broker_rejection() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let broker = listener
+            .local_addr()
+            .expect("listener address must be available")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("status client must connect");
+            let mut reader = BufReader::new(stream.try_clone().expect("stream must clone"));
+            let _ = read_msg(&mut reader);
+            write_msg(
+                &mut stream,
+                &Msg::Error {
+                    reason: "status refused".to_string(),
+                },
+            )
+            .expect("broker refusal must write");
+        });
+        let cfg = Config {
+            broker,
+            tenant: String::new(),
+            swap_prio: None,
+            nbd_base: "/dev/nbd".to_string(),
+            transport: TransportKind::NbdTcp,
+            watchdog: Duration::from_secs(1),
+            status_only: true,
+        };
+        let err = run_status(&cfg).expect_err("a broker Error must fail the status query");
+        assert!(
+            err.to_string().contains("status refused"),
+            "the refusal reason must reach the operator: {err}"
+        );
+        server.join().expect("status fixture must finish");
+    }
+
+    #[test]
+    fn run_status_fails_when_no_status_reply_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let broker = listener
+            .local_addr()
+            .expect("listener address must be available")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("status client must connect");
+            let mut reader = BufReader::new(stream.try_clone().expect("stream must clone"));
+            let _ = read_msg(&mut reader);
+            // A non-StatusReply frame is skipped; a clean close then ends the
+            // poll loop without ever producing a status.
+            write_msg(&mut stream, &Msg::Ack).expect("non-status frame must write");
+        });
+        let cfg = Config {
+            broker,
+            tenant: String::new(),
+            swap_prio: None,
+            nbd_base: "/dev/nbd".to_string(),
+            transport: TransportKind::NbdTcp,
+            watchdog: Duration::from_secs(1),
+            status_only: true,
+        };
+        let err = run_status(&cfg).expect_err("no StatusReply must fail the status query");
+        assert!(
+            err.to_string().contains("did not return StatusReply"),
+            "unexpected error: {err}"
+        );
+        server.join().expect("status fixture must finish");
+    }
+
+    #[test]
+    fn execute_command_maps_attach_and_detach_outcomes() {
+        let endpoint = NbdEndpoint::Unix {
+            path: "/run/b.sock".to_string(),
+        };
+        let mut ok_attach = |_: &NbdEndpoint, _: &str, _: &str, _: Option<i32>| Ok(());
+        let mut ok_detach = |_: &str| Ok(());
+
+        match execute_command(
+            ExecCmd::On {
+                slice: 2,
+                export: "s2".to_string(),
+                endpoint: endpoint.clone(),
+                dev: "/dev/nbd2".to_string(),
+                prio: Some(-3),
+            },
+            &mut ok_attach,
+            &mut ok_detach,
+        ) {
+            ExecResult::On { slice, ok, detail } => {
+                assert_eq!(slice, 2);
+                assert!(ok);
+                assert_eq!(detail, "/dev/nbd2");
+            }
+            other => panic!("On must yield On, got {other:?}"),
+        }
+
+        match execute_command(
+            ExecCmd::Off {
+                slice: 2,
+                dev: "/dev/nbd2".to_string(),
+            },
+            &mut ok_attach,
+            &mut ok_detach,
+        ) {
+            ExecResult::Off { slice, ok, detail } => {
+                assert_eq!(slice, 2);
+                assert!(ok);
+                assert_eq!(detail, "/dev/nbd2");
+            }
+            other => panic!("Off must yield Off, got {other:?}"),
+        }
+
+        let mut fail_attach =
+            |_: &NbdEndpoint, _: &str, _: &str, _: Option<i32>| Err(swap::SwapError::DiskFull);
+        match execute_command(
+            ExecCmd::On {
+                slice: 5,
+                export: "s5".to_string(),
+                endpoint: endpoint.clone(),
+                dev: "/dev/nbd5".to_string(),
+                prio: None,
+            },
+            &mut fail_attach,
+            &mut ok_detach,
+        ) {
+            ExecResult::On { slice, ok, detail } => {
+                assert_eq!(slice, 5);
+                assert!(!ok);
+                assert_eq!(detail, "disk full (ENOSPC)");
+            }
+            other => panic!("a failed attach must yield On with ok=false, got {other:?}"),
+        }
+
+        let mut fail_detach = |_: &str| Err(swap::SwapError::PermissionDenied);
+        match execute_command(
+            ExecCmd::Off {
+                slice: 5,
+                dev: "/dev/nbd5".to_string(),
+            },
+            &mut ok_attach,
+            &mut fail_detach,
+        ) {
+            ExecResult::Off { slice, ok, detail } => {
+                assert_eq!(slice, 5);
+                assert!(!ok);
+                assert_eq!(detail, "permission denied (EACCES)");
+            }
+            other => panic!("a failed detach must yield Off with ok=false, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_refuses_agent_mode_without_root() {
+        // DT-26: swap requires privilege; the refusal names the observed euid so
+        // the operator sees the number, not just an adjective. Tests run without
+        // root, so this exercises the real early-return path.
+        let err = run(&args(&["--broker", "127.0.0.1:1", "--tenant", "t"]))
+            .expect_err("agent mode without root must refuse");
+        match err {
+            CliExit::Runtime(message) => {
+                assert!(
+                    message.contains("root is required for swap"),
+                    "unexpected refusal: {message}"
+                );
+                assert!(
+                    message.contains("euid="),
+                    "the refusal must name the observed euid: {message}"
+                );
+            }
+            other => panic!("expected a runtime refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_requires_tenant_in_agent_mode() {
+        let err = run(&args(&["--broker", "127.0.0.1:1"]))
+            .expect_err("agent mode without --tenant must refuse");
+        match err {
+            CliExit::Usage(message) => assert!(
+                message.contains("--tenant is required"),
+                "unexpected usage refusal: {message}"
+            ),
+            other => panic!("expected a usage refusal, got {other:?}"),
+        }
     }
 }

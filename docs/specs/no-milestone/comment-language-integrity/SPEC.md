@@ -647,7 +647,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ram
 | `crates/ramshared-integrity/src/hash.rs` | 86.2% |
 | `crates/ramshared-integrity/src/pattern.rs` | 81.0% |
 | `crates/ramshared-vram/src/lib.rs` | 95.0% |
-| `crates/ramshared-cuda/src/probe.rs` | 82.8% |
+| `crates/ramshared-cuda/src/probe.rs` | 98.2% |
 
 <!-- rust-slice-structural-contract-v1
 {
@@ -793,16 +793,19 @@ repeated run does not modify fixture bytes or repository files.
   and resolve their scoped links.
 - [ ] Every Markdown link in these two files resolves to an existing repository
   path or an explicitly permitted external standard.
-- [ ] `git diff --check -- docs/specs/no-milestone/comment-language-integrity/`
-  passes.
+- [x] `git diff --check -- docs/specs/no-milestone/comment-language-integrity/`
+  passes. (2026-09-30: clean.)
 - [ ] Only this SPEC, the scanner, its named test module, the strict ratchet
   schema, the existing diff workflow, the exact DT-11 coverage map/planner
   test, the DT-12 test-only map/planner contract, and the named bounded mutable
   English batches are modified by this Step 3 implementation.
 
-- [ ] `node --check tools/ci/check-comment-language.mjs`
-- [ ] Focused `node --test tools/ci/check-comment-language.test.mjs`
-- [ ] Per-file coverage:
+- [x] `node --check tools/ci/check-comment-language.mjs` (2026-09-30: OK.)
+- [x] Focused `node --test tools/ci/check-comment-language.test.mjs`
+  (2026-09-30: 32/32 pass, including `addProtectedDigest_refuses_oversized_inventory`
+  and `protected_inventory_stays_under_the_scanner_ceiling`.)
+- [x] Per-file coverage: (2026-09-30: 92.95% lines, 84.83% branches, 98.53%
+  functions — all ≥80%.)
 
   ```bash
   node --test --experimental-test-coverage \
@@ -812,10 +815,16 @@ repeated run does not modify fixture bytes or repository files.
     tools/ci/check-comment-language.test.mjs
   ```
 
-- [ ] `node tools/ci/check-comment-language.mjs --diff <base>` rejects a new
+- [x] `node tools/ci/check-comment-language.mjs --diff <base>` rejects a new
   finding and accepts an English or exact localized addition.
-- [ ] `node tools/ci/check-comment-language.mjs --all` reports deterministic
-  mutable/protected counts.
+  (2026-09-30: `--diff origin/main` → `PASS`, 0 findings; rejection/acceptance
+  covered by `cli_diff_accepts_english_and_refuses_new_finding` and
+  `localized_diff_is_accepted_by_the_exact_allowlist`.)
+- [x] `node tools/ci/check-comment-language.mjs --all` reports deterministic
+  mutable/protected counts. (2026-09-30: two consecutive runs identical —
+  `mutable_files=4 mutable_lines=19 protected_files=5 protected_lines=38
+  finding_count=57`. Historical findings are the expected `--all` snapshot,
+  not the CI gate.)
 - [ ] Fixture `--ratchet <base>` tests prove that a working record matches the
   current scan and either equals or makes one bounded strict decrease from its
   committed base record; a repository invocation remains fail-closed until
@@ -831,10 +840,14 @@ repeated run does not modify fixture bytes or repository files.
   maintainer-review protocol, base comparison, batch limits, fixture bootstrap,
   and missing-base refusal are tested. Material baseline and workflow activation
   remain pending stabilization.
-- [ ] DT-11's exact canonical command passes with every named production file
+- [x] DT-11's exact canonical command passes with every named production file
   at ≥80% line coverage, and planner tests prove every former lower-coverage
   path has its exact separate feature owner; zero historical paths remain
-  low-coverage or unmapped.
+  low-coverage or unmapped. (2026-09-30: `comment-language-rust-localization-high-coverage`
+  green — handshake 94.0%, protocol 90.4%, arbiter 92.6%, model 100.0%,
+  broker protocol 97.5%, slices 87.3%, broker_srv 80.6%, canary_probe 91.2%,
+  residency 98.1%, telemetry 100.0%. The CUDA probe row was re-measured at
+  98.2% and is owned by `cuda-probe-planning-coverage`.)
 - [ ] DT-12 accepts only the two exact test-only source paths after a full-base
   lexical projection proves their production text unchanged, package tests pass,
   and the immutable base contains all named ignored-GPU PASS commands. No GPU

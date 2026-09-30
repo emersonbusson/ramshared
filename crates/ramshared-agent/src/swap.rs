@@ -345,4 +345,80 @@ mod tests {
         validate_swap_resize(64 * 1024 * 1024, 64 * 1024 * 1024)
             .expect("should succeed at exact bounds");
     }
+
+    #[test]
+    fn resize_error_display_names_every_variant() {
+        assert_eq!(
+            ResizeError::TooSmall(63 * 1024 * 1024).to_string(),
+            "swap size 66060288 bytes is below 64 MiB minimum"
+        );
+        assert_eq!(
+            ResizeError::ExceedsDiskSpace {
+                size: 128 * 1024 * 1024,
+                max: 64 * 1024 * 1024,
+            }
+            .to_string(),
+            "swap size 134217728 bytes exceeds physical disk space 67108864 bytes"
+        );
+    }
+
+    #[test]
+    fn swap_error_display_names_every_variant() {
+        let cases = [
+            (SwapError::DiskFull, "disk full (ENOSPC)"),
+            (SwapError::PermissionDenied, "permission denied (EACCES)"),
+            (SwapError::InvalidSize, "invalid size (ERANGE)"),
+            (
+                SwapError::Other("nbd-client: boom".into()),
+                "nbd-client: boom",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn from_io_err_maps_enospc_eacces_and_erange() {
+        assert_eq!(
+            SwapError::from_io_err(Error::from_raw_os_error(28), "x".into()),
+            SwapError::DiskFull
+        );
+        assert_eq!(
+            SwapError::from_io_err(Error::from_raw_os_error(13), "x".into()),
+            SwapError::PermissionDenied
+        );
+        assert_eq!(
+            SwapError::from_io_err(Error::from_raw_os_error(34), "x".into()),
+            SwapError::InvalidSize
+        );
+        assert_eq!(
+            SwapError::from_io_err(Error::from_raw_os_error(5), "fallback".into()),
+            SwapError::Other("fallback".into())
+        );
+        assert_eq!(
+            SwapError::from_io_err(Error::other("no os code"), "fallback".into()),
+            SwapError::Other("fallback".into())
+        );
+    }
+
+    #[test]
+    fn run_maps_special_exit_codes_to_raw_os_error() {
+        // Codes 28/13/34 are the ENOSPC/EACCES/ERANGE signatures that
+        // `from_io_err` turns into typed SwapError values; any other non-zero
+        // exit keeps the full command line for the operator.
+        for (code, expected) in [(28, 28), (13, 13), (34, 34)] {
+            let err = run("/bin/sh", &["-c".into(), format!("exit {code}")])
+                .expect_err("a non-zero exit must fail");
+            assert_eq!(err.raw_os_error(), Some(expected), "exit {code}");
+        }
+        let err = run("/bin/sh", &["-c".into(), "exit 7".into()])
+            .expect_err("an unmapped exit must fail");
+        assert_eq!(err.raw_os_error(), None);
+        assert!(
+            err.to_string().contains("/bin/sh"),
+            "the message must retain the command line: {err}"
+        );
+        run("/bin/true", &[]).expect("a zero exit must succeed");
+    }
 }
