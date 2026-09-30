@@ -8917,3 +8917,54 @@ is to `kernel-ramshared-v5` by restoring the prior `kernel=` line.
 **Verdict:** 🟡 `PARTIAL` — kernel `#9` identity and arm are sealed and
 reproducible; live boot proof and runtime qualification remain open until the
 restart verification.
+
+## 2026-09-29 22:45 -03 — kernel #9 post-reboot boot and lifecycle proof
+
+**What:** Verified the WSL restart activated custom kernel `#9`, confirmed
+the sealed image SHA-256 against its receipt, scanned the fresh boot log for
+fatal/FORTIFY/p9/init-timeout signals, reattached the sealed origin, and ran
+RamShared cascade start/stop cycles on the new kernel. Xwayland was running
+against `/dev/dxg` with no DXG FORTIFY warning in the boot log.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0118`.
+**Owner role:** post-reboot custom-kernel identity and lifecycle verification.
+**Observed at:** `2026-09-30T00:45:00Z`.
+**Verified at:** `2026-09-30T00:45:00Z`.
+**Source revision:** `fef95da7deae8875ed691572f1d7c44758d70877`.
+**Kernel candidate revision:** `a5cedb4de6f887b5ac6d7394dbc7851cc4a71db0`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0115 through EVD-0117. This is one supervised
+post-reboot boot of kernel `#9`; it does not replace a same-host bundled/custom
+A/B campaign, CoCo transition, or three-tier stress qualification.
+**Freshness:** `uname -r` reported
+`6.18.40.1-microsoft-standard-WSL2+` and `/proc/version` showed build `#9`
+dated `Tue Sep 29 21:30:04 -03 2026`. `sha256sum /mnt/c/wsl/kernel-ramshared-v6`
+matched the receipt value
+`24ac89168096b1dfbd4fda18f19b2aebeeca9742d19ce808dfba4ea0b3be8b2a`.
+Guardian health after restart was `HEALTHY` / `watching` with a new canonical
+boot ID. Installed RamShared remained `v0.15.0 · 5e6b5845 (clean)`.
+**Category:** live boot identity / dmesg fatal-signal scan / cascade lifecycle /
+GPU-adjacent DXG probe.
+**How to measure:** Elevated `wsl --shutdown` armed `.wslconfig`
+`kernel=C:\\wsl\\kernel-ramshared-v6` and restarted the distro. Boot log
+showed `hv_vmbus: Vmbus version:5.3`, `registering driver dxgkrnl`, and
+`Hyper-V: Calibrating min_free_kbytes ... for VMBus resilience`. A scan for
+`BUG:`, `Oops`, `panic`, and `FORTIFY` found no matches (the only WARNING is
+the standard SRSO hardware-mitigation notice). `/dev/dxg` was present and
+Xwayland was running; repeated `dxgkio_query_adapter_info` ioctl `-22`/`-2`
+errors are userspace feature probes, not kernel faults. Origin reattach
+returned `state=ATTACHED` with the sealed PARTUUID. `ramshared host-gate`
+printed `NORMAL_BOOT`. `ramshared up --vram 4096 --zram 2048` armed zram prio
+200 and NBD prio 100; `ramshared down` performed swapoff-first teardown and
+`up` restored the same topology. dmesg recorded clean `zram`/`nbd0` add,
+swap-on, disconnect, and re-add cycles with no kernel splat. `ramshared check`
+returned `Decision: blocked` only because managed swap was already active
+(fail-closed on double activation), and recommended keeping the MVP on `nbd`.
+**Remaining boundary:** This is not a same-host bundled-vs-custom A/B, not a
+GPADL/UIO race reproduction, not a DXG greater-than-4-GiB allocation test, and
+not a CoCo transition. Hosted KUnit for the updated series still belongs to
+the workflow gate. `/opt/ramshared/current` remains on `v0.15.0-b788c17`.
+Stress, multi-vendor GPU, and Windows physical campaigns stay unqualified.
+**Verdict:** 🟡 `PARTIAL` — kernel `#9` is the active WSL image with matching
+receipt and a clean boot/lifecycle sample; A/B, race, CoCo, and stress proofs
+remain open.
