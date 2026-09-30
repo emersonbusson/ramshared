@@ -10411,3 +10411,132 @@ capability gap.
 KUnit, CoCo or drill evidence. If GitHub retires or repurposes the
 `windows-latest` / `windows-2025` images, or drops the Hyper-V role from
 them, this feasibility claim is void until re-measured.
+
+## 2026-09-30 18:16 -03 — first full Hyper-V runtime drill on the six-patch candidate (EVD-0133)
+
+**What:** Run
+[36777284600](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36777284600)
+(`Hyper-V runtime drill`, all three jobs `success`, contribution-fork SHA
+`f831c80e0a2b`) booted the exact pinned six-patch mainline candidate as a
+disposable Gen2 Hyper-V guest and ran the lifecycle and fragmentation
+drills against those bytes on `windows-2025` and `windows-latest`.
+
+**Question:** Do the GPADL/UIO lifecycle and order-zero fallback drills
+execute their stress paths against the sendable candidate in Actions?
+
+**Answer: no.** The harness is green and the candidate is healthy, but
+**neither stress path executed**. This entry is recorded as
+**PARTIAL** precisely so the green job is not mistaken for a gate closure.
+
+**What the run does prove** (both runners, identical):
+
+| Fact | Value |
+| --- | --- |
+| base | mainline `93f51579e7df`, `applied_stages=6` |
+| `kernelversion` | `7.3.0-rc4+` |
+| bzImage | 4 174 848 bytes |
+| bzImage sha256 | `980a45653dda0ccadd20c993dba7800a2b8514d5fb156f5d86a9634f4512b295` |
+| image audit | `IMAGE efi_stub=ok machine=x86_64 subsystem=10`, `IMAGE initramfs=ok` |
+| boot | single-file `BOOTX64.EFI`, no reboot, full teardown (`vm_remove=ok`, `vhd_remove=ok`, `drill_switch_remove=ok`) |
+| VMBus | `present=yes devices=14`, `hv_vmbus: Vmbus version:6.0` |
+| candidate symbols | `HYPERV_DRILL_SYMBOLS alloc=4` (`vmbus_alloc_buffer` family present) |
+| map balance over 30 hv_netvsc unbind/bind cycles | `BASELINE MAPS count=12 bytes=20279296 pages=4939` == `FINAL MAPS count=12 bytes=20279296 pages=4939` |
+| transient dip | `cycle20 MAPS count=11 bytes=19226624 pages=4683`, back to 12 by cycle 30 |
+| channel open under pressure | `PRE-OPEN 12 maps` / `POST-OPEN 12 maps`, `nic_driver=/sys/bus/vmbus/drivers/hv_netvsc` |
+| damage | `HYPERV_DRILL_SPLATS count=0`, `HYPERV_DRILL_FAULTS count=0` |
+| console | 23 849 bytes (`windows-2025`), 21 103 bytes (`windows-latest`) |
+
+The map balance is genuine evidence **against** the EVD-0088/0089/0091
+retention/runaway hypothesis on this candidate: 30 full rebind cycles return
+to the exact baseline. It does not close that gate by itself — causality to
+the historical freeze was never this measurement's claim.
+
+**What the run does NOT prove** (the load-bearing negatives):
+
+1. **UIO subchannel mmap / hold-in-mmap (BUG-3) never ran.** All 30 cycles
+   printed `bind_fail`; `PHASE2 no UIO device or no vmbus_drill_helper;
+   skipping mmap` and `PHASE2 no sysfs ring found`. Root cause, confirmed in
+   the tree: `class_id_show()` emits `"{%pUl}\n"` **with braces**, while
+   `new_id_store()` hands the buffer to `guid_parse()` → `uuid_is_valid()`,
+   which accepts exactly the 36-char canonical form. The drill wrote
+   `{f8615163-df3e-46c5-913f-f2d2f965ed0e}`, `guid_parse()` returned
+   `-EINVAL`, the dynid never registered, and `uio_hv_generic` — whose
+   `id_table` is `NULL, /* only dynamic id's */` — could never bind.
+   `|| true` swallowed the `new_id` write, so thirty cycles looked like a
+   quiet log rather than a drill that never started. `HYPERV_DRILL_DEVICE
+   classid=` printed empty 14 times for the same class of bug: the sysfs
+   attribute is `class_id`, not `classid`.
+2. **The order-zero fallback was not exercised, and on this guest it cannot
+   be.** `vmbus_uses_shared_page_chunks()` is
+   `!encrypted && (hv_isolated || IS_ENABLED(CONFIG_ARM64))`. A hosted x86_64
+   runner is neither isolated nor arm64, so **every ring allocation here
+   takes the `vzalloc()` branch** and the chunked order-N → order-0 path —
+   the one that calls `set_memory_decrypted()` per chunk — is unreachable.
+   It also would not log: that path uses `__GFP_NORETRY | __GFP_NOWARN`, so
+   even where it runs, `grep 'order:7'` cannot see it. Measured here:
+   `order7_failures=0`, and the buddy still held `120` order-10 blocks after
+   hogging 1464 MiB of 2003 MiB, so `order:7` never had a reason to appear.
+   Verdict printed: `INCONCLUSIVE_ORDER7_NEVER_FAILED`.
+3. **No host-rescind / GPADL response-rescind interleaving** was performed.
+4. **No CoCo.** Every number above is ordinary x86_64 Hyper-V evidence.
+   COCO-1..5 remain open and this entry must never be cited as a CoCo gate.
+
+**Root causes fixed in the same work stream** (not yet re-measured here):
+
+- dynid GUID written unbraced, derived from sysfs `class_id` with the braces
+  stripped (`${CLS#\{}` / `${CLS%\}}` — the unescaped `${CLS#{}` form parses
+  differently in bash, dash and busybox ash and was rejected).
+- inventory attribute renamed to `class_id`.
+- `new_id` failures now counted; the lifecycle drill exits non-zero if any
+  bind step failed or if no hold-in-mmap path ran, instead of exiting 0 after
+  a silent skip.
+- new `fragment-buddy` primitive replaces the single large `mlock-hog`: it
+  takes the budget as 64 KiB chunks and frees every other one, so no two
+  neighbouring chunks are free, nothing above order-4 can coalesce, and the
+  freed chunks still serve order-0. The single hog splits only as far as it
+  must and leaves the remainder as order-10 — which is exactly why 120 of
+  them survived.
+- the fragmentation verdict now states its scope: `PASS_RING_ALLOCATION_UNDER_FRAGMENTATION`
+  with `VERDICT_SCOPE ordinary-x86_64-vzalloc-path; co-co-chunked-fallback-not-exercised`.
+  `PASS_ORDER0_FALLBACK` is retired as unreachable on this guest and
+  misleading as a claim.
+- `NamedPipeClientStream.ReadTimeout` is no longer relied on. The property
+  setter throws `Timeouts are not supported on this stream` on this .NET and
+  became the reader job's whole output. Replaced with `ReadAsync` + `Wait(1000)`.
+
+**Verdict:** 🟡 PARTIAL — the harness works end to end and the candidate is
+healthy as a real Gen2 Hyper-V guest with real VMBus, with exact map balance
+across 30 rebind cycles and zero damage. **The GPADL/UIO lifecycle gate and
+the order-zero fallback gate are NOT closed by this run.** The former is a
+drill-registration defect now fixed and awaiting a re-run; the latter is a
+platform limit: the chunked fallback needs CoCo or arm64 and stays with
+KUnit fault injection plus COCO-1..5 until then.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36777284600 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `bind_fail`, `PHASE2`, `VERDICT=`, `HYPERV_DRILL_RESULT`.
+The uploaded `hyperv-drill-windows-*` artifacts hold `drill-console.log` and
+`drill-vm-report.txt`; `hyperv-drill-kernel` holds `bzImage.sha256`,
+`image-audit.txt` and `applied-stages.txt`. A re-run after the fixes must
+show `cycle*_bind_fail` absent, a UIO or sysfs-ring `MMAP_HOLD` line, and a
+`high_order_7plus_blocks=` figure — those three together are what closes the
+GPADL/UIO half.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0133`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T21:16:11Z`.
+**Verified at:** `2026-09-30T21:16:11Z`.
+**Source revision:** `f831c80e0a2b`
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the series is sent or withdrawn. Keep the
+bzImage sha256 recorded above: a future build that resolves a different
+digest is a new measurement, not a repeat of this one. Keep the two negatives
+with the positives — a reader who sees only `status=PASS` will over-claim.
+**Freshness:** Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
+GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
+drops the Hyper-V role from them, this claim is void until re-measured.
