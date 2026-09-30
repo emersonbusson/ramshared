@@ -9859,3 +9859,104 @@ in order, and piping `git diff --no-ext-diff --no-color` into
 **Lifecycle:** `reviewable`.
 **Retention:** Keep until the isolated-guest lifecycle drill reports `vmbus_channel_lifecycle_buffer_balance` on the exact seven-patch candidate, or until the series is withdrawn. The map counts are a single-sample steady-state observation and must not be cited as allocate/free balance.
 **Freshness:** Re-run the map command after any kernel install, reboot, or VMBus device topology change. Re-run the checkpatch gate after any edit to `series/*.patch`. If map counts ever exceed ~1,000 without a matching channel inventory, treat that as a regression alarm and open a gate rather than extending this entry.
+
+---
+
+## 2026-09-30 — CoCo static invariants made machine-checkable (EVD-0128)
+
+**Question:** Can the Confidential Computing objection be closed without
+CoCo hardware, and does the source actually match the claim that was being
+made about it?
+
+**Answer:** Not closed — COCO-1..5 still require a real memory-encryption
+transition. But the claim that *was* being made did not survive an audit of
+the candidate source, and the corrected claim is now machine-checked on
+every CI run. Two citation defects and one overclaim were found and fixed
+before anything was sent.
+
+**Method.** Fetched mainline `93f51579e7df` (Linux 7.3-rc4) and applied
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series/0001..0007`
+in order (7/7 APPLIED, no fuzz). Audited every `set_memory_*` call site in
+the resulting tree, then traced reachability of each one.
+
+**Findings against the previous draft of the proof.**
+
+1. The draft claimed Invariant 1 was "exactly one `set_memory_decrypted()`
+   in the buffer path". There are **five** `set_memory_*` sites in
+   `drivers/hv/channel.c` and **zero** in `drivers/uio/uio_hv_generic.c`
+   and `include/linux/hyperv.h`. Three take `page_address(page)`. **Two
+   take a virtual address** and were not mentioned: `kbuffer` at
+   `__vmbus_establish_gpadl()`, and `owner->addr` in the reclaim worker.
+2. The draft's Invariant 3 cited an `unknown_page` guard and an
+   `__vmbus_free_buffer_mem()` chunk-release loop. **Neither identifier
+   exists** in the candidate. The real mechanism is
+   `owner->encryption_unknown = true` on a failed `set_memory_decrypted()`,
+   `vmbus_buffer_owner_can_reclaim()` refusing that owner permanently, and
+   `vmbus_free_buffer()` doing `continue` past `__free_pages` when
+   re-encryption fails.
+3. The draft's Invariant 4 named `vmbus_uses_shared_page_chunks()`. The
+   function is **`vmbus_needs_shared_pages()`**.
+
+A reviewer who grepped for those names would have found nothing and
+discounted the whole proof. That is the v1 cover-letter failure mode
+repeated at the document level.
+
+**What the two virtual-address sites actually are.** They are the
+pre-existing mainline `vmbus_establish_gpadl()` contract, preserved
+unchanged, and its symmetric undo. Decryption is gated on
+`gpadl->decrypted = !memory_prepared && ...`. Every buffer this series
+allocates reaches `__vmbus_establish_gpadl()` with `memory_prepared = true`:
+
+| Caller | `memory_prepared` | Decrypts `kbuffer`? |
+| --- | --- | --- |
+| `vmbus_establish_gpadl_owned()` (netvsc, UIO) | `true` | no |
+| `vmbus_establish_gpadl_caller_decrypted()` | `true` | no |
+| ring open, `HV_GPADL_RING` | `true` | no |
+| `vmbus_establish_gpadl()` (legacy export) | `false` | yes — pre-existing |
+
+In-tree callers of the bare legacy export after this series: **zero**.
+
+**What was built.** Contribution-fork `63cb97459cd3` adds
+`coco-static-invariants.py` and an `Enforce CoCo static invariants` CI step
+that checks six invariants (direct-map chunk encryption, prepared GPADL does
+not re-decrypt, unknown page state retained, private path never touches
+encryption, UIO never transitions encryption, consumers avoid the legacy
+path) and then **injects the rejected pattern and requires the gate to
+reject it**, twice — once as `set_memory_decrypted((unsigned long)buffer->addr, …)`
+in the allocator, once as a `set_memory_decrypted()` call in
+`uio_hv_generic.c` — restoring the tree before the KUnit build.
+
+**Measured data.** Checker on the unmodified candidate: 6/6 PASS,
+`COCO-STATIC-PROOF: all invariants hold.`, exit 0. Four negative injections
+each produced the expected FAIL and exit 1: vmalloc decrypt in the allocator
+(`INV-1 … buffer->addr`), ring GPADL with `memory_prepared=false` (`INV-2`),
+removed `encryption_unknown` marker (`INV-3`), UIO `set_memory_decrypted()`
+(`INV-5`). Full CI step body dry-run end to end: `STEP_EXIT=0`, tree restored
+byte-identical before the final check.
+
+**Verdict:** 🟡 PARTIAL — the static half is now honest and enforceable. The
+platform half is untouched: **no SEV-SNP, Intel TDX, or Arm CCA page-state
+transition has been observed.** `COCO-GAP.md` stays open, the send gate
+stays closed, and the cover letter draft now claims the negative proof and
+explicitly not platform evidence. `COCO-GAP.md` also records a third
+resolution that does not require buying silicon: rent Azure Confidential
+VMs (SEV-SNP `DCasv5`/`ECasv5`, TDX `DCesv5`/`ECesv5`); Arm CCA still has
+no cloud SKU.
+
+**Category:** kernel-source-audit
+
+**How to measure:** apply the seven patches to mainline `93f51579e7df`, then
+`python3 Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/coco-static-invariants.py --tree <linux-tree>`.
+Expected: six `PASS` lines and `COCO-STATIC-PROOF: all invariants hold.`
+To prove the gate is armed, replace a `page_address(page)` operand with
+`buffer->addr` at the allocator decrypt site and require a non-zero exit.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0128`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T19:40:00Z`.
+**Verified at:** `2026-09-30T19:40:00Z`.
+**Source revision:** `e9cad0b9` (RamShared) / `63cb97459cd3` (contribution fork).
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until COCO-1..5 are satisfied on real hardware or the series is withdrawn. If a future edit moves any `set_memory_*` operand away from `page_address()`, or passes `memory_prepared = false` outside `vmbus_establish_gpadl()`, this entry becomes the rollback baseline.
+**Freshness:** Re-run the checker after any edit to `drivers/hv/channel.c`, `drivers/uio/uio_hv_generic.c`, or `series/*.patch`. Never silence the CI step or weaken its self-test to land a patch.
