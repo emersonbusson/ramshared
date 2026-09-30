@@ -453,9 +453,16 @@ possible. It is recorded as the single observation it is.
 - Supported: under a 3 GiB external VRAM consumer the device-wide budget tracks
   the consumer reproducibly (round-to-round stddev ≈ 4 MiB), and the cache
   yields its pages (100% in the one run where pages were resident).
-- Not supported: re-growth of the cache after pressure releases — it stayed at
-  0 MiB across all three rounds. Cache refill is demand-driven, so this is not
-  claimed as a defect, but recovery is **unproven**.
+- Not supported **on this host, live**: re-growth of the cache after pressure
+  released — it stayed at 0 MiB across all three rounds because nothing read
+  through the cache afterwards and refill is demand-driven. The *mechanism*
+  is covered by
+  `heartbeat_reports_physical_release_after_external_gpu_pressure`, which
+  parks the cache at 0, releases the external consumer, and then shows one
+  accepted update bringing resident bytes back to `chunk_bytes`. What remains
+  unproven is a live host round where a real workload re-fills the cache after
+  a real pressure event; that needs the supervised Windows watchdog harness
+  and is not attempted here.
 - Idle ceiling: when no consumer is present, `available_bytes` clamps at
   2721 MiB because the WDDM per-process term still binds the `min`. Harmless
   for containment (the truthful lower number binds under pressure) and not
