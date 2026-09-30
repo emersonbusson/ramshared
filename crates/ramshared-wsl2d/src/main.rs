@@ -2250,7 +2250,9 @@ trait NbdRuntimeStarter {
 }
 
 enum OriginCache {
-    Ipc(IpcCacheClient),
+    // Boxed: `IpcCacheClient` is ~304 bytes and would otherwise dominate every
+    // `OriginCache` slot, including the `Disabled` fallback that never holds one.
+    Ipc(Box<IpcCacheClient>),
     Disabled(DisabledCache),
 }
 
@@ -3351,7 +3353,10 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
 
     enum Be<'a, Pr: VramProvider + 'a> {
         Sparse(SparseVramBackend<'a, Pr>),
-        Origin(AuthoritativeOriginBackend<FileOrigin, OriginCache>),
+        // Boxed: the authoritative-origin backend is ~424 bytes against the
+        // sparse backend's ~128, so the enum would otherwise pay the larger
+        // size on every dispatch regardless of which mode is active.
+        Origin(Box<AuthoritativeOriginBackend<FileOrigin, OriginCache>>),
     }
     impl<'a, Pr: VramProvider + 'a> BlockBackend for Be<'a, Pr> {
         fn size_bytes(&self) -> u64 {
@@ -3414,7 +3419,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                         size >> 20,
                         supervisor.pid()
                     );
-                    (OriginCache::Ipc(client), Some(supervisor))
+                    (OriginCache::Ipc(Box::new(client)), Some(supervisor))
                 }
                 Err(error) => {
                     eprintln!(
@@ -3427,7 +3432,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             };
             let cache = AuthoritativeOriginBackend::new(origin, origin_cache, size, BLOCK_SIZE)
                 .map_err(|error| error.0)?;
-            (Be::Origin(cache), supervisor)
+            (Be::Origin(Box::new(cache)), supervisor)
         } else {
             let chunk = chunk_bytes_from_env();
             let reserve = reserve_floor;
@@ -8721,6 +8726,14 @@ mod tests {
 
     #[test]
     fn daemon_nbd_recovery_activation_does_not_block_nbd_jobs() {
+        // Every wait below is a terminal-event deadline, not a performance
+        // budget: the daemon path itself finishes in milliseconds. CI runs
+        // `cargo test -- --test-threads=1`, but a local parallel run on a
+        // loaded host can preempt the daemon thread long enough to expire a
+        // 5s window and fail the test without any product defect. 30s keeps
+        // the refusal fail-closed while surviving that contention.
+        const TERMINAL_EVENT_DEADLINE: Duration = Duration::from_secs(30);
+
         fn assert_nbd_ok(reply: Reply, context: &str) {
             assert!(
                 !reply.disconnect,
@@ -8914,7 +8927,7 @@ mod tests {
         });
 
         let worker_tx = jobs_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(TERMINAL_EVENT_DEADLINE)
             .expect("injected acceptor exposes the live NBD worker");
         worker_tx.send(WMsg::Opened).expect("open NBD generation");
         for handle in 0..3 {
@@ -8935,13 +8948,13 @@ mod tests {
                 .expect("drive one bounded recovery sample");
             assert_nbd_ok(
                 reply_rx
-                    .recv_timeout(Duration::from_secs(5))
+                    .recv_timeout(TERMINAL_EVENT_DEADLINE)
                     .expect("pre-recovery NBD job reply"),
                 "pre-recovery NBD job",
             );
         }
         activation_started_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(TERMINAL_EVENT_DEADLINE)
             .expect("the third healthy sample starts one pending activation");
 
         worker_tx
@@ -8964,7 +8977,7 @@ mod tests {
             .expect("queue NBD work after pending shutdown");
         assert_nbd_ok(
             reply_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(TERMINAL_EVENT_DEADLINE)
                 .expect("pending recovery must not block the NBD serve loop"),
             "post-shutdown pending-recovery NBD job",
         );
@@ -8981,7 +8994,7 @@ mod tests {
         activation_outcome.succeed();
         assert_eq!(
             done_rx
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(TERMINAL_EVENT_DEADLINE)
                 .expect("daemon exits after the terminal activation outcome"),
             Ok(())
         );
@@ -12809,7 +12822,7 @@ Filename Type Size Used Priority
 
         let mut backend = AuthoritativeOriginBackend::new(
             origin,
-            OriginCache::Ipc(client),
+            OriginCache::Ipc(Box::new(client)),
             16 * 1024 * 1024,
             BLOCK_SIZE,
         )
