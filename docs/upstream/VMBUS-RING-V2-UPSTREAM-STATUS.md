@@ -8,11 +8,11 @@
 
 - **Target Repository:** [`microsoft/WSL#41634`](https://github.com/microsoft/WSL/issues/41634) (combined proposal) · [`microsoft/WSL#40795`](https://github.com/microsoft/WSL/issues/40795#issuecomment-5716513649) (solution comment) & Linux Hyper-V Subsystem (LKML)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Synthetic Transport)
-- **Patch Reference:** [seven-patch v2 series](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series) (in the contribution fork) · [older consolidated draft](patches/vmbus-ring-buffer-v2-draft.patch)
+- **Patch Reference:** [six-patch v2 series](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series) (in the contribution fork) · [older consolidated draft](patches/vmbus-ring-buffer-v2-draft.patch)
 - **Cover letter:** [DRAFT — do not send](vmbus-ring-v2-cover-letter-DRAFT.md). Prepared so the send is mechanical once the gates close; the PRD send gate is closed and the draft carries its own checklist.
 - **CoCo static proof:** [`COCO-STATIC-PROOF.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-STATIC-PROOF.md) — machine-checked negative proof that the guest-fatal vmalloc-decryption pattern is unreachable from any allocation this series introduces. Enforced in CI with a self-test. Does **not** close [`COCO-GAP.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md).
 - **Status (2026-09-30):** v1 proposal submitted 2026-09-17 and reviewed by
-  Michael Kelley on 2026-09-22. The seven-patch v2 candidate is an **unsent
+  Michael Kelley on 2026-09-22. The six-patch v2 candidate is an **unsent
   draft by policy**. It is source-complete against the maintainer's five-point
   refactor request and its hosted build/KUnit gates pass (run 36574925363, and
   run 36590352003 for audit SHA `de5138b5`); the series bytes are pinned by
@@ -22,6 +22,24 @@
   to send.** Blocking gates live in
   [`GAP-REGISTER.md`](../reliability/GAP-REGISTER.md) and the SSDV3 suite at
   [`docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/).
+
+### September 30 series hygiene pass
+
+The candidate is now six patches, not seven. The order-vector correction
+that sat two commits after the KUnit case it repairs is folded into the
+patch that introduces that case: a series must not add a broken test and
+then fix it. The three `test(hv):` subjects are retitled to subsystem
+prefixes, the `Rollback trigger:` pseudo-trailers are gone (they are a
+local governance marker and read as process leakage on LKML), and every
+mail is regenerated with `git format-patch` so it carries a real `From
+<sha>` marker, the `---` separator and a diffstat. Patch 1 no longer
+claims the change "reduces high-order allocation failures"; that causal
+claim is unproven until the forced-fragmentation drill exists. The applied
+tree is byte-identical to the previous seven-patch tree (`BINARY_MATCH`
+checked file-by-file against the prior candidate), so this is a mail-format
+and commit-message pass only. Cumulative `checkpatch.pl --strict` reports
+`total: 0 errors, 0 warnings, 0 checks` at all six stages, and each mail
+file itself now also reports "ready for submission".
 
 ---
 

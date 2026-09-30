@@ -104,7 +104,7 @@ source. It is not evidence about a memory-encryption transition.
 The nearest real VMBus runtime available without new hardware is a
 **disposable WSL2 guest on a Windows CI runner** — WSL2 is a genuine Hyper-V
 guest. Any such run is **WSL-backport evidence**, not mainline evidence, and
-must be labelled as such; the seven-patch mainline series does not apply to
+must be labelled as such; the six-patch mainline series does not apply to
 the WSL 6.18 tree. It also cannot close COCO-1..5, because a stock WSL2 VM
 is not a confidential guest.
 
@@ -124,11 +124,12 @@ qualified — the following are **true and separately evidenced**:
   every run including a gate self-test. See
   [`COCO-STATIC-PROOF.md`](COCO-STATIC-PROOF.md). This is stronger than a
   design argument and **still does not close any row of the table above**.
-- Hosted build/Sparse/checkpatch/KUnit gates pass for the seven patches
-  (runs 36574925363, 36590352003).
+- Hosted build/Sparse/checkpatch/KUnit gates pass for the predecessor
+  seven-patch bytes (runs 36574925363, 36590352003). The current six-patch
+  bytes supersede them and await a fresh hosted run.
 - Ordinary x86_64 Hyper-V runtime on an earlier four-commit snapshot passed
   normal-path GPADL create/teardown and UIO mmap (`EVD-0054`). That is not
-  the seven-patch candidate and not a CoCo platform.
+  the current candidate and not a CoCo platform.
 - The code **refuses to claim** universal CoCo support. Removing the
   unsupported claim is already part of the series.
 

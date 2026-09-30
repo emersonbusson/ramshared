@@ -4,10 +4,10 @@
 **Recorded:** 2026-09-30
 **Authority:** [`COCO-GAP.md`](COCO-GAP.md) · [`PRD.md`](PRD.md) RF-2
 **Related:** [`IMPL.md`](IMPL.md) · [`AUDIT-source.md`](AUDIT-source.md)
-**Enforced by:** the `coco-static-invariant` step in the contribution fork's
-`.github/workflows/vmbus-upstream.yml`, which runs
+**Enforced by:** the `Enforce CoCo static invariants` step in the
+contribution fork's `.github/workflows/vmbus-upstream.yml`, which runs
 `Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/coco-static-invariants.py`
-against the tree with all seven patches applied to mainline `93f51579e7df`
+against the tree with the full series applied to mainline `93f51579e7df`
 (Linux 7.3-rc4), then **injects the rejected pattern and requires the gate to
 reject it**.
 

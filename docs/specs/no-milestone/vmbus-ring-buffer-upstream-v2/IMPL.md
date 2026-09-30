@@ -4,9 +4,24 @@
 
 ## Status
 
-**PARTIAL — the current public v2 candidate has seven tracked patches. Hosted run 36574925363 passed all seven staged x86_64/arm64 builds, the WSL 6.18.40.1 backport build, and KUnit 24/24 on x86_64 plus 14/14 on the WSL backport. A kernel built from this worktree's `vmbus-ring-buffer-upstream-v2` branch head `a5cedb4de6f8` is installed on the daily WSL host as Build #9 (`kernel-ramshared-v6`, receipt-matched source, EVD-0117/0118); that is the WSL-derived candidate, not a boot of the seven-patch mainline series against v7.3-rc4. Live GPADL/UIO lifecycle, forced order-zero fallback, and SEV-SNP/TDX/Arm CCA evidence remain open.**
+**PARTIAL — the current public v2 candidate has six tracked patches.** The
+six-patch shape is the 2026-09-30 hygiene pass: the order-vector correction
+is folded into the patch that introduces the KUnit case it repairs, the
+`test(hv):` subjects are retitled, and every mail is regenerated with
+`git format-patch`. The applied tree is byte-identical to the previous
+seven-patch candidate, so the source-level findings below still describe it,
+but **hosted runs 36574925363 and 36590352003 qualify the previous bytes,
+not these**. A fresh hosted run on the pinned `series/SHA256SUMS` is required
+before any claim that the build/KUnit gates pass on this candidate.
 
-EVD-0111 reviewed a dirty candidate at `a022ac393ecaab845682f5afe2be6be792aedde2` and found that its attempted cleanup helper confused host rescind with local unload and missed partial GPADL establishment. That audit's statement that no candidate build or KUnit had run described that dirty snapshot at that time. The current public series tracks patch `0007-gpadl-lifetime-reclaim.patch`; EVD-0112 records its hosted build and KUnit results. Those tests do not establish live VMBus protocol behavior or CoCo safety.
+A kernel built from this worktree's `vmbus-ring-buffer-upstream-v2` branch
+head `a5cedb4de6f8` is installed on the daily WSL host as Build #9
+(`kernel-ramshared-v6`, receipt-matched source, EVD-0117/0118); that is the
+WSL-derived candidate, not a boot of the six-patch mainline series against
+v7.3-rc4. Live GPADL/UIO lifecycle, forced order-zero fallback, and
+SEV-SNP/TDX/Arm CCA evidence remain open.
+
+EVD-0111 reviewed a dirty candidate at `a022ac393ecaab845682f5afe2be6be792aedde2` and found that its attempted cleanup helper confused host rescind with local unload and missed partial GPADL establishment. That audit's statement that no candidate build or KUnit had run described that dirty snapshot at that time. The current public series ends at `0006-gpadl-lifetime-reclaim.patch`; EVD-0112 records the hosted build and KUnit results for its predecessor seven-patch bytes. Those tests do not establish live VMBus protocol behavior or CoCo safety.
 
 EVD-0088 and EVD-0089 record cumulative read-only growth in
 `vmbus_alloc_buffer` vmalloc entries: 14,003 at 12:21, 15,821 at 12:38, and
@@ -39,11 +54,11 @@ continuous exhaustion of Windows physical RAM. It still does not prove that
 the running Build #6 contains the audited rescind path or that this was the
 freeze trigger.
 
-The versioned seven-patch draft is based on Linux `v7.3-rc4`
+The versioned six-patch draft is based on Linux `v7.3-rc4`
 (`93f51579e7df248780214094418f205253383cc5`). The local draft at
 `docs/upstream/patches/vmbus-ring-buffer-v2-draft.patch` remains a separate
 working diff. The ordinary Hyper-V boot evidence below is for an earlier
-four-commit snapshot; it is not a boot of this seven-patch candidate. The
+four-commit snapshot; it is not a boot of this six-patch candidate. The
 current public series is not a distribution backport or an upstream
 submission.
 
@@ -107,13 +122,16 @@ qualification.
 
 ## Blocking gaps
 
-1. Hosted run 36574925363 passed all seven patch stages on x86_64 and arm64,
-   the WSL 6.18.40.1 backport build, and x86_64 KUnit 24/24; the WSL backport
-   KUnit run passed 14/14. Patch 6 exercises order-zero fallback with injected
-   allocation failures. These hosted tests do not simulate live allocator
-   fragmentation or host response/rescind interleaving. Arm64 KUnit is skipped.
+1. Hosted run 36574925363 passed all seven patch stages of the **predecessor
+   bytes** on x86_64 and arm64, the WSL 6.18.40.1 backport build, and x86_64
+   KUnit 24/24; the WSL backport KUnit run passed 14/14. Those bytes were
+   superseded by the 2026-09-30 six-patch hygiene pass; a fresh hosted run on
+   the current `series/SHA256SUMS` is outstanding. The order-zero fallback
+   test exercises injected allocation failures. These hosted tests do not
+   simulate live allocator fragmentation or host response/rescind
+   interleaving. Arm64 KUnit is skipped.
 2. An earlier four-commit v7.3-rc4 snapshot was linked and booted on ordinary
-   x86_64 Hyper-V. This does not qualify the current seven-patch v2 series, the
+   x86_64 Hyper-V. This does not qualify the current six-patch v2 series, the
    separate WSL backport, or a CoCo platform.
 3. Normal GPADL create/teardown succeeded on that earlier snapshot. Current
    KUnit injects outgoing header/body/teardown post failures and tests
