@@ -10,6 +10,13 @@ import * as coverageChecker from "./check-rust-slice-coverage.mjs";
 const TOOL_PATH = resolve(fileURLToPath(new URL("./check-rust-slice-coverage.mjs", import.meta.url)));
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const COVERED_FILE = "crates/ramshared-cli/src/cascade/cascade_io.rs";
+// Uncovered-line chunking needs a file whose production denominator is not
+// adjusted by `#[cfg(test)]` / `#[cfg(not(test))]` exclusion. `cascade_io.rs`
+// carries those gates throughout its first 340 lines, so a synthetic region
+// list on it is either rewritten by the exclusion or rejected as an
+// inconsistent export. This file has no cfg gates at all, so the fixture's 170
+// zero-count regions are exactly the 170 reported uncovered entries.
+const CFG_FREE_FILE = "crates/ramshared-config/src/resource_profile.rs";
 
 function runChecker(env) {
   return new Promise((resolveRun, rejectRun) => {
@@ -413,20 +420,38 @@ test("coverage_cli_report_only_preserves_per_file_threshold_and_allow_missing_co
       1,
     );
 
-    report.data[0].functions = [
-      {
-        filenames: [join(REPO_ROOT, COVERED_FILE)],
-        regions: Array.from({ length: 170 }, (_, index) => {
-          const line = index * 2 + 1;
-          return [line, 1, line, 2, 0, 0, 0, 0];
-        }),
-      },
-    ];
-    writeFileSync(reportPath, `${JSON.stringify(report)}\n`);
+    // Uncovered-line reporting is chunked 80 entries at a time. Build a
+    // self-consistent export on a cfg-free file: the line summary must survive
+    // cfg(test) exclusion unchanged, and every region line must be reported,
+    // otherwise the chunk bounds drift off the asserted 170.
+    writeFileSync(
+      reportPath,
+      `${JSON.stringify({
+        data: [
+          {
+            files: [
+              {
+                filename: join(REPO_ROOT, CFG_FREE_FILE),
+                summary: { lines: { count: 10, covered: 8, percent: 80 } },
+              },
+            ],
+            functions: [
+              {
+                filenames: [join(REPO_ROOT, CFG_FREE_FILE)],
+                regions: Array.from({ length: 170 }, (_, index) => {
+                  const line = index * 2 + 1;
+                  return [line, 1, line, 2, 0, 0, 0, 0];
+                }),
+              },
+            ],
+          },
+        ],
+      })}\n`,
+    );
     const failureOutput = [];
     assert.equal(
       coverageChecker.main(
-        ["node", "checker", "--report-only", reportPath, "--files", COVERED_FILE, "--min", "81"],
+        ["node", "checker", "--report-only", reportPath, "--files", CFG_FREE_FILE, "--min", "81"],
         { print: () => {}, error: (line) => failureOutput.push(line) },
       ),
       1,
