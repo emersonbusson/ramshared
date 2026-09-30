@@ -349,14 +349,26 @@ attributed to this candidate.
 
 ## Next gate
 
-Exercise real host response/rescind interleavings, an actual UIO mmap-close and
-unregister lifecycle, and order-zero fallback under live fragmentation. Obtain
-a suitable platform/lab for SEV-SNP, TDX, and Arm CCA memory-state tests. Match
-the running WSL image to an immutable source/modules receipt before attributing
+Exercise real host response/rescind interleavings, an actual UIO mmap-close
+and unregister lifecycle, and order-zero fallback under live fragmentation.
+These three are no longer blocked on hardware: `EVD-0131` (run 36767912983)
+measures that a hosted Windows runner boots a disposable WSL2 guest with 30
+real VMBus devices, and `EVD-0132` (run 36768828972) measures that the same
+runners define and run an arbitrary Gen2 Hyper-V VM with no reboot. Build the
+candidate as a mainline `bzImage` on the Linux job, boot it as that Gen2
+guest, and run `vmbus-lifecycle-drill.sh` and `vmbus-fragmentation-drill.sh`
+against those exact bytes. The guest is disposable, which is exactly the
+host-safety contract those scripts require; they must not run on the daily
+WSL2 host.
+
+Obtain a suitable platform/lab for SEV-SNP, TDX, and Arm CCA memory-state
+tests — Azure Confidential VMs are the no-silicon route
+(`DCasv5`/`ECasv5`, `DCesv5`/`ECesv5`); Arm CCA has no cloud SKU. Match the
+running WSL image to an immutable source/modules receipt before attributing
 the prior freeze or promoting the separate backport. Keep the series unsent
-until required runtime gates pass and maintainers review it. The disposable
+until required runtime gates pass and maintainers review it. A disposable
 ordinary Hyper-V runtime does not qualify the WSL backport or the actual WSL
-host kernel.
+host kernel, and a hosted guest is never a confidential guest.
 
 ## Rollback trigger
 

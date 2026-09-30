@@ -10215,3 +10215,199 @@ require a fresh hosted run; this entry then becomes the pre-edit baseline.
 36590352003 as evidence for this candidate — they qualified predecessor
 bytes. Never cite run 36762560212 as a pass; it is the recorded red baseline
 for the `a8042f978bc0` omission.
+
+## 2026-09-30 16:48 -03 — hosted Windows runners can boot a real VMBus guest
+
+**What:** Hosted run
+[36767912983](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36767912983)
+(`WSL runtime feasibility probe`, both matrix legs `success`,
+contribution-fork SHA `b6bc34402810`) measured what a GitHub-hosted Windows
+runner can actually host. This is a **capability probe**, not a kernel
+qualification: it measures the runner, not the candidate, and it must never
+be cited as a build, KUnit or CoCo gate.
+
+**Question:** Can a hosted Windows runner boot a real Hyper-V guest with
+real VMBus, so the runtime drills can run in Actions without new hardware?
+
+**Answer:** Yes. Measured identically on `windows-latest` and
+`windows-2025`:
+
+| Probe | Value |
+| --- | --- |
+| `hypervisor_present` | `True` |
+| `total_physical_memory_gb` | `16` |
+| `virtual_machine_platform_state` | `Enabled` |
+| `enable_VirtualMachinePlatform` | `ok restart_required=False` |
+| `enable_Microsoft-Windows-Subsystem-Linux` | `ok restart_required=False` |
+| `wsl.exe` | `present`, WSL `2.7.14.0`, kernel `6.18.33.2-2` |
+| `wsl_status` | `Default Version: 2` |
+| rootfs asset | `alpine-minirootfs-3.24.2-x86_64.tar.gz`, 3 701 382 bytes |
+| rootfs sha256 | `c5ca053cfe1d85c5b96dff8b9bc57045f7f184a30ffb6b65776409ca90388677` |
+| `wsl --import` | `exit=0` |
+| guest view | `6.18.33.2-microsoft-standard-WSL2` · `VMBUS_PRESENT` · `VMBUS_DEVICES=30` |
+| `wsl --unregister` | `ok` |
+
+**Probe verdict:** `WSL2_RUNTIME_AVAILABLE` on both runner images.
+
+A disposable WSL2 guest with **30 real VMBus devices** is reachable from a
+hosted Windows runner in about eight seconds, at a cost of one 3.7 MB rootfs
+and one scratch VHDX that the job unregisters before it ends. The probe
+installs no kernel, touches no swap, applies no memory pressure and changes
+no RamShared lifecycle state.
+
+What this settles and what it does not:
+
+- It **settles feasibility** for WSL-backport runtime work in Actions. The
+  nearest real VMBus runtime without new hardware is no longer hypothetical.
+- It does **not** qualify the mainline six-patch series. That guest boots
+  Microsoft's `6.18.33.2-microsoft-standard-WSL2`, not a kernel built from
+  the pinned `series/`. Those patches apply to a mainline base, so their
+  GPADL/UIO lifecycle and order-zero fallback drills need a mainline kernel
+  on a Hyper-V guest. The companion `hyper-v-role-probe` measures whether a
+  hosted runner can define an arbitrary Gen2 VM for exactly that.
+- It does **not** close COCO-1..5. A stock WSL2 guest is not a confidential
+  guest. No hosted runner is. A QEMU/TCG CoCo boot remains forbidden
+  evidence theatre. The non-silicon route is still an Azure Confidential VM
+  (`DCasv5`/`ECasv5` SEV-SNP, `DCesv5`/`ECesv5` TDX); Arm CCA has no cloud
+  SKU.
+- `second_level_address_translation_reported=False` is a CPUID-derived flag
+  that nested guests commonly mask. It is recorded for context and was not
+  used to decide the verdict. Only a booted guest exposing VMBus decides it.
+
+**Recorded red baseline:** run **36766972913** (`55cb1e0df4f5`) failed on
+both legs while measuring the runner correctly. The job went red only
+because `wsl.exe` returns 1 on "no installed distributions" and the Actions
+`pwsh` wrapper propagates `$LASTEXITCODE`. A probe whose answer is negative
+must not be reported as a broken probe; `b6bc34402810` makes every step exit
+0 once its measurement is recorded and confines red to a probe that failed to
+measure at all.
+
+**Verdict:** 🟡 PARTIAL — hosted Windows runners can boot a real VMBus
+guest, so runtime drills are feasible in Actions without new hardware. The
+probe qualifies the runner, not the candidate. Mainline runtime drills,
+COCO-1..5 and the send gate remain open and are not claimed.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36767912983 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `VERDICT=` / `PROBE wsl_guest_view`. Both matrix legs must print
+`VERDICT=WSL2_RUNTIME_AVAILABLE` and a `wsl_guest_view` line containing
+`VMBUS_PRESENT`. The uploaded `wsl-runtime-probe-*` artifact holds
+`capability.txt` and `verdict.txt`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0131`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T19:48:22Z`.
+**Verified at:** `2026-09-30T19:48:29Z`.
+**Source revision:** `bc51b5d9`
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the series is sent or withdrawn. Keep the
+rootfs sha256 recorded above: a future probe that resolves a different
+Alpine asset is a new measurement, not a repeat of this one.
+**Freshness:** Re-run on any change to
+`.github/workflows/wsl-runtime-probe.yml`. Never cite this entry as build,
+KUnit, CoCo or mainline runtime evidence. Never cite run 36766972913 as a
+pass; it is the recorded red baseline for the `$LASTEXITCODE` propagation
+defect. If GitHub retires or repurposes the `windows-latest` /
+`windows-2025` images, this feasibility claim is void until re-measured.
+
+## 2026-09-30 16:57 -03 — hosted runners can define and run Gen2 Hyper-V VMs
+
+**What:** Hosted run
+[36768828972](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36768828972)
+(`Hyper-V role feasibility probe`, both matrix legs `success`,
+contribution-fork SHA `e260066e0129`) measured whether a GitHub-hosted
+Windows runner exposes the Hyper-V **management** stack — the part that
+defines arbitrary VMs — and not merely the lightweight hypervisor that WSL2
+uses. Like EVD-0131 this is a **capability probe**: it measures the runner,
+not the candidate.
+
+**Question:** Can the mainline six-patch candidate be booted as a real
+Hyper-V guest in Actions, so the GPADL/UIO lifecycle and order-zero fallback
+drills run against those exact mainline bytes?
+
+**Answer:** Yes. Measured identically on `windows-latest` and `windows-2025`:
+
+| Probe | Value |
+| --- | --- |
+| `hypervisor_present` | `True` |
+| `total_physical_memory_gb` | `16` |
+| `feature_Microsoft-Hyper-V` | `Enabled` |
+| `feature_Microsoft-Hyper-V-Management-PowerShell` | `Enabled` |
+| `feature_HypervisorPlatform` | `Enabled` |
+| `feature_VirtualMachinePlatform` | `Enabled` |
+| `feature_RSAT-Hyper-V-Tools-Feature` | `Enabled` |
+| `feature_Microsoft-Hyper-V-All` | `not_in_this_sku` (name only; the role is present under other names) |
+| `enable_Microsoft-Hyper-V` | `ok restart_required=False` |
+| `enable_HypervisorPlatform` | `ok restart_required=False` |
+| `any_restart_required` | `False` |
+| `new_vm_cmdlet` | `present` |
+| `probe_vm_create` | `ok` (Gen2, 1 GiB, diskless) |
+| `probe_vm_firmware` | `configured` (secure boot off) |
+| `probe_vm_state` | `Running` |
+| `probe_vm_remove` | `ok` |
+
+**Probe verdict:** `HYPERV_MANAGEMENT_AVAILABLE` on both runner images.
+
+A hosted runner reaches `Running` for a Gen2 VM we defined, without a reboot.
+The earlier `Microsoft-Hyper-V-All=unavailable` reading was a **feature-name**
+artifact of the runner SKU, not a capability gap: the role is present as
+`Microsoft-Hyper-V`, `Microsoft-Hyper-V-Online`, `Microsoft-Hyper-V-Offline`
+and `RSAT-Hyper-V-Tools-Feature`, all `Enabled`.
+
+What this settles and what it does not:
+
+- It **settles feasibility for mainline runtime drills in Actions.** The
+  six-patch candidate can be built as a mainline `bzImage` on the Linux job,
+  shipped as an artifact, and booted as a Gen2 Hyper-V guest on the Windows
+  job. That guest is ordinary x86_64 Hyper-V with a real VMBus, which is the
+  surface `vmbus-lifecycle-drill.sh` and `vmbus-fragmentation-drill.sh` are
+  written for.
+- The probe created a **diskless** VM only. Booting our kernel still needs a
+  boot chain (ESP with GRUB or an `CONFIG_EFI_STUB` kernel plus an initrd and
+  an embedded cmdline). That is ordinary build work, not a capability gap.
+- It does **not** close COCO-1..5. A Gen2 Hyper-V guest on a hosted runner is
+  not a confidential guest. SEV-SNP, TDX-without-paravisor and Arm CCA still
+  require an Azure Confidential VM (`DCasv5`/`ECasv5`, `DCesv5`/`ECesv5`) or
+  lab hardware. Arm CCA has no cloud SKU.
+- It does **not** close the send gate. Operator approval is still required
+  before any `git send-email`.
+- `second_level_address_translation_reported=False` was again not used to
+  decide the verdict. A VM reaching `Running` is the test.
+
+**Probe scope boundary:** no kernel was installed anywhere, no swap was
+touched, no memory pressure was applied, and no RamShared lifecycle state
+was changed. The probe VM was deleted before the job ended
+(`probe_vm_remove=ok`).
+
+**Verdict:** 🟡 PARTIAL — both cheap blockers to upstream approval are now
+measured as feasible in Actions: a real VMBus guest (EVD-0131) and an
+arbitrary Gen2 Hyper-V VM whose kernel we choose (this entry). The drills
+themselves have not been run yet, and COCO-1..5 remain open. Nothing here is
+claimed as a pass on the candidate.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36768828972 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `VERDICT=` / `PROBE probe_vm_`. Both matrix legs must print
+`VERDICT=HYPERV_MANAGEMENT_AVAILABLE` and `probe_vm_running_observed=True`.
+The uploaded `hyper-v-role-probe-*` artifact holds `capability.txt` and
+`verdict.txt`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0132`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T19:57:11Z`.
+**Verified at:** `2026-09-30T19:57:17Z`.
+**Source revision:** `96a894ff`
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the series is sent or withdrawn. The feature-name
+mapping recorded above is the load-bearing finding: if a future run reports
+`Microsoft-Hyper-V-All=not_in_this_sku`, that alone is not evidence of a
+capability gap.
+**Freshness:** Re-run on any change to
+`.github/workflows/hyper-v-role-probe.yml`. Never cite this entry as build,
+KUnit, CoCo or drill evidence. If GitHub retires or repurposes the
+`windows-latest` / `windows-2025` images, or drops the Hyper-V role from
+them, this feasibility claim is void until re-measured.

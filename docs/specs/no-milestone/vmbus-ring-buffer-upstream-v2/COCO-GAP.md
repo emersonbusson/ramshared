@@ -103,10 +103,23 @@ source. It is not evidence about a memory-encryption transition.
 
 The nearest real VMBus runtime available without new hardware is a
 **disposable WSL2 guest on a Windows CI runner** — WSL2 is a genuine Hyper-V
-guest. Any such run is **WSL-backport evidence**, not mainline evidence, and
+guest. That is no longer hypothetical: `EVD-0131` measured
+`VERDICT=WSL2_RUNTIME_AVAILABLE` on `windows-latest` and `windows-2025`
+(run 36767912983), where a 3.7 MB Alpine rootfs imports as a scratch WSL
+distro and the guest reports `VMBUS_PRESENT` with **30 VMBus devices** on
+`6.18.33.2-microsoft-standard-WSL2`, then unregisters cleanly.
+
+A WSL2 guest alone is **WSL-backport evidence**, not mainline evidence, and
 must be labelled as such; the six-patch mainline series does not apply to
-the WSL 6.18 tree. It also cannot close COCO-1..5, because a stock WSL2 VM
-is not a confidential guest.
+the WSL 6.18 tree. `EVD-0132` measures the answer to that objection: the
+same runners expose the Hyper-V management stack
+(`HYPERV_MANAGEMENT_AVAILABLE`, run 36768828972) and reach `Running` for a
+Gen2 VM we define, with no reboot. The mainline candidate can therefore be
+booted as an ordinary x86_64 Hyper-V guest in Actions and drilled there.
+That is ordinary Hyper-V evidence for the exact mainline bytes.
+
+Neither route closes COCO-1..5. A stock WSL2 VM is not a confidential guest,
+and neither is a Gen2 Hyper-V VM on a hosted runner.
 
 ---
 
