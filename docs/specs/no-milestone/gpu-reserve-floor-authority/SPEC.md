@@ -395,7 +395,24 @@ Kinds: unit · integration · drill/E2E. Every row names a real test; none is "a
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings`
 - [ ] `cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli`
-- [ ] Coverage for all touched Rust business-logic files: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli --files <paths above> --min 80`
+- [x] Coverage for `crates/ramshared-vram/src/reserve_policy.rs`
+  (2026-09-30: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/reserve_policy.rs --min 80 --report-json tmp/gpu-reserve-floor-policy-cov.json`
+  — 93.7% lines (118/126), gate PASSED. All thirteen named
+  `reserve_policy::tests` are present and green, including
+  `override_below_sealed_is_refused`, `override_writes_min_floor_only`,
+  `percent_below_twenty_is_rejected`, `zero_configured_never_raises_allocation`,
+  and `overflow_is_refused`.)
+- [x] Every other touched Rust business-logic file is already owned by a
+  `docs/governance/rust-slice-coverage.json` line-coverage entry:
+  `crates/ramshared-vram/src/lib.rs` (`vram-provider-abstraction`),
+  `crates/ramshared-block/src/sparse_vram.rs` (`cascade-vram-ondemand-policy`),
+  `crates/ramshared-block/src/origin_cache.rs` and `crates/ramshared-block/src/gpu_cache_worker.rs`
+  and `crates/ramshared-wsl2d/src/gpu_budget.rs` (`isolated-gpu-cache-worker`,
+  `wsl2-revocable-vram-origin-block`), `crates/ramshared-wsl2d/src/main.rs`
+  (`memory-broker-wsl2d-entrypoint-contract`), and
+  `crates/ramshared-cli/src/monitor.rs` (`wsl2-dual-plane-monitor`).
+  (2026-09-30: confirmed — `plan-rust-slice-coverage.mjs --all` reports
+  `RUST_SLICE_COVERAGE_STATUS=READY` with no `changed-rust-file-unmapped`.)
 - [ ] Every matrix row has a real test name and passes.
 - [ ] Kahneman critical rows have executable evidence (named tests above; ITEM-6 drill for #5).
 - [ ] No production path computes a reserve inline; grepping for `2 * GIB` as a reserve term, `1536 * 1024 * 1024` as an admission default, and `reserve_floor_bytes_from_env` returns nothing on an admission path.

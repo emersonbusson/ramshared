@@ -309,6 +309,14 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
 - **Structs:** `#[repr(C)] pub struct Sqe { pub tag:u64, pub op:u32, pub flags:u32, pub offset:u64, pub len:u32, pub buf_slot:u32 }` (same for `Cqe`, `RingHdr`, `Register`); `pub const ABI_VERSION:u32=1; pub const MAX_QD:u32=256; pub const MAX_IO:u32=1<<20;`.
 - **Functions:** `const _: () = { assert!(core::mem::size_of::<Sqe>()==32); assert!(core::mem::size_of::<Cqe>()==16); /* ... */ };`
 - **Required tests:** `golden_sqe_bytes` (serializes a known `Sqe` and compares it with the fixed byte array produced by C).
+- **Coverage:** the mirror is declaration-only (constants and `#[repr(C)]`
+  layouts; zero instrumented production lines after `#[cfg(test)]` exclusion),
+  so its named golden-layout tests are the evidence and the gate reports
+  `100.0% (0/0)`. Ownership is still registered so
+  `plan-rust-slice-coverage.mjs --changed-files` can attribute edits:
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/proto.rs --min 80 --report-json tmp/windows-swap-driver-protocol-mirror-cov.json
+  ```
 
 ### `drivers/windows/ramshared/driver.c` + `driver.h`  *(ITEM-5 — RF-1, DT-1)*
 

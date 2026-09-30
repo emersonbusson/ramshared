@@ -305,6 +305,27 @@ node tools/ci/check-rust-slice-coverage.mjs \
   --report-json tmp/wsl2-conn-cov.json
 ```
 
+The inflight range model is the pure I/O-atomicity contract for the same NBD
+path: a request overlapping an inflight range is serialized behind it, so a
+read is never torn and a write is never reordered past another write to the
+same range. `crates/ramshared-block/src/inflight.rs` carries this slice's
+ownership. Its source header still cites the retired `SPECv3-WSL2.md` §8.1;
+that pointer is superseded by this SPEC.
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/inflight.rs --min 80 --report-json tmp/cascade-swap-inflight-cov.json
+```
+
+The daemon state machine is the pure transition contract for this cascade,
+including `Demoted` (V3-F3 / §9: graceful demote removes VRAM from the pool
+without killing the process). `crates/ramshared-wsl2d/src/state.rs` carries
+this slice's ownership; its source header's `SPEC §7`/`§9` citations also
+resolve to this SPEC.
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/state.rs --min 80 --report-json tmp/cascade-swap-daemon-state-cov.json
+```
+
 ## 11. Safety Limits (updated)
 
 - No auto-start. VRAM **never** as the highest priority swap (V3-F1). Fixed scheme: `200 > 100 > −2`.

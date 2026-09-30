@@ -603,6 +603,13 @@ The bounded support-policy tests imported from the PR audit use:
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent,ramshared-tier --files crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs,crates/ramshared-agent/src/swap.rs,crates/ramshared-agent/src/watchdog.rs,crates/ramshared-tier/src/priority.rs --min 80 --report-json tmp/memory-broker-support-safety-cov.json
 ```
 
+The ublk control surface (device lifecycle, control-socket protocol, and the
+device-free io_uring smoke probe) is gated by:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/ublk.rs,crates/ramshared-wsl2d/src/ublk_control.rs,crates/ramshared-wsl2d/src/uring_smoke.rs --min 80 --report-json tmp/memory-broker-ublk-control-cov.json
+```
+
 The safe suite is necessary but not sufficient for a deployment claim. The
 remaining live gate is server-only: a disposable VM/QEMU or approved WSL2
 environment must exercise the selected production backend and record
@@ -619,3 +626,34 @@ slice has an explicit `BINARY_MATCH/E2E` gap and is not a live-daemon DONE.
 4. **Agent Integration:** Refactor agent main loop, implement Windows target code and metrics.
 5. **Generic DCC/workload telemetry:** Implement app-agnostic local bridge and aggregate workload measurement.
 6. **E2E Validation:** Run isolated QEMU crash tests and E2E remote VM simulations.
+
+## Coverage map declarations
+
+`crates/ramshared-agent/src/lib.rs` is a module-declaration-only library root:
+it has zero instrumented production lines, so a line-coverage entry cannot
+own it. Its structure — exactly the six documented modules, no `unsafe`, and
+every submodule test-green — is a structural contract instead.
+
+<!-- rust-slice-structural-contract-v1
+{
+  "schema_version": 1,
+  "id": "memory-broker-agent-library-structure",
+  "kind": "rust-structural-contract",
+  "files": [
+    "crates/ramshared-agent/src/lib.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-agent/src/lib.rs",
+      "package": "ramshared-agent",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-agent",
+        "--lib"
+      ]
+    }
+  ]
+}
+-->

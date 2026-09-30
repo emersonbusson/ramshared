@@ -354,6 +354,15 @@ ITEM-8's daemon entry-point contract.
 (ADR-0005); isolated VM e2e (Q1d): `eviction`/`unaccounted` flag under real load
 (objective evidence for the ITEM-7 Kahneman map).
 
+## Coverage commands
+
+`crates/ramshared-agent/src/psi.rs` is the PSI/swap/diskstats parser surface
+(ITEM-6). It is gated by its own exact invocation:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/psi.rs --min 80 --report-json tmp/memory-broker-agent-psi-cov.json
+```
+
 ## Validation checklist
 
 **Backend:**

@@ -331,6 +331,14 @@ node tools/ci/check-rust-slice-coverage.mjs \
   --report-json tmp/cascade-lifecycle-cov.json
 ```
 
+The demotion status reporter is a separate daemon-side source and is gated by
+its own command. It is not folded into the CLI pure-line owner above because
+the two live in different packages.
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/demote_status.rs --min 80 --report-json tmp/cascade-lifecycle-demote-status-cov.json
+```
+
 **E2E (cascade surface — not cover script):**
 
 | Check | Expect |
