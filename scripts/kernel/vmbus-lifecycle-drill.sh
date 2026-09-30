@@ -2,7 +2,7 @@
 # Guest-side VMBus GPADL/UIO lifecycle drill for the ring-buffer upstream v2 series.
 #
 # Runs INSIDE a disposable ordinary x86_64 Hyper-V guest that booted the exact
-# seven-patch candidate. It is never run on the daily WSL2 host: it rebinds the
+# six-patch candidate. It is never run on the daily WSL2 host: it rebinds the
 # production synthetic NIC and unloads/reloads VMBus sub-drivers.
 #
 # Covers the named SPEC gates that hosted KUnit cannot:
