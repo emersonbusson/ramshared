@@ -329,3 +329,141 @@ The runtime monitor now refuses this legacy summary and displays
 `AWAITING_QUALIFICATION`; it accepts metrics only from clean, promotable v1
 evidence. This source fix is recorded in EVD-0086 and has not been installed on
 the host.
+
+<!-- ramshared-benchmark-id: 2026-09-30-gpu-budget-chain-condition-snapshot -->
+## 2026-09-30 06:29 -03 — GPU budget chain condition snapshot (EVD-0120)
+
+**Publication status:** `legacy-unqualified`. Raw output is host-private and
+carries no in-repo SHA-256 artifact, so this entry is **not** a baseline, not a
+regression PASS, and not a promotion claim. It records the load state under
+which EVD-0120's live GPU-budget proof was taken.
+
+**Context**
+- Branch/commit: `feat/ramshared-v0.15.0-readiness` @ `05e3c1c4` (GPU-budget
+  delta uncommitted on top).
+- Machine: **dev-workstation** — Windows + **RTX 2060 (6144 MiB)**, WSL2
+  `6.18.40.1-microsoft-standard-WSL2+` build `#9`, WSL RAM 15 GiB.
+- **Load (snapshot):** free VRAM 3601–3615 MiB; RAM available 7957–7984 MiB;
+  swap used 4 MiB; PSI memory avg10 0.00. Condition tag: **`idle`**.
+- **Active:** desktop GPU load only; no dedicated GPU application running.
+- **Tooling:** `scripts/p0/measure-vram-headroom.sh 20 2` (read-only, n = 10)
+  plus three `ramshared status --json` cache-telemetry samples 5 s apart.
+
+**Results**
+
+| Metric | n | min | max | mean | stddev | unit |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| Free VRAM | 10 | 3601 | 3615 | 3612 | 4 | MiB |
+| RAM available | 10 | 7957 | 7984 | 7973 | — | MiB |
+| Swap used | 10 | 4 | 4 | 4 | — | MiB |
+
+Free-VRAM volatility = range / mean = **0.4%**.
+
+Cache telemetry (3 samples, identical across all three):
+
+| Field | Value | unit |
+| :--- | ---: | :--- |
+| `cache_state` | ACTIVE | — |
+| `vram_cached` | 256 | MiB |
+| `cache_target` | 1328 | MiB |
+| `gpu_headroom` | 2721 | MiB |
+| `gpu_budget.budget_bytes` | 4016 | MiB |
+| `gpu_budget.used_bytes` | 1295 | MiB |
+| `gpu_budget.source` | `driver_reported` | — |
+
+`nvidia-smi` ground truth on the same adapter: 6144 MiB total, 2289 MiB used,
+3666 MiB free.
+
+**Honest reading**
+- The number supports one statement only: under this idle desktop load the
+  host exposes a **stable** ~3.6 GiB of free VRAM, so a 256 MiB cache sample
+  is not an artifact of a flapping adapter.
+- `driver_reported` is the budget the WDDM path measured, not `nvidia-smi`
+  free memory. Budget-available 2721 MiB vs `nvidia-smi` free 3666 MiB is
+  WDDM-budget-vs-free accounting divergence and is **not reconciled here**.
+  The budget snapshot is internally consistent (`budget - used = available`).
+- No competitor is side-by-side in this window: this is not a swap-backend
+  comparison and must not be read as one.
+- Missing proof: no DEMOTE / VRAM-return measurement in this entry (see the
+  cascade DEMOTE drill separately), no multi-adapter run, no AMD/Intel, and
+  no CoCo. Three rounds against a matched baseline are required before any
+  of these numbers may be used as a regression gate.
+
+<!-- ramshared-benchmark-id: 2026-09-30-gpu-budget-containment-nvml -->
+## 2026-09-30 04:51 -03 — GPU budget containment under a staged VRAM consumer (EVD-0122)
+
+**Publication status:** `legacy-unqualified`. Raw sampler output is host-private
+(`/tmp/contain-r*.log`) and carries no in-repo SHA-256 artifact, so this entry
+is **not** a baseline, not a regression PASS, and not a promotion claim. It
+records that the device-wide budget tracks an external VRAM consumer
+reproducibly across three rounds.
+
+**Context**
+- Branch/commit: `feat/ramshared-v0.15.0-readiness` @ `05e3c1c4` (NVML budget
+  fix uncommitted on top). Installed daemon
+  `913daa2c5492c003df4627801885db4eb822c2059bdcb8fef929738100504697`,
+  `BINARY_MATCH`.
+- Machine: **dev-workstation** — Windows + **RTX 2060 (6144 MiB)**, WSL2
+  `6.18.40.1-microsoft-standard-WSL2+` build `#9`.
+- **Load (snapshot):** dedicated VRAM consumer active for the whole window.
+  Condition tag: **`loaded`**.
+- **Tooling:** `scripts/p0/vram_ramp.c` as the consumer
+  (`vram-ramp 256 3072 2 12`), plus a 2 s sampler reading `nvidia-smi` and
+  `/run/ramshared/cache-status.json`. **n = 3 rounds**, 22 samples per round.
+
+**Results — budget tracking (3 rounds)**
+
+| Metric | unit | n | min | max | median | mean | stddev |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `nvidia-smi` used peak | MiB | 3 | 4652 | 4661 | 4652 | 4655 | 4 |
+| `gpu_budget.used_bytes` peak | MiB | 3 | 4841 | 4850 | 4841 | 4844 | 4 |
+| `gpu_budget.available_bytes` min | MiB | 3 | 1293 | 1302 | 1302 | 1299 | 4 |
+| `gpu_budget.used_bytes` floor | MiB | 3 | 1673 | 1686 | 1686 | 1682 | 6 |
+| `nvidia-smi` used floor | MiB | 3 | 1484 | 1497 | 1497 | 1493 | 6 |
+
+`p99` is degenerate at n = 3 (it equals the maximum) and is not reported as a
+separate column.
+
+**Results — consumer tracking (per round)**
+
+| Round | consumer swing (`nvidia-smi`) | `used_bytes` swing | `available_bytes` drop from 2721 |
+| ---: | ---: | ---: | ---: |
+| 1 | 3155 MiB | 3154 MiB | 1419 MiB |
+| 2 | 3155 MiB | 3154 MiB | 1419 MiB |
+| 3 | 3177 MiB | 3177 MiB | 1428 MiB |
+
+`used_bytes` moves by the same amount as the device within 1 MiB on every
+round. That is the containment signal: the budget now describes the adapter,
+not the caller.
+
+**Cache yield (single run, see EVD-0122)**
+
+| Metric | value | unit |
+| :--- | ---: | :--- |
+| Cache resident at pressure onset | 256 | MiB |
+| Cache resident under pressure | 0 | MiB |
+| Yield | 256 | MiB (100%) |
+| Same probe before the NVML fix | 128 | MiB (10%) |
+
+The yield figure is **n = 1**: the cache had already drained to 0 MiB and did
+not re-grow during these three rounds, so a repeat of the yield ratio was not
+possible. It is recorded as the single observation it is.
+
+**Honest reading**
+- Supported: under a 3 GiB external VRAM consumer the device-wide budget tracks
+  the consumer reproducibly (round-to-round stddev ≈ 4 MiB), and the cache
+  yields its pages (100% in the one run where pages were resident).
+- Not supported: re-growth of the cache after pressure releases — it stayed at
+  0 MiB across all three rounds. Cache refill is demand-driven, so this is not
+  claimed as a defect, but recovery is **unproven**.
+- Idle ceiling: when no consumer is present, `available_bytes` clamps at
+  2721 MiB because the WDDM per-process term still binds the `min`. Harmless
+  for containment (the truthful lower number binds under pressure) and not
+  reconciled here.
+- No competitor is side-by-side in this window: this is not a swap-backend
+  comparison and must not be read as one.
+- Missing proof: multi-adapter, AMD/Intel, NVML-absent fail-closed behaviour at
+  runtime, and three-tier stress.
+
+**Related evidence:** `validation.md` EVD-0121 (DEMOTE action),
+EVD-0122 (defect, root cause, fix, live revalidation).

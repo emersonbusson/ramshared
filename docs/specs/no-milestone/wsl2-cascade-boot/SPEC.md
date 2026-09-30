@@ -1,5 +1,13 @@
 # SPEC — wsl2-cascade-boot
 
+> **STALE — DO NOT IMPLEMENT FROM THIS SPEC.**
+> `PRD.md` revision 2 (2026-09-30) replaced the script-only design with a
+> native in-program bootstrap (RF-7..RF-10) and added the 2026-09-23 outage
+> lesson (§2.1). Every ITEM below describes the retired
+> `scripts/safety/*.sh` orchestrator and is superseded. Rewrite this SPEC
+> against PRD rev 2 before any code change (SSDV3: no structural creativity
+> in IMPL — update SPEC first).
+
 > Passo 2 SSDV3. Implementa `PRD.md` na mesma pasta. Zero criatividade fora deste SPEC.
 
 ## Traceability

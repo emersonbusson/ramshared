@@ -1,5 +1,13 @@
 # IMPL — wsl2-cascade-boot
 
+> **SUPERSEDED — this IMPL documents the retired script-only design.**
+> `PRD.md` revision 2 requires a native in-program bootstrap (RF-7..RF-10).
+> The "code complete / boot opt-in" status below refers only to the
+> `scripts/safety/*.sh` path that was retired after the 2026-09-23 outage
+> (`455565db`, `MEMORY.md`). The feature is **not** complete: boot still
+> leaves the cascade `Off` and `docs/INDEX.md` lists this spec `UNQUALIFIED`.
+> Rewrite SPEC against PRD rev 2, then re-issue this IMPL.
+
 > Passo 3 SSDV3. Branch: `main`.
 
 ## Status
