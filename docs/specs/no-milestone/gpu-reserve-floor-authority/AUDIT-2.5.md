@@ -95,14 +95,27 @@ wording defects. Every claim below was verified in the tree.
 - **Closed this pass:** pass 1 asked whether any operator surface sets a reserve below 2048
   today. Yes — `scripts/safety/preflight.sh` defaults to 256 MiB and gates daemon startup on
   it. That is no longer an open question; it is finding 3 above and a required fix.
-- **Still open, and now load-bearing:** pass 2 recorded that `safe_target_bytes` subtracts
-  `runtime_headroom_bytes` from live headroom but **not** from `within_capacity`, while
-  `required_free_bytes` **adds** it to the reserve. DT-2's three-term maximum states the floor
-  as a single quantity, so a reader may assume the two helpers bound the same thing. They do
-  not. This SPEC claims not to change the helpers' math — so either the asymmetry is
-  documented as intentional in DT-2 and the ITEM-6 campaign reports both quantities, or the
-  helper math is reconciled in a separate slice. **ITEM-6 must not be closed without stating
-  which quantity it measured.**
+- **Closed 2026-09-30 (Step 3): the helper asymmetry is unreachable on every validated
+  path.** pass 2 recorded that `safe_target_bytes` subtracts `runtime_headroom_bytes` from
+  live headroom but **not** from `within_capacity`, while `required_free_bytes` **adds** it to
+  the reserve. The question was whether that is intentional. It is, and here is the proof:
+  `capacity = total_bytes.unwrap_or(budget_bytes).min(budget_bytes)`, and both production
+  callers refuse `budget_bytes > total_bytes` **before** the arithmetic
+  (`origin_cache.rs :: physical_target_bytes` per DT-6, and
+  `gpu_budget.rs :: safe_cache_target_with_runtime`). So on every reachable call
+  `capacity == budget_bytes`, hence `available_bytes = capacity - used_bytes` and
+  `within_live_headroom = available - reserve - runtime <= within_capacity = capacity - reserve`.
+  The live-headroom term always binds, so the omitted capacity-side headroom is never the
+  limiting term and the two helpers agree on the reachable domain. Named proof:
+  `safe_target_keeps_the_floor_for_trusted_snapshots` asserts
+  `capacity - used - target >= required_free_bytes` across six trusted snapshots including the
+  live 6144/4270/1549 MiB host figure. The counter-case is also named —
+  `safe_target_can_violate_the_floor_without_budget_consistency` — which is the Kahneman #16
+  evidence that the caller-side consistency check is **load-bearing**, not decorative: with
+  `budget 8000 > total 3000` the capacity term binds and the target leaves capacity-relative
+  free space below the floor. **ITEM-6 must measure against `required_free_bytes`** (the
+  floor); the target-side quantity is `safe_target_bytes`, and the two are equal in bound over
+  the trusted domain.
 - `GpuBudgetSource::ProviderLocalEstimate` is still unpicked for the origin path. DT-6 now
   refuses anything but `DriverReported`, which is the safer default and matches
   `can_admit_at`. If a real adapter session ever reports only `ProviderLocalEstimate`, that
@@ -137,8 +150,9 @@ the verdict is **`go`** for Step 3, with these standing conditions:
 6. **Provenance is carried, never stamped.** Any sample type feeding `required_free_bytes` /
    `safe_target_bytes` carries its own age and source; a normalization that writes
    `DriverReported` or `Instant::now()` into a snapshot is a defect.
-7. **The two helpers do not bound the same quantity.** ITEM-6 reports which of the two it
-   measured before any gate is closed.
+7. **The two helpers agree on the reachable domain** (closed 2026-09-30; see the Step 3
+   closure above). ITEM-6 still reports the quantity it measured — the floor
+   `required_free_bytes` — before any gate is closed.
 
 ## Open questions — pass 2
 
@@ -146,11 +160,14 @@ the verdict is **`go`** for Step 3, with these standing conditions:
   does, the fix is a narrow one (carry the age it already has). If it does not, the origin
   path has been accepting stale capacity data all along and that is a separate defect worth
   its own record.
-- `safe_target_bytes` subtracts `runtime_headroom_bytes` from live headroom but **not** from
-  `within_capacity`, while `required_free_bytes` **adds** it to the reserve. The two helpers
-  therefore do not bound the same quantity. That asymmetry is pre-existing and this SPEC
-  claims not to change the helpers' math — but DT-5/DT-6 now route *both* surfaces through
-  them, so the asymmetry becomes load-bearing. Is it intentional?
+- **Answered 2026-09-30 (Step 3): yes, it is intentional and unreachable.** `safe_target_bytes`
+  subtracts `runtime_headroom_bytes` from live headroom but **not** from `within_capacity`,
+  while `required_free_bytes` **adds** it to the reserve. Because both production callers
+  refuse `budget_bytes > total_bytes` first, `capacity == budget_bytes` on every reachable
+  call, so `within_live_headroom <= within_capacity` always and the live-headroom term binds.
+  The helpers agree on the reachable domain. See
+  `safe_target_keeps_the_floor_for_trusted_snapshots` and
+  `safe_target_can_violate_the_floor_without_budget_consistency`.
 - `GpuBudgetSource` also has `ProviderLocalEstimate`. Should the origin path accept it (it
   may be the only source available before an allocation) or refuse it the way
   `can_admit_at` does? DT-6 must pick one; "DriverReported only" is the safer default and

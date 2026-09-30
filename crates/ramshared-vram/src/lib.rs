@@ -25,14 +25,14 @@ pub use codec::{
     CodecAlignments, CodecChunkResult, CodecId, CodecStatus, FakeCodec, GpuCacheCodec,
     VramOutputReservation, VramSpan, crc32,
 };
+pub use reserve_policy::{
+    ReserveFloorEnv, ReserveFloorError, ReserveFloorPolicy, ReserveFloorSource,
+    SEALED_PERCENT_SAFETY_FLOOR, enforced_free_floor_from_configured,
+};
 pub use worker_telemetry::{
     CodecCapability, CodecState, CodecTelemetry, MAX_CODEC_REFUSAL_REASON_BYTES,
     MAX_WORKER_TELEMETRY_PAYLOAD_BYTES, TELEMETRY_MAX_AGE_MS, WORKER_TELEMETRY_SCHEMA_VERSION,
     WorkerCacheTelemetry, WorkerTelemetryEnvelope,
-};
-pub use reserve_policy::{
-    ReserveFloorEnv, ReserveFloorError, ReserveFloorPolicy, ReserveFloorSource,
-    SEALED_PERCENT_SAFETY_FLOOR, enforced_free_floor_from_configured,
 };
 
 /// VRAM operation error (mapped from the backend-specific error, e.g., `CudaError`).
@@ -389,6 +389,93 @@ mod tests {
         // free after the existing 1_000 bytes of provider/external use.
         assert_eq!(budget.safe_target_bytes(10_000, 1_000, 500), 3_300);
         assert_eq!(budget.required_free_bytes(1_000, 500), 1_700);
+    }
+
+    /// Capacity-relative free space after admitting `target` must still hold the
+    /// full floor. `safe_target_bytes` subtracts `runtime_headroom_bytes` only
+    /// from its live-headroom term, not from its capacity term, so the two
+    /// helpers do not bound the same expression on paper. This asserts the
+    /// reachable case: for a **trusted** snapshot (`budget_bytes <= total_bytes`
+    /// when a total is known) the live-headroom term always binds, so the
+    /// omitted capacity-side headroom is never the limiting term and the floor
+    /// survives. Every production caller enforces that consistency before the
+    /// arithmetic (`physical_target_bytes`, `safe_cache_target_with_runtime`).
+    #[test]
+    fn safe_target_keeps_the_floor_for_trusted_snapshots() {
+        let mib = 1024 * 1024;
+        let configured = 1_000;
+        let runtime = 500;
+        // (total, budget, used). Trusted means budget <= total when total is known.
+        let cases: [(u64, u64, u64); 6] = [
+            (8_000, 6_000, 1_000),
+            (6_000, 6_000, 0),
+            (6_000, 6_000, 5_000),
+            (6_144 * mib, 4_270 * mib, 1_549 * mib),
+            (48 * 1024 * mib, 40 * 1024 * mib, 1024 * mib),
+            (6_000, 4_000, 3_000),
+        ];
+        for (total, budget, used) in cases {
+            let snapshot = GpuBudgetSnapshot {
+                adapter: Some(GpuAdapterIdentity {
+                    backend: "cuda".into(),
+                    key: "gpu:test".into(),
+                    luid: None,
+                }),
+                total_bytes: Some(total),
+                budget_bytes: budget,
+                used_bytes: used,
+                source: GpuBudgetSource::DriverReported,
+                sampled_at: Instant::now(),
+            };
+            let capacity = snapshot
+                .total_bytes
+                .unwrap_or(snapshot.budget_bytes)
+                .min(snapshot.budget_bytes);
+            let floor = snapshot.required_free_bytes(configured, runtime);
+            for requested in [1, 1_000, 10_000, 1 << 30, u64::MAX] {
+                let target = snapshot.safe_target_bytes(requested, configured, runtime);
+                let free_after = capacity.saturating_sub(used).saturating_sub(target);
+                assert!(
+                    target == 0 || free_after >= floor,
+                    "target {target} leaves {free_after} of capacity free, below floor {floor} \
+                     (total={total} budget={budget} used={used} requested={requested})"
+                );
+            }
+        }
+    }
+
+    /// Kahneman #16 evidence for the trust boundary: without the consistency
+    /// check the capacity term binds and the floor is violated. This is why
+    /// `physical_target_bytes` and `safe_cache_target_with_runtime` must refuse
+    /// `budget_bytes > total_bytes` before calling the arithmetic — the
+    /// validation is load-bearing, not decorative.
+    #[test]
+    fn safe_target_can_violate_the_floor_without_budget_consistency() {
+        // Deliberately inconsistent: budget 8_000 exceeds total 3_000.
+        let snapshot = GpuBudgetSnapshot {
+            adapter: Some(GpuAdapterIdentity {
+                backend: "cuda".into(),
+                key: "gpu:test".into(),
+                luid: None,
+            }),
+            total_bytes: Some(3_000),
+            budget_bytes: 8_000,
+            used_bytes: 2_000,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: Instant::now(),
+        };
+        let capacity: u64 = 3_000;
+        let target = snapshot.safe_target_bytes(u64::MAX, 500, 500);
+        let floor = snapshot.required_free_bytes(500, 500);
+        let free_after = capacity.saturating_sub(2_000).saturating_sub(target);
+        assert_eq!(
+            target, 2_400,
+            "capacity term binds when budget exceeds total"
+        );
+        assert!(
+            free_after < floor,
+            "the inconsistency must be observable: free_after={free_after} floor={floor}"
+        );
     }
 
     #[test]

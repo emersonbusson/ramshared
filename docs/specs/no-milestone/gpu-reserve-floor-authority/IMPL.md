@@ -145,6 +145,10 @@ Branch `feat/ramshared-v0.15.0-readiness`, 2026-09-30. `CARGO_BUILD_JOBS=1`.
 | other workspace targets (tiers, integration) | 59 | 0 |
 | **Total** | **959** | **0** |
 
+**Post-closure re-run, 2026-09-30** (after the contract-closure tests landed):
+`cargo test --workspace --exclude ramshared-winsvc` → **1390 passed / 0 failed / 25 ignored**
+across 53 suites. `cargo test -p ramshared-vram --lib` → 40 passed / 0 failed.
+
 ### SPEC-named tests
 
 | Named test | Surface | Result |
@@ -172,21 +176,55 @@ Branch `feat/ramshared-v0.15.0-readiness`, 2026-09-30. `CARGO_BUILD_JOBS=1`.
 | `monitor_labels_enforced_reserve_floor_as_vram` | `monitor.rs` | PASS |
 | `preflight_refuses_below_sealed_floor` | `preflight.sh` | PASS (shell) |
 | `preflight_honors_raise_only_override` | `preflight.sh` | PASS (shell) |
+| `safe_target_keeps_the_floor_for_trusted_snapshots` | `lib.rs` | PASS |
+| `safe_target_can_violate_the_floor_without_budget_consistency` | `lib.rs` | PASS |
+
+### Contract closure — the two helpers agree on the reachable domain
+
+AUDIT-2.5 pass 2 left a load-bearing open question: `safe_target_bytes` subtracts
+`runtime_headroom_bytes` from its live-headroom term but not from `within_capacity`, while
+`required_free_bytes` adds it to the reserve, so the two do not bound the same expression on
+paper. **Closed 2026-09-30.** Both production callers refuse `budget_bytes > total_bytes`
+before the arithmetic (`physical_target_bytes` per DT-6, `safe_cache_target_with_runtime`), so
+`capacity == budget_bytes` on every reachable call and `within_live_headroom <= within_capacity`
+always. The live-headroom term binds; the omitted capacity-side headroom is never the limiting
+term.
+
+- `safe_target_keeps_the_floor_for_trusted_snapshots` asserts
+  `capacity - used - target >= required_free_bytes` for six trusted snapshots, including the
+  live host figure `total 6144 MiB / budget 4270 MiB / used 1549 MiB` and a 48 GiB adapter.
+- `safe_target_can_violate_the_floor_without_budget_consistency` asserts the counter-case with
+  `budget 8000 > total 3000`: the capacity term binds and capacity-relative free space falls
+  below the floor. This is the Kahneman #16 evidence that the caller-side consistency check is
+  load-bearing, not decorative.
+
+**ITEM-6 measures `required_free_bytes`** (the floor). The target-side quantity is
+`safe_target_bytes`; the two are equal in bound over the trusted domain.
 
 ### Slice coverage gate
 
 `tools/ci/check-rust-slice-coverage.mjs`, metric `lines`, min 80% on business-logic files
 (excluding `main.rs`, whose cover target is "extracted business logic only" per SPEC).
 
+Command (2026-09-30 re-measure, `CARGO_BUILD_JOBS=1`):
+
+```text
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-vram,ramshared-block,ramshared-wsl2d \
+  --files crates/ramshared-vram/src/reserve_policy.rs,crates/ramshared-block/src/sparse_vram.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/gpu_cache_worker.rs,crates/ramshared-wsl2d/src/gpu_budget.rs \
+  --min 80
+```
+
 | File | Lines covered | % |
 | --- | ---: | ---: |
-| `crates/ramshared-vram/src/reserve_policy.rs` | 108/126 | **85.7%** |
-| `crates/ramshared-block/src/sparse_vram.rs` | 352/398 | **88.4%** |
-| `crates/ramshared-block/src/origin_cache.rs` | 495/577 | **85.8%** |
-| `crates/ramshared-block/src/gpu_cache_worker.rs` | 349/391 | **89.3%** |
+| `crates/ramshared-vram/src/reserve_policy.rs` | 118/126 | **93.7%** |
+| `crates/ramshared-block/src/sparse_vram.rs` | 365/398 | **91.7%** |
+| `crates/ramshared-block/src/origin_cache.rs` | 529/577 | **91.7%** |
+| `crates/ramshared-block/src/gpu_cache_worker.rs` | 680/839 | **81.0%** |
 | `crates/ramshared-wsl2d/src/gpu_budget.rs` | 217/258 | **84.1%** |
 
-All five **PASSED**.
+All five **PASSED**. `gpu_cache_worker.rs`'s production-line denominator grew from 391 to 839
+after the worker surface expanded; 81.0% is the honest current figure, above the 80% floor.
 
 ### Hardcoded-reserve verification
 
