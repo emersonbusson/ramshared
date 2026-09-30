@@ -5,7 +5,7 @@
 # The image is a mainline bzImage with:
 #   - CONFIG_EFI_STUB=y            so it is itself an EFI application
 #   - CONFIG_INITRAMFS_SOURCE=...  so the drill userspace is embedded
-#   - CONFIG_CMDLINE_FORCE=y       so the console is baked in and no bootloader
+#   - CONFIG_CMDLINE_OVERRIDE=y    so the console is baked in and no bootloader
 #                                  argument can drift between runs
 #
 # The result is one file. Drop it at \EFI\BOOT\BOOTX64.EFI on a FAT32 ESP and

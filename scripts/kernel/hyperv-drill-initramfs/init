@@ -62,11 +62,12 @@ fi
 echo "HYPERV_DRILL_VMBUS present=$VMBUS_PRESENT devices=$VMBUS_DEVICES"
 
 if [ "$VMBUS_PRESENT" = yes ]; then
-	# Class ids only. Device instance ids are host-assigned and uninteresting.
+	# Class ids only. Device instance ids are host-assigned and uninteresting,
+	# so they are deliberately not printed.
 	for d in /sys/bus/vmbus/devices/*; do
 		[ -e "$d" ] || continue
 		cls=$(cat "$d/classid" 2>/dev/null)
-		echo "HYPERV_DRILL_DEVICE id=$(basename "$d") classid=$cls"
+		echo "HYPERV_DRILL_DEVICE classid=$cls"
 	done
 fi
 
@@ -140,7 +141,12 @@ fi
 if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
 	export NIC
 	echo "HYPERV_DRILL_PHASE name=fragmentation"
-	sh /scripts/vmbus-fragmentation-drill.sh 512 /var/tmp/fragment.log
+	# 75% of MemAvailable, not a fixed 512 MiB: the whole point of this drill
+	# is to drain the free high-order blocks. A fixed hog that leaves most of
+	# RAM free guarantees the INCONCLUSIVE outcome.
+	FRAG_HOG=$(awk '/MemAvailable/{print int($2 / 1024 * 75 / 100)}' /proc/meminfo)
+	echo "HYPERV_DRILL_FRAGMENT hog_mib=${FRAG_HOG:-0}"
+	sh /scripts/vmbus-fragmentation-drill.sh "${FRAG_HOG:-512}" /var/tmp/fragment.log
 	FRAG_STATUS=$?
 	echo "HYPERV_DRILL_FRAGMENT status=$FRAG_STATUS"
 	echo "HYPERV_DRILL_MAPS after_fragment $(vmbus_maps)"
@@ -152,8 +158,12 @@ fi
 SPLATS=$(splat_count)
 echo "HYPERV_DRILL_SPLATS count=${SPLATS:-0}"
 
+# Deliberately excludes `order:7` and `page allocation failure`: those are the
+# proof that the fragmentation drill actually applied pressure, and the drill
+# scores them itself. Counting them here would FAIL a successful fallback.
+# What counts as damage is a splat or the channel-open regression signature.
 FAULTS=$(dmesg 2>/dev/null |
-	grep -cE 'BUG:|Oops:|panic:|order:7|accept4 failed|page allocation failure|hung task')
+	grep -cE 'BUG:|Oops:|panic:|accept4 failed|hung task|Unable to handle|general protection')
 echo "HYPERV_DRILL_FAULTS count=${FAULTS:-0}"
 
 # --- verdict -----------------------------------------------------------------
