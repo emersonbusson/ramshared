@@ -1374,6 +1374,30 @@
           ]
         }
       ]
+    },
+    {
+      "id": "windows-swap-driver-loader-unix",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-swap-driver/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cuda",
+        "--files",
+        "crates/ramshared-cuda/src/loader_unix.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/windows-swap-driver-loader-unix-cov.json"
+      ],
+      "packages": [
+        "ramshared-cuda"
+      ],
+      "files": [
+        "crates/ramshared-cuda/src/loader_unix.rs"
+      ],
+      "min": 80
     }
   ]
 }

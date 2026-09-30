@@ -450,6 +450,13 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   ```bash
   node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/lib.rs --min 80 --report-json tmp/cuda-pinned-host-mapping-cov.json
   ```
+- **Unix loader coverage:** `loader_unix.rs` is four thin `dlopen`/`dlsym`/`dlclose`/`dlerror`
+  wrappers plus `error()`. The unit tests exercise them against `libc.so.6`, which every Unix
+  host has, so the wrapper surface is covered without depending on an NVIDIA driver install.
+  Measured 100.0% lines (17/17).
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/loader_unix.rs --min 80 --report-json tmp/windows-swap-driver-loader-unix-cov.json
+  ```
 - **Kahneman discipline:** #14 + #1 (ITEM-1 Map).
 
 ### `crates/ramshared-cuda/Cargo.toml`  *(ITEM-1 — RF-4, DT-16)*

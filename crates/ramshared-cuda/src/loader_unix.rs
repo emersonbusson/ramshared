@@ -82,4 +82,23 @@ mod tests {
         let err_msg2 = error();
         assert_eq!(err_msg2, "unknown dlopen error");
     }
+
+    /// `sym` and `close` are thin `dlsym`/`dlclose` wrappers. Exercise them
+    /// against a library every Unix host has, so the wrappers are covered
+    /// without depending on an NVIDIA driver install.
+    #[test]
+    fn test_sym_and_close_roundtrip_on_libc() {
+        let handle = unsafe { open(c"libc.so.6".as_ptr()) };
+        assert!(!handle.is_null(), "libc.so.6 must be loadable: {}", error());
+
+        let strlen = unsafe { sym(handle, c"strlen".as_ptr()) };
+        assert!(!strlen.is_null(), "libc must export strlen: {}", error());
+
+        // A missing symbol resolves to null and leaves the handle usable.
+        let missing = unsafe { sym(handle, c"ramshared_no_such_symbol".as_ptr()) };
+        assert!(missing.is_null());
+
+        let rc = unsafe { close(handle) };
+        assert_eq!(rc, 0, "dlclose of a real handle must succeed");
+    }
 }
