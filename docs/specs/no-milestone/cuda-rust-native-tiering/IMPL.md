@@ -227,12 +227,16 @@ foreground GPU co-load p95, and the nvCOMP pre-decode checksum mechanism.
 No performance number in this file is a hardware result.
 
 ## Gaps
-- **Reserve-floor contract value drift** in the parent worker SPEC must be
-  reconciled before any compression admission is qualified on hardware. The
-  *shape* of the floor is fixed here (full `required_free_bytes`, not the
-  configured floor alone); the default value (512 MiB env vs
-  `max(1536 MiB, 20%)` in the parent PRD mitigation) is still unreconciled
-  upstream.
+- **Reserve-floor contract** is reconciled (commit `76a90c55`). The single
+  authority is `ramshared_vram::ReserveFloorPolicy`, and the enforced floor is
+  `max(min_floor_bytes, floor(capacity * sealed_percent / 100),
+  ceil(capacity / 5)) + runtime_headroom_bytes`. The sealed manifest binds
+  `gpu_reserve_min_mib = 2048` and `gpu_reserve_percent = 20`; the isolated
+  worker supplies the 640 MiB runtime headroom. The former 512 MiB env floor
+  and the 128–4096 MiB clamp were deleted. The parent PRD's
+  `max(1536 MiB, 20%)` line is superseded and must not be cited as the
+  enforced floor. Compression admission still requires the full
+  `required_free_bytes`, not the configured floor alone.
 - **nvCOMP pre-decode checksum capability is unresolved** and no `libnvcomp`
   is present on this host. ITEM-3 stays gated; DT-7 must not be weakened to a
   host readback to work around it.
