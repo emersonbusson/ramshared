@@ -6,8 +6,9 @@
 
 use std::time::{Duration, Instant};
 
-use ramshared_vram::{VramError, VramMemory, VramProvider};
+use ramshared_vram::{ReserveFloorEnv, ReserveFloorPolicy, VramError, VramMemory, VramProvider};
 
+use crate::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES;
 use crate::{BlockBackend, IoError};
 
 /// Default chunk size (MiB) — SPEC `RAMSHARED_VRAM_CHUNK_MIB` default 128.
@@ -23,7 +24,9 @@ pub struct SparseVramConfig<'p> {
     pub capacity: u64,
     pub chunk_bytes: u64,
     pub block_size: u32,
-    pub reserve_floor_bytes: u64,
+    /// The one configured-reserve authority (DT-1). Resolved once at startup
+    /// and passed by value to every admission surface.
+    pub reserve_policy: ReserveFloorPolicy,
     pub commit_cap_bytes: Option<u64>,
     pub budget_gate: Option<&'p dyn CommitBudgetGate>,
 }
@@ -42,7 +45,8 @@ pub struct SparseVramBackend<'p, P: VramProvider + 'p> {
     chunk_bytes: u64,
     block_size: u32,
     /// Never allocate if `mem_info.free < reserve_floor + chunk` (keep GPU headroom).
-    reserve_floor_bytes: u64,
+    /// The one configured-reserve authority (DT-1).
+    reserve_policy: ReserveFloorPolicy,
     /// Hard cap on sum of Live chunks (≤ capacity). Protects 6 GiB cards from full fill.
     commit_cap_bytes: u64,
     budget_gate: Option<&'p dyn CommitBudgetGate>,
@@ -68,7 +72,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
                 capacity,
                 chunk_bytes,
                 block_size,
-                reserve_floor_bytes: reserve_floor_bytes_from_env(),
+                reserve_policy: sealed_reserve_policy(),
                 commit_cap_bytes: None,
                 budget_gate: None,
             },
@@ -81,7 +85,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         capacity: u64,
         chunk_bytes: u64,
         block_size: u32,
-        reserve_floor_bytes: u64,
+        reserve_policy: ReserveFloorPolicy,
         commit_cap_bytes: Option<u64>,
     ) -> Result<Self, IoError> {
         Self::new_with_config(
@@ -90,7 +94,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
                 capacity,
                 chunk_bytes,
                 block_size,
-                reserve_floor_bytes,
+                reserve_policy,
                 commit_cap_bytes,
                 budget_gate: None,
             },
@@ -103,7 +107,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         capacity: u64,
         chunk_bytes: u64,
         block_size: u32,
-        reserve_floor_bytes: u64,
+        reserve_policy: ReserveFloorPolicy,
         commit_cap_bytes: Option<u64>,
         budget_gate: Option<&'p dyn CommitBudgetGate>,
     ) -> Result<Self, IoError> {
@@ -113,7 +117,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
                 capacity,
                 chunk_bytes,
                 block_size,
-                reserve_floor_bytes,
+                reserve_policy,
                 commit_cap_bytes,
                 budget_gate,
             },
@@ -157,7 +161,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             capacity: config.capacity,
             chunk_bytes: config.chunk_bytes,
             block_size: config.block_size,
-            reserve_floor_bytes: config.reserve_floor_bytes,
+            reserve_policy: config.reserve_policy,
             commit_cap_bytes: commit_cap,
             budget_gate: config.budget_gate,
             chunks,
@@ -172,8 +176,8 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         self.commit_cap_bytes
     }
 
-    pub fn reserve_floor_bytes(&self) -> u64 {
-        self.reserve_floor_bytes
+    pub fn reserve_policy(&self) -> ReserveFloorPolicy {
+        self.reserve_policy
     }
 
     pub fn capacity_bytes(&self) -> u64 {
@@ -211,6 +215,10 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
     }
 
     /// MVP reclaim: only when `nbd_used_kb == 0` and (free below floor or idle).
+    ///
+    /// `free_floor_bytes` must be the shared three-term floor from
+    /// `enforced_free_floor_from_configured` — the same value admission uses
+    /// (DT-5). Callers must not pass the configured reserve alone.
     ///
     /// Returns bytes freed. Never frees when `nbd_used_kb > 0` (corruption class).
     pub fn try_reclaim(
@@ -268,13 +276,23 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             )));
         }
         // Free-floor: never take the last reserve of GPU (desktop/game headroom).
+        //
+        // DT-5 of `gpu-reserve-floor-authority`: the threshold is the shared
+        // three-term floor `required_free_bytes(configured, RUNTIME_FREE_BUFFER_BYTES)`,
+        // not the configured reserve alone. Before this, the sparse tier dropped
+        // both the 20% capacity share and the 640 MiB runtime buffer — the most
+        // permissive production surface.
         match self.provider.mem_info() {
-            Ok((free, _total)) => {
-                let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
+            Ok((free, total)) => {
+                let capacity = ReserveFloorPolicy::helper_capacity(Some(total), total);
+                let floor = self
+                    .reserve_policy
+                    .enforced_free_floor_bytes(capacity, RUNTIME_FREE_BUFFER_BYTES);
+                let need = floor.saturating_add(self.chunk_bytes);
                 if free < need {
                     self.floor_refuses = self.floor_refuses.saturating_add(1);
                     return Err(IoError(format!(
-                        "sparse free-floor: free {} MiB < reserve+chunk {} MiB — refuse alloc \
+                        "sparse free-floor: free {} MiB < shared-floor+chunk {} MiB — refuse alloc \
                          (protect GPU)",
                         free >> 20,
                         need >> 20
@@ -454,14 +472,57 @@ pub fn idle_free_secs_from_env() -> u64 {
 }
 
 /// GPU free floor before another chunk alloc (MiB → bytes). Default 512.
-pub fn reserve_floor_bytes_from_env() -> u64 {
-    let mib = std::env::var("RAMSHARED_MIN_VRAM_FREE_MIB")
+/// Sealed manifest literals for the configured reserve (DT-3).
+///
+/// The same numbers the host-origin seal accepts
+/// (`gpu_reserve_min_mib = 2048`, `gpu_reserve_percent = 20`). They live here
+/// so a path that has no manifest yet still enforces the sealed authority
+/// instead of an arbitrary default.
+pub const SEALED_RESERVE_MIN_MIB: u64 = 2048;
+pub const SEALED_RESERVE_PERCENT: u64 = 20;
+
+/// Resolves the configured reserve once: sealed manifest values, raised only
+/// by an environment override that is at least as conservative (DT-8).
+///
+/// Replaces the old `unwrap_or(512).clamp(128, 4096)` reader, which silently
+/// accepted a 128 MiB floor on a shared host and never applied the sealed
+/// percentage share. An override below the sealed authority is a hard error:
+/// the caller fails closed rather than under-reserving.
+/// The sealed authority with no environment override applied.
+///
+/// Infallible: the sealed literals are compile-time constants and are unit
+/// tested by `sealed_reserve_policy_rejects_override_below_sealed`.
+pub fn sealed_reserve_policy() -> ReserveFloorPolicy {
+    ReserveFloorPolicy::from_manifest(SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT)
+        // Unreachable: SEALED_RESERVE_MIN_MIB is non-zero and
+        // SEALED_RESERVE_PERCENT is at the safety floor. Fail closed on the
+        // strongest known-good policy rather than under-reserve.
+        .unwrap_or(ReserveFloorPolicy {
+            min_floor_bytes: u64::MAX,
+            sealed_percent: SEALED_RESERVE_PERCENT,
+        })
+}
+
+/// Sealed authority raised only by an environment override (DT-8).
+///
+/// Errors when the override is below the seal or the two documented names
+/// disagree. Callers must fail closed — never clamp, never pick one.
+pub fn sealed_reserve_policy_from_env()
+-> Result<ReserveFloorPolicy, ramshared_vram::ReserveFloorError> {
+    let base = sealed_reserve_policy();
+    let env = ReserveFloorEnv::from_process_env();
+    ReserveFloorPolicy::resolve_with_env(&base, &env)
+}
+
+/// Raise-only override input in MiB, or `None` when neither name is set.
+///
+/// No default and no clamp (DT-8): an operator may be more conservative than
+/// the seal, never less, and the resolver is what enforces that.
+pub fn reserve_floor_override_mib() -> Option<u64> {
+    std::env::var("RAMSHARED_MIN_VRAM_FREE_MIB")
         .or_else(|_| std::env::var("MIN_VRAM_HEADROOM_MIB"))
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(512)
-        .clamp(128, 4096);
-    mib.saturating_mul(1024 * 1024)
 }
 
 /// Optional hard commit cap (MiB). Unset → no extra cap beyond capacity (still free-floor).
@@ -486,6 +547,19 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use ramshared_vram::enforced_free_floor_from_configured;
+
+    /// A policy with an explicit configured minimum and the sealed percent.
+    ///
+    /// `min_floor_bytes` is the resolved minimum term (DT-1), not a raw
+    /// "reserve floor". `0` is the DT-9 degenerate case that never raises an
+    /// allocation because the 20% share still binds.
+    fn policy(min_floor_bytes: u64) -> ReserveFloorPolicy {
+        ReserveFloorPolicy {
+            min_floor_bytes,
+            sealed_percent: SEALED_RESERVE_PERCENT,
+        }
+    }
     use std::cell::Cell;
 
     struct FakeMem(Vec<u8>);
@@ -537,6 +611,40 @@ mod tests {
                 allocs: Cell::new(0),
                 fail_next: Cell::new(false),
             }
+        }
+    }
+
+    /// Provider whose reported free/total are settable, so the shared free
+    /// floor can be exercised at its boundary.
+    struct VarProvider {
+        free: Cell<u64>,
+        total: u64,
+        allocs: Cell<usize>,
+    }
+
+    impl VarProvider {
+        fn new(free: u64, total: u64) -> Self {
+            Self {
+                free: Cell::new(free),
+                total,
+                allocs: Cell::new(0),
+            }
+        }
+    }
+
+    impl VramProvider for VarProvider {
+        type Mem<'a>
+            = FakeMem
+        where
+            Self: 'a;
+
+        fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+            self.allocs.set(self.allocs.get() + 1);
+            Ok(FakeMem(vec![0u8; bytes]))
+        }
+
+        fn mem_info(&self) -> Result<(u64, u64), VramError> {
+            Ok((self.free.get(), self.total))
         }
     }
 
@@ -685,7 +793,7 @@ mod tests {
             2 * chunk,
             chunk,
             4096,
-            0,           // no free-floor (fake has lots of free)
+            policy(0),   // no configured floor (fake has lots of free)
             Some(chunk), // only one chunk allowed
         )
         .unwrap();
@@ -710,7 +818,7 @@ mod tests {
             1024 * 1024,
             256 * 1024,
             4096,
-            0,
+            policy(0),
             None,
             Some(&Deny),
         )
@@ -762,7 +870,7 @@ mod tests {
         assert!(be.chunks_total() >= 1);
         assert_eq!(be.committed_bytes(), 0);
         assert!(be.commit_cap_bytes() > 0);
-        assert!(be.reserve_floor_bytes() > 0);
+        assert!(be.reserve_policy().min_floor_bytes > 0);
     }
 
     #[test]
@@ -800,7 +908,7 @@ mod tests {
             1024 * 1024,
             256 * 1024,
             4096,
-            512 * 1024, // reserve 512KiB
+            policy(512 * 1024), // reserve 512KiB
             None,
         )
         .unwrap();
@@ -828,7 +936,8 @@ mod tests {
         }
         let p = BadInfo;
         let mut be =
-            SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None).unwrap();
+            SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, policy(0), None)
+                .unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
         assert!(
             err.0.contains("mem_info") || err.0.contains("no gpu"),
@@ -850,10 +959,117 @@ mod tests {
         if std::env::var("RAMSHARED_MIN_VRAM_FREE_MIB").is_err()
             && std::env::var("MIN_VRAM_HEADROOM_MIB").is_err()
         {
-            assert_eq!(reserve_floor_bytes_from_env(), 512 * 1024 * 1024);
+            // DT-3: the sealed manifest authority, not an arbitrary default.
+            // The old reader returned 512 MiB and clamped overrides to
+            // [128, 4096], silently accepting a 128 MiB floor on a shared host.
+            let policy = sealed_reserve_policy();
+            assert_eq!(policy.min_floor_bytes, SEALED_RESERVE_MIN_MIB * 1024 * 1024);
+            assert_eq!(policy.sealed_percent, SEALED_RESERVE_PERCENT);
         }
         if std::env::var("RAMSHARED_VRAM_COMMIT_CAP_MIB").is_err() {
             assert!(commit_cap_bytes_from_env() > 1 << 30);
         }
+    }
+    #[test]
+    fn sealed_reserve_policy_rejects_override_below_sealed() {
+        // DT-8: raise-only. A 128 MiB override — the value the old clamp
+        // silently accepted — must be refused, not clamped up.
+        let base =
+            ReserveFloorPolicy::from_manifest(SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT)
+                .expect("sealed literals are valid");
+        let too_low = ReserveFloorEnv {
+            env_mib: Some(128),
+            alias_mib: None,
+        };
+        assert!(ReserveFloorPolicy::resolve_with_env(&base, &too_low).is_err());
+        // A more conservative override is accepted and raises only the minimum.
+        let raised = ReserveFloorEnv {
+            env_mib: Some(SEALED_RESERVE_MIN_MIB + 1024),
+            alias_mib: None,
+        };
+        let resolved =
+            ReserveFloorPolicy::resolve_with_env(&base, &raised).expect("raise is legal");
+        assert_eq!(
+            resolved.min_floor_bytes,
+            (SEALED_RESERVE_MIN_MIB + 1024) * 1024 * 1024
+        );
+        // The sealed percentage share is never dropped through the seam.
+        assert_eq!(resolved.sealed_percent, SEALED_RESERVE_PERCENT);
+    }
+
+    #[test]
+    fn sparse_admission_uses_shared_reserve_floor() {
+        // Kahneman #13 — refusal plus legitimate pass.
+        //
+        // DT-5: the sparse tier must refuse below the **shared** three-term
+        // floor, not below the configured reserve alone. Before this rewire,
+        // `reserve_floor_bytes = 0` admitted any allocation and the tier
+        // dropped both the 20% capacity share and the 640 MiB runtime buffer.
+        let chunk = 4 * 1024 * 1024u64;
+        let total = 5 * 1024 * 1024 * 1024u64;
+        // Shared floor = max(0, ceil(5 GiB / 5)) + 640 MiB = 1 GiB + 640 MiB.
+        let expected_floor =
+            enforced_free_floor_from_configured(0, total, RUNTIME_FREE_BUFFER_BYTES);
+        assert_eq!(expected_floor, (1 << 30) + RUNTIME_FREE_BUFFER_BYTES);
+
+        // Refusal: free is above the *configured* floor (0) but below the
+        // shared floor. The old surface would have admitted this.
+        let just_below = expected_floor - 1;
+        let p = VarProvider::new(just_below, total);
+        let mut be =
+            SparseVramBackend::new_with_limits(&p, 2 * chunk, chunk, 4096, policy(0), None)
+                .unwrap();
+        let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
+        assert!(
+            err.0.contains("shared-floor"),
+            "must refuse under the shared floor: {err:?}"
+        );
+        assert_eq!(be.floor_refuses, 1);
+        assert_eq!(be.chunks_live(), 0);
+
+        // Legitimate pass: the same request above the shared floor still hits.
+        let p = VarProvider::new(expected_floor + chunk, total);
+        let mut be =
+            SparseVramBackend::new_with_limits(&p, 2 * chunk, chunk, 4096, policy(0), None)
+                .unwrap();
+        be.write_at(0, &[1u8; 4096]).unwrap();
+        assert_eq!(be.chunks_live(), 1);
+        assert_eq!(be.floor_refuses, 0);
+    }
+
+    #[test]
+    fn sparse_probe_floor_matches_shared_reserve() {
+        // DT-5: the demotion probe floor is the same value admission uses.
+        let total = 6 * 1024 * 1024 * 1024u64;
+        let configured = 2048 * 1024 * 1024u64;
+        let capacity = ramshared_vram::ReserveFloorPolicy::helper_capacity(Some(total), total);
+        let floor =
+            enforced_free_floor_from_configured(configured, capacity, RUNTIME_FREE_BUFFER_BYTES);
+        // Refusal below the shared floor (Kahneman #13).
+        let p = VarProvider::new(total, total);
+        let mut be = SparseVramBackend::new_with_limits(
+            &p,
+            total,
+            4 * 1024 * 1024,
+            4096,
+            policy(configured),
+            None,
+        )
+        .unwrap();
+        be.write_at(0, &[1u8; 4096]).unwrap();
+        let freed_tight = be
+            .try_reclaim(0, Some(floor - 1), floor, Duration::from_secs(9999))
+            .unwrap();
+        assert!(freed_tight > 0, "probe must reclaim below the shared floor");
+        // A free reading at or above the shared floor must not reclaim on the
+        // floor condition alone (only on idle, which is held off here).
+        be.write_at(0, &[1u8; 4096]).unwrap();
+        let freed_healthy = be
+            .try_reclaim(0, Some(floor), floor, Duration::from_secs(9999))
+            .unwrap();
+        assert_eq!(
+            freed_healthy, 0,
+            "no floor-triggered reclaim at or above the shared floor"
+        );
     }
 }

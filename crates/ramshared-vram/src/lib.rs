@@ -15,6 +15,15 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+/// The single configured-reserve authority for every VRAM admission surface.
+///
+/// SPEC: `docs/specs/no-milestone/gpu-reserve-floor-authority/SPEC.md`.
+pub mod reserve_policy;
+pub use reserve_policy::{
+    ReserveFloorEnv, ReserveFloorError, ReserveFloorPolicy, ReserveFloorSource,
+    SEALED_PERCENT_SAFETY_FLOOR, enforced_free_floor_from_configured,
+};
+
 /// VRAM operation error (mapped from the backend-specific error, e.g., `CudaError`).
 #[derive(Debug)]
 pub enum VramError {

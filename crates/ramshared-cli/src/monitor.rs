@@ -334,6 +334,9 @@ pub struct ProcessObservation {
     pub managed: bool,
 }
 
+/// DT-10: one observation of the GPU budget plus the enforced VRAM-reserve
+/// floor. Every reserve field is named `vram_reserve_*` so a reader can never
+/// confuse the GPU free floor with a system-RAM or swap threshold.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GpuObservation {
     pub adapter: ramshared_vram::GpuAdapterIdentity,
@@ -342,6 +345,64 @@ pub struct GpuObservation {
     pub budget_mib: u64,
     pub used_mib: u64,
     pub free_mib: u64,
+    /// Enforced VRAM free floor the admission path must leave untouched,
+    /// in MiB. Three-term maximum plus runtime headroom.
+    pub vram_reserve_enforced_mib: u64,
+    /// Where that floor came from: `sealed-manifest` or `lab-override-raise`.
+    pub vram_reserve_source: String,
+    /// Sealed configured minimum from the manifest, in MiB.
+    pub vram_reserve_sealed_min_mib: u64,
+    /// Sealed percentage share. Never overridable (DT-8).
+    pub vram_reserve_sealed_percent: u64,
+    /// Runtime headroom added on top of the configured reserve, in MiB.
+    pub vram_reserve_runtime_buffer_mib: u64,
+}
+
+/// The runtime headroom the worker and broker add on top of the configured
+/// reserve. Mirrors `ramshared_block::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES`;
+/// `ramshared-cli` does not depend on that crate.
+const VRAM_RESERVE_RUNTIME_BUFFER_MIB: u64 = 640;
+
+/// The sealed percentage share the monitor can prove without a daemon
+/// handshake. A daemon override raises the floor; it never lowers this share,
+/// so reporting the sealed share is never optimistic (DT-8).
+const VRAM_RESERVE_SEALED_PERCENT: u64 = 20;
+
+/// Builds the DT-10 reserve block from one budget observation.
+///
+/// The monitor is a reader: it reports the sealed authority and the formula it
+/// can recompute. It never claims `lab-override-raise`, because an override
+/// lives in the daemon process and is not observable from here.
+fn vram_reserve_fields(
+    total_bytes: Option<u64>,
+    budget_bytes: u64,
+) -> (
+    u64,    // enforced MiB
+    String, // source
+    u64,    // sealed min MiB
+    u64,    // sealed percent
+    u64,    // runtime buffer MiB
+) {
+    use ramshared_vram::{ReserveFloorPolicy, enforced_free_floor_from_configured};
+    let policy = ReserveFloorPolicy::from_manifest(2048, VRAM_RESERVE_SEALED_PERCENT).unwrap_or(
+        ReserveFloorPolicy {
+            min_floor_bytes: u64::MAX,
+            sealed_percent: VRAM_RESERVE_SEALED_PERCENT,
+        },
+    );
+    let capacity = total_bytes.unwrap_or(budget_bytes).min(budget_bytes);
+    let enforced = enforced_free_floor_from_configured(
+        policy.configured_reserve_bytes(capacity),
+        capacity,
+        VRAM_RESERVE_RUNTIME_BUFFER_MIB * 1024 * 1024,
+    );
+    (
+        enforced / (1024 * 1024),
+        "sealed-manifest".to_string(),
+        policy.min_floor_bytes / (1024 * 1024),
+        policy.sealed_percent,
+        VRAM_RESERVE_RUNTIME_BUFFER_MIB,
+    )
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1000,6 +1061,14 @@ fn gpu_observation_from_status(
         return None;
     }
 
+    let (
+        vram_reserve_enforced_mib,
+        vram_reserve_source,
+        vram_reserve_sealed_min_mib,
+        vram_reserve_sealed_percent,
+        vram_reserve_runtime_buffer_mib,
+    ) = vram_reserve_fields(telemetry.total_bytes, telemetry.budget_bytes);
+
     Some(GpuObservation {
         adapter: adapter.clone(),
         source: telemetry.source,
@@ -1007,6 +1076,11 @@ fn gpu_observation_from_status(
         budget_mib: telemetry.budget_bytes / MIB_BYTES,
         used_mib: telemetry.used_bytes / MIB_BYTES,
         free_mib: available_bytes / MIB_BYTES,
+        vram_reserve_enforced_mib,
+        vram_reserve_source,
+        vram_reserve_sealed_min_mib,
+        vram_reserve_sealed_percent,
+        vram_reserve_runtime_buffer_mib,
     })
 }
 
@@ -3234,7 +3308,8 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let pgmajfault_rate = observation.control_plane.pgmajfault_per_sec;
     let boot_info = match observation.control_plane.boot_tier_latency_ms {
         Some(ms) => format!("{:.2}s (Tier Ready)", ms as f64 / 1000.0),
-        None => "3.12s (Tier Ready)".to_string(),
+        // Never invent a measurement: absent telemetry renders as unmeasured.
+        None => "not measured".to_string(),
     };
 
     let swap_read_peak = observation.control_plane.swap_read_peak_mbs;
@@ -4557,6 +4632,29 @@ mod tests {
     }
 
     #[test]
+    fn dashboard_does_not_invent_boot_tier_latency_when_unmeasured() {
+        let mut sample = observation(true, true);
+        sample.control_plane.boot_tier_latency_ms = None;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Boot Initialization"));
+        assert!(rendered.contains("not measured"));
+        assert!(!rendered.contains("3.12s"));
+        assert!(!rendered.contains("Tier Ready"));
+    }
+
+    #[test]
     fn dashboard_marks_failed_refresh_values_as_stale() {
         let mut sample = observation(false, false);
         sample.control_plane.memory_psi_available = true;
@@ -5051,5 +5149,69 @@ mod tests {
             heartbeat: None,
         };
         assert!(run_jsonl(&jsonl_opts).is_ok());
+    }
+    /// read as a system-RAM threshold.
+    #[test]
+    fn monitor_labels_enforced_reserve_floor_as_vram() {
+        let (enforced_mib, source, sealed_min_mib, percent, runtime_mib) =
+            vram_reserve_fields(Some(6144 * 1024 * 1024), 4016 * 1024 * 1024);
+
+        // The shared three-term formula, recomputed here independently.
+        // WDDM shape: budget < total. `helper_capacity` takes the min.
+        // Non-literal inputs so the min is not a compile-time no-op.
+        let total_bytes = 6144 * 1024 * 1024u64;
+        let budget_bytes = 4016 * 1024 * 1024u64;
+        let capacity = total_bytes.min(budget_bytes);
+        assert_eq!(capacity, budget_bytes, "capacity is min(total, budget)");
+        let configured = (2048 * 1024 * 1024u64).max(capacity * 20 / 100);
+        let expected =
+            (configured.max(capacity.div_ceil(5)) + runtime_mib * 1024 * 1024) / (1024 * 1024);
+        assert_eq!(
+            enforced_mib, expected,
+            "enforced floor must match the shared formula"
+        );
+        assert!(enforced_mib > 0);
+
+        // Source is honest: the monitor cannot observe a daemon override.
+        assert_eq!(source, "sealed-manifest");
+        assert_eq!(sealed_min_mib, 2048);
+        assert_eq!(percent, 20);
+        assert_eq!(runtime_mib, 640);
+
+        // The label is `vram_reserve_*` on every field (DT-10).
+        let encoded = serde_json::to_value(GpuObservation {
+            adapter: ramshared_vram::GpuAdapterIdentity {
+                backend: "cuda".into(),
+                key: "test".into(),
+                luid: None,
+            },
+            source: GpuBudgetSource::DriverReported,
+            total_mib: Some(6144),
+            budget_mib: 4016,
+            used_mib: 2128,
+            free_mib: 1888,
+            vram_reserve_enforced_mib: enforced_mib,
+            vram_reserve_source: source,
+            vram_reserve_sealed_min_mib: sealed_min_mib,
+            vram_reserve_sealed_percent: percent,
+            vram_reserve_runtime_buffer_mib: runtime_mib,
+        })
+        .expect("serializable");
+        let map = encoded.as_object().expect("object");
+        let reserve_keys: Vec<&str> = map
+            .keys()
+            .filter(|k| k.contains("reserve"))
+            .map(String::as_str)
+            .collect();
+        assert!(
+            !reserve_keys.is_empty(),
+            "the observation must carry reserve fields"
+        );
+        for key in &reserve_keys {
+            assert!(
+                key.starts_with("vram_reserve_"),
+                "reserve field {key} must be labeled as VRAM"
+            );
+        }
     }
 }

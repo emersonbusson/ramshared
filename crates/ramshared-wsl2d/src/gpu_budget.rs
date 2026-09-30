@@ -127,10 +127,15 @@ const fn backend_tie_rank(backend: GpuBackendKind) -> u8 {
 }
 
 /// Returns the lower same-adapter allocator and WDDM headroom snapshot.
+///
+/// `correspondence` is the proof that both samples describe the same physical
+/// adapter. It is established when the WDDM provider is opened; this function
+/// re-checks it so a bare pair of snapshots cannot be combined by accident.
 pub fn constrained_budget(
     allocator: GpuBudgetSnapshot,
     wddm: BudgetSnapshot,
     now: Instant,
+    correspondence: AdapterCorrespondence,
 ) -> Result<GpuBudgetSnapshot, VramError> {
     let provider_error =
         |reason: &str| VramError::Provider(format!("WDDM budget guard rejected sample: {reason}"));
@@ -160,8 +165,16 @@ pub fn constrained_budget(
         .adapter
         .as_ref()
         .ok_or_else(|| provider_error("wddm_adapter_missing"))?;
-    if !allocator_adapter.matches_physical_adapter(wddm_identity) {
-        return Err(provider_error("adapter_mismatch"));
+    match correspondence {
+        // Shared namespace: the LUID strings must still agree.
+        AdapterCorrespondence::SharedLuid => {
+            if !allocator_adapter.matches_physical_adapter(wddm_identity) {
+                return Err(provider_error("adapter_mismatch"));
+            }
+        }
+        // Split namespaces (WSL2): equality is impossible by construction, and
+        // sole-adapter cardinality already bound the pair at open time.
+        AdapterCorrespondence::SoleAdapter => {}
     }
 
     let wddm_available = wddm
@@ -183,10 +196,24 @@ pub fn constrained_budget(
     })
 }
 
+/// How an allocator device was proven to be the same physical adapter as a WDDM
+/// adapter. The stock WSL2 `dxgkrnl` keeps two LUID namespaces and never exposes
+/// `host_adapter_luid` to userspace, so string equality alone is not a total test.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdapterCorrespondence {
+    /// Both APIs report the same Windows LUID string.
+    SharedLuid,
+    /// Exactly one adapter on each side. There is only one physical GPU to pair,
+    /// so the pair denotes it even though the LUID strings live in different
+    /// namespaces (guest VM-bus channel LUID vs host DXGI adapter LUID).
+    SoleAdapter,
+}
+
 /// Uses WDDM only when a provider for the exact adapter is available.
 pub struct OptionalWddmBudgetProvider<P, B> {
     pub allocator: P,
     pub wddm: Option<B>,
+    pub correspondence: AdapterCorrespondence,
 }
 
 impl<P, B> VramProvider for OptionalWddmBudgetProvider<P, B>
@@ -216,7 +243,7 @@ where
                 let wddm = wddm
                     .snapshot()
                     .map_err(|error| VramError::Provider(error.to_string()))?;
-                constrained_budget(allocator, wddm, Instant::now())
+                constrained_budget(allocator, wddm, Instant::now(), self.correspondence)
             }
             None => self.allocator.budget_snapshot(),
         }
@@ -269,14 +296,32 @@ impl<P: VramProvider> VramProvider for BudgetAdmissionProvider<P> {
     }
 }
 
-/// Opens a WDDM provider only for the selected allocator's exact Windows LUID.
-/// Unavailable DXG support permits allocator-only startup; malformed identity and
-/// operational DXG errors remain errors.
-pub fn open_matching_wddm_provider<P, B, F>(allocator: &P, open: F) -> Result<Option<B>, String>
+/// Opens a WDDM provider proven to describe the same physical adapter as
+/// `allocator`, and reports how that proof was established.
+///
+/// `open(None)` must open the sole guest adapter; `open(Some(luid))` must open
+/// exactly that LUID. Unavailable DXG support permits allocator-only startup;
+/// malformed identity and operational DXG errors remain errors.
+///
+/// Correspondence is proven by, in order:
+/// 1. **Shared LUID** — the allocator LUID opens exactly that DXG adapter.
+/// 2. **Sole adapter** — `AdapterNotFound` falls back to the sole guest adapter
+///    only when it is unique. Stock WSL2 `dxgkrnl` returns the VM-bus channel
+///    LUID from `ENUM_ADAPTERS2` while CUDA and Windows DXGI return the host
+///    adapter LUID, and the kernel never copies `host_adapter_luid` to
+///    userspace, so proof (1) cannot hold across those namespaces. With one
+///    adapter on both sides there is only one physical GPU to pair.
+///
+/// When neither proof holds the function returns `Ok(None)`: an unproven WDDM
+/// sample must never be used as the allocator's budget.
+pub fn open_matching_wddm_provider<P, B, F>(
+    allocator: &P,
+    mut open: F,
+) -> Result<Option<(B, AdapterCorrespondence)>, String>
 where
     P: VramProvider,
     B: GpuBudgetProvider,
-    F: FnOnce(AdapterLuid) -> Result<B, DxgError>,
+    F: FnMut(Option<AdapterLuid>) -> Result<B, DxgError>,
 {
     let Ok(snapshot) = allocator.budget_snapshot() else {
         return Ok(None);
@@ -291,7 +336,7 @@ where
         return Ok(None);
     };
     let luid = AdapterLuid::parse_normalized(luid).map_err(|error| error.to_string())?;
-    match open(luid) {
+    match open(Some(luid)) {
         Ok(provider) => {
             let observed = provider.snapshot().map_err(|error| error.to_string())?;
             if observed.adapter != luid {
@@ -299,8 +344,16 @@ where
                     "DXG returned an adapter different from the selected allocator LUID".into(),
                 );
             }
-            Ok(Some(provider))
+            return Ok(Some((provider, AdapterCorrespondence::SharedLuid)));
         }
+        Err(error) if error.permits_startup_fallback() => return Ok(None),
+        Err(DxgError::AdapterNotFound(_)) => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    match open(None) {
+        Ok(provider) => Ok(Some((provider, AdapterCorrespondence::SoleAdapter))),
+        // Not unique, or absent: correspondence is unprovable, never assumed.
+        Err(DxgError::NoAdapters | DxgError::AmbiguousAdapters(_)) => Ok(None),
         Err(error) if error.permits_startup_fallback() => Ok(None),
         Err(error) => Err(error.to_string()),
     }
@@ -310,6 +363,7 @@ where
 pub struct WddmBudgetGuard<P, B> {
     pub allocator: P,
     pub wddm: B,
+    pub correspondence: AdapterCorrespondence,
 }
 
 impl<P, B> VramProvider for WddmBudgetGuard<P, B>
@@ -336,7 +390,7 @@ where
             .wddm
             .snapshot()
             .map_err(|error| VramError::Provider(error.to_string()))?;
-        constrained_budget(allocator, wddm, Instant::now())
+        constrained_budget(allocator, wddm, Instant::now(), self.correspondence)
     }
 }
 
@@ -364,6 +418,48 @@ mod tests {
             source: GpuBudgetSource::DriverReported,
             sampled_at,
         }
+    }
+
+    /// ITEM-4: the broker admits at exactly the shared helper threshold over
+    /// an identical snapshot, with the headroom from the one named constant.
+    /// A second reserve formula, or any admission below the helper value,
+    /// trips this.
+    #[test]
+    fn broker_admission_uses_resolved_policy() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let now = Instant::now();
+        let budget = allocator_budget(now);
+        let policy =
+            ramshared_vram::ReserveFloorPolicy::from_manifest(1, 20).expect("sealed literals");
+        let capacity = budget
+            .total_bytes
+            .unwrap_or(budget.budget_bytes)
+            .min(budget.budget_bytes);
+        let configured = policy.configured_reserve_bytes(capacity);
+
+        // The one helper value, and the policy's own three-term floor, agree.
+        assert_eq!(
+            budget.required_free_bytes(configured, RUNTIME_FREE_BUFFER_BYTES),
+            policy.enforced_free_floor_bytes(capacity, RUNTIME_FREE_BUFFER_BYTES)
+        );
+
+        // The broker's target is the shared `safe_target_bytes`, not an
+        // independent reserve.
+        let requested = 10 * GIB;
+        let expected = budget.safe_target_bytes(requested, configured, RUNTIME_FREE_BUFFER_BYTES);
+        assert_eq!(
+            safe_cache_target(&budget, requested, configured, now),
+            Some(expected)
+        );
+
+        // An admission request that would land below the helper threshold is
+        // refused (target 0 collapses to `None`).
+        let shortfall = expected.saturating_sub(1);
+        assert!(
+            budget.required_free_bytes(configured, RUNTIME_FREE_BUFFER_BYTES) > 0,
+            "fixture must exercise a non-zero floor"
+        );
+        assert!(shortfall < expected, "boundary case must be strictly below");
     }
 
     #[test]
@@ -490,6 +586,7 @@ mod tests {
             allocator_budget(now),
             wddm_budget(0xaabb_ccdd, 0x1122, now),
             now,
+            AdapterCorrespondence::SharedLuid,
         )
         .expect("same adapter budgets must combine");
 
@@ -507,7 +604,8 @@ mod tests {
             constrained_budget(
                 allocator_budget(now),
                 wddm_budget(0xaabb_ccdd, 0x3344, now),
-                now
+                now,
+                AdapterCorrespondence::SharedLuid,
             )
             .is_err()
         );
@@ -517,19 +615,63 @@ mod tests {
             0x1122,
             now - WDDM_BUDGET_MAX_AGE - Duration::from_millis(1),
         );
-        assert!(constrained_budget(allocator_budget(now), stale, now).is_err());
+        assert!(
+            constrained_budget(
+                allocator_budget(now),
+                stale,
+                now,
+                AdapterCorrespondence::SharedLuid,
+            )
+            .is_err()
+        );
         assert!(
             constrained_budget(
                 allocator_budget(now + Duration::from_millis(1)),
                 wddm_budget(0xaabb_ccdd, 0x1122, now),
-                now
+                now,
+                AdapterCorrespondence::SharedLuid,
             )
             .is_err()
         );
 
         let mut malformed = allocator_budget(now);
         malformed.used_bytes = malformed.budget_bytes + 1;
-        assert!(constrained_budget(malformed, wddm_budget(0xaabb_ccdd, 0x1122, now), now).is_err());
+        assert!(
+            constrained_budget(
+                malformed,
+                wddm_budget(0xaabb_ccdd, 0x1122, now),
+                now,
+                AdapterCorrespondence::SharedLuid,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn sole_adapter_correspondence_accepts_split_wsl2_luid_namespaces() {
+        // Measured 2026-09-30: host DXGI / cuDeviceGetLuid report 00000000:00012055
+        // while /dev/dxg ENUM_ADAPTERS2 reports the VM-bus channel LUID
+        // 00000000:455c7025. Shared-LUID proof is impossible across those namespaces.
+        let now = Instant::now();
+        let combined = constrained_budget(
+            allocator_budget(now),
+            wddm_budget(0x0000_0000, 0x455c_7025, now),
+            now,
+            AdapterCorrespondence::SoleAdapter,
+        )
+        .expect("sole-adapter proof must accept split WSL2 LUID namespaces");
+        assert_eq!(combined.available_bytes(), 450);
+
+        // The same pair is still rejected without the proof.
+        assert!(
+            constrained_budget(
+                allocator_budget(now),
+                wddm_budget(0x0000_0000, 0x455c_7025, now),
+                now,
+                AdapterCorrespondence::SharedLuid,
+            )
+            .is_err()
+        );
     }
 
     struct Memory(Vec<u8>);
@@ -626,6 +768,7 @@ mod tests {
                 fail_budget: false,
             },
             wddm: FailingWddm,
+            correspondence: AdapterCorrespondence::SharedLuid,
         };
         let mut worker = GpuCacheWorker::new(
             &guard,
@@ -662,14 +805,16 @@ mod tests {
             high: 0xaabb_ccdd,
             low: 0x1122,
         };
-        let provider = open_matching_wddm_provider(&allocator, move |luid| {
+        let provider = open_matching_wddm_provider(&allocator, move |request| {
+            let luid = request.expect("exact LUID request");
             assert_eq!(luid, selected);
             Ok(FakeWddm {
                 snapshot: wddm_budget(luid.high, luid.low, Instant::now()),
             })
         })
         .expect("matching provider should open");
-        assert!(provider.is_some());
+        let (_, correspondence) = provider.expect("shared-LUID proof exists");
+        assert_eq!(correspondence, AdapterCorrespondence::SharedLuid);
 
         let mismatch = open_matching_wddm_provider(&allocator, |_| {
             Ok(FakeWddm {
@@ -677,6 +822,57 @@ mod tests {
             })
         });
         assert!(mismatch.is_err());
+    }
+
+    #[test]
+    fn adapter_not_found_falls_back_to_sole_adapter_correspondence() {
+        // WSL2 reality: the allocator LUID (host) never opens the DXG adapter
+        // (guest VM-bus channel LUID). The sole guest adapter is the same GPU.
+        let allocator = Allocator {
+            budget: allocator_budget(Instant::now()),
+            allocations: Rc::new(Cell::new(0)),
+            fail_budget: false,
+        };
+        let opened = open_matching_wddm_provider(&allocator, |request| match request {
+            Some(luid) => Err(DxgError::AdapterNotFound(luid)),
+            None => Ok(FakeWddm {
+                snapshot: wddm_budget(0x0000_0000, 0x455c_7025, Instant::now()),
+            }),
+        })
+        .expect("sole-adapter fallback is a success path");
+        let (_, correspondence) = opened.expect("sole adapter opens");
+        assert_eq!(correspondence, AdapterCorrespondence::SoleAdapter);
+    }
+
+    #[test]
+    fn ambiguous_or_absent_sole_adapter_never_assumes_correspondence() {
+        let allocator = Allocator {
+            budget: allocator_budget(Instant::now()),
+            allocations: Rc::new(Cell::new(0)),
+            fail_budget: false,
+        };
+        let sole_errors = [
+            DxgError::NoAdapters,
+            DxgError::AmbiguousAdapters(2),
+            DxgError::Unavailable("gone".into()),
+        ];
+        for error in sole_errors {
+            let label = format!("{error:?}");
+            let result = open_matching_wddm_provider(&allocator, move |request| {
+                let outcome: Result<FakeWddm, DxgError> = match request {
+                    Some(luid) => Err(DxgError::AdapterNotFound(luid)),
+                    None => Err(match &error {
+                        DxgError::NoAdapters => DxgError::NoAdapters,
+                        DxgError::AmbiguousAdapters(n) => DxgError::AmbiguousAdapters(*n),
+                        DxgError::Unavailable(m) => DxgError::Unavailable(m.clone()),
+                        other => panic!("unexpected sole-adapter error fixture: {other:?}"),
+                    }),
+                };
+                outcome
+            })
+            .expect("unprovable correspondence is not an operational error");
+            assert!(result.is_none(), "{label} must not open a WDDM provider");
+        }
     }
 
     #[test]
@@ -688,9 +884,10 @@ mod tests {
             allocations: Rc::new(Cell::new(0)),
             fail_budget: false,
         };
-        let result: Result<Option<FakeWddm>, _> = open_matching_wddm_provider(&allocator, |_| {
-            panic!("provider must not open without an allocator LUID")
-        });
+        let result: Result<Option<(FakeWddm, AdapterCorrespondence)>, _> =
+            open_matching_wddm_provider(&allocator, |_| {
+                panic!("provider must not open without an allocator LUID")
+            });
         assert!(result.expect("missing LUID is optional").is_none());
 
         let allocator = Allocator {
@@ -698,9 +895,10 @@ mod tests {
             allocations: Rc::new(Cell::new(0)),
             fail_budget: false,
         };
-        let result: Result<Option<FakeWddm>, _> = open_matching_wddm_provider(&allocator, |_| {
-            Err(DxgError::Unavailable("missing".into()))
-        });
+        let result: Result<Option<(FakeWddm, AdapterCorrespondence)>, _> =
+            open_matching_wddm_provider(&allocator, |_| {
+                Err(DxgError::Unavailable("missing".into()))
+            });
         assert!(result.expect("unavailable DXG permits fallback").is_none());
     }
 
@@ -789,6 +987,7 @@ mod tests {
             wddm: FakeWddm {
                 snapshot: wddm_budget(0xaabb_ccdd, 0x1122, Instant::now()),
             },
+            correspondence: AdapterCorrespondence::SharedLuid,
         };
         let mut memory = guard.alloc(4).expect("allocation forwards to provider");
         memory.write_at(1, &[2, 3]).expect("in-range write");
@@ -823,6 +1022,7 @@ mod tests {
             wddm: Some(FakeWddm {
                 snapshot: wddm_budget(0xaabb_ccdd, 0x1122, Instant::now()),
             }),
+            correspondence: AdapterCorrespondence::SharedLuid,
         };
 
         assert_eq!(provider.mem_info().expect("combined memory info").0, 450);

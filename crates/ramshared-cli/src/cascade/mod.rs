@@ -696,6 +696,21 @@ fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
     if cascade_already_healthy(entries) {
         return Ok(());
     }
+    // Same test seam as `has_live_records` above: an injected `/proc/swaps`
+    // must not couple to live `/run` record paths. Without this, a unit test
+    // on a host whose daemon is running sees the operator's real half-state
+    // and cannot reach the ordering it is meant to prove. The injected
+    // entries still decide `has_vram` — only the hardcoded host paths are
+    // ignored.
+    #[cfg(test)]
+    let has_record = if TEST_SWAPS.with(|c| c.borrow().is_some()) {
+        false
+    } else {
+        Path::new(SWAP_DEV_FILE).exists()
+            || Path::new(ZRAM_DEV_FILE).exists()
+            || Path::new(PID_FILE).exists()
+    };
+    #[cfg(not(test))]
     let has_record = Path::new(SWAP_DEV_FILE).exists()
         || Path::new(ZRAM_DEV_FILE).exists()
         || Path::new(PID_FILE).exists();

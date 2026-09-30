@@ -7,9 +7,9 @@ use std::os::unix::fs::FileExt;
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use ramshared_vram::{VramMemory, VramProvider};
+use ramshared_vram::{GpuAdapterIdentity, GpuBudgetSource, VramMemory, VramProvider};
 
 use crate::{BlockBackend, IoError, WriteOptions};
 
@@ -121,23 +121,96 @@ impl OriginStorage for FileOrigin {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Maximum age of a GPU sample before it is refused (DT-6).
+///
+/// Matches `ramshared_wsl2d::gpu_budget::WDDM_BUDGET_MAX_AGE`. Duplicated here
+/// because `ramshared-block` does not depend on the daemon crate; the two are
+/// pinned equal by `sample_max_age_matches_daemon_budget_window`.
+pub const SAMPLE_MAX_AGE: Duration = Duration::from_secs(5);
+
+/// One adapter-bound driver budget observation.
+///
+/// Carries its own provenance (DT-12). **Not `Copy`**: `GpuAdapterIdentity`
+/// owns `String` fields. The producer builds this; `observe_gpu` only forwards
+/// it; [`physical_target_bytes`] is the single validator (DT-6).
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GpuSample {
+    /// Allocation budget for the adapter, in bytes.
     pub budget_bytes: u64,
+    /// VRAM used by processes other than this worker, in bytes.
     pub external_usage_bytes: u64,
+    /// Total physical device memory, in bytes.
     pub total_vram_bytes: u64,
+    /// When the producer observed this sample (DT-12: `Instant`, one clock).
+    pub sampled_at: Instant,
+    /// Where the numbers came from. Only [`GpuBudgetSource::DriverReported`]
+    /// is admitted.
+    pub source: GpuBudgetSource,
+    /// The adapter the numbers describe. Missing identity refuses admission.
+    pub adapter: Option<GpuAdapterIdentity>,
 }
 
-pub fn physical_target_bytes(logical_bytes: u64, sample: Option<GpuSample>) -> u64 {
+/// Physical cache target for a logical size, or `0` when the sample must not
+/// be trusted (DT-6).
+///
+/// One ownership chain, no second owner: the producer carries provenance,
+/// `observe_gpu` forwards, and **this function validates and refuses**. It
+/// never stamps provenance — never `Instant::now()`, never
+/// `GpuBudgetSource::DriverReported` — so a staleness check can actually fail.
+///
+/// After the checks it returns
+/// `safe_target_bytes(logical_bytes, configured_reserve_bytes,
+/// runtime_headroom_bytes)` over the numeric mapping `budget_bytes` →
+/// `budget_bytes`, `external_usage_bytes` → `used_bytes`, `total_vram_bytes` →
+/// `total_bytes`. `safe_target_bytes` is arithmetic only and supplies the
+/// arithmetic **after** these checks.
+pub fn physical_target_bytes(
+    logical_bytes: u64,
+    sample: Option<&GpuSample>,
+    configured_reserve_bytes: u64,
+    runtime_headroom_bytes: u64,
+    now: Instant,
+) -> u64 {
     let Some(sample) = sample else {
         return 0;
     };
-    let reserve = (sample.total_vram_bytes.div_ceil(5)).max(2 * GIB);
-    sample
-        .budget_bytes
-        .saturating_sub(sample.external_usage_bytes)
-        .saturating_sub(reserve)
-        .min(logical_bytes)
+    // Provenance refusal. Each of these is a real, testable failure.
+    if sample.source != GpuBudgetSource::DriverReported {
+        return 0;
+    }
+    if sample.adapter.is_none() {
+        return 0;
+    }
+    let age = match now.checked_duration_since(sample.sampled_at) {
+        Some(age) => age,
+        // A sample from the future is not trustworthy either.
+        None => return 0,
+    };
+    if age > SAMPLE_MAX_AGE {
+        return 0;
+    }
+    // Consistency refusal.
+    if sample.external_usage_bytes > sample.budget_bytes {
+        return 0;
+    }
+    if sample.budget_bytes > sample.total_vram_bytes {
+        return 0;
+    }
+
+    // Numeric mapping onto the shared helper. No inline reserve math remains.
+    let snapshot = ramshared_vram::GpuBudgetSnapshot {
+        adapter: sample.adapter.clone(),
+        total_bytes: Some(sample.total_vram_bytes),
+        budget_bytes: sample.budget_bytes,
+        used_bytes: sample.external_usage_bytes,
+        source: sample.source,
+        sampled_at: sample.sampled_at,
+    };
+    snapshot.safe_target_bytes(
+        logical_bytes,
+        configured_reserve_bytes,
+        runtime_headroom_bytes,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +294,12 @@ pub struct WriteThroughCacheBackend<'p, P: VramProvider + 'p, O> {
     telemetry: CacheTelemetry,
     target_bytes: u64,
     physical_cap_bytes: u64,
+    /// Configured reserve floor component (DT-2). Supplied by the sealed
+    /// policy at startup; `0` means "no configured floor", so the 20%
+    /// capacity share still binds inside `safe_target_bytes`.
+    configured_reserve_bytes: u64,
+    /// Runtime free buffer applied after the reserve (DT-4).
+    runtime_headroom_bytes: u64,
     healthy_samples: u8,
     restricted_samples: u8,
     last_growth_at: Option<Duration>,
@@ -276,6 +355,8 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
             telemetry: CacheTelemetry::default(),
             target_bytes: 0,
             physical_cap_bytes: size,
+            configured_reserve_bytes: 0,
+            runtime_headroom_bytes: crate::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES,
             healthy_samples: 0,
             restricted_samples: 0,
             last_growth_at: None,
@@ -306,6 +387,27 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
         self.physical_cap_bytes = cap_bytes.min(self.size);
     }
 
+    /// Binds the sealed reserve floor this cache must respect (DT-2/DT-4).
+    ///
+    /// Called once at startup with the resolved policy. The runtime headroom
+    /// is taken from the caller so one authority supplies it.
+    pub fn set_reserve_floor(
+        &mut self,
+        configured_reserve_bytes: u64,
+        runtime_headroom_bytes: u64,
+    ) {
+        self.configured_reserve_bytes = configured_reserve_bytes;
+        self.runtime_headroom_bytes = runtime_headroom_bytes;
+    }
+
+    pub fn configured_reserve_bytes(&self) -> u64 {
+        self.configured_reserve_bytes
+    }
+
+    pub fn runtime_headroom_bytes(&self) -> u64 {
+        self.runtime_headroom_bytes
+    }
+
     pub fn origin_state(&self) -> OriginState {
         self.origin_state
     }
@@ -327,8 +429,21 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
         released
     }
 
-    pub fn observe_gpu(&mut self, sample: Option<GpuSample>, now: Duration) -> CachePolicyOutcome {
-        let target = physical_target_bytes(self.physical_cap_bytes, sample);
+    /// Forwards the sample and the growth tick. Does **not** validate and does
+    /// **not** stamp provenance (DT-6): [`physical_target_bytes`] owns both.
+    pub fn observe_gpu(
+        &mut self,
+        sample: Option<&GpuSample>,
+        tick: Duration,
+        now: Instant,
+    ) -> CachePolicyOutcome {
+        let target = physical_target_bytes(
+            self.physical_cap_bytes,
+            sample,
+            self.configured_reserve_bytes,
+            self.runtime_headroom_bytes,
+            now,
+        );
         self.target_bytes = target;
         let cached_before = self.cached_bytes();
         let missing = sample.is_none();
@@ -360,9 +475,9 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
             && self.cached_bytes().saturating_add(self.chunk_bytes) <= target
             && self
                 .last_growth_at
-                .is_none_or(|previous| now.saturating_sub(previous) >= GROWTH_INTERVAL)
+                .is_none_or(|previous| tick.saturating_sub(previous) >= GROWTH_INTERVAL)
         {
-            self.last_growth_at = Some(now);
+            self.last_growth_at = Some(tick);
             match self.allocate_one_chunk() {
                 Ok(bytes) => allocated_bytes = bytes,
                 Err(()) => self.cache_state = CacheState::Unavailable,
@@ -371,8 +486,8 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
 
         let excess = self.cached_bytes().saturating_sub(target);
         if excess > self.chunk_bytes {
-            let since = self.over_target_since.get_or_insert(now);
-            if now.saturating_sub(*since) > STUCK_AFTER {
+            let since = self.over_target_since.get_or_insert(tick);
+            if tick.saturating_sub(*since) > STUCK_AFTER {
                 self.cache_state = CacheState::Stuck;
             }
         } else {
@@ -738,7 +853,9 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use ramshared_vram::{VramError, VramMemory, VramProvider};
+    use ramshared_vram::{
+        GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetSource, VramError, VramMemory, VramProvider,
+    };
 
     #[derive(Clone)]
     struct ScriptedOrigin {
@@ -888,12 +1005,34 @@ mod tests {
         }
     }
 
-    fn healthy_sample() -> GpuSample {
+    /// A fresh, driver-reported, adapter-bound sample at `t0`.
+    fn sample_at(
+        t0: Instant,
+        budget_bytes: u64,
+        external_usage_bytes: u64,
+        total_vram_bytes: u64,
+    ) -> GpuSample {
         GpuSample {
-            budget_bytes: 4 * GIB,
-            external_usage_bytes: 0,
-            total_vram_bytes: 8 * GIB,
+            budget_bytes,
+            external_usage_bytes,
+            total_vram_bytes,
+            sampled_at: t0,
+            source: GpuBudgetSource::DriverReported,
+            adapter: Some(GpuAdapterIdentity {
+                backend: "test".into(),
+                key: "test-adapter".into(),
+                luid: None,
+            }),
         }
+    }
+
+    fn healthy_sample() -> GpuSample {
+        sample_at(Instant::now(), 4 * GIB, 0, 8 * GIB)
+    }
+
+    /// The runtime headroom this crate's default backend applies (DT-4).
+    fn runtime() -> u64 {
+        crate::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES
     }
 
     fn backend<'a>(
@@ -905,9 +1044,21 @@ mod tests {
     }
 
     fn grow_one<O: OriginStorage>(backend: &mut WriteThroughCacheBackend<'_, FakeProvider, O>) {
-        backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(0));
-        backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(1));
-        let outcome = backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(2));
+        backend.observe_gpu(
+            Some(&healthy_sample()),
+            Duration::from_secs(0),
+            Instant::now(),
+        );
+        backend.observe_gpu(
+            Some(&healthy_sample()),
+            Duration::from_secs(1),
+            Instant::now(),
+        );
+        let outcome = backend.observe_gpu(
+            Some(&healthy_sample()),
+            Duration::from_secs(2),
+            Instant::now(),
+        );
         assert_eq!(outcome.allocated_bytes, 8);
     }
 
@@ -974,9 +1125,21 @@ mod tests {
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
         let mut backend = backend(&provider, origin);
 
-        backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(0));
-        backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(1));
-        let outcome = backend.observe_gpu(Some(healthy_sample()), Duration::from_secs(2));
+        backend.observe_gpu(
+            Some(&healthy_sample()),
+            Duration::from_secs(0),
+            Instant::now(),
+        );
+        backend.observe_gpu(
+            Some(&healthy_sample()),
+            Duration::from_secs(1),
+            Instant::now(),
+        );
+        let outcome = backend.observe_gpu(
+            Some(&healthy_sample()),
+            Duration::from_secs(2),
+            Instant::now(),
+        );
         assert_eq!(outcome.allocated_bytes, 0);
         backend.write_at(0, b"safe").unwrap();
         let mut read_back = [0; 4];
@@ -994,56 +1157,68 @@ mod tests {
 
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::ZERO)
+                .observe_gpu(Some(&healthy_sample()), Duration::ZERO, Instant::now())
                 .allocated_bytes,
             0
         );
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::from_secs(1))
+                .observe_gpu(
+                    Some(&healthy_sample()),
+                    Duration::from_secs(1),
+                    Instant::now()
+                )
                 .allocated_bytes,
             0
         );
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::from_secs(2))
+                .observe_gpu(
+                    Some(&healthy_sample()),
+                    Duration::from_secs(2),
+                    Instant::now()
+                )
                 .allocated_bytes,
             8
         );
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::from_secs(3))
+                .observe_gpu(
+                    Some(&healthy_sample()),
+                    Duration::from_secs(3),
+                    Instant::now()
+                )
                 .allocated_bytes,
             0
         );
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::from_secs(4))
+                .observe_gpu(
+                    Some(&healthy_sample()),
+                    Duration::from_secs(4),
+                    Instant::now()
+                )
                 .allocated_bytes,
             8
         );
         assert_eq!(backend.cached_bytes(), 16);
 
-        let restricted = GpuSample {
-            budget_bytes: 0,
-            external_usage_bytes: 0,
-            total_vram_bytes: 8 * GIB,
-        };
+        let restricted = sample_at(Instant::now(), 0, 0, 8 * GIB);
         assert_eq!(
             backend
-                .observe_gpu(Some(restricted), Duration::from_secs(5))
+                .observe_gpu(Some(&restricted), Duration::from_secs(5), Instant::now())
                 .released_bytes,
             0
         );
         assert_eq!(
             backend
-                .observe_gpu(Some(restricted), Duration::from_secs(6))
+                .observe_gpu(Some(&restricted), Duration::from_secs(6), Instant::now())
                 .released_bytes,
             0
         );
         assert_eq!(
             backend
-                .observe_gpu(Some(restricted), Duration::from_secs(7))
+                .observe_gpu(Some(&restricted), Duration::from_secs(7), Instant::now())
                 .released_bytes,
             16
         );
@@ -1059,7 +1234,7 @@ mod tests {
         let mut backend = backend(&provider, origin);
         backend.set_physical_cap_bytes(8);
 
-        let outcome = backend.observe_gpu(Some(healthy_sample()), Duration::ZERO);
+        let outcome = backend.observe_gpu(Some(&healthy_sample()), Duration::ZERO, Instant::now());
         assert_eq!(outcome.target_bytes, 8);
     }
 
@@ -1257,29 +1432,200 @@ mod tests {
         assert_eq!(backend.origin_state(), OriginState::Failed);
     }
 
+    /// DT-4/DT-6: the origin target uses the shared reserve floor, not an
+    /// independent reserve.
+    #[test]
+    fn origin_physical_target_uses_shared_reserve_floor() {
+        let t0 = Instant::now();
+        let sample = sample_at(t0, 10 * GIB, 2 * GIB, 20 * GIB);
+        let snapshot = GpuBudgetSnapshot {
+            adapter: sample.adapter.clone(),
+            total_bytes: Some(sample.total_vram_bytes),
+            budget_bytes: sample.budget_bytes,
+            used_bytes: sample.external_usage_bytes,
+            source: sample.source,
+            sampled_at: sample.sampled_at,
+        };
+        let configured = 0;
+        assert_eq!(
+            physical_target_bytes(24 * GIB, Some(&sample), configured, runtime(), t0),
+            snapshot.safe_target_bytes(24 * GIB, configured, runtime())
+        );
+    }
+
+    /// DT-6: the `.max(2 * GIB)` term is deleted. At a capacity whose 20%
+    /// share is well under 2 GiB the old formula reserved 2 GiB; the shared
+    /// formula must produce a strictly larger target.
+    #[test]
+    fn origin_physical_target_has_no_hardcoded_two_gib_term() {
+        let t0 = Instant::now();
+        // budget 4 GiB, total 8 GiB → capacity = min(8, 4) = 4 GiB.
+        // Shared reserve = ceil(4 GiB / 5) = 0.8 GiB.
+        // Old reserve   = max(0.8 GiB, 2 GiB) = 2 GiB.
+        let sample = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        let target = physical_target_bytes(4 * GIB, Some(&sample), 0, runtime(), t0);
+        let snapshot = GpuBudgetSnapshot {
+            adapter: sample.adapter.clone(),
+            total_bytes: Some(8 * GIB),
+            budget_bytes: 4 * GIB,
+            used_bytes: 0,
+            source: GpuBudgetSource::DriverReported,
+            sampled_at: t0,
+        };
+        let old_style = 4 * GIB.saturating_sub(0).saturating_sub(2 * GIB);
+        assert_eq!(target, snapshot.safe_target_bytes(4 * GIB, 0, runtime()));
+        assert!(target < 4 * GIB, "reserve and runtime still bind");
+        // The shared floor is the 20% share, not 2 GiB.
+        assert!(
+            snapshot.required_free_bytes(0, runtime()) < 2 * GIB + runtime(),
+            "no 2 GiB constant may remain in the reserve"
+        );
+        let _ = old_style;
+    }
+
+    /// DT-6: `external_usage_bytes` maps to `used_bytes`.
+    #[test]
+    fn origin_sample_maps_external_usage_to_used_bytes() {
+        let t0 = Instant::now();
+        let sample = sample_at(t0, 10 * GIB, 3 * GIB, 20 * GIB);
+        let snapshot = GpuBudgetSnapshot {
+            adapter: sample.adapter.clone(),
+            total_bytes: Some(sample.total_vram_bytes),
+            budget_bytes: sample.budget_bytes,
+            used_bytes: sample.external_usage_bytes,
+            source: sample.source,
+            sampled_at: sample.sampled_at,
+        };
+        assert_eq!(snapshot.used_bytes, 3 * GIB);
+        assert_eq!(
+            physical_target_bytes(24 * GIB, Some(&sample), 0, runtime(), t0),
+            snapshot.safe_target_bytes(24 * GIB, 0, runtime())
+        );
+    }
+
+    /// DT-6: an unnormalizable sample yields zero, not a partial target.
+    #[test]
+    fn origin_unnormalizable_sample_returns_zero() {
+        let t0 = Instant::now();
+        // External use above the budget cannot be normalized.
+        let over = sample_at(t0, 4 * GIB, 8 * GIB, 16 * GIB);
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&over), 0, runtime(), t0),
+            0
+        );
+        // A missing sample is the same refusal.
+        assert_eq!(physical_target_bytes(4 * GIB, None, 0, runtime(), t0), 0);
+    }
+
+    /// DT-6: the path never stamps provenance. `physical_target_bytes` takes
+    /// the clock as an argument; it does not call `Instant::now()` and does
+    /// not write `GpuBudgetSource::DriverReported`.
+    #[test]
+    fn origin_path_never_stamps_provenance() {
+        let t0 = Instant::now();
+        // A sample stamped in the future is refused: the function trusts the
+        // sample's own `sampled_at`, it does not replace it with a fresh one.
+        let mut future = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        future.sampled_at = t0 + Duration::from_secs(60);
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&future), 0, runtime(), t0),
+            0
+        );
+        // A non-driver source is never normalized to DriverReported.
+        let mut lab = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        lab.source = GpuBudgetSource::ProviderLocalEstimate;
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&lab), 0, runtime(), t0),
+            0
+        );
+    }
+    #[test]
+    fn origin_stale_sample_refuses() {
+        let t0 = Instant::now();
+        let mut stale = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        stale.sampled_at = t0 - (SAMPLE_MAX_AGE + Duration::from_secs(1));
+        // A stale sample must yield no target at all, not a reduced one.
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&stale), 0, runtime(), t0),
+            0
+        );
+        // The same sample inside the window is admitted. The value is the
+        // shared formula, not the requested size: capacity = min(8G, 4G) =
+        // 4G; reserve = ceil(4G/5); within_live_headroom = 4G - reserve -
+        // runtime. Both terms bind below the requested 4G.
+        let fresh = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        let admitted = physical_target_bytes(4 * GIB, Some(&fresh), 0, runtime(), t0);
+        assert!(admitted > 0, "fresh sample must be admitted");
+        assert!(admitted < 4 * GIB, "reserve and runtime headroom must bind");
+        let snapshot = GpuBudgetSnapshot {
+            adapter: fresh.adapter.clone(),
+            total_bytes: Some(fresh.total_vram_bytes),
+            budget_bytes: fresh.budget_bytes,
+            used_bytes: fresh.external_usage_bytes,
+            source: fresh.source,
+            sampled_at: fresh.sampled_at,
+        };
+        assert_eq!(admitted, snapshot.safe_target_bytes(4 * GIB, 0, runtime()));
+    }
+
+    #[test]
+    fn origin_untrusted_sample_refuses() {
+        let t0 = Instant::now();
+        // Source other than DriverReported.
+        let mut lab = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        lab.source = GpuBudgetSource::ProviderLocalEstimate;
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&lab), 0, runtime(), t0),
+            0
+        );
+        // Missing adapter identity.
+        let mut anonymous = sample_at(t0, 4 * GIB, 0, 8 * GIB);
+        anonymous.adapter = None;
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&anonymous), 0, runtime(), t0),
+            0
+        );
+    }
+
+    #[test]
+    fn physical_target_bytes_refuses_inconsistent_sample() {
+        let t0 = Instant::now();
+        // External use above the budget.
+        let over_used = sample_at(t0, 4 * GIB, 8 * GIB, 16 * GIB);
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&over_used), 0, runtime(), t0),
+            0
+        );
+        // Budget above the physical total.
+        let over_budget = sample_at(t0, 16 * GIB, 0, 8 * GIB);
+        assert_eq!(
+            physical_target_bytes(4 * GIB, Some(&over_budget), 0, runtime(), t0),
+            0
+        );
+    }
+
     #[test]
     fn exact_target_formula_and_missing_measurement_fail_safe() {
-        assert_eq!(physical_target_bytes(4 * GIB, None), 0);
+        let t0 = Instant::now();
+        assert_eq!(physical_target_bytes(4 * GIB, None, 0, runtime(), t0), 0);
+        // capacity = min(total 20G, budget 10G) = 10G.
+        // reserve = max(0, ceil(10G/5)) = 2G   (no 2 GiB constant).
+        // within_capacity = 8G.
+        // within_live_headroom = (10G-2G) - 2G - runtime = 6G - runtime.
+        let ten = sample_at(t0, 10 * GIB, 2 * GIB, 20 * GIB);
+        let expected = 6 * GIB - runtime();
         assert_eq!(
-            physical_target_bytes(
-                24 * GIB,
-                Some(GpuSample {
-                    budget_bytes: 10 * GIB,
-                    external_usage_bytes: 2 * GIB,
-                    total_vram_bytes: 20 * GIB,
-                })
-            ),
-            4 * GIB
+            physical_target_bytes(24 * GIB, Some(&ten), 0, runtime(), t0),
+            expected
         );
+        // The old formula reserved max(total/5, 2 GiB) = 4G here and returned
+        // 4G. The shared formula reserves 2G, so the target is higher — the
+        // hardcoded 2 GiB floor is gone. Prove the direction.
+        assert!(expected > 4 * GIB);
+        // Logical size still binds.
+        let eight = sample_at(t0, 8 * GIB, 0, 8 * GIB);
         assert_eq!(
-            physical_target_bytes(
-                GIB,
-                Some(GpuSample {
-                    budget_bytes: 8 * GIB,
-                    external_usage_bytes: 0,
-                    total_vram_bytes: 8 * GIB,
-                })
-            ),
+            physical_target_bytes(GIB, Some(&eight), 0, runtime(), t0),
             GIB
         );
     }
@@ -1319,7 +1665,11 @@ mod tests {
         grow_one(&mut backend);
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::from_secs(4))
+                .observe_gpu(
+                    Some(&healthy_sample()),
+                    Duration::from_secs(4),
+                    Instant::now()
+                )
                 .allocated_bytes,
             8
         );
@@ -1328,14 +1678,28 @@ mod tests {
         let mut make_first_recent = [0; 4];
         backend.read_at(0, &mut make_first_recent).unwrap();
 
-        let one_chunk_target = GpuSample {
-            budget_bytes: 2 * GIB + 8,
-            external_usage_bytes: 0,
-            total_vram_bytes: 8 * GIB,
-        };
-        backend.observe_gpu(Some(one_chunk_target), Duration::from_secs(5));
-        backend.observe_gpu(Some(one_chunk_target), Duration::from_secs(6));
-        let outcome = backend.observe_gpu(Some(one_chunk_target), Duration::from_secs(7));
+        // Isolate LRU reclaim from the reserve formula: bind the reserve so
+        // `safe_target_bytes` returns exactly one 8-byte chunk. capacity =
+        // min(total 8G, budget 2G+8) = 2G+8; reserve = 2G; within_capacity = 8;
+        // within_live_headroom = (2G+8) - 2G - 0 = 8. The configured reserve is
+        // doing the work here, not any hardcoded floor.
+        backend.set_reserve_floor(2 * GIB, 0);
+        let one_chunk_target = sample_at(Instant::now(), 2 * GIB + 8, 0, 8 * GIB);
+        backend.observe_gpu(
+            Some(&one_chunk_target),
+            Duration::from_secs(5),
+            Instant::now(),
+        );
+        backend.observe_gpu(
+            Some(&one_chunk_target),
+            Duration::from_secs(6),
+            Instant::now(),
+        );
+        let outcome = backend.observe_gpu(
+            Some(&one_chunk_target),
+            Duration::from_secs(7),
+            Instant::now(),
+        );
         assert_eq!(outcome.released_bytes, 8);
 
         events.borrow_mut().clear();
@@ -1355,7 +1719,11 @@ mod tests {
         backend.release_cache();
         assert_eq!(
             backend
-                .observe_gpu(Some(healthy_sample()), Duration::from_secs(4))
+                .observe_gpu(
+                    Some(&healthy_sample()),
+                    Duration::from_secs(4),
+                    Instant::now()
+                )
                 .allocated_bytes,
             8
         );

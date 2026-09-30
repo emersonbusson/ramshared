@@ -31,7 +31,7 @@ use ramshared_block::{
     CacheState as OriginCacheState, Command, CommitBudgetGate, DisabledCache, FileOrigin,
     GpuWorkerConfig, IpcCacheClient, OriginState as DurableOriginState, SparseVramBackend,
     WriteOptions, chunk_bytes_from_env, commit_cap_bytes_from_env, idle_free_secs_from_env,
-    reserve_floor_bytes_from_env, run_gpu_worker_loop, safe_commit_cap, serve,
+    run_gpu_worker_loop, safe_commit_cap, serve,
 };
 #[cfg(test)]
 use ramshared_block::{GpuSample, WriteThroughCacheBackend};
@@ -1061,6 +1061,43 @@ fn validate_host_origin_manifest_bytes(
         || computed_configuration_sha256 != sealed.configuration_sha256
     {
         return Err("host origin configuration SHA-256 is not enforced end to end".into());
+    }
+    Ok(())
+}
+
+/// Sealed reserve literals the host-origin manifest is verified against.
+///
+/// These are the integrity constants of check (a). `sparse_vram` carries the
+/// same numbers for the no-manifest path; the two are pinned equal by
+/// `enforcement_binding_matches_verified_seal`.
+const SEALED_RESERVE_MIN_MIB: u64 = 2048;
+const SEALED_RESERVE_PERCENT: u64 = 20;
+
+/// DT-7 check (b): bind the resolved policy to what the seal verified.
+///
+/// Two inequalities that can actually fail. A resolver that wrote a lower
+/// minimum trips the first; one that dropped or altered the percentage trips
+/// the second. Deliberately **not** checked: `configured_reserve_bytes ==
+/// max(...)` — that is DT-2's own definition and is true by construction.
+///
+/// Disagreement is a startup failure on the existing error path.
+fn enforce_reserve_policy_binding(
+    resolved: &ramshared_vram::ReserveFloorPolicy,
+    verified_min_mib: u64,
+    verified_percent: u64,
+) -> Result<(), String> {
+    let verified_min_bytes = verified_min_mib.saturating_mul(1024 * 1024);
+    if resolved.min_floor_bytes < verified_min_bytes {
+        return Err(format!(
+            "resolved reserve floor {} B undercuts sealed authority {} B",
+            resolved.min_floor_bytes, verified_min_bytes
+        ));
+    }
+    if resolved.sealed_percent != verified_percent {
+        return Err(format!(
+            "resolved sealed percent {} differs from verified {}",
+            resolved.sealed_percent, verified_percent
+        ));
     }
     Ok(())
 }
@@ -2593,6 +2630,13 @@ fn run_isolated_gpu_worker_entry(args: &[String]) -> Result<(), Box<dyn std::err
             let Ok(provider) = VulkanProvider::open_exact(ordinal) else {
                 continue;
             };
+            if !provider.is_hardware_gpu() {
+                eprintln!(
+                    "[ramsharedd] Vulkan adapter {ordinal} skipped: not a hardware GPU (name={:?})",
+                    provider.device_name()
+                );
+                continue;
+            }
             match gpu_candidate(&provider, GpuBackendKind::Vulkan, ordinal, config) {
                 Ok(Some(candidate)) => candidates.push(candidate),
                 Ok(None) => {}
@@ -2657,14 +2701,15 @@ fn gpu_candidate<P: VramProvider>(
     ordinal: u32,
     config: GpuWorkerConfig,
 ) -> Result<Option<GpuAdapterCandidate>, String> {
-    let wddm = open_matching_wddm_provider(allocator, |luid| DxgBudgetProvider::open(Some(luid)))?;
+    let wddm = open_matching_wddm_provider(allocator, DxgBudgetProvider::open)?;
     let budget = match wddm {
-        Some(wddm) => constrained_budget(
+        Some((wddm, correspondence)) => constrained_budget(
             allocator
                 .budget_snapshot()
                 .map_err(|error| error.to_string())?,
             wddm.snapshot().map_err(|error| error.to_string())?,
             Instant::now(),
+            correspondence,
         ),
         None => allocator.budget_snapshot(),
     }
@@ -2694,23 +2739,25 @@ fn run_gpu_worker_with_selected_wddm<P: VramProvider>(
     expected_identity: GpuAdapterIdentity,
     config: GpuWorkerConfig,
 ) -> Result<(), String> {
-    let wddm =
-        match open_matching_wddm_provider(&allocator, |luid| DxgBudgetProvider::open(Some(luid))) {
-            Ok(wddm) => wddm,
-            Err(error) => {
-                eprintln!("[ramsharedd] selected adapter WDDM revalidation failed: {error}");
-                return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
-            }
-        };
+    let wddm = match open_matching_wddm_provider(&allocator, DxgBudgetProvider::open) {
+        Ok(wddm) => wddm,
+        Err(error) => {
+            eprintln!("[ramsharedd] selected adapter WDDM revalidation failed: {error}");
+            return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
+        }
+    };
     match wddm {
-        Some(wddm) => {
+        Some((wddm, correspondence)) => {
             let allocator_budget = allocator.budget_snapshot();
             let wddm_budget = wddm.snapshot();
             let budget = match (allocator_budget, wddm_budget) {
-                (Ok(allocator_budget), Ok(wddm_budget)) => {
-                    constrained_budget(allocator_budget, wddm_budget, Instant::now())
-                        .map_err(|error| error.to_string())
-                }
+                (Ok(allocator_budget), Ok(wddm_budget)) => constrained_budget(
+                    allocator_budget,
+                    wddm_budget,
+                    Instant::now(),
+                    correspondence,
+                )
+                .map_err(|error| error.to_string()),
                 (Err(error), _) => Err(error.to_string()),
                 (_, Err(error)) => Err(error.to_string()),
             };
@@ -2726,10 +2773,19 @@ fn run_gpu_worker_with_selected_wddm<P: VramProvider>(
                 return run_gpu_worker_loop(socket, UnavailableVramProvider, config);
             }
             eprintln!(
-                "[ramsharedd] gpu_budget_guard=dxg adapter={}",
-                wddm.adapter_luid()
+                "[ramsharedd] gpu_budget_guard=dxg adapter={} correspondence={:?}",
+                wddm.adapter_luid(),
+                correspondence
             );
-            run_gpu_worker_loop(socket, WddmBudgetGuard { allocator, wddm }, config)
+            run_gpu_worker_loop(
+                socket,
+                WddmBudgetGuard {
+                    allocator,
+                    wddm,
+                    correspondence,
+                },
+                config,
+            )
         }
         None => {
             let budget = match allocator.budget_snapshot() {
@@ -3225,7 +3281,54 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         Some(CanaryProbe::new(provider.alloc(CANARY_BYTES)?))
     };
     let mut cadence = Cadence::new(CANARY_EVERY);
-    let reserve_floor = reserve_floor_bytes_from_env();
+    // DT-1 of `gpu-reserve-floor-authority`: one configured-reserve authority,
+    // resolved once at startup and passed by value. Raise-only: an operator may
+    // be more conservative than the seal, never less (DT-8).
+    // DT-8: an override below the seal, or two conflicting names, is a startup
+    // failure on the existing error path — never a clamp.
+    let reserve_policy = ramshared_block::sparse_vram::sealed_reserve_policy_from_env()
+        .map_err(|error| error.to_string())?;
+    // DT-7 check (b): bind what the runtime will enforce to what the seal
+    // verified. A resolver that undercuts the sealed minimum or drops the
+    // percentage fails here, on the existing startup failure path.
+    enforce_reserve_policy_binding(
+        &reserve_policy,
+        SEALED_RESERVE_MIN_MIB,
+        SEALED_RESERVE_PERCENT,
+    )?;
+    let reserve_floor = reserve_policy.min_floor_bytes;
+    // DT-10: one startup line with what is *enforced*, not what is configured.
+    // The source label is honest — `lab-override-raise` only when the override
+    // actually raises the enforced result; a subsumed override is noted and the
+    // source stays `sealed-manifest`.
+    let sealed_only = ramshared_vram::ReserveFloorPolicy::from_manifest(
+        SEALED_RESERVE_MIN_MIB,
+        SEALED_RESERVE_PERCENT,
+    )
+    .map_err(|error| error.to_string())?;
+    let runtime_headroom = ramshared_block::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES;
+    // Capacity for the DT-10 source label is the helper's own expression over
+    // the measured adapter total. Passing `u64::MAX` would make the 20% share
+    // dominate every override and misreport a real raise as subsumed.
+    // `total == 0` (origin mode, provider has no mem_info) yields capacity 0,
+    // so the configured minimum is the whole reserve and a raise is a raise.
+    let label_capacity = ramshared_vram::ReserveFloorPolicy::helper_capacity(Some(total), total);
+    let source = reserve_policy.source_label(&sealed_only, label_capacity);
+    let override_mib = ramshared_block::sparse_vram::reserve_floor_override_mib();
+    let subsumed_note = match (&override_mib, source) {
+        (Some(_), ramshared_vram::ReserveFloorSource::SealedManifest) => " (override subsumed)",
+        _ => "",
+    };
+    eprintln!(
+        "[ramsharedd] reserve-floor: enforced={} MiB source={}{} sealed_min={} MiB override={:?} percent={}% runtime={} MiB",
+        reserve_floor >> 20,
+        source,
+        subsumed_note,
+        SEALED_RESERVE_MIN_MIB,
+        override_mib,
+        reserve_policy.sealed_percent,
+        runtime_headroom >> 20,
+    );
     let residency_cfg = sparse_residency_config(reserve_floor);
     let mut sampler = ResidencySampler::new(residency_cfg);
     let free_floor = residency_cfg.free_floor_bytes;
@@ -3314,7 +3417,13 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             let chunk = chunk_bytes_from_env();
             let reserve = reserve_floor;
             let env_cap = commit_cap_bytes_from_env();
-            let auto_cap = safe_commit_cap(size, total, reserve);
+            // The commit cap must leave the shared three-term free floor, not
+            // the configured minimum alone (DT-5).
+            let enforced_floor = reserve_policy.enforced_free_floor_bytes(
+                ramshared_vram::ReserveFloorPolicy::helper_capacity(Some(total), total),
+                ramshared_block::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES,
+            );
+            let auto_cap = safe_commit_cap(size, total, enforced_floor);
             let commit_cap = env_cap.min(auto_cap);
             let sparse = SparseVramBackend::new_with_config(
                 &provider,
@@ -3322,7 +3431,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     capacity: size,
                     chunk_bytes: chunk,
                     block_size: BLOCK_SIZE,
-                    reserve_floor_bytes: reserve,
+                    reserve_policy,
                     commit_cap_bytes: Some(commit_cap),
                     budget_gate,
                 },
@@ -3641,8 +3750,22 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         // SPEC ITEM-2: reclaim on worker thread (I/O or idle tick).
         if let Be::Sparse(ref mut sp) = backend {
             let used_kb = starter.nbd_used_kb(&nbd_dev);
-            let free_b = provider.mem_info().ok().map(|(f, _)| f);
-            match sp.try_reclaim(used_kb, free_b, free_floor, idle_free) {
+            let (free_b, probe_floor) = match provider.mem_info() {
+                Ok((f, total)) => {
+                    let capacity =
+                        ramshared_vram::ReserveFloorPolicy::helper_capacity(Some(total), total);
+                    (
+                        Some(f),
+                        ramshared_vram::enforced_free_floor_from_configured(
+                            reserve_floor,
+                            capacity,
+                            ramshared_block::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES,
+                        ),
+                    )
+                }
+                Err(_) => (None, free_floor),
+            };
+            match sp.try_reclaim(used_kb, free_b, probe_floor, idle_free) {
                 Ok(0) => {}
                 Ok(n) => eprintln!(
                     "[ramsharedd] sparse reclaim freed {} MiB (used_kb={used_kb} live={})",
@@ -6084,7 +6207,9 @@ mod tests {
                         let mut bytes = [0u8; FRAME_HEADER_LEN];
                         match worker_socket.read_exact(&mut bytes) {
                             Ok(()) => {
-                                let request = FrameHeader::decode(&bytes);
+                                let Some(request) = FrameHeader::decode(&bytes) else {
+                                    break;
+                                };
                                 let response_type = match request.msg_type {
                                     MSG_HANDSHAKE_REQ => MSG_HANDSHAKE_RESP,
                                     MSG_HEARTBEAT_REQ => MSG_HEARTBEAT_RESP,
@@ -6168,7 +6293,16 @@ mod tests {
 
     #[test]
     fn missing_gpu_measurement_sets_zero_cache_target() {
-        assert_eq!(ramshared_block::physical_target_bytes(4 * GIB, None), 0);
+        assert_eq!(
+            ramshared_block::physical_target_bytes(
+                4 * GIB,
+                None,
+                0,
+                ramshared_block::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES,
+                std::time::Instant::now()
+            ),
+            0
+        );
     }
 
     #[test]
@@ -6194,13 +6328,21 @@ mod tests {
         let mut cache =
             WriteThroughCacheBackend::with_chunk_bytes(&provider, origin, 32, 4, 8).unwrap();
         cache.set_physical_cap_bytes(8);
-        let sample = Some(GpuSample {
+        let now = std::time::Instant::now();
+        let sample = GpuSample {
             budget_bytes: 16 * GIB,
             external_usage_bytes: 0,
             total_vram_bytes: 16 * GIB,
-        });
+            sampled_at: now,
+            source: ramshared_vram::GpuBudgetSource::DriverReported,
+            adapter: Some(ramshared_vram::GpuAdapterIdentity {
+                backend: "test".into(),
+                key: "test-adapter".into(),
+                luid: None,
+            }),
+        };
         for seconds in 0..3 {
-            cache.observe_gpu(sample, Duration::from_secs(seconds));
+            cache.observe_gpu(Some(&sample), Duration::from_secs(seconds), now);
         }
         assert_eq!(cache.cached_bytes(), 8);
 
@@ -6283,7 +6425,7 @@ mod tests {
         assert_eq!(backend.origin_state(), DurableOriginState::Failed);
         assert_eq!(
             backend
-                .observe_gpu(None, Duration::from_secs(1))
+                .observe_gpu(None, Duration::from_secs(1), std::time::Instant::now())
                 .target_bytes,
             0
         );
@@ -6586,6 +6728,218 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// DT-7 check (a), ITEM-5: the seal rejects a manifest whose reserve
+    /// fields disagree with the verifier's sealed literals. The rejection is
+    /// the integrity proof — no tautological self-comparison.
+    #[test]
+    fn manifest_seal_rejects_reserve_mismatch() {
+        let make_host = |min_mib: u64, percent: u64| {
+            let mut host = HostOriginManifest {
+                schema_version: 3,
+                origin_vhdx: "I:\\RamShared\\ramshared-origin.vhdx".into(),
+                fixed_size_bytes: 25 * GIB,
+                logical_capacity_mib: 4096,
+                physical_cache_cap_mib: 1024,
+                chunk_mib: 128,
+                gpu_reserve_min_mib: min_mib,
+                gpu_reserve_percent: percent,
+                partuuid: "11111111-2222-4333-8444-555555555555".into(),
+                disk_guid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into(),
+                expected_swap_uuid: "99999999-8888-4777-8666-555555555555".into(),
+                ownership_proof_schema: 1,
+                existing_wsl_swap_vhdx: "R:\\wsl_swap\\swap.vhdx".into(),
+                configuration_sha256: String::new(),
+            };
+            host.configuration_sha256 = sha256_hex(host_configuration_text(&host).as_bytes());
+            let bytes = serde_json::to_vec(&host).expect("serialize fixture");
+            let sealed = SealedOriginManifest {
+                host_manifest_sha256: sha256_hex(&bytes),
+                configuration_sha256: host.configuration_sha256.clone(),
+                origin_path: "/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555".into(),
+                partuuid: host.partuuid.clone(),
+                ptuuid: host.disk_guid.clone(),
+                partition_dev_t: "43:1".into(),
+                parent_dev_t: "43:0".into(),
+                expected_swap_uuid: host.expected_swap_uuid.clone(),
+                logical_capacity_mib: host.logical_capacity_mib,
+                physical_cache_cap_mib: host.physical_cache_cap_mib,
+            };
+            (sealed, bytes)
+        };
+
+        // Matching seal is accepted (Kahneman #13: refusal plus pass).
+        let (sealed, bytes) = make_host(SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT);
+        validate_host_origin_manifest_bytes(&sealed, &bytes).expect("sealed literals match");
+
+        // A lower minimum is rejected even though the configuration hash is
+        // internally consistent — the seal constants, not the manifest's own
+        // hash, are the authority.
+        let (sealed_low, bytes_low) = make_host(128, SEALED_RESERVE_PERCENT);
+        assert!(validate_host_origin_manifest_bytes(&sealed_low, &bytes_low).is_err());
+
+        // A percentage below the 20% safety floor is rejected.
+        let (sealed_pct, bytes_pct) = make_host(SEALED_RESERVE_MIN_MIB, 5);
+        assert!(validate_host_origin_manifest_bytes(&sealed_pct, &bytes_pct).is_err());
+    }
+
+    /// DT-7 check (b), ITEM-5: the runtime is bound to what the seal verified.
+    /// These inequalities can fail — a resolver that undercuts the minimum or
+    /// drops the percentage trips them.
+    #[test]
+    fn enforcement_binding_matches_verified_seal() {
+        use ramshared_vram::ReserveFloorPolicy;
+
+        // The literals the seal verifies must equal the literals the
+        // no-manifest path enforces, or the two surfaces diverge again.
+        assert_eq!(
+            SEALED_RESERVE_MIN_MIB,
+            ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB
+        );
+        assert_eq!(
+            SEALED_RESERVE_PERCENT,
+            ramshared_block::sparse_vram::SEALED_RESERVE_PERCENT
+        );
+
+        let resolved =
+            ReserveFloorPolicy::from_manifest(SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT)
+                .expect("sealed literals are valid");
+        enforce_reserve_policy_binding(&resolved, SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT)
+            .expect("sealed resolution binds");
+
+        // A raised minimum is still bound (raise-only).
+        let raised = ReserveFloorPolicy {
+            min_floor_bytes: SEALED_RESERVE_MIN_MIB * 2 * 1024 * 1024,
+            sealed_percent: SEALED_RESERVE_PERCENT,
+        };
+        enforce_reserve_policy_binding(&raised, SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT)
+            .expect("raising the floor is legal");
+
+        // Undercutting the minimum trips the first inequality.
+        let undercut = ReserveFloorPolicy {
+            min_floor_bytes: 128 * 1024 * 1024,
+            sealed_percent: SEALED_RESERVE_PERCENT,
+        };
+        let err = enforce_reserve_policy_binding(
+            &undercut,
+            SEALED_RESERVE_MIN_MIB,
+            SEALED_RESERVE_PERCENT,
+        )
+        .expect_err("a lower floor must fail startup");
+        assert!(err.contains("undercuts"), "{err}");
+
+        // Dropping or altering the percentage trips the second.
+        let dropped = ReserveFloorPolicy {
+            min_floor_bytes: SEALED_RESERVE_MIN_MIB * 1024 * 1024,
+            sealed_percent: 5,
+        };
+        let err = enforce_reserve_policy_binding(
+            &dropped,
+            SEALED_RESERVE_MIN_MIB,
+            SEALED_RESERVE_PERCENT,
+        )
+        .expect_err("a dropped percentage must fail startup");
+        assert!(err.contains("sealed percent"), "{err}");
+    }
+
+    /// DT-8, ITEM-5: an override below the sealed authority fails startup on
+    /// the existing failure path (`ExitCode::from(1)`), not a new exit class.
+    #[test]
+    fn low_reserve_override_fails_startup() {
+        use ramshared_vram::{ReserveFloorEnv, ReserveFloorPolicy};
+
+        let base = ReserveFloorPolicy::from_manifest(
+            ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB,
+            ramshared_block::sparse_vram::SEALED_RESERVE_PERCENT,
+        )
+        .expect("sealed literals are valid");
+
+        // 128 MiB — the value the old clamp silently accepted.
+        let too_low = ReserveFloorEnv {
+            env_mib: Some(128),
+            alias_mib: None,
+        };
+        let err = ReserveFloorPolicy::resolve_with_env(&base, &too_low)
+            .expect_err("an override below the seal must fail");
+        assert!(err.to_string().contains("below"), "{err}");
+
+        // Conflicting names also fail closed rather than picking one.
+        let conflict = ReserveFloorEnv {
+            env_mib: Some(4096),
+            alias_mib: Some(8192),
+        };
+        assert!(ReserveFloorPolicy::resolve_with_env(&base, &conflict).is_err());
+
+        // A raise-only override at or above the seal is accepted.
+        let raise = ReserveFloorEnv {
+            env_mib: Some(4096),
+            alias_mib: None,
+        };
+        let ok = ReserveFloorPolicy::resolve_with_env(&base, &raise).expect("raise is legal");
+        assert_eq!(ok.min_floor_bytes, 4096 * 1024 * 1024);
+        assert_eq!(ok.sealed_percent, base.sealed_percent);
+    }
+
+    /// DT-10: a raise-only override that actually raises the enforced result
+    /// is logged as `lab-override-raise`; one that the percentage share already
+    /// covers is logged `sealed-manifest` with "(override subsumed)". The log
+    /// never claims the floor moved when it did not.
+    #[test]
+    fn high_reserve_override_logs_raise_only() {
+        use ramshared_vram::{ReserveFloorEnv, ReserveFloorPolicy, ReserveFloorSource};
+
+        let base = ReserveFloorPolicy::from_manifest(
+            ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB,
+            ramshared_block::sparse_vram::SEALED_RESERVE_PERCENT,
+        )
+        .expect("sealed literals are valid");
+
+        // A high override raises the floor above the sealed-only result.
+        let high = ReserveFloorEnv {
+            env_mib: Some(8192),
+            alias_mib: None,
+        };
+        let raised = ReserveFloorPolicy::resolve_with_env(&base, &high).expect("raise is legal");
+        // Real capacity: 8 GiB adapter. 20% = 1.6 GiB, so an 8 GiB override
+        // raises the configured reserve above the sealed-only result.
+        let capacity = 8 * 1024 * 1024 * 1024u64;
+        assert_eq!(
+            raised.source_label(&base, capacity),
+            ReserveFloorSource::LabOverrideRaise
+        );
+        assert_eq!(
+            raised.source_label(&base, capacity).to_string(),
+            "lab-override-raise"
+        );
+
+        // An override equal to the sealed minimum changes nothing.
+        let same = ReserveFloorEnv {
+            env_mib: Some(ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB),
+            alias_mib: None,
+        };
+        let unchanged = ReserveFloorPolicy::resolve_with_env(&base, &same).expect("equal is legal");
+        assert_eq!(unchanged.min_floor_bytes, base.min_floor_bytes);
+        assert_eq!(
+            unchanged.source_label(&base, capacity),
+            ReserveFloorSource::SealedManifest
+        );
+
+        // An override accepted above the minimum but still under the 20%
+        // share is subsumed: the source stays `sealed-manifest`.
+        // capacity = u64::MAX saturates the share, so use a finite capacity
+        // whose 20% share exceeds a modest raise.
+        let modest = ReserveFloorEnv {
+            env_mib: Some(ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB + 1),
+            alias_mib: None,
+        };
+        let subsumed =
+            ReserveFloorPolicy::resolve_with_env(&base, &modest).expect("raise is legal");
+        let capacity = 64 * 1024 * 1024 * 1024u64; // 64 GiB → 20% = 12.8 GiB
+        assert_eq!(
+            subsumed.source_label(&base, capacity),
+            ReserveFloorSource::SealedManifest,
+            "an override the percentage share already covers is not a raise"
+        );
+    }
     #[test]
     fn host_manifest_hash_fields_are_enforced_end_to_end() {
         let mut host = HostOriginManifest {

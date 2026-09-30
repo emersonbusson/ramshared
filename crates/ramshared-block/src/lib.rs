@@ -52,8 +52,8 @@ pub use protocol::{
 pub use request::{BlockBackend, IoError, ServeOutcome, WriteOptions, serve};
 pub use sparse_vram::{
     CommitBudgetGate, DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env,
-    commit_cap_bytes_from_env, idle_free_secs_from_env, reserve_floor_bytes_from_env,
-    safe_commit_cap,
+    commit_cap_bytes_from_env, idle_free_secs_from_env, safe_commit_cap, sealed_reserve_policy,
+    sealed_reserve_policy_from_env,
 };
 pub use vram_backend::VramBackend;
 

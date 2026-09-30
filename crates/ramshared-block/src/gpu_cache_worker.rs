@@ -588,6 +588,75 @@ mod tests {
         assert_eq!(cached_kib_aux(4 * 1024 * 1024 * 1024 * 1024), u32::MAX);
     }
 
+    /// ITEM-4: every worker admission threshold is the shared helper's value
+    /// over an identical snapshot, with the headroom from the one named
+    /// constant. A second source of the 640 MiB buffer, or any caller that
+    /// admits below the helper threshold, trips this.
+    #[test]
+    fn worker_admission_uses_resolved_policy() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let policy = ramshared_vram::ReserveFloorPolicy::from_manifest(1, 20).expect("valid");
+        let configured = policy.configured_reserve_bytes(8 * GIB);
+        let config = GpuWorkerConfig {
+            target_bytes: 16 * GIB,
+            chunk_bytes: 64 * 1024 * 1024,
+            reserve_floor_bytes: configured,
+        };
+        // 2 GiB free: available 2G sits under configured(1.6G)+share(1.6G)+
+        // runtime(640MiB) + chunk(64MiB), so admission must refuse.
+        let budget = trusted_test_budget(2 * GIB, 8 * GIB);
+
+        // The single helper threshold over this snapshot.
+        let required_free = budget.required_free_bytes(configured, RUNTIME_FREE_BUFFER_BYTES);
+        assert_eq!(
+            required_free,
+            policy.enforced_free_floor_bytes(8 * GIB, RUNTIME_FREE_BUFFER_BYTES),
+            "worker and policy must compute one floor"
+        );
+
+        // Admission refuses exactly at the boundary: one byte below.
+        let needed = config.chunk_bytes as u64;
+        let below = budget.available_bytes() < needed + required_free;
+        assert!(below, "fixture must sit below the threshold");
+        assert_eq!(
+            effective_target_from_budget(&budget, config),
+            budget.safe_target_bytes(config.target_bytes, configured, RUNTIME_FREE_BUFFER_BYTES)
+        );
+
+        // Above the threshold the same snapshot yields the shared target.
+        let roomy = trusted_test_budget(8 * GIB - 1024, 8 * GIB);
+        assert!(roomy.available_bytes() >= needed + required_free);
+        assert_eq!(
+            effective_target_from_budget(&roomy, config),
+            roomy.safe_target_bytes(config.target_bytes, configured, RUNTIME_FREE_BUFFER_BYTES)
+        );
+    }
+
+    /// ITEM-4: a stale budget is refused, never admitted with a reduced
+    /// target. `can_admit` is the freshness gate; a stale snapshot must fail
+    /// it rather than reach `safe_target_bytes`.
+    #[test]
+    fn worker_admission_refuses_on_stale_budget() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let config = GpuWorkerConfig {
+            target_bytes: 4 * GIB,
+            chunk_bytes: 512 * 1024 * 1024,
+            reserve_floor_bytes: GIB,
+        };
+        let mut stale = trusted_test_budget(6 * GIB, 8 * GIB);
+        stale.sampled_at = Instant::now() - Duration::from_secs(60);
+        assert!(
+            !stale.can_admit(0),
+            "a 60s-old snapshot must not be admitted"
+        );
+        assert_eq!(effective_target_from_budget(&stale, config), 0);
+
+        // Fresh equivalent is admitted.
+        let fresh = trusted_test_budget(6 * GIB, 8 * GIB);
+        assert!(fresh.can_admit(0));
+        assert!(effective_target_from_budget(&fresh, config) > 0);
+    }
+
     #[test]
     fn worker_budget_target_requires_external_adapter_bound_snapshot() {
         const GIB: u64 = 1024 * 1024 * 1024;

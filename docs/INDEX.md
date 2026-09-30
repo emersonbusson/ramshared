@@ -26,6 +26,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
 | [`elastic-vram-cooperative-tier`](specs/no-milestone/elastic-vram-cooperative-tier/) | Elastic cooperative VRAM tiering, dynamic host borrowing, and non-blocking SSD spillover | — | — | UNQUALIFIED | — |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED | — |
+| [`gpu-reserve-floor-authority`](specs/no-milestone/gpu-reserve-floor-authority/) | Single authoritative GPU reserve floor for shared-host VRAM admission | — | — | UNQUALIFIED | — |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD | — |
 | [`kernel-pci-bar-capacity-contract`](specs/no-milestone/kernel-pci-bar-capacity-contract/) | Exact PCI BAR capacity contract for the RamShared block driver | — | — | UNQUALIFIED | — |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD | — |
