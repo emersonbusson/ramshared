@@ -137,17 +137,26 @@ cargo fmt --package ramshared-winsvc --package ramshared-cuda -- --check
   PASS
 ```
 
-Rust slice coverage:
+Rust slice coverage (re-measured 2026-09-30, metric `lines`, threshold 80%):
 
-| Slice | Coverage |
-| --- | ---: |
-| broker tenant | 85.9% |
-| config | 95.5% |
-| driver link | 87.7% |
-| evidence | 91.9% |
-| runtime | 86.8% |
-| service | 84.9% |
-| CUDA probe | 80.0% |
+| Slice | Lines | Coverage |
+| --- | ---: | ---: |
+| `broker_tenant.rs` | 127 / 143 | **88.8%** |
+| `config.rs` | 152 / 159 | **95.6%** |
+| `driver_link.rs` | 334 / 371 | **90.0%** |
+| `evidence.rs` | 150 / 156 | **96.2%** |
+| `host_safety.rs` | 60 / 61 | **98.4%** |
+| `runtime.rs` | 286 / 332 | **86.1%** |
+| `service.rs` | 151 / 176 | **85.8%** |
+| CUDA probe | — | 80.0% (separate `cuda-probe-planning-coverage` entry) |
+
+**Coverage gate PASSED** for every `windows-storport-cuda-vram` slice. The 2026-09-30
+re-measurement closes two previously failing files: `broker_tenant.rs` 78.3% → 88.8%
+after four named tests (`error_display_names_every_variant`,
+`register_refuses_protocol_error_and_eof`, `release_already_sent_reflects_release_state`,
+`release_without_lease_is_noop`), and `service.rs` 65.9% → 85.8% after Day-0 removal of
+the zero-caller `#[deprecated] pub fn teardown` wrapper and the unreachable `SimpleGates`
+`PagefileGates` adapter (denominator 229 → 176 lines). Suite: **216 passed / 0 failed**.
 
 PowerShell parser validation passes for `Run-GuestExhaustive.ps1` and
 `Invoke-WinDriveIoctlValidation.ps1` under Windows PowerShell 5.1.

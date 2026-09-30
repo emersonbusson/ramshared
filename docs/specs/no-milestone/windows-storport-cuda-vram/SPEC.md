@@ -487,12 +487,12 @@ This SPEC is the single pure-line owner for the shared storage-product
 storport-specific modules. Later product SPECs may require extra named tests on
 those shared sources as evidence without creating a second coverage owner.
 
-- [x] `cargo fmt --all -- --check`
-- [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
-- [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
+- [x] `cargo fmt --all -- --check` (2026-09-30: clean for `ramshared-winsvc`)
+- [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings` (2026-09-30: clean for `ramshared-winsvc`)
+- [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc` (2026-09-30: `ramshared-winsvc` **216 passed / 0 failed**)
 - [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
 - [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
-  (also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
+  (2026-09-30: all seven slices ≥85.8% — gate **PASSED**; also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
 - [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.
 - [x] WDK Release x64 build with `/W4 /WX /wd4324 /Z7` (canonical `Build-Drivers.ps1`; UNC `/Zi`
