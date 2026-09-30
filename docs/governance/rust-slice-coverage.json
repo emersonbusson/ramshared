@@ -1422,6 +1422,30 @@
         "crates/ramshared-cuda/src/nvml.rs"
       ],
       "min": 80
+    },
+    {
+      "id": "memory-broker-host-agent-entry",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-agent",
+        "--files",
+        "crates/ramshared-agent/src/bin/ramshared_host_agent.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/memory-broker-host-agent-cov.json"
+      ],
+      "packages": [
+        "ramshared-agent"
+      ],
+      "files": [
+        "crates/ramshared-agent/src/bin/ramshared_host_agent.rs"
+      ],
+      "min": 80
     }
   ]
 }

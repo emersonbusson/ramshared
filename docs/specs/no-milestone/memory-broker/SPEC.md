@@ -252,6 +252,39 @@
 
 ### ITEM-17 — `crates/ramshared-agent/src/bin/ramshared_host_agent.rs`
 - Windows Agent entry point executing `WinDccRole` and local bindings.
+- The bin is a business surface, not untested wiring: it owns argument parsing,
+  the broker register handshake, the local JSON-lines bridge, and the accept
+  loop. `serve` takes the accept stream as an iterator so that lifecycle is
+  unit-testable without a live listener; `main` stays thin wiring over it.
+- `#![forbid(unsafe_code)]` stays in force.
+
+| Named test | Covers |
+| --- | --- |
+| `usage_names_every_required_flag` | the usage string names every flag the parser accepts |
+| `parse_args_applies_defaults_and_reads_every_flag` | defaults for `--listen`/`--tenant` and explicit values for all three flags |
+| `parse_args_rejects_missing_broker_unknown_flag_and_truncated_values` | missing `--broker`, unknown flag, and each flag without a value |
+| `parse_args_help_returns_usage_as_the_error` | `-h` and `--help` both return usage as the parse outcome |
+| `connect_broker_registers_and_returns_the_pair` | register handshake succeeds and the returned pair is live |
+| `connect_broker_surfaces_register_refusal_and_close` | a `Msg::Error` refusal is surfaced verbatim; a close without `Registered` is named |
+| `connect_broker_reports_unreachable_broker` | an unreachable broker is a connect error, not a panic |
+| `connect_broker_skips_unexpected_frames_until_registered` | a non-`Registered` frame is skipped rather than treated as the handshake answer |
+| `handle_closes_quietly_on_empty_local_request` | EOF on the local socket ends the request without a broker connection |
+| `handle_forwards_status_and_reports_rebalance` | `LocalMsg::Status` → `Msg::Status` → `LocalReply::Status` with the rebalance evidence line |
+| `handle_forwards_lease_lifecycle_and_ignores_acks` | `LeaseRequest`/`LeaseRelease` forward and map `LeaseGranted`/`LeaseDenied`; an `Ack` is not mistaken for the reply |
+| `handle_reports_broker_error_and_missing_reply` | broker `Msg::Error` becomes `LocalReply::Error`; a close without a reply is named |
+| `handle_skips_unexpected_broker_replies_until_a_known_one` | a reply this bridge does not translate is skipped until a known one arrives |
+| `serve_accepts_ok_streams_logs_accept_errors_and_survives_request_failures` | the accept loop runs `handle` on `Ok`, logs an accept `Err` without ending, and only logs a request failure |
+
+The canonical per-file coverage owner for this bin is:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/bin/ramshared_host_agent.rs --min 80 --report-json tmp/memory-broker-host-agent-cov.json
+```
+
+Measured 2026-09-30: 84.9% lines (107/126). The residual uncovered production
+lines are `main`'s thin wiring (argv collection, bind, the startup log line),
+which unit tests of the bin cannot reach and which the named `serve` tests
+cover one level down.
 
 ### ITEM-18 — `crates/ramshared-agent/src/local.rs`
 - Local DCC/workload listener and JSON-lines codec (`LocalMsg`/`LocalReply`).
