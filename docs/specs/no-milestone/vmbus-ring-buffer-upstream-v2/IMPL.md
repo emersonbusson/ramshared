@@ -132,16 +132,26 @@ qualification.
    (15/15 KUnit), and x86_64 KUnit 20/20 named cases, with both CoCo gate
    self-tests green. Hosted run 36574925363 covered the predecessor
    seven-patch bytes and is not evidence for this candidate. The order-zero
-   fallback test exercises injected allocation failures. These hosted tests do
-   not simulate live allocator fragmentation or host response/rescind
-   interleaving. Arm64 KUnit is skipped.
+   fallback test exercises injected allocation failures. Live allocator
+   fragmentation and host response/rescind interleaving are runtime questions
+   and are being closed by the Hyper-V drill pipeline (see **Next gate**).
+   Order-zero fallback of the **chunked** allocator is not a runtime-drill
+   question at all: `vmbus_alloc_buffer()` only takes that path when
+   `vmbus_uses_shared_page_chunks()` is true (host-visible buffer and
+   Hyper-V isolation or `CONFIG_ARM64`), and it allocates with
+   `__GFP_NORETRY | __GFP_NOWARN`, so an order-7 failure prints nothing. Its
+   runtime proof is the CoCo platform gate, the same as SEV-SNP/TDX/Arm CCA.
+   Arm64 KUnit is skipped.
 2. An earlier four-commit v7.3-rc4 snapshot was linked and booted on ordinary
    x86_64 Hyper-V. This does not qualify the current six-patch v2 series, the
    separate WSL backport, or a CoCo platform.
 3. Normal GPADL create/teardown succeeded on that earlier snapshot. Current
    KUnit injects outgoing header/body/teardown post failures and tests
-   response-state mapping, but live host response/error delivery and rescind
-   interleavings remain untested.
+   response-state mapping. Live host response/error delivery and rescind
+   interleavings remain untested; the first runtime drill (EVD-0133, run
+   36777284600) could not exercise them because the UIO dynid was written
+   brace-wrapped and `guid_parse()` rejected it — 30 cycles, 30 `bind_fail`,
+   BUG-3 never reached. Fixed and re-running.
 4. Ordinary Hyper-V UIO and sysfs ring mmap passed on the earlier snapshot.
    The current KUnit mapping-preparation tests do not exercise a real
    mmap-close/unregister lifecycle. CoCo memory-state tests for SEV-SNP, TDX,
@@ -349,29 +359,62 @@ attributed to this candidate.
 
 ## Next gate
 
-Exercise real host response/rescind interleavings, an actual UIO mmap-close
-and unregister lifecycle, and order-zero fallback under live fragmentation.
-These three are no longer blocked on hardware: `EVD-0131` (run 36767912983)
-measures that a hosted Windows runner boots a disposable WSL2 guest with 30
-real VMBus devices, and `EVD-0132` (run 36768828972) measures that the same
-runners define and run an arbitrary Gen2 Hyper-V VM with no reboot.
+Two of the three remaining runtime questions are exercisable in Actions. The
+third is not, and the reason is structural rather than a drill bug.
 
-The pipeline that converts that measurement into qualification now exists in
-the contribution tree at
-`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`, driven by
-`.github/workflows/hyperv-runtime-drill.yml`. It builds a self-booting
-mainline `bzImage` (`CONFIG_EFI_STUB` + embedded initramfs + forced cmdline),
-boots it as a Gen2 guest on a hosted runner, streams the COM1 named pipe, and
+**Exercisable here (ordinary x86_64 Hyper-V guest):**
+
+- live GPADL create/teardown and response/rescind interleaving;
+- the UIO mmap-close / unregister lifecycle, including the BUG-3
+  hold-in-mmap window;
+- that ring allocation survives real buddy fragmentation — the historical
+  `accept4 110` claim on ordinary guests.
+
+`EVD-0131` (run 36767912983) measured that a hosted Windows runner boots a
+disposable WSL2 guest with 30 real VMBus devices, and `EVD-0132` (run
+36768828972) measured that the same runners define and run an arbitrary Gen2
+Hyper-V VM with no reboot. The pipeline that turns that into qualification
+lives at `Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`,
+driven by `.github/workflows/hyperv-runtime-drill.yml`. It builds a
+self-booting mainline `bzImage` (`CONFIG_EFI_STUB` + embedded initramfs +
+forced cmdline), boots it as a Gen2 guest, streams the COM1 named pipe, and
 runs `vmbus-lifecycle-drill.sh` and `vmbus-fragmentation-drill.sh` against
 those exact bytes. The guest is disposable, which is exactly the host-safety
 contract those scripts require; they must not run on the daily WSL2 host.
 
-What remains is not construction but **measurement**: the drills must run to
-completion on the pinned six-patch bytes and the result must be recorded as
-evidence. A drill that reports `FAIL` is a real candidate failure. A drill
-that reports `INCONCLUSIVE` — order-7 never actually failed — is a partial
-result and must be recorded as partial, not as a pass. KUnit fault injection
-is not a substitute for either.
+**Not exercisable here: order-zero fallback of the chunked allocator.**
+`vmbus_alloc_buffer()` only takes its physically-contiguous-chunk path when
+`vmbus_uses_shared_page_chunks()` is true — host-visible buffer **and**
+(Hyper-V isolation **or** `CONFIG_ARM64`). A hosted x86_64 runner is
+neither, so every ring allocation there is `vzalloc()` and the chunked
+order-N → order-0 degrade never runs. It would not be visible either: that
+path allocates with `__GFP_NORETRY | __GFP_NOWARN`, so an order-7 failure
+prints nothing. The fallback is already covered by named KUnit cases with
+fault injection; its runtime proof is the same gate as CoCo and lives with
+the SEV-SNP / TDX / Arm CCA qualification below. Do not treat a green drill
+job as evidence for it.
+
+**Measurement status — EVD-0133 (run 36777284600, fork `f831c80e0a2b`):**
+harness green on both runners. The candidate booted as a real Gen2 guest
+(`7.3.0-rc4+`, 14 VMBus devices, candidate symbols present) with **map
+balance exact across 30 hv_netvsc rebind cycles** (12 maps / 20 279 296
+bytes / 4 939 pages before and after), zero splats, zero faults, and channel
+open under 1 464 MiB pressure. **Neither stress path executed.** All 30
+cycles printed `bind_fail` — the dynid GUID was written brace-wrapped and
+`guid_parse()` rejects it, so `uio_hv_generic` (whose `id_table` is `NULL,
+only dynamic id's`) never bound and BUG-3 hold-in-mmap never ran — and the
+buddy still held 120 order-10 blocks after the hog, so order-7 never had a
+reason to fail. Both defects are fixed; the re-run is what closes the
+GPADL/UIO half.
+
+Scoring rules for the re-run, and for any future run: a drill that reports
+`FAIL` is a real candidate failure. `INCONCLUSIVE` — pressure did not remove
+the order-7 supply — is green for the job and `PARTIAL` for the gate.
+`PARTIAL` from init means one drill ran and the other did not. A green job
+is never by itself a gate closure; the `VERDICT_SCOPE` line names what was
+actually proven and must travel with any citation. KUnit fault injection is
+not a substitute for runtime evidence, and runtime evidence on an ordinary
+guest is not a substitute for CoCo.
 
 Obtain a suitable platform/lab for SEV-SNP, TDX, and Arm CCA memory-state
 tests — Azure Confidential VMs are the no-silicon route
