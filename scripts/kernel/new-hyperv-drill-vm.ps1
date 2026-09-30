@@ -248,23 +248,38 @@ $readerScript = {
   }
   Add-Content -Path $logPath -Value 'DRILL-VM console_connect=ok'
 
-  $pipe.ReadTimeout = 5000
+  # NamedPipeClientStream.ReadTimeout is not supported on every .NET this
+  # harness runs on — the property setter throws "Timeouts are not supported
+  # on this stream" and, with the default ErrorActionPreference, that error
+  # becomes the job's whole output while a subsequent blocking Read parks the
+  # loop until the outer Wait-Job kills it. Do not depend on the property.
+  # ReadAsync + Wait(1000) gives a real deadline on every runtime and still
+  # keeps a quiet guest from stalling the reader.
   $buf = New-Object byte[] 4096
   $pending = ''
   $seenDone = $false
+  $readTask = $pipe.ReadAsync($buf, 0, $buf.Length)
 
   while ([DateTime]::UtcNow -lt $deadline -and -not $seenDone) {
     try {
-      $n = $pipe.Read($buf, 0, $buf.Length)
+      if (-not $readTask.Wait(1000)) { continue }
+      $n = $readTask.Result
       if ($n -le 0) { break }
       $chunk = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
       $pending += $chunk
       Add-Content -Path $logPath -Value $chunk -NoNewline
-      if ($pending -match 'HYPERV_DRILL_DONE') { $seenDone = $true }
+      if ($pending -match 'HYPERV_DRILL_DONE') {
+        $seenDone = $true
+      }
+      else {
+        $readTask = $pipe.ReadAsync($buf, 0, $buf.Length)
+      }
     }
     catch {
-      # ReadTimeout keeps the loop alive while the guest is quiet.
-      if ($_.Exception -isnot [System.IO.IOException]) { throw }
+      # A faulted read is the pipe closing under us. Record it and stop;
+      # rethrowing here would lose everything already written to the log.
+      Add-Content -Path $logPath -Value ("`nDRILL-VM console_read=error " + $_.Exception.Message)
+      break
     }
   }
 
@@ -385,9 +400,15 @@ catch {
 Write-Host '---- drill-vm report ----'
 Get-Content $script:report | Write-Host
 
-if ($verdict -eq 'PASS') {
+# PASS and PARTIAL both mean the measurement ran. PARTIAL is green for the job
+# and PARTIAL for the gate -- it is the honest "drill executed, gate not closed"
+# outcome and must not be confused with a failure to measure. FAIL and
+# NO_RESULT redden: either the candidate was damaged or we never got a verdict.
+if ($verdict -eq 'PASS' -or $verdict -eq 'PARTIAL') {
   Note exit_code 0
+  Note verdict $verdict
   exit 0
 }
 Note exit_code 1
+Note verdict $verdict
 exit 1
