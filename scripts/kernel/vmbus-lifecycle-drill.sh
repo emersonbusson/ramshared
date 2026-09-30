@@ -51,15 +51,25 @@ vmbus_maps() {
 		echo "MAPS unreadable (need root / CONFIG_PROC_PAGE_MONITOR)" | tee -a "$LOG"
 		return 1
 	fi
+	# /proc/vmallocinfo line shape:
+	#   0xffff....-0xffff....  61440 vmbus_alloc_buffer+0x... pages=14 vmalloc
+	#   $1 = virtual range (never logged), $2 = size in bytes, pages= is the
+	#   backing page count. Size is taken from field 2 directly: parsing the
+	#   range as if it were field 2 produced negative totals and would have
+	#   reported garbage inside the guest.
 	awk '
 		/vmbus_alloc_buffer/ {
 			n++
-			# area field is field 2, e.g. "0xffff....-0xffff...."
-			split($2, a, "-")
-			total += (strtonum(a[2]) - strtonum(a[1]))
+			total += $2
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^pages=/) {
+					split($i, p, "=")
+					pages += p[2]
+				}
+			}
 		}
 		END {
-			printf "MAPS count=%d bytes=%d\n", n, total
+			printf "MAPS count=%d bytes=%d pages=%d\n", n, total, pages
 		}
 	' /proc/vmallocinfo
 }

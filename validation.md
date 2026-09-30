@@ -9646,11 +9646,34 @@ identity claims. No code, config, kernel, or host state was changed.
 upstream send remains blocked on the eight open items above. No runtime or
 CoCo claim is made by this entry.
 
+**What:** Read-only audit of the Hyper-V/VMBus upstream contribution against
+the 2026-09-22 review of the unversioned v1 send, a live check of the
+installed kernel `#9`, and a documentation-only reconciliation of stale host
+identity claims. No code, config, kernel, or host state was changed.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0124`.
+**Owner role:** `kernel-coder`.
+**Observed at:** `2026-09-30T16:13:00Z`.
+**Verified at:** `2026-09-30T16:21:51Z`.
+**Source revision:** `1a3b72e0e88a2697829455edd9c80847165ce662`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep while the VMBus v2 series remains an unsent draft.
+**Freshness:** Re-run the live host check after any kernel install or reboot;
+this entry is a point-in-time audit, not a standing qualification.
+
 ## 2026-09-30 14:22 -03 — contribution fork slimmed and internal dossiers relocated
 
 **Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0125`.
 **Owner role:** `kernel-coder`.
 **Observed at:** `2026-09-30T17:22:00Z`.
+**Verified at:** `2026-09-30T16:48:53Z`.
+**Source revision:** `ce217c15350b8982d7676ac4861cf35d40099f78`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep while the public contribution fork is maintained.
+**Freshness:** Re-verify `git ls-files` and the workflow path references after
+any further fork sync.
 **Category:** `governance`.
 **What:** The public kernel contribution fork `emersonbusson/WSL2-Linux-Kernel`
 carried RamShared internal process documents inside Linux kernel documentation
@@ -9697,3 +9720,142 @@ host (`EVD-0056`: Ryzen 5 3600, Zen 2, no SEV-SNP, no TDX, no Arm).
 **Verdict:** 🟡 `PARTIAL` — documentation and contribution-fork hygiene are
 DONE and merged; runtime qualification, the sealed kernel/modules pair, and
 CoCo evidence remain open, so the v2 series is still an unsent draft.
+
+## 2026-09-30 14:02 — ITEM-4 worker-cache telemetry envelope
+
+**What:** SSDV3 Step 3 close-out of `cuda-rust-native-tiering` ITEM-4.
+Implemented the versioned worker-cache telemetry envelope
+(`WorkerTelemetryEnvelope`, schema version 1) within the existing 4 KiB
+payload limit, kept physical `cached_bytes`/`target_bytes` in the frame
+header, added typed codec fault counters, and labelled logical cache
+occupancy separately from RAM in the monitor. Ran the full test suite, clippy
+with `-D warnings`, and the per-file coverage gate. The tree was **dirty** at
+observation time: the ITEM-4 slice under test is the uncommitted working-tree
+diff on the source revision below.
+
+**Verdict:** 🟡 PARTIAL — ITEM-4 is **done** (code, named tests, cover gate,
+labels). The overall spec stays partial because ITEM-3 is gated on the absent
+nvCOMP runtime and ITEM-5 has no real paired GPU runs. No hardware number is
+claimed here.
+
+**Category:** ci-gate
+
+**Measured data:** `cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli` → **1003 passed / 0 failed / 19 ignored** (hardware-gated). `cargo clippy --all-targets -p ramshared-vram -p ramshared-block -p ramshared-cli -- -D warnings` → **0 errors, 0 warnings**. `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram,ramshared-block,ramshared-cli --min 80` → **PASSED**; `compressed_cache.rs` 89.9% (222/247), `gpu_cache_worker.rs` 80.1% (672/839), `ipc_cache_client.rs` 84.0% (305/363), `monitor.rs` 84.6% (2171/2566), `codec.rs` 90.1% (317/352), `worker_telemetry.rs` 86.7% (52/60). Envelope ceiling 4096 bytes; refusal reason bounded at 64 bytes; telemetry max age 5000 ms. All six SPEC-named ITEM-4 tests green, plus `heartbeat_telemetry_truncation_fails_closed` and `heartbeat_mismatched_correlation_fails_closed`.
+
+**How to measure:** `CARGO_BUILD_JOBS=1 cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli` then `CARGO_BUILD_JOBS=1 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram,ramshared-block,ramshared-cli --files crates/ramshared-vram/src/codec.rs,crates/ramshared-vram/src/worker_telemetry.rs,crates/ramshared-block/src/compressed_cache.rs,crates/ramshared-block/src/gpu_cache_worker.rs,crates/ramshared-block/src/ipc_cache_client.rs,crates/ramshared-cli/src/monitor.rs --min 80`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0126`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T17:02:15Z`.
+**Verified at:** `2026-09-30T17:02:15Z`.
+**Source revision:** `ce217c15350b8982d7676ac4861cf35d40099f78`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until ITEM-5 paired-run gates are recorded or the codec path is sunset under DT-9, whichever comes first.
+**Freshness:** Re-run the commands above after any change to `worker_telemetry.rs`, `gpu_cache_worker.rs`, `ipc_cache_client.rs`, `isolated_origin.rs`, or the monitor telemetry labels. This entry is not a hardware result and must not be used as one.
+
+## 2026-09-30 14:07 -03 — upstream v2 readiness: map re-measurement on #9, checkpatch gate, and phantom-blocker closure
+
+**What:** Read-only readiness checkpoint on the VMBus ring-buffer upstream v2
+series: a single-sample live map accounting of `vmbus_alloc_buffer` on kernel
+`#9`, a fault scan of the same boot, a local reproduction of the seven-patch
+checkpatch gate, a drill-harness field-parse fix, and the closure of two purely
+documentary phantom blockers in `GAP-REGISTER.md`. The tree was **dirty** at
+observation time: `GAP-REGISTER.md`, `scripts/kernel/vmbus-lifecycle-drill.sh`
+and this entry were the uncommitted working-tree diff on the source revision
+below. Contribution fork at `af11c5e7a9379bdcea3503a5d7b4d1706eb5723e`.
+No bind/unbind, no memory pressure, no swap activation, and no RamShared
+lifecycle change were performed; the daily WSL2 host is not a drill surface.
+
+**Live map accounting on kernel #9 (closes the "not re-measured" gap).**
+A single read-only sample of `/proc/vmallocinfo` on `6.18.40.1-microsoft-standard-WSL2+`
+build `#9` (`kernel-ramshared-v6`, SHA-256 `24ac8916…be8b2a`, receipt source
+`a5cedb4de6f8`) counts **110–112 live `vmbus_alloc_buffer` maps**, **57.14–60.77 MiB**
+of vmalloc area, and **14,725 backing pages**, across **97 VMBus devices**.
+Size distribution: 2×36864, 4×45056, 25×61440, 3×266240, 60×430080,
+2×528384, 1×1048576, 12×1052672, 1×16781312 bytes. Backing pages sum to
+60,313,600 bytes against a 60,772,352-byte vmalloc area, i.e. **1 page of
+vmalloc alignment overhead per map** (112 pages total) — normal behaviour,
+not a retention signature.
+
+This is **steady state, not the EVD-0091 runaway**: that record reached
+24,932 maps / ~7.2 GiB growing at ~44 MiB/min under Build #6. The current
+figure is two orders of magnitude lower and shows no growth series. A single
+sample cannot establish allocate/free balance across an open/close cycle, so
+the GPADL retention hypothesis is **neither confirmed nor closed** and still
+requires the isolated-guest lifecycle drill
+(`vmbus-lifecycle-drill.sh`, `vmbus_channel_lifecycle_buffer_balance`).
+
+`/proc/vmallocinfo` is mode 0400 root:root; unprivileged reads are denied.
+The accounting above required `sudo`. No kernel virtual address is recorded
+here or in the drill scripts (NFR-3 / `security.md` info-leak rule).
+
+**Fault scan on the same boot.** `kernel_oops_bug=0`, `kernel_warning_at=0`,
+`hung_task=0`, `page_alloc_fail=0`, `accept4_fail=0`, `gpadl_leak=0`,
+`call_trace=0`. A naive `grep 'WARNING:'` returns 1; that single hit is the
+SRSO mitigation banner (`Speculative Return Stack Overflow: WARNING: See
+.../srso.html`) printed at boot under `CONFIG_MITIGATION_SRSO`, not a kernel
+warning. Any future scan must exclude mitigation banners or it will report a
+false fault.
+
+**CI checkpatch gate reproduced locally, 7/7 clean.** Against mainline base
+`93f51579e7df` (Linux 7.3-rc4) in a throwaway worktree, the seven series
+patches apply in order, `git diff --check` is clean at every stage, and
+cumulative `scripts/checkpatch.pl --strict --no-tree` reports
+`total: 0 errors, 0 warnings, 0 checks` at stages 1–7 (677 / 879 / 952 /
+952 / 1282 / 1381 / 2657 lines checked). The five `EXPORT_SYMBOL_GPL`
+symbols the workflow asserts are present in `drivers/hv/channel.c` and
+declared in `include/linux/hyperv.h`. Running checkpatch directly on the
+*mail* files reports trailing whitespace; those are blank unified-diff
+context lines and are the documented false positive. The workflow's
+cumulative-source-diff invocation is the authoritative gate and is clean.
+Contribution-fork commit `af11c5e7` adds the missing mail header to
+`series/0007-gpadl-lifetime-reclaim.patch` and regenerates
+`vmbus-ring-buffer-v2.patch` from the seven files (7 Subjects, 19 diffs).
+
+**Defect found and fixed in the drill harness.** `vmbus-lifecycle-drill.sh`
+parsed `/proc/vmallocinfo` field 2 as a virtual-address range (`split($2, a,
+"-")`) and would have reported negative byte totals inside the guest. Field 1
+is the range and field 2 is the size in bytes. The helper now sums field 2
+and the `pages=` attribute, and reports `MAPS count= bytes= pages=`. Both
+drill guards still refuse this host with exit 2.
+
+**Phantom blockers closed in `GAP-REGISTER.md`.** The VMBus ring-fallback row
+claimed Build #9 map counts "have not been re-measured"; replaced with the
+measurement above. Two Build #6-era sentences ("remain unresolved", "the
+same ... gap remain") that read as current state are now explicitly dated to
+EVD-0098 / EVD-0099 and point at the current section. The 2026-09-28
+evidence block is renamed from "Latest Evidence" to "Evidence archive" so
+exactly one section carries that title.
+
+**Verdict:** 🟡 PARTIAL — the two gaps that were purely documentary (Build #9
+map re-measurement, patch mail hygiene) are closed. Live GPADL
+response/rescind interleaving, UIO mmap close/unregister, forced order-zero
+fallback under real fragmentation, BUG-2/3/9 runtime reproducers, and DXG
+>4 GiB remain open on the isolated-guest drills. CoCo (SEV-SNP / TDX-no-
+paravisor / Arm CCA) remains a hard external hardware block
+(`COCO-GAP.md`): the Ryzen 5 3600 host cannot supply any of those modes.
+
+**Category:** kernel-runtime-observation
+
+**Measured data:** `sudo awk '/vmbus_alloc_buffer/{n++; t+=$2; ...}' /proc/vmallocinfo`
+→ `MAPS count=112 bytes=60772352 pages=14725` (and 110 / 59912192 on the
+prior sample minutes earlier; the delta is live device churn). Checkpatch
+cumulative totals at stages 1–7: `0 errors, 0 warnings, 0 checks`.
+
+**How to measure:** `sudo awk '/vmbus_alloc_buffer/{n++; t+=$2; for(i=1;i<=NF;i++) if($i~/^pages=/){split($i,p,"="); pages+=p[2]}} END{printf "MAPS count=%d bytes=%d pages=%d\n", n, t, pages}' /proc/vmallocinfo`
+— read-only, safe on the daily host. The checkpatch gate is reproduced by
+creating a detached worktree at `93f51579e7df`, applying
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series/000[1-7]-*.patch`
+in order, and piping `git diff --no-ext-diff --no-color` into
+`scripts/checkpatch.pl --strict --no-tree` after each patch.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0127`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T17:07:30Z`.
+**Verified at:** `2026-09-30T17:07:30Z`.
+**Source revision:** `ce217c15350b8982d7676ac4861cf35d40099f78`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the isolated-guest lifecycle drill reports `vmbus_channel_lifecycle_buffer_balance` on the exact seven-patch candidate, or until the series is withdrawn. The map counts are a single-sample steady-state observation and must not be cited as allocate/free balance.
+**Freshness:** Re-run the map command after any kernel install, reboot, or VMBus device topology change. Re-run the checkpatch gate after any edit to `series/*.patch`. If map counts ever exceed ~1,000 without a matching channel inventory, treat that as a regression alarm and open a gate rather than extending this entry.
