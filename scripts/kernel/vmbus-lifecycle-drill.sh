@@ -17,11 +17,17 @@
 #
 # usage: vmbus-lifecycle-drill.sh [cycles] [logfile]
 #   cycles  default 100 (SPEC vmbus_channel_lifecycle_buffer_balance)
+#
+# Depends on vmbus_drill_helper (static, see hyperv-drill-initramfs/) for the
+# mmap-hold primitive. The guest has no CPython and this is a Day-0
+# dependency, not a shim.
 set -euo pipefail
 
 CYCLES="${1:-100}"
 LOG="${2:-/var/tmp/vmbus-lifecycle-drill.log}"
 : >"$LOG"
+
+HELPER="${HELPER:-$(command -v vmbus_drill_helper || true)}"
 
 # --- guards: refuse to run on the daily WSL2 host -----------------------------
 guard() {
@@ -85,7 +91,30 @@ say "$BASE_MAPS"
 dmesg 2>/dev/null | tail -5 >>"$LOG"
 
 # --- synthetic NIC rebind setup ---------------------------------------------
-NIC="${NIC:-abcb345e-c024-4e15-ae8f-96f3d210cd74}"
+# The instance id is host-assigned and differs on every VM. Discover it from
+# the hv_netvsc binding instead of hardcoding a GUID that only held on one lab
+# machine.
+discover_nic() {
+	local d n
+	for d in /sys/bus/vmbus/drivers/hv_netvsc/*; do
+		[ -e "$d" ] || continue
+		n="$(basename "$d")"
+		case "$n" in
+		bind | unbind | uevent | module | new_id | remove_id) continue ;;
+		esac
+		[ -d "$d" ] || continue
+		printf '%s\n' "$n"
+		return 0
+	done
+	return 1
+}
+
+NIC="${NIC:-$(discover_nic || true)}"
+if [ -z "${NIC:-}" ]; then
+	say "REFUSE: no synthetic NIC bound to hv_netvsc; cannot force ring realloc"
+	exit 2
+fi
+say "NIC=$NIC (discovered from hv_netvsc binding)"
 CLS='{f8615163-df3e-46c5-913f-f2d2f965ed0e}'
 DRIVER_DIR="/sys/bus/vmbus/drivers"
 
@@ -130,53 +159,29 @@ for u in /sys/class/uio/uio*; do
 	say "UIO $(basename "$u") name=$(cat "$u/name" 2>/dev/null) maps=$(ls "$u/maps" 2>/dev/null | tr '\n' ' ')"
 done
 
-if [ -n "$UIO_DEV" ] && [ -e "$UIO_DEV" ]; then
+if [ -n "$UIO_DEV" ] && [ -e "$UIO_DEV" ] && [ -n "$HELPER" ]; then
 	say "PHASE2 mmap all maps of $UIO_DEV"
-	python3 - "$UIO_DEV" <<'PY' 2>>"$LOG" || say "PHASE2 mmap helper failed"
-import mmap, os, sys, time
-dev = sys.argv[1]
-fd = os.open(dev, os.O_RDONLY)
-maps = []
-try:
-    for i in range(8):
-        try:
-            # UIO map i: offset i * pagesize, read until failure
-            m = mmap.mmap(fd, 4096, offset=i * 4096)
-            maps.append(m)
-        except Exception:
-            break
-    print(f"PHASE2 mapped={len(maps)}")
-    # hold-in-mmap: keep mappings alive while the caller tears the channel down
-    # (BUG-3: sysfs ring mmap vs ring release). The unbind below races this hold.
-    open("/tmp/.uio_hold", "w").write(str(os.getpid()))
-    time.sleep(3)
-finally:
-    for m in maps:
-        m.close()
-    os.close(fd)
-    print("PHASE2 released")
-PY
+	# UIO map N lives at offset N * pagesize. Hold 3s so the unbind below
+	# races the mapping on purpose: that is the BUG-3 window (sysfs ring
+	# mmap versus ring release).
+	"$HELPER" mmap-hold "$UIO_DEV" 4096 3 8 2>>"$LOG" | tee -a "$LOG" ||
+		say "PHASE2 mmap helper failed"
 else
-	say "PHASE2 no UIO device appeared; skipping mmap"
+	say "PHASE2 no UIO device or no vmbus_drill_helper; skipping mmap"
 fi
 
 RING="$(find /sys/devices -path "*$NIC*" -name 'ring' 2>/dev/null | head -1 || true)"
 if [ -n "$RING" ]; then
 	say "PHASE2 sysfs ring present: ${RING#/sys}"
 	say "PHASE2 ring mmap attempt"
-	python3 - "$RING" <<'PY' 2>>"$LOG" || say "PHASE2 ring mmap failed"
-import mmap, os, sys, time
-path = sys.argv[1]
-fd = os.open(path, os.O_RDONLY)
-try:
-    m = mmap.mmap(fd, 4 * 1024 * 1024)
-    print("PHASE2 ring mapped 4MiB")
-    time.sleep(2)   # hold while restore/unbind frees the ring
-    m.close()
-    print("PHASE2 ring released")
-finally:
-    os.close(fd)
-PY
+	if [ -n "$HELPER" ]; then
+		# Hold 2s so restore/unbind frees the ring while the mapping is
+		# still alive.
+		"$HELPER" mmap-hold "$RING" 4194304 2 1 2>>"$LOG" | tee -a "$LOG" ||
+			say "PHASE2 ring mmap failed"
+	else
+		say "PHASE2 no vmbus_drill_helper; skipping ring mmap"
+	fi
 else
 	say "PHASE2 no sysfs ring found"
 fi

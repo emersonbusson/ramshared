@@ -1,10 +1,33 @@
 #!/usr/bin/env bash
 # Bounded UIO ring-mmap exercise with forced hv_netvsc restore.
 set -u
-NIC="${1:-abcb345e-c024-4e15-ae8f-96f3d210cd74}"
+
+# The instance id is host-assigned and differs on every VM. Discover it from
+# the hv_netvsc binding; the first argument is an override only.
+discover_nic() {
+	local d n
+	for d in /sys/bus/vmbus/drivers/hv_netvsc/*; do
+		[ -e "$d" ] || continue
+		n="$(basename "$d")"
+		case "$n" in
+		bind | unbind | uevent | module | new_id | remove_id) continue ;;
+		esac
+		[ -d "$d" ] || continue
+		printf '%s\n' "$n"
+		return 0
+	done
+	return 1
+}
+
+NIC="${1:-$(discover_nic || true)}"
+if [ -z "${NIC:-}" ]; then
+	echo "REFUSE: no synthetic NIC bound to hv_netvsc" >&2
+	exit 2
+fi
 CLS='{f8615163-df3e-46c5-913f-f2d2f965ed0e}'
 LOG="${2:-/var/tmp/uio-ring-exercise.log}"
 : >"$LOG"
+echo "NIC=$NIC (discovered from hv_netvsc binding)" | tee -a "$LOG"
 
 restore() {
   echo "RESTORE begin" | tee -a "$LOG"

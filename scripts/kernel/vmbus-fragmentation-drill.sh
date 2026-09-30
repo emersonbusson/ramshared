@@ -15,10 +15,16 @@
 #
 # usage: vmbus-fragmentation-drill.sh [hog_mib] [logfile]
 #   hog_mib  default 75% of MemAvailable
+#
+# Depends on vmbus_drill_helper (static, see hyperv-drill-initramfs/) for the
+# mlock-hog primitive. The guest has no CPython and this is a Day-0
+# dependency, not a shim.
 set -euo pipefail
 
 LOG="${2:-/var/tmp/vmbus-fragmentation-drill.log}"
 : >"$LOG"
+
+HELPER="${HELPER:-$(command -v vmbus_drill_helper || true)}"
 
 # --- guards ------------------------------------------------------------------
 guard() {
@@ -67,30 +73,20 @@ buddy
 # --- fragment: pin most of RAM as unmovable-ish high-order eaters ------------
 # mlock'd anonymous pages resist compaction and drain high-order free blocks.
 say "=== HOG ${HOGB} MiB with mlock ==="
-python3 - "$HOGB" <<'PY' 2>>"$LOG" &
-import mmap, os, sys, time, signal
-mib = int(sys.argv[1])
-try:
-    buf = mmap.mmap(-1, mib * 1024 * 1024)
-    # touch every page so it is populated, then lock
-    for i in range(0, mib * 1024 * 1024, 4096):
-        buf[i] = 1
-    import ctypes
-    libc = ctypes.CDLL("libc.so.6")
-    libc.mlock(ctypes.c_void_p(ctypes.addressof(ctypes.c_char.from_buffer(buf))), mib * 1024 * 1024)
-    print(f"HOG locked {mib} MiB", flush=True)
-    open("/tmp/.hog_ready", "w").write("1")
-    time.sleep(600)
-except Exception as e:
-    print(f"HOG fail {e}", flush=True)
-PY
+if [ -z "$HELPER" ]; then
+	say "REFUSE: vmbus_drill_helper not found; cannot fragment without mlock-hog"
+	exit 2
+fi
+# 600s hold: the channel-open exercise and the buddy snapshots below have to
+# finish while the pages are still locked.
+"$HELPER" mlock-hog "$HOGB" 600 >>"$LOG" 2>&1 &
 HOGPID=$!
 
 for _ in $(seq 1 60); do
-	[ -f /tmp/.hog_ready ] && break
+	grep -q 'MLOCK_HOG ready=1' "$LOG" 2>/dev/null && break
 	sleep 1
 done
-if [ ! -f /tmp/.hog_ready ]; then
+if ! grep -q 'MLOCK_HOG ready=1' "$LOG" 2>/dev/null; then
 	say "HOG did not reach ready state"
 fi
 
@@ -99,7 +95,32 @@ buddy
 
 # --- exercise channel open under fragmentation ------------------------------
 say "=== CHANNEL OPEN UNDER FRAGMENTATION ==="
-NIC="${NIC:-abcb345e-c024-4e15-ae8f-96f3d210cd74}"
+
+# The instance id is host-assigned and differs on every VM. Discover it from
+# the hv_netvsc binding.
+discover_nic() {
+	local d n
+	for d in /sys/bus/vmbus/drivers/hv_netvsc/*; do
+		[ -e "$d" ] || continue
+		n="$(basename "$d")"
+		case "$n" in
+		bind | unbind | uevent | module | new_id | remove_id) continue ;;
+		esac
+		[ -d "$d" ] || continue
+		printf '%s\n' "$n"
+		return 0
+	done
+	return 1
+}
+
+NIC="${NIC:-$(discover_nic || true)}"
+if [ -z "${NIC:-}" ]; then
+	say "REFUSE: no synthetic NIC bound to hv_netvsc; cannot force ring realloc"
+	kill "$HOGPID" 2>/dev/null || true
+	wait "$HOGPID" 2>/dev/null || true
+	exit 2
+fi
+say "NIC=$NIC (discovered from hv_netvsc binding)"
 CLS='{f8615163-df3e-46c5-913f-f2d2f965ed0e}'
 DRIVER_DIR="/sys/bus/vmbus/drivers"
 
@@ -137,6 +158,5 @@ buddy
 # --- teardown hog -----------------------------------------------------------
 kill "$HOGPID" 2>/dev/null || true
 wait "$HOGPID" 2>/dev/null || true
-rm -f /tmp/.hog_ready
 say "=== END vmbus-fragmentation-drill ==="
 say "log=$LOG"

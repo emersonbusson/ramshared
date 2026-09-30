@@ -354,12 +354,24 @@ and unregister lifecycle, and order-zero fallback under live fragmentation.
 These three are no longer blocked on hardware: `EVD-0131` (run 36767912983)
 measures that a hosted Windows runner boots a disposable WSL2 guest with 30
 real VMBus devices, and `EVD-0132` (run 36768828972) measures that the same
-runners define and run an arbitrary Gen2 Hyper-V VM with no reboot. Build the
-candidate as a mainline `bzImage` on the Linux job, boot it as that Gen2
-guest, and run `vmbus-lifecycle-drill.sh` and `vmbus-fragmentation-drill.sh`
-against those exact bytes. The guest is disposable, which is exactly the
-host-safety contract those scripts require; they must not run on the daily
-WSL2 host.
+runners define and run an arbitrary Gen2 Hyper-V VM with no reboot.
+
+The pipeline that converts that measurement into qualification now exists in
+the contribution tree at
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`, driven by
+`.github/workflows/hyperv-runtime-drill.yml`. It builds a self-booting
+mainline `bzImage` (`CONFIG_EFI_STUB` + embedded initramfs + forced cmdline),
+boots it as a Gen2 guest on a hosted runner, streams the COM1 named pipe, and
+runs `vmbus-lifecycle-drill.sh` and `vmbus-fragmentation-drill.sh` against
+those exact bytes. The guest is disposable, which is exactly the host-safety
+contract those scripts require; they must not run on the daily WSL2 host.
+
+What remains is not construction but **measurement**: the drills must run to
+completion on the pinned six-patch bytes and the result must be recorded as
+evidence. A drill that reports `FAIL` is a real candidate failure. A drill
+that reports `INCONCLUSIVE` — order-7 never actually failed — is a partial
+result and must be recorded as partial, not as a pass. KUnit fault injection
+is not a substitute for either.
 
 Obtain a suitable platform/lab for SEV-SNP, TDX, and Arm CCA memory-state
 tests — Azure Confidential VMs are the no-silicon route
@@ -368,7 +380,8 @@ running WSL image to an immutable source/modules receipt before attributing
 the prior freeze or promoting the separate backport. Keep the series unsent
 until required runtime gates pass and maintainers review it. A disposable
 ordinary Hyper-V runtime does not qualify the WSL backport or the actual WSL
-host kernel, and a hosted guest is never a confidential guest.
+host kernel, and a hosted guest is never a confidential guest — so no result
+from this drill pipeline closes COCO-1..5.
 
 ## Rollback trigger
 
