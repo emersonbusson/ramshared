@@ -10540,3 +10540,137 @@ with the positives — a reader who sees only `status=PASS` will over-claim.
 this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
 GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
 drops the Hyper-V role from them, this claim is void until re-measured.
+
+## 2026-09-30 20:16 -03 — runtime drill re-run fails on three harness defects (EVD-0134)
+
+**What:** Run
+[36783758959](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36783758959)
+(`Hyper-V runtime drill`, `conclusion=failure`, contribution-fork SHA
+`0d2844870beb`, completed `2026-09-30T22:16:16Z`) re-ran the lifecycle and
+fragmentation drills after the EVD-0133 dynid/class_id fixes. It is
+recorded as **FAIL**, not as a pass and not as a quiet re-run: the new
+failure-visibility scoring did its job and a broken drill no longer looks
+green.
+
+**Question:** After the braced-GUID and silent-skip fixes, do the GPADL/UIO
+lifecycle and fragmentation stress paths execute and measure what they
+claim?
+
+**Answer: no.** The candidate is healthy and three independent **harness**
+defects produced the failure. Each was traced to the kernel source that
+produces the observed behaviour, not guessed.
+
+**What the run does prove — candidate health on real Gen2 Hyper-V:**
+
+| Fact | Value |
+| --- | --- |
+| guest | Gen2 Hyper-V, `memory_mb=2048`, `cpu_count=2` |
+| kernel | `7.3.0-rc4+`, `#1 SMP PREEMPT Wed Sep 30 22:13:31 UTC 2026` |
+| bzImage | 4 178 944 bytes |
+| `esp_bootx64_sha256` | `F39BCC744BB484F626CB030A9F822945ABB9E1C898C2B30FDE5F414F856C1900` |
+| boot | single-file `BOOTX64.EFI`, no reboot, full teardown (`vm_remove=ok`, `vhd_remove=ok`, `drill_switch_remove=ok`) |
+| console | 22 126 bytes |
+| VMBus | `devices=14`, `HYPERV_DRILL_SYMBOLS alloc=4` (`vmbus_alloc_buffer` family present) |
+| NIC | `HYPERV_DRILL_NIC id=7e3993d8-e910-478d-9103-9cdf152e3a37` |
+| map balance over 30 cycles | `BASELINE MAPS count=12 bytes=20279296 pages=4939` == `PHASE1-AFTER` == `PHASE2-AFTER-TEARDOWN` == `FINAL` |
+| UIO probe accounting | `PHASE2-BEFORE-TEARDOWN MAPS count=13 bytes=53915648 pages=13150` → `AFTER-TEARDOWN count=12 bytes=20279296 pages=4939` (the +1 map is the NIC ring plus its send/receive buffers, and it is returned) |
+| damage | `HYPERV_DRILL_SPLATS count=0`, `HYPERV_DRILL_FAULTS count=0`, `FAULTS_NONE` |
+| fragmentation side effects | `RESULT ... accept4_failures=0 oops=0 rebind=yes` |
+
+The exact 12 / 20 279 296 / 4 939 return on every boundary, including after
+the UIO probe released a 33 636 352-byte ring set, is further evidence
+**against** the EVD-0088/0089/0091 retention/runaway hypothesis on this
+candidate. It still does not close that gate: causality to the historical
+freeze was never this measurement's claim.
+
+**The three harness defects** (the reason for the FAIL):
+
+1. **`bind_fail` × 30 was `-EBUSY` from a redundant bind, not a failed
+   attach.** `new_id_store()` → `vmbus_add_dynid()` ends in
+   `driver_attach()`, so `uio_hv_generic` already owns the device when the
+   explicit `bind` write follows. That write reaches
+   `__driver_probe_device()` (`drivers/base/dd.c`) with `dev->driver` set
+   and returns `-EBUSY`, which `bind_store()` surfaces. Measured:
+   `cycle1..cycle30 bind_fail` with **zero** `newid_fail` (the EVD-0133
+   braces fix did work), and `/dev/uio0` present with the UIO probe having
+   run — the attach landed every time.
+2. **`MMAP_HOLD ... maps=0` was `O_RDONLY`, not a missing mapping.**
+   `do_mmap()` clears `VM_SHARED` on an fd without `FMODE_WRITE`
+   (`mm/mmap.c`), and `hv_uio_mmap_validate()` returns `-EINVAL` unless the
+   vma is shared. Measured: `/dev/uio0` mapped `maps=0`, and the sysfs ring
+   at `.../channels/14/ring` — **present** — also mapped `maps=0`. The
+   objects existed; the open mode made every mmap fail.
+3. **`high_order_7plus_blocks=127` was an under-fragmented buddy.**
+   `fragment-buddy` took a fixed 75% of `MemAvailable` (`hog_mib=1464`)
+   and left the untouched remainder as order-10 blocks. Measured:
+   `FRAGMENT_BUDDY ready=1 chunks=23424 held=11712 freed=11712
+   locked=11712 chunk_kib=64`, then `high_order_7plus_blocks=127`, then
+   `VERDICT=INCONCLUSIVE_ORDER7_STILL_AVAILABLE`. The pattern was built
+   correctly; the budget was not large enough to remove the high-order
+   supply.
+
+**What this run still does NOT prove** (unchanged from EVD-0133):
+
+1. **UIO subchannel mmap / hold-in-mmap (BUG-3) never ran** — see defect 2.
+2. **The order-zero fallback cannot run on this guest.**
+   `vmbus_uses_shared_page_chunks()` is
+   `!encrypted && (hv_isolated || IS_ENABLED(CONFIG_ARM64))`; a hosted
+   x86_64 runner is neither, so every ring here is `vzalloc()` and the
+   chunked order-N → order-0 path is unreachable. It would not log either:
+   it uses `__GFP_NORETRY | __GFP_NOWARN`, so `grep 'order:7'` can never
+   match. Measured: `order7_dmesg=0`.
+3. **No host-rescind / GPADL response-rescind interleaving.**
+4. **No CoCo.** Every number above is ordinary x86_64 Hyper-V evidence.
+   COCO-1..5 remain open; this entry is never a CoCo gate.
+
+**Root causes fixed in the same work stream** (fork `f8277cbfed40`, RamShared
+`8b7cf6c9`; re-measured by run 36789491184, not by this entry):
+
+- after `new_id`, verify the driver symlink and only write `bind` when it is
+  not already `uio_hv_generic`;
+- `mmap-hold` opens `O_RDWR` and reports mmap errno instead of breaking
+  silently;
+- `fragment-buddy` treats `<mib>` as a cap and allocates 64 KiB chunks until
+  the kernel refuses, with `oom_score_adj = -1000`; the drill passes full
+  `MemAvailable` instead of 75%.
+
+**Verdict:** 🔴 does not work — `HYPERV_DRILL_RESULT status=FAIL
+scope=drill-failed`, `LIFECYCLE_VERDICT=FAIL cycle_fails=30`,
+`HYPERV_DRILL_FRAGMENT status=3`. The **drill harness** produced no usable
+lifecycle or fragmentation evidence. The **candidate** is not implicated:
+map balance is exact, `SPLATS=0`, `FAULTS=0`, `accept4_failures=0`, and
+teardown is clean. Keep those positives next to the red — a reader who sees
+only `status=FAIL` will over-claim against the patch set.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36783758959 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `bind_fail`, `newid_fail`, `MMAP_HOLD`, `high_order_7plus_blocks`,
+`LIFECYCLE_VERDICT`, `HYPERV_DRILL_RESULT`.
+The `hyperv-drill-windows-latest` artifact holds `drill-console.log` and
+`drill-vm-report.txt`. A fixed re-run must show **zero** `cycle*_bind_fail`,
+a `MMAP_HOLD ... maps>0` on `/dev/uio0` or the sysfs ring, and
+`high_order_7plus_blocks=0` with `exhausted=1`. Those three together are
+what turns this red into a measurement.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0134`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T22:15:37Z` (guest start, from `drill-vm-report.txt`).
+**Verified at:** `2026-09-30T23:11:27Z`.
+**Source revision:** `0d2844870beb`
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the series is sent or withdrawn. Keep the
+`esp_bootx64_sha256` recorded above: a future build that resolves a
+different digest is a new measurement, not a repeat of this one. Keep the
+candidate-health positives next to the FAIL — a reader who sees only
+`cycle_fails=30` will over-claim against the patch set, and a reader who
+sees only `SPLATS=0` will over-claim for the drills.
+**Freshness:** Superseded as soon as a run of fork `f8277cbfed40` or later
+lands and shows the three fixed signals. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never
+cite this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence.
+If GitHub retires or repurposes the `windows-latest` / `windows-2025`
+images, or drops the Hyper-V role from them, this claim is void until
+re-measured.

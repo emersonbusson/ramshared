@@ -407,6 +407,35 @@ buddy still held 120 order-10 blocks after the hog, so order-7 never had a
 reason to fail. Both defects are fixed; the re-run is what closes the
 GPADL/UIO half.
 
+**Measurement status — EVD-0134 (run 36783758959, fork `0d2844870beb`):**
+the re-run is on record as **FAIL** (`HYPERV_DRILL_RESULT status=FAIL
+scope=drill-failed`, `LIFECYCLE_VERDICT=FAIL cycle_fails=30`,
+`HYPERV_DRILL_FRAGMENT status=3`). The candidate is not implicated — map
+balance is exact again (12 / 20 279 296 / 4 939 at every boundary,
+including after the UIO probe returned a 33 636 352-byte ring set),
+`SPLATS=0`, `FAULTS=0`, `accept4_failures=0`, teardown clean. Three
+**harness** defects produced the failure, each traced to kernel source:
+
+1. `bind_fail` × 30 was `-EBUSY`, not a failed attach. `new_id_store()` →
+   `vmbus_add_dynid()` ends in `driver_attach()`, so the explicit `bind`
+   write that followed hit `__driver_probe_device()` with `dev->driver`
+   already set. Zero `newid_fail` — the braces fix worked — and `/dev/uio0`
+   existed, so every attach landed.
+2. `MMAP_HOLD ... maps=0` was `O_RDONLY`. `do_mmap()` clears `VM_SHARED`
+   on an fd without `FMODE_WRITE`, and `hv_uio_mmap_validate()` rejects
+   any mapping without `VM_SHARED`. The sysfs ring at `.../channels/14/ring`
+   was present and still mapped zero times.
+3. `high_order_7plus_blocks=127` was an under-fragmented buddy.
+   `fragment-buddy` built the 64 KiB free-every-other pattern correctly
+   (`chunks=23424 held=11712 freed=11712 locked=11712`) but took only 75%
+   of `MemAvailable` (`hog_mib=1464`), leaving the remainder as order-10
+   blocks.
+
+All three are fixed (fork `f8277cbfed40`); a later run must show zero
+`cycle*_bind_fail`, a `MMAP_HOLD ... maps>0` on `/dev/uio0` or the sysfs
+ring, and `high_order_7plus_blocks=0` with `exhausted=1`. Until those three
+signals land together, the GPADL/UIO half stays open.
+
 Scoring rules for the re-run, and for any future run: a drill that reports
 `FAIL` is a real candidate failure. `INCONCLUSIVE` — pressure did not remove
 the order-7 supply — is green for the job and `PARTIAL` for the gate.
