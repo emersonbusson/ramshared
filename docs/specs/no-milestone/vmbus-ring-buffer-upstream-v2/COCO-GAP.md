@@ -80,6 +80,34 @@ more WSL boots does not move these rows.
 
 Generic QEMU without CoCo passthrough cannot emulate these transitions either.
 
+### Why CI cannot fake this
+
+Two things look like they would help in GitHub Actions and would not:
+
+1. **A QEMU boot of the candidate kernel proves nothing about VMBus.** VMBus
+   is the Hyper-V guest bus. QEMU (TCG or KVM) presents virtio, not VMBus, so
+   a QEMU boot exercises **zero** lines of `drivers/hv/`. A green
+   "boot-smoke" job would be evidence theatre and must not be added as if it
+   qualified the series. Do not add it.
+2. **A QEMU or TCG CoCo machine without passthrough does not perform a page
+   state transition.** The guest-fatal operation is a real firmware/GPA
+   sequence. Emulation that skips it proves only that the code did not crash
+   on a machine that could not have crashed it.
+
+What hosted CI *does* legitimately cover, and does: applying the exact
+pinned bytes to a pinned mainline base, `git diff --check`, cumulative
+`scripts/checkpatch.pl --strict --no-tree` at every stage, `W=1` plus Sparse
+on x86_64 and arm64, the VMBus and UIO KUnit suites, and the machine-checked
+CoCo static invariants with their self-test. That is real evidence about the
+source. It is not evidence about a memory-encryption transition.
+
+The nearest real VMBus runtime available without new hardware is a
+**disposable WSL2 guest on a Windows CI runner** — WSL2 is a genuine Hyper-V
+guest. Any such run is **WSL-backport evidence**, not mainline evidence, and
+must be labelled as such; the seven-patch mainline series does not apply to
+the WSL 6.18 tree. It also cannot close COCO-1..5, because a stock WSL2 VM
+is not a confidential guest.
+
 ---
 
 ## What this does *not* say
