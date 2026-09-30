@@ -55,3 +55,19 @@ CUDA backend file against which to run a Step 3 coverage gate.
 
 **PARTIAL / NO-GO for deployment.** The existing uncompressed CUDA path is
 retained. Proposed GPU compute and compression remain research work.
+
+## 2026-09-30 14:02 — ITEM-4 telemetry envelope closed
+
+**What:** SSDV3 Step 3 close-out of ITEM-4 (versioned worker-cache telemetry
+envelope, physical `cached_bytes`/`target_bytes` preserved, logical cache
+bytes labelled separately from RAM). Full measured data, cover table, and
+re-execution commands are recorded as **EVD-0126** in the repository
+[validation.md](../../../../validation.md) under `ramshared.validation.v2`.
+
+**Verdict:** 🟡 PARTIAL — ITEM-4 done; ITEM-3 gated on nvCOMP, ITEM-5 needs
+real paired GPU runs.
+
+**Category:** ci-gate
+
+**Measured data:** 1003 tests passed / 0 failed; coverage gate PASSED
+(`ipc_cache_client.rs` 84.0%, 305/363).

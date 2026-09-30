@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 349,
-    "classified": 346,
+    "total": 352,
+    "classified": 349,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -2500,6 +2500,30 @@
       "freshnessDays": null
     },
     {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/AUDIT-source.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-gap-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/IMPL.md",
       "disposition": "classified",
       "ruleId": "ssdv3-implementation-records",
@@ -4025,6 +4049,18 @@
     },
     {
       "path": "docs/upstream/LKML-PATCHSET.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
+      "path": "docs/upstream/VMBUS-RING-V2-UPSTREAM-STATUS.md",
       "disposition": "classified",
       "ruleId": "upstream-drafts",
       "verification": {

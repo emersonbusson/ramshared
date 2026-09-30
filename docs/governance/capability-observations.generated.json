@@ -382,8 +382,20 @@
         "registry_state": null
       },
       "documented_surface": {
-        "implementation_paths": [],
-        "test_paths": []
+        "implementation_paths": [
+          "crates/ramshared-block/src/compressed_cache.rs",
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-vram/src/codec.rs",
+          "crates/ramshared-vram/src/worker_telemetry.rs",
+          "tools/ci/check-rust-slice-coverage.mjs"
+        ],
+        "test_paths": [
+          "crates/ramshared-block/tests/cpu_codec_control_arm.rs",
+          "crates/ramshared-block/tests/gpu_cache_compression.rs"
+        ]
       },
       "documents": {
         "implementation": "docs/specs/no-milestone/cuda-rust-native-tiering/IMPL.md",

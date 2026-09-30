@@ -1,30 +1,110 @@
 # AUDIT-2.5 — cuda-rust-native-tiering
 
-## Findings
+> SSDV3 Step 2.5 · PRD: [PRD.md](PRD.md) · SPEC: [SPEC.md](SPEC.md)
+> **Pass 3 re-audit — 2026-09-30.** Reviews the package as revised by passes 1–2 (same day).
+> No code was implemented and no hardware was qualified by any pass.
+
+## Direction audit — is this the best thing to do
+
+Substantively unchanged, and still the governing judgment:
+
+- **Scope correction is right.** Compression confined to the disposable VRAM cache; a
+  compressed swap/origin format stays rejected. Keep it.
+- **GPU compute remains unproven**, which is why the CPU-codec control arm exists. Pass 3
+  finds the arm still has no defined measurement surface (Finding 2), so the decision it is
+  meant to inform still cannot be made.
+- **Priority unchanged.** WSL2 freeze work, kernel promotion refusals, and the reserve-floor
+  contract drift all outrank a default-off capacity optimization.
+
+**Recommendation unchanged.** Build ITEM-1/ITEM-2, record the CPU arm through a harness that
+can actually run, and only then decide whether a GPU codec belongs in this cache.
+
+## Findings — pass 3
 
 | Sev | SPEC § | Issue | Required fix |
 | :--- | :--- | :--- | :--- |
-| High | Codec operation lifecycle; Atomicity and rollback | The design now refuses bad compressed checksums before decode and keeps uncertain buffers owned, but source review does not prove that the current supervisor can confirm worker exit and prevent overlapping GPU workers after a stalled driver call. | Before any hardware enablement, inject a delayed/in-flight operation and prove client fallback, worker revocation, confirmed process exit, no buffer reuse, and no replacement worker racing the old operation. Keep compression default-off until then. |
-| Medium | DT-2; Required tests | The local RTX 2060's sm75 meets nvCOMP's documented architecture floor, but the exact WSL nvCOMP package, CUDA driver/runtime, exported C symbols, and end-to-end codec path are not qualified. All named tests in SPEC are planned, not present or run. | Implement only behind the test-only opt-in. Run the exact-adapter LZ4 and checksum refusal drill before enabling the backend; missing or unqualified capability must remain raw-only. |
-| Medium | DT-2; DT-10; PRD NFR-6 | VRAM headroom does not report GPU compute contention, and the current provider contract has no vendor-neutral busy/idle signal. Compression can compete with foreground GPU work even when memory admission passes; the proposed 5% p95 threshold is not empirical yet. | Keep the feature explicitly opt-in. Run paired foreground co-load qualification with zero missed deadlines and at most 5% p95 regression; if runtime suppression is later required, design a provider-specific signal and fail closed when it is unavailable. |
-| Medium | DT-4; DT-5; PRD NFR-2 | The 4 MiB host staging, dynamic GPU temporary ceiling, 2 MiB slabs, metadata cap, and 16 MiB cache-read ceiling are explicit engineering bounds, not measurements from this workload. | Preserve them as hard ceilings for the first prototype; measure peak worker RSS, device workspace, fragmentation, and latency before changing a ceiling or considering enablement. |
-| Medium | Existing IMPL.md; SPEC §1 | The existing tracking document still describes swap-page compression and async backend work, which this cache-only SPEC explicitly rejects. It is historical planning, not an implementation record for this SPEC. | Rewrite the tracking document to mark the old items superseded and derive any Step 3 checklist from this SPEC before implementation begins. |
+| **Hard no-go** | DT-4; PRD NFR-2; Assumed-ready dependencies | **Admission formula does not match the parent reserve contract.** DT-4 and NFR-2 compute `fresh_admissible_headroom = available_bytes.saturating_sub(reserve_floor_bytes)`, where `reserve_floor_bytes` is only the *configured* floor (env default 512 MiB, clamp 128–4096). The parent worker enforces `max(configured, ceil(capacity/5)) + runtime_headroom` (the 640 MiB runtime buffer) via `GpuBudgetSnapshot::required_free_bytes`, and this SPEC's assumed-ready dependencies claim to reuse exactly that. On a 6 GiB adapter with the configured 512 MiB floor the parent refuses below 1,869 MiB free, while DT-4 admits codec scratch down to 512 MiB — roughly 1.3 GiB of shared-host overcommit. Greedy overcommit on shared hardware without the real floor calculation is a Step 2.5 hard no-go. | Compute `fresh_admissible_headroom` from the parent's full free floor (`required_free_bytes(configured_reserve_bytes, runtime_headroom_bytes)`), not from the configured floor alone. Carry the same formula into NFR-2. Add a named test that codec admission refuses when only the configured floor is satisfied but the 20%/runtime floor is not. *(Fixed this turn.)* |
+| High | NFR-6b; DT-10; Provider codec contract | **The CPU-codec control arm has no measurement surface.** `GpuCacheCodec` compresses into provider-owned `VramMemory` slabs and workspace (`slab: &mut M`, `workspace: &mut M`). A host-side codec cannot implement that trait, yet NFR-6b/DT-10/ITEM-2 exit/ITEM-5 all require the arm. As specified it cannot be produced. | State that the control arm is measured by a **host-side harness outside `GpuCacheCodec`**, over identical extents and the same metric envelope and integrity checks; it is never a trait implementation and never a production fallback. *(Fixed this turn.)* |
+| High | Required tests matrix vs Files | Matrix names `isolated_origin.rs :: compressed_cache_fault_falls_back_to_origin`, but `isolated_origin.rs` appears only under assumed-ready dependencies — it is in neither CREATE nor MODIFY. A matrix row pointing at a file no slice will touch is not executable evidence. | Add `crates/ramshared-block/src/isolated_origin.rs` to MODIFY with that required test. *(Fixed this turn.)* |
+| Medium | PRD §14 Validation plan — Performance | The performance protocol still describes only three raw/compressed paired runs. It does not require the CPU-codec control arm, the raw/compressed/origin hit-p95 triple, or identical logical read ranges, so NFR-5b, NFR-6b, and DT-10 are not exercised by the plan that is supposed to close them. | Extend the Performance bullet with the control arm, the hit-p95 triple, and the identical-logical-range requirement. *(Fixed this turn.)* |
+| Medium | DT-10; NFR-5b | The self-latency comparison basis is not pinned. The raw path serves 2 MiB chunks and the compressed path serves 64 KiB extents; comparing p95 across differently shaped reads is not apples-to-apples. | Require the compressed-hit, raw-hit, and origin-read p95 figures to be measured over **identical logical read ranges**. *(Fixed this turn.)* |
 
-## Open questions
+## Open questions — pass 3
 
-- Which exact nvCOMP release and dynamically loaded LZ4/CRC32 C API will be used with the WSL CUDA driver on sm75?
-- Can the existing isolated-worker supervisor confirm old-process exit and prevent a replacement worker from racing unresolved GPU work?
-- On the declared synthetic workload mix, do end-to-end reads meet the existing 50 ms cache deadline and exceed the 10% net-capacity usefulness gate after all slab and workspace costs?
-- Is there a reliable provider-specific compute-busy signal that should defer codec work on a shared interactive GPU, or is test-only opt-in plus the co-load qualification gate sufficient?
-- Are the proposed host staging, device workspace, metadata, and slab ceilings appropriate after observing peak RSS and VRAM on the exact adapter?
+- Is **1.25×** the right prototype bound once p95 is measured over identical logical ranges?
+  A raw hit is a VRAM copy and a compressed hit adds at least a checksum and a decode step;
+  if raw-hit p95 is in the sub-millisecond range the bound may be unreachable — which would
+  itself be the answer (the GPU codec does not belong here). Tighten or reject with numbers;
+  never loosen to pass.
+- Which exact nvCOMP release exposes a documented pre-decode checksum usable through a
+  dynamically loaded C API on the WSL CUDA driver with sm75? Open since pass 1; hard entry
+  gate for the GPU codec.
+- Does the CPU-codec arm alone reach the ≥10% net capacity gain with no GPU contention?
+- At what extent size does batched GPU encode/decode stop paying for its own overhead under
+  the 50 ms read deadline?
+- Can the isolated-worker supervisor confirm old-process exit and prevent a replacement
+  worker from racing unresolved GPU work?
+- Will the parent reserve-floor contract be reconciled to one authoritative default before
+  any compression admission is qualified? Note that even after this pass's formula fix, the
+  *value* of the configured floor remains unreconciled (512 MiB env vs `max(1536 MiB, 20%)`
+  in the parent PRD mitigation). This SPEC now uses the correct *shape* of the floor.
 
-## Verdict
+## Verdict — pass 3
 
-**go** for an isolated, opt-in Step 3 prototype only, after the stale IMPL tracking record is reconciled. Production enablement, host activation, a 2:1 claim, or universal GPU support remain no-go until every hardware, lifecycle, integrity, performance, and live-worker gate above passes. No implementation or runtime qualification was performed for this audit.
+**`no-go`** on the package as reviewed in this pass: one hard-gate failure — the codec
+admission formula overcommits shared host memory relative to the parent reserve contract.
+
+That fix and the four alignment fixes above were applied in the same turn. After those edits
+the verdict returns to a **conditional `go`** for isolated, opt-in **ITEM-1 and ITEM-2
+only**, with entry gates still closed:
+
+1. **ITEM-3 (GPU codec) is gated** on the CPU-codec control arm recorded at ITEM-2 exit
+   through the host-side harness, and on resolution of the nvCOMP pre-decode checksum
+   question. If the CPU arm alone meets the usefulness gate without GPU contention, sunset
+   the feature (DT-9) instead of building the GPU codec.
+2. **Promotion beyond experimental** requires the completed matrix, the 1.25× self-latency
+   bound over identical logical ranges, the co-load gate, three paired runs including the
+   CPU arm, and reconciliation of the parent reserve-floor *value*.
+3. **Production enablement, host activation, a 2:1 claim, or universal GPU support** remain
+   no-go.
+
+---
+
+## Pass 2 record (2026-09-30)
+
+| Sev | Issue (pass 2) | Disposition |
+| :--- | :--- | :--- |
+| Hard no-go | Self-latency gate said "within the declared bound" but never declared a number. | Fixed in pass 2: compressed-hit p95 ≤ 1.25× raw-hit p95, raw/compressed/origin triple published. Range-comparison basis tightened in pass 3. |
+| Hard no-go | Codec sub-deadline (DT-3) had no named test. | Fixed in pass 2: `codec_subdeadline_falls_through_to_raw_or_miss` added (matrix 36 rows). |
+| High | DT-11 contradicted "Out now", PRD flow step 5, and the security checklist on who revokes the cache. | Fixed in pass 2: DT-11 restated as worker-side codec-fault isolation; transport/protocol/process revocation unchanged. |
+| High | Implementation order circular: ITEM-3 gated on an arm only ITEM-5 produced. | Fixed in pass 2: arm moved to ITEM-2 exit. Measurement surface defect found in pass 3. |
+| High | DT-3 overclaimed preemption of a blocked driver call. | Fixed in pass 2: claim limited to admission and inter-step continuation. |
+| Medium | Traceability mapped codec fault isolation to ITEM-3; "Out now" read as forbidding the CPU arm. | Fixed in pass 2. |
+
+Pass 2 verdict: `no-go` → conditional `go` for ITEM-1/ITEM-2 after same-turn fixes.
+
+## Pass 1 record (2026-09-30)
+
+| Sev | Issue (pass 1) | Disposition |
+| :--- | :--- | :--- |
+| Hard no-go | Required tests matrix missing 4 rows named in Files. | Fixed in pass 1; verified complete in passes 2–3. |
+| High | No codec sub-deadline; one slow codec step could revoke the entire cache. | Fixed in pass 1 (DT-3, DT-11); reopened and settled in pass 2. |
+| High | No compressed-hit self-latency gate. | Added in pass 1; bound declared in pass 2; comparison basis pinned in pass 3. |
+| High | Missing counterfactual: CPU codec never measured, so the GPU-compute choice was unfalsifiable. | Fixed in pass 1 (NFR-6b, DT-10); surface defined in pass 3. |
+| Medium | Day-0: failed usefulness gate left the codec disabled in the tree. | Fixed in pass 1 (DT-9 sunset rule). |
+| Medium | Admission inherits the unreconciled parent reserve floor. | Formula shape corrected in pass 3; floor *value* still open in the parent SPEC. |
+| Medium | IMPL.md advertised superseded swap-page compression. | Rewritten in pass 1. |
+| Medium | DT-7 requires an unverified nvCOMP pre-decode checksum. | Open question + ITEM-3 entry gate since pass 1. |
+| Low | 64 KiB extent ceiling unreconciled with vendor batched-chunk guidance. | Recorded; measure before changing. |
+
+Pass 1 verdict: `no-go` → conditional `go` for ITEM-1/ITEM-2 after same-turn fixes.
+
+---
 
 ## Historical audit record (2026-09-21)
 
-The following CUDA/cutile findings are preserved as historical research. They are not current requirements for this cache-compression SPEC unless repeated in the findings above.
+The following CUDA/cutile findings are preserved as historical research. They are not
+current requirements for this cache-compression SPEC unless repeated in the findings above.
 
 ## Audit scope and evidence
 
@@ -89,7 +169,7 @@ designed `sm_75` SIMT implementation would need its own host qualification.
 The open PRs remain untouched while this gate is red; source-only findings
 are local review notes, not upstream acceptance or execution evidence.
 
-## Forensic findings
+## Forensic findings (historical)
 
 | Severity | Boundary | Finding | Required closure |
 | :--- | :--- | :--- | :--- |
@@ -100,20 +180,7 @@ are local review notes, not upstream acceptance or execution evidence.
 | High | Host safety | A proposed 50 ms cancellation deadline cannot guarantee that `/dev/dxg` or another foreign driver call has stopped. | Bound admission and report timeouts honestly; retain resources until completion; run controlled pressure and recovery tests. |
 | High | Evidence matrix | The proposed SPEC test names do not yet correspond to executable tests, and its coverage and live-E2E gates have not run for a new backend. | Add tests first, achieve the per-file 80% line-coverage gate, then execute live before/action/after and `BINARY_MATCH` on the installed surface. |
 
-## Hard-gate disposition
-
-- [x] PRD and SPEC distinguish current facts from proposed behavior.
-- [x] `sm_75` and `sm_80+` are separate hardware gates; the existing uncompressed
-  path remains the fallback.
-- [x] Reserve policies are separated by product surface rather than presented
-  as a universal 2 GiB rule.
-- [ ] Critical cancellation, data-integrity, and recovery decisions are fully
-  specified and exercised by executable named tests.
-- [ ] Each new business-logic file passes the SSDV3 per-file coverage gate.
-- [ ] GPU execution, pressure/recovery, and installed-binary identity are
-  qualified on every claimed target surface.
-
-## Verdict: `no-go` for production migration or host replacement
+## Historical verdict: `no-go` for production migration or host replacement
 
 Step 3 may continue only as isolated, opt-in implementation slices with the
 existing CUDA path preserved. The current source and tests do not justify
