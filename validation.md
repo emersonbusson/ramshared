@@ -8869,3 +8869,51 @@ was produced. `/opt/ramshared/current` remains on `v0.15.0-b788c17`.
 **Verdict:** 🟡 `PARTIAL` — repeated idempotent start/stop and swapoff-first
 teardown now have live proof on the EVD-0115 install; post-reboot repetition,
 product-path promotion, stress, kernel, and hardware gates remain open.
+
+## 2026-09-29 21:55 -03 — custom kernel #9 built and armed for WSL reboot
+
+**What:** Built WSL kernel `#9` from `vmbus-ring-buffer-upstream-v2` including
+BUG-1/5/8/11 and BUG-2/3/9 source fixes, installed matching UIO/NBD/ZRAM/
+zsmalloc modules into `/lib/modules/6.18.40.1-microsoft-standard-WSL2+`,
+staged `C:\wsl\kernel-ramshared-v6` with an immutable SHA-256 receipt, and
+atomically switched the `.wslconfig` `kernel=` line from v5 to v6. Cascade was
+torn down swapoff-first before the arm. The WSL restart that activates the
+image is a separate post-reboot verification step.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0117`.
+**Owner role:** custom-kernel build, module install, and arm receipt.
+**Observed at:** `2026-09-29T23:55:00Z`.
+**Verified at:** `2026-09-29T23:55:00Z`.
+**Source revision:** `a5cedb4de6f887b5ac6d7394dbc7851cc4a71db0`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0112 and the kernel fork audit. This evidence
+covers build identity and arming only; boot proof is separate.
+**Freshness:** `arch/x86/boot/bzImage` is Linux `6.18.40.1-microsoft-standard-WSL2+`
+build `#9` dated `Tue Sep 29 21:30:04 -03 2026`. SHA-256 of both the tree image
+and `C:\wsl\kernel-ramshared-v6` is
+`24ac89168096b1dfbd4fda18f19b2aebeeca9742d19ce808dfba4ea0b3be8b2a`.
+Receipt `/mnt/c/wsl/kernel-ramshared-v6.receipt` records source commit
+`a5cedb4de6f887b5ac6d7394dbc7851cc4a71db0` and `source_tree_state=clean`.
+`.wslconfig` now has `kernel=C:\\wsl\\kernel-ramshared-v6`. Modules installed
+include rebuilt `uio.ko`, `uio_hv_generic.ko`, and `zsmalloc.ko` plus the
+current `nbd.ko` and `zram.ko`. Cascade was `Off` with only fallback swap
+before arm.
+**Category:** kernel build / module install / immutable image receipt /
+attended wslconfig arm.
+**How to measure:** `make -j2 bzImage` produced `Kernel: arch/x86/boot/bzImage
+is ready (#9)`. `make W=1 drivers/hv/channel.o drivers/hv/dxgkrnl/dxgadapter.o`
+and UIO/dxgkrnl module builds completed after BUG-2/3/9 fixes
+(`b64d516de5fc`, `a8042f978bc0`, `15c26f95a702`, `0dcd3ad5d996`).
+`scripts/checkpatch.pl --strict` on `850f55bc0c28..HEAD` reported 0 errors.
+`sudo make modules_install` and `depmod -a` populated the distro module tree.
+Elevated PowerShell rewrote only the `kernel=` line and logged
+`kernel_line_updated`. `sha256sum` matched across the build tree and
+`C:\wsl\kernel-ramshared-v6`.
+**Remaining boundary:** The active WSL boot is still `#6` until `wsl --shutdown`
+and restart. No post-reboot `uname`, DXG/Xwayland probe, UIO mmap exercise,
+GPADL interleaving, CoCo transition, or RamShared stress ran on `#9`. Hosted
+mainline KUnit for the updated series still requires the workflow gate. Rollback
+is to `kernel-ramshared-v5` by restoring the prior `kernel=` line.
+**Verdict:** 🟡 `PARTIAL` — kernel `#9` identity and arm are sealed and
+reproducible; live boot proof and runtime qualification remain open until the
+restart verification.
