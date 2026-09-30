@@ -694,7 +694,9 @@ mod tests {
     /// request, so the client sees a well-formed frame with a caller-chosen body.
     fn serve_heartbeat_payload(mut worker_sock: UnixStream, payload: Vec<u8>, aux: u32) {
         let mut request = [0u8; FRAME_HEADER_LEN];
-        worker_sock.read_exact(&mut request).expect("heartbeat request");
+        worker_sock
+            .read_exact(&mut request)
+            .expect("heartbeat request");
         let request = FrameHeader::decode(&request).expect("valid request header");
         let response = FrameHeader {
             msg_type: MSG_HEARTBEAT_RESP,
@@ -704,11 +706,16 @@ mod tests {
             payload_len: payload.len() as u32,
             aux,
         };
-        worker_sock.write_all(&response.encode()).expect("heartbeat header");
+        worker_sock
+            .write_all(&response.encode())
+            .expect("heartbeat header");
         worker_sock.write_all(&payload).expect("heartbeat body");
     }
 
-    fn sample_cache_telemetry(logical_cached_bytes: u64, sampled_at_unix_ms: u64) -> WorkerCacheTelemetry {
+    fn sample_cache_telemetry(
+        logical_cached_bytes: u64,
+        sampled_at_unix_ms: u64,
+    ) -> WorkerCacheTelemetry {
         use ramshared_vram::{CodecCapability, CodecState, CodecTelemetry};
 
         WorkerCacheTelemetry {
@@ -732,11 +739,8 @@ mod tests {
     fn telemetry_envelope_rejects_unknown_version_or_oversize() {
         // Unknown envelope version: the sample is omitted, never accepted and
         // never turned into a client failure. Physical header fields survive.
-        let mut unknown = WorkerTelemetryEnvelope::new(
-            1_000,
-            None,
-            Some(sample_cache_telemetry(4096, 1_000)),
-        );
+        let mut unknown =
+            WorkerTelemetryEnvelope::new(1_000, None, Some(sample_cache_telemetry(4096, 1_000)));
         unknown.schema_version = 99;
         let unknown_payload = serde_json::to_vec(&unknown).unwrap();
 
@@ -791,11 +795,8 @@ mod tests {
         use crate::isolated_origin::BestEffortCache;
 
         const LOGICAL: u64 = 1 << 30;
-        let envelope = WorkerTelemetryEnvelope::new(
-            1_000,
-            None,
-            Some(sample_cache_telemetry(LOGICAL, 1_000)),
-        );
+        let envelope =
+            WorkerTelemetryEnvelope::new(1_000, None, Some(sample_cache_telemetry(LOGICAL, 1_000)));
         let payload = envelope.to_bounded_payload().expect("envelope fits");
 
         let (client_sock, worker_sock) = UnixStream::pair().expect("socketpair failed");
@@ -826,8 +827,7 @@ mod tests {
         // The same separation holds on every read-only trait forward.
         assert_eq!(BestEffortCache::cached_bytes(&client), 64 << 10);
         assert_eq!(BestEffortCache::target_bytes(&client), 1024 * 1024);
-        let trait_cache =
-            BestEffortCache::cache_telemetry(&client).expect("trait cache telemetry");
+        let trait_cache = BestEffortCache::cache_telemetry(&client).expect("trait cache telemetry");
         assert_eq!(trait_cache.logical_cached_bytes, LOGICAL);
         assert_ne!(
             trait_cache.logical_cached_bytes,

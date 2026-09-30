@@ -18,8 +18,8 @@ use ramshared_block::gpu_cache_worker::MAX_IPC_PAYLOAD_BYTES;
 use ramshared_block::{GpuWorkerConfig, RUNTIME_FREE_BUFFER_BYTES, gpu_cache_worker};
 use ramshared_vram::{
     CodecAlignments, CodecChunkResult, CodecId, CodecStatus, FakeCodec, GpuAdapterIdentity,
-    GpuBudgetSnapshot, GpuBudgetSource, GpuCacheCodec, VramError, VramMemory, VramOutputReservation,
-    VramProvider, VramSpan, crc32,
+    GpuBudgetSnapshot, GpuBudgetSource, GpuCacheCodec, VramError, VramMemory,
+    VramOutputReservation, VramProvider, VramSpan, crc32,
 };
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -46,10 +46,7 @@ impl VramMemory for HostMem {
         self.len
     }
     fn zero(&mut self) -> Result<(), VramError> {
-        self.data
-            .lock()
-            .map_err(|_| VramError::Busy)?
-            .fill(0);
+        self.data.lock().map_err(|_| VramError::Busy)?.fill(0);
         Ok(())
     }
     fn read_at(&self, off: u64, dst: &mut [u8]) -> Result<(), VramError> {
@@ -273,10 +270,8 @@ fn compression_config(target_bytes: u64, reserve_floor_bytes: u64) -> GpuWorkerC
 #[test]
 fn worker_compression_roundtrip_is_byte_exact() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
 
     // Highly compressible: the fake RLE must shrink it and publish compressed.
     let zeros = vec![0u8; MAX_EXTENT_LEN];
@@ -313,10 +308,8 @@ fn worker_compression_roundtrip_is_byte_exact() {
 #[test]
 fn worker_raw_fallback_when_encoded_allocation_is_not_smaller() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
 
     // High-entropy payload: RLE grows it, so the usefulness gate keeps raw.
     let mut noise = vec![0u8; MAX_EXTENT_LEN];
@@ -380,7 +373,10 @@ fn worker_corrupt_entry_returns_origin_bytes() {
         "a corrupt entry must miss so the origin serves the bytes, not {:?}",
         after_corruption.as_ref().map(|bytes| bytes.len())
     );
-    assert!(!worker.is_disabled(), "a codec integrity fault is not a revoke");
+    assert!(
+        !worker.is_disabled(),
+        "a codec integrity fault is not a revoke"
+    );
 }
 
 /// `worker_partial_update_never_returns_stale_bytes` — DT-6.
@@ -392,10 +388,8 @@ fn worker_corrupt_entry_returns_origin_bytes() {
 #[test]
 fn worker_partial_update_never_returns_stale_bytes() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     let original = vec![1u8; 4096];
     worker.handle_update(0, &original);
     assert_eq!(worker.handle_read(0, 4096), Some(original.clone()));
@@ -456,10 +450,8 @@ fn worker_compression_disable_is_idempotent() {
 #[test]
 fn compression_update_replay_is_idempotent() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     let payload = vec![6u8; 4096];
     worker.handle_update(0, &payload);
     let after_first = worker.compressed_entries_count();
@@ -537,7 +529,9 @@ fn worker_compressed_crc_mismatch_refuses_before_decode() {
     let mut slab = Slab {
         bytes: vec![0u8; 8192],
     };
-    let mut workspace = Slab { bytes: vec![0u8; 1] };
+    let mut workspace = Slab {
+        bytes: vec![0u8; 1],
+    };
     let payload = vec![0xEEu8; 2048];
     let reservation = VramOutputReservation::new(0, 4096, 4096).expect("reservation");
     let results = codec
@@ -571,10 +565,8 @@ fn codec_fault_keeps_raw_cache_serving() {
         free: 8 * GIB,
         codec: FaultyCodec,
     };
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     let payload = vec![0x11u8; 4096];
     worker.handle_update(0, &payload);
     assert_eq!(worker.compressed_entries_count(), 0);
@@ -594,10 +586,8 @@ fn codec_fault_does_not_revoke_cache_client() {
         free: 8 * GIB,
         codec: FaultyCodec,
     };
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     for i in 0..8u64 {
         worker.handle_update(i * 4096, &vec![0x22u8; 4096]);
     }
@@ -621,10 +611,8 @@ fn codec_fault_does_not_revoke_cache_client() {
 #[test]
 fn codec_subdeadline_falls_through_to_raw_or_miss() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     // Publish a compressed extent, then also populate the raw path over the
     // same logical chunk by disabling compression for the second write. The
     // worker's config is immutable, so instead publish at a distinct offset
@@ -659,10 +647,8 @@ fn codec_subdeadline_falls_through_to_raw_or_miss() {
 #[test]
 fn read_over_16_mib_refuses_before_allocation() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     let payload = vec![0u8; 4096];
     worker.handle_update(0, &payload);
     assert!(worker.handle_read(0, MAX_READ_LEN + 1).is_none());
@@ -675,10 +661,8 @@ fn read_over_16_mib_refuses_before_allocation() {
 fn worker_compression_respects_physical_budget() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
     // A 2 MiB physical target backs at most one 2 MiB slab.
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(2 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(2 * 1024 * 1024, GIB));
     let payload = vec![0u8; MAX_EXTENT_LEN];
     for i in 0..64 {
         worker.handle_update((i as u64) * MAX_EXTENT_LEN as u64, &payload);
@@ -695,10 +679,8 @@ fn worker_compression_respects_physical_budget() {
 #[test]
 fn worker_evicts_compressed_lru_extent() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     let payload = vec![0u8; 4096];
     worker.handle_update(0, &payload);
     worker.handle_update(4096, &payload);
@@ -720,10 +702,8 @@ fn worker_evicts_compressed_lru_extent() {
 #[test]
 fn worker_teardown_waits_for_codec_completion() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     worker.handle_update(0, &vec![0u8; 8192]);
     assert!(worker.completed_codec_ops() > 0);
     assert!(!worker.codec_in_flight());
@@ -741,10 +721,8 @@ fn worker_teardown_waits_for_codec_completion() {
 #[test]
 fn worker_decode_error_returns_miss() {
     let provider = HostCodecProvider::new(8 * GIB, 8 * GIB);
-    let mut worker = gpu_cache_worker::GpuCacheWorker::new(
-        &provider,
-        compression_config(64 * 1024 * 1024, GIB),
-    );
+    let mut worker =
+        gpu_cache_worker::GpuCacheWorker::new(&provider, compression_config(64 * 1024 * 1024, GIB));
     let payload = vec![5u8; 4096];
     worker.handle_update(0, &payload);
     assert!(worker.compressed_entries_count() > 0);
@@ -754,7 +732,10 @@ fn worker_decode_error_returns_miss() {
     // An overlapping partial read must not assemble from neighbouring
     // extents when coverage is incomplete.
     worker.handle_update(8192, &vec![6u8; 4096]);
-    assert!(worker.handle_read(4096, 8192).is_none(), "gap at 4096..8192");
+    assert!(
+        worker.handle_read(4096, 8192).is_none(),
+        "gap at 4096..8192"
+    );
 }
 
 /// `crc32_is_the_shared_integrity_primitive` — DT-7.

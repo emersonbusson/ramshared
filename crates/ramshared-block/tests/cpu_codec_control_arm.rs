@@ -124,9 +124,9 @@ impl CpuStopwatch {
     /// unavailable; the caller must surface that rather than invent a value.
     fn stop(self) -> (Duration, Option<Duration>) {
         let wall = self.wall.elapsed();
-        let cpu = self.cpu.and_then(|base| {
-            read_process_cpu().map(|now| now.saturating_sub(base))
-        });
+        let cpu = self
+            .cpu
+            .and_then(|base| read_process_cpu().map(|now| now.saturating_sub(base)));
         (wall, cpu)
     }
 }
@@ -332,10 +332,7 @@ impl CpuCodecArm {
     /// Run the arm over a set of identical logical extents and produce the
     /// complete metric envelope. This is the ITEM-2 exit record and the ITEM-5
     /// baseline. Returns `Err` if any extent violates the DT-4 ceiling.
-    pub fn run_over_extents(
-        &self,
-        extents: &[Vec<u8>],
-    ) -> Result<CpuArmReport, CpuArmError> {
+    pub fn run_over_extents(&self, extents: &[Vec<u8>]) -> Result<CpuArmReport, CpuArmError> {
         let mut timing = CpuArmTiming::default();
         let mut total_logical = 0usize;
         let mut total_raw_alloc = 0usize;
@@ -383,8 +380,9 @@ impl CpuCodecArm {
                 let mut bad = encoded.clone();
                 let idx = bad.len() / 2;
                 bad[idx] ^= 0xff;
-                let refused =
-                    self.decode_one(&bad, stored_crc, logical.len(), original_crc).is_none();
+                let refused = self
+                    .decode_one(&bad, stored_crc, logical.len(), original_crc)
+                    .is_none();
                 let after = self.decode_invocations();
                 if !refused || after != before {
                     checksum_refused_before_decode = false;
@@ -434,9 +432,7 @@ fn cpu_codec_arm_roundtrip_is_byte_exact() {
     let single = vec![0x42u8];
 
     let extents = vec![compressible, noise, mixed, single];
-    let report = arm
-        .run_over_extents(&extents)
-        .expect("DT-4 extents only");
+    let report = arm.run_over_extents(&extents).expect("DT-4 extents only");
 
     assert!(
         report.byte_exact,
@@ -482,9 +478,10 @@ fn cpu_codec_arm_checksum_refusal_never_invokes_decode() {
     assert_eq!(arm.decode_invocations(), 0);
     let mut bad = encoded.clone();
     bad[0] ^= 0xff;
-    assert!(arm
-        .decode_one(&bad, stored_crc, payload.len(), original_crc)
-        .is_none());
+    assert!(
+        arm.decode_one(&bad, stored_crc, payload.len(), original_crc)
+            .is_none()
+    );
     assert_eq!(
         arm.decode_invocations(),
         0,
@@ -492,10 +489,15 @@ fn cpu_codec_arm_checksum_refusal_never_invokes_decode() {
     );
 
     // A corrupt *logical* CRC is also refused, but only after decode.
-    assert!(arm
-        .decode_one(&encoded, stored_crc, payload.len(), original_crc ^ 1)
-        .is_none());
-    assert_eq!(arm.decode_invocations(), 1, "decode ran; output CRC refused");
+    assert!(
+        arm.decode_one(&encoded, stored_crc, payload.len(), original_crc ^ 1)
+            .is_none()
+    );
+    assert_eq!(
+        arm.decode_invocations(),
+        1,
+        "decode ran; output CRC refused"
+    );
 }
 
 /// `cpu_codec_arm_capacity_gate_is_strictly_smaller` — DT-10.
@@ -549,7 +551,10 @@ fn cpu_codec_arm_report_carries_the_metric_envelope() {
     assert!(report.checksum_refused_before_decode);
     // The host this runs on exposes /proc/self/stat, so CPU time is real and
     // not a wall-clock stand-in.
-    assert!(report.cpu_clock_available, "process CPU clock must be readable");
+    assert!(
+        report.cpu_clock_available,
+        "process CPU clock must be readable"
+    );
 }
 
 /// `cpu_codec_arm_refuses_oversize_extents` — DT-4.

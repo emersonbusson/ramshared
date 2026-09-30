@@ -11888,13 +11888,9 @@ mod tests {
             codec: ramshared_vram::FakeCodec::new(),
         };
         assert!(
-            revalidate_selected_adapter(
-                starving.budget_snapshot().unwrap(),
-                &expected,
-                config,
-            )
-            .unwrap_err()
-            .contains("fresh safe cache budget")
+            revalidate_selected_adapter(starving.budget_snapshot().unwrap(), &expected, config,)
+                .unwrap_err()
+                .contains("fresh safe cache budget")
         );
     }
 
@@ -12985,13 +12981,18 @@ Filename Type Size Used Priority
         assert_eq!(parsed["gpu_budget"]["available_bytes"], 512 * 1024 * 1024);
         // DT-8: cache occupancy is published beside the adapter budget and is
         // never the same field as the physical `vram_cached_kib`.
-        assert_eq!(parsed["gpu_cache"]["logical_cached_bytes"], 256 * 1024 * 1024);
-        assert_eq!(parsed["gpu_cache"]["physical_cache_slab_bytes"], 8 * 1024 * 1024);
+        assert_eq!(
+            parsed["gpu_cache"]["logical_cached_bytes"],
+            256 * 1024 * 1024
+        );
+        assert_eq!(
+            parsed["gpu_cache"]["physical_cache_slab_bytes"],
+            8 * 1024 * 1024
+        );
         assert_eq!(parsed["gpu_cache"]["codec_decode_errors"], 1);
         assert_eq!(parsed["gpu_cache"]["codec"]["state"], "ready");
         assert_ne!(
-            parsed["gpu_cache"]["logical_cached_bytes"],
-            parsed["vram_cached_kib"],
+            parsed["gpu_cache"]["logical_cached_bytes"], parsed["vram_cached_kib"],
             "logical cache occupancy must never be published as physical cached KiB"
         );
         assert_eq!(parsed["cache_target_kib"], 262144);

@@ -346,12 +346,12 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
             logical_cached_bytes = logical_cached_bytes.saturating_add(entry.logical_len);
             match &entry.representation {
                 CacheRepresentation::Raw { address } => {
-                    raw_payload_bytes = raw_payload_bytes
-                        .saturating_add(address.span.stored_len as u64);
+                    raw_payload_bytes =
+                        raw_payload_bytes.saturating_add(address.span.stored_len as u64);
                 }
                 CacheRepresentation::Compressed { address, .. } => {
-                    compressed_payload_bytes = compressed_payload_bytes
-                        .saturating_add(address.span.stored_len as u64);
+                    compressed_payload_bytes =
+                        compressed_payload_bytes.saturating_add(address.span.stored_len as u64);
                 }
             }
         }
@@ -370,8 +370,11 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
             .iter()
             .map(|slab| slab.len() as u64)
             .fold(0u64, u64::saturating_add);
-        let codec_workspace_bytes =
-            self.codec_workspace.as_ref().map(|mem| mem.len() as u64).unwrap_or(0);
+        let codec_workspace_bytes = self
+            .codec_workspace
+            .as_ref()
+            .map(|mem| mem.len() as u64)
+            .unwrap_or(0);
         let metadata_bytes = self.compressed.allocator.metadata_bytes() as u64;
 
         let capability = if self.provider.cache_codec().is_some() {
@@ -381,9 +384,7 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         };
         let state = if self.disabled {
             CodecState::Disabled
-        } else if capability == CodecCapability::RawOnly
-            || !self.config.compression_enabled
-        {
+        } else if capability == CodecCapability::RawOnly || !self.config.compression_enabled {
             CodecState::RawOnly
         } else if self.compressed.codec_timeouts > 0 {
             CodecState::TimedOut
@@ -521,11 +522,10 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
                 self.compressed.note_codec_timeout();
                 return None;
             }
-            let index = self
-                .compressed
-                .entries
-                .iter()
-                .position(|entry| entry.logical_start <= cursor && cursor < entry.logical_end())?;
+            let index =
+                self.compressed.entries.iter().position(|entry| {
+                    entry.logical_start <= cursor && cursor < entry.logical_end()
+                })?;
             let entry = self.compressed.entries[index].clone();
             self.compressed.entries[index].last_accessed = Instant::now();
             let within = (cursor - entry.logical_start) as usize;
@@ -569,7 +569,10 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
                     return None;
                 };
                 let payload = address.span.stored_len.min(buf.len());
-                if slab.read_at(address.span.offset, &mut buf[..payload]).is_err() {
+                if slab
+                    .read_at(address.span.offset, &mut buf[..payload])
+                    .is_err()
+                {
                     self.compressed.note_decode_error();
                     return None;
                 }
@@ -827,7 +830,8 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
                 return false;
             }
         };
-        if !encoded.status.is_ok() || encoded.encoded_len == 0 || encoded.encoded_len >= data.len() {
+        if !encoded.status.is_ok() || encoded.encoded_len == 0 || encoded.encoded_len >= data.len()
+        {
             // DT-10 usefulness gate: keep raw unless the encoded form is
             // strictly smaller. `Incompressible` is not a fault.
             self.compressed.note_codec_completion();
@@ -1193,9 +1197,11 @@ pub fn run_gpu_worker_loop_with_frame_read_timeout<P: VramProvider>(
                     Vec::new()
                 } else {
                     let now = unix_time_ms();
-                    let budget = worker.provider.budget_snapshot().ok().map(|snapshot| {
-                        GpuBudgetTelemetry::from_snapshot(&snapshot, now)
-                    });
+                    let budget = worker
+                        .provider
+                        .budget_snapshot()
+                        .ok()
+                        .map(|snapshot| GpuBudgetTelemetry::from_snapshot(&snapshot, now));
                     let cache = worker.cache_telemetry(now);
                     WorkerTelemetryEnvelope::new(now, budget, Some(cache))
                         .to_bounded_payload()
@@ -1217,9 +1223,7 @@ pub fn run_gpu_worker_loop_with_frame_read_timeout<P: VramProvider>(
                     return Err(format!("worker write heartbeat error: {e}"));
                 }
                 if let Err(e) = socket.write_all(&telemetry_payload) {
-                    return Err(format!(
-                        "worker write heartbeat telemetry error: {e}"
-                    ));
+                    return Err(format!("worker write heartbeat telemetry error: {e}"));
                 }
             }
             _ => {
@@ -2034,7 +2038,10 @@ mod tests {
         }
 
         fn budget_snapshot(&self) -> Result<GpuBudgetSnapshot, VramError> {
-            Ok(trusted_test_budget(self.free.load(Ordering::SeqCst), self.total))
+            Ok(trusted_test_budget(
+                self.free.load(Ordering::SeqCst),
+                self.total,
+            ))
         }
 
         fn cache_codec(&self) -> Option<&dyn GpuCacheCodec<Self::Mem<'_>>> {
@@ -2393,7 +2400,10 @@ mod tests {
         worker.handle_update(4096, &payload);
         worker.handle_update(8192, &payload);
         let before = worker.compressed_entries_count();
-        assert!(before > 0, "the codec must have published compressed extents");
+        assert!(
+            before > 0,
+            "the codec must have published compressed extents"
+        );
 
         // Touch the later extents so extent 0 is the LRU.
         let _ = worker.handle_read(4096, 4096);
@@ -2451,7 +2461,9 @@ mod tests {
             .representation
             .clone();
         if let crate::compressed_cache::CacheRepresentation::Compressed {
-            address, stored_crc32, ..
+            address,
+            stored_crc32,
+            ..
         } = representation
         {
             let slab = worker
@@ -2507,7 +2519,10 @@ mod tests {
         let mut worker = GpuCacheWorker::new(&provider, config);
         worker.handle_update(0, &vec![0u8; 8192]);
         let completed = worker.completed_codec_ops();
-        assert!(completed > 0, "a successful publish must count as completed");
+        assert!(
+            completed > 0,
+            "a successful publish must count as completed"
+        );
         assert!(
             !worker.codec_in_flight(),
             "no operation may remain in flight after handle_update returns"

@@ -318,11 +318,13 @@ impl VramSpanAllocator {
                 size: self.slab_bytes as u64,
             });
         };
-        let end = off.checked_add(span.allocation_len).ok_or(VramError::OutOfRange {
-            off: span.offset,
-            len: span.allocation_len as u64,
-            size: self.slab_bytes as u64,
-        })?;
+        let end = off
+            .checked_add(span.allocation_len)
+            .ok_or(VramError::OutOfRange {
+                off: span.offset,
+                len: span.allocation_len as u64,
+                size: self.slab_bytes as u64,
+            })?;
         if end > slab.capacity {
             return Err(VramError::OutOfRange {
                 off: span.offset,

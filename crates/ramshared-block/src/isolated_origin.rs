@@ -607,9 +607,13 @@ mod tests {
         codec_fault_cache.hit = b"corrupt!".to_vec();
 
         let bytes = Rc::new(RefCell::new(b"origin!!".to_vec()));
-        let mut backend =
-            AuthoritativeOriginBackend::new(MemoryOrigin(Rc::clone(&bytes)), codec_fault_cache, 8, 4)
-                .unwrap();
+        let mut backend = AuthoritativeOriginBackend::new(
+            MemoryOrigin(Rc::clone(&bytes)),
+            codec_fault_cache,
+            8,
+            4,
+        )
+        .unwrap();
 
         let mut destination = [0; 8];
         backend.read_at(0, &mut destination).unwrap();
@@ -620,7 +624,8 @@ mod tests {
         assert_ne!(&destination, b"corrupt!");
         assert_eq!(backend.telemetry().fallback_reads, 1);
         assert_eq!(
-            backend.telemetry().cache_read_failures, 0,
+            backend.telemetry().cache_read_failures,
+            0,
             "a codec integrity miss is not a transport failure"
         );
         assert_eq!(
