@@ -9862,7 +9862,13 @@ in order, and piping `git diff --no-ext-diff --no-color` into
 
 ---
 
-## 2026-09-30 — CoCo static invariants made machine-checkable (EVD-0128)
+## 2026-09-30 16:40 -03 — CoCo static invariants made machine-checkable (EVD-0128)
+
+**What:** Audited the seven-patch v2 candidate against mainline `93f51579e7df`
+for every `set_memory_*` site, corrected two citation defects and one overclaim
+in the static-proof draft, and made the surviving invariants machine-checkable
+in contribution-fork `63cb97459cd3` so CI enforces them on every run. This does
+not close COCO-1..5.
 
 **Question:** Can the Confidential Computing objection be closed without
 CoCo hardware, and does the source actually match the claim that was being
@@ -9956,7 +9962,7 @@ To prove the gate is armed, replace a `page_address(page)` operand with
 **Owner role:** `kernel-runtime-engineer`.
 **Observed at:** `2026-09-30T19:40:00Z`.
 **Verified at:** `2026-09-30T19:40:00Z`.
-**Source revision:** `e9cad0b9` (RamShared) / `63cb97459cd3` (contribution fork).
+**Source revision:** `e9cad0b9`
 **Lifecycle:** `reviewable`.
 **Retention:** Keep until COCO-1..5 are satisfied on real hardware or the series is withdrawn. If a future edit moves any `set_memory_*` operand away from `page_address()`, or passes `memory_prepared = false` outside `vmbus_establish_gpadl()`, this entry becomes the rollback baseline.
 **Freshness:** Re-run the checker after any edit to `drivers/hv/channel.c`, `drivers/uio/uio_hv_generic.c`, or `series/*.patch`. Never silence the CI step or weaken its self-test to land a patch.
