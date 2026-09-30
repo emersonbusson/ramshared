@@ -27,11 +27,12 @@
  * fragment-buddy is the one the order-zero drill actually needs. A single
  * large hog splits the buddy only as far as it must and leaves the untouched
  * remainder as high-order blocks, so order-7 still succeeds and the drill
- * reports INCONCLUSIVE. This mode instead takes <mib> as many independent
- * 64 KiB chunks, then frees every other chunk and mlocks the rest. No two
- * neighbouring chunks are free at once, so nothing above order-4 can coalesce,
- * order-7 must fail, and the freed chunks still satisfy order-0 fallback.
- * It prints FRAGMENT_BUDDY ready=1 only after the pattern is in place.
+ * reports INCONCLUSIVE. This mode takes <mib> as a cap and keeps allocating
+ * 64 KiB chunks until the kernel refuses, then frees every other chunk and
+ * mlocks the rest. No two neighbouring chunks are free at once, so nothing
+ * above order-4 can coalesce, order-7 must fail, and the freed chunks still
+ * satisfy order-0 fallback. It prints FRAGMENT_BUDDY ready=1 only after the
+ * pattern is in place.
  *
  * Never prints addresses. Evidence must not carry KASLR material.
  */
@@ -89,7 +90,15 @@ static int do_mmap_hold(int argc, char **argv)
 		return 2;
 	}
 
-	fd = open(path, O_RDONLY);
+	/*
+	 * MAP_SHARED on an O_RDONLY fd gets VM_SHARED cleared by do_mmap()
+	 * (mm/mmap.c: `if (!(file->f_mode & FMODE_WRITE)) vm_flags &=
+	 * ~(VM_MAYWRITE | VM_SHARED)`), and hv_uio_mmap_validate() rejects
+	 * any mapping without VM_SHARED. Open read-write so the mapping is
+	 * actually shared; both the UIO device and the channel "ring" sysfs
+	 * attribute are 0600 and writable here.
+	 */
+	fd = open(path, O_RDWR);
 	if (fd < 0) {
 		fprintf(stderr, "HELPER open %s: %s\n", path, strerror(errno));
 		return 1;
@@ -106,8 +115,11 @@ static int do_mmap_hold(int argc, char **argv)
 		off_t off = (off_t)(i * page);
 		void *m = mmap(NULL, (size_t)bytes, PROT_READ, MAP_SHARED, fd, off);
 
-		if (m == MAP_FAILED)
+		if (m == MAP_FAILED) {
+			fprintf(stderr, "HELPER mmap %s[%ld] off=%lld: %s\n",
+				path, i, (long long)off, strerror(errno));
 			break;
+		}
 		maps[i] = m;
 		mapped++;
 	}
@@ -197,7 +209,7 @@ static int do_mlock_hog(int argc, char **argv)
 
 static int do_fragment_buddy(int argc, char **argv)
 {
-	long mib, hold, want, got = 0, freed = 0, locked = 0, i, off;
+	long mib, hold, want, got = 0, freed = 0, locked = 0, i, off, stopped = 0;
 	void **maps;
 
 	if (argc < 3) {
@@ -211,12 +223,35 @@ static int do_fragment_buddy(int argc, char **argv)
 		return 2;
 	}
 
+	/*
+	 * The mib argument is a cap, not a quota. A fixed 75% share leaves
+	 * the untouched remainder as order-10 blocks, so order-7 never fails
+	 * and the drill reports INCONCLUSIVE. Allocate until the kernel says
+	 * no, up to this cap; splitting down to the watermark is what actually
+	 * removes the high-order supply.
+	 */
 	want = (mib * 1024 * 1024) / FRAG_CHUNK;
 	if (want > FRAG_MAX_CHUNKS)
 		want = FRAG_MAX_CHUNKS;
 	if (want < 2) {
 		fprintf(stderr, "HELPER mib too small to fragment\n");
 		return 2;
+	}
+
+	/*
+	 * This guest is disposable and this process is the point of the
+	 * drill. Keep the OOM killer off us: if memory truly runs out the
+	 * fault fails and we stop there instead of being killed mid-pattern.
+	 */
+	{
+		int oom = open("/proc/self/oom_score_adj", O_WRONLY);
+
+		if (oom >= 0) {
+			if (write(oom, "-1000\n", 6) < 0) {
+				/* best effort: the pattern still works */
+			}
+			close(oom);
+		}
 	}
 
 	maps = calloc((size_t)want, sizeof(*maps));
@@ -229,8 +264,10 @@ static int do_fragment_buddy(int argc, char **argv)
 		char *m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
 			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-		if (m == MAP_FAILED)
+		if (m == MAP_FAILED) {
+			stopped = 1;
 			break;
+		}
 		for (off = 0; off < FRAG_CHUNK; off += 4096)
 			m[off] = 1;
 		maps[i] = m;
@@ -250,8 +287,8 @@ static int do_fragment_buddy(int argc, char **argv)
 			locked++;
 	}
 
-	printf("FRAGMENT_BUDDY ready=1 chunks=%ld held=%ld freed=%ld locked=%ld chunk_kib=64\n",
-	       got, got - freed, freed, locked);
+	printf("FRAGMENT_BUDDY ready=1 chunks=%ld held=%ld freed=%ld locked=%ld chunk_kib=64 cap_chunks=%ld exhausted=%ld\n",
+	       got, got - freed, freed, locked, want, stopped);
 	fflush(stdout);
 
 	if (hold > 0)

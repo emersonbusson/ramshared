@@ -160,10 +160,22 @@ for i in $(seq 1 "$CYCLES"); do
 	# new_id must succeed: without a registered dynid, uio_hv_generic has
 	# id_table = NULL and will never bind. A silent || true here hid exactly
 	# that failure for thirty cycles and left the BUG-3 path unexercised.
+	#
+	# vmbus_add_dynid() ends in driver_attach(), so new_id binds the
+	# matching device by itself. A following explicit bind then hits
+	# __driver_probe_device() with dev->driver already set and returns
+	# -EBUSY, which counted a correct attach as bind_fail thirty times.
+	# Verify the binding instead of requiring the redundant write.
 	echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/new_id" 2>>"$LOG" ||
 		{ say "cycle$i newid_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
-	echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/bind" 2>>"$LOG" ||
-		{ say "cycle$i bind_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
+	bound="$(readlink -f "/sys/bus/vmbus/devices/$NIC/driver" 2>/dev/null || echo none)"
+	case "$bound" in
+	*/uio_hv_generic) ;;
+	*)
+		echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/bind" 2>>"$LOG" ||
+			{ say "cycle$i bind_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
+		;;
+	esac
 	echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/unbind" 2>>"$LOG" || true
 	echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/remove_id" 2>>"$LOG" || true
 	echo "$NIC" >"$DRIVER_DIR/hv_netvsc/bind" 2>>"$LOG" ||
@@ -179,8 +191,8 @@ say "PHASE1-AFTER $(vmbus_maps || echo 'MAPS unavailable')"
 # --- phase 2: UIO mmap + hold-in-mmap (BUG-3 candidate repro) ---------------
 say "=== PHASE 2: UIO mmap + hold-in-mmap ==="
 echo "$NIC" >"$DRIVER_DIR/hv_netvsc/unbind" 2>>"$LOG" || true
+# new_id's driver_attach() is what binds the device; no separate bind.
 echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/new_id" 2>>"$LOG" || true
-echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/bind" 2>>"$LOG" || true
 sleep 1
 
 UIO_DEV=""

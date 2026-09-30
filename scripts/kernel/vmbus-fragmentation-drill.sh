@@ -25,7 +25,9 @@
 # daily WSL2 environment. Swap is never activated here.
 #
 # usage: vmbus-fragmentation-drill.sh [hog_mib] [logfile]
-#   hog_mib  default 75% of MemAvailable, taken as 64 KiB chunks
+#   hog_mib  cap in MiB; default MemAvailable. The helper allocates 64 KiB
+#            chunks until the kernel refuses or the cap is reached, then
+#            frees every other one.
 #
 # Depends on vmbus_drill_helper (static, see hyperv-drill-initramfs/) for the
 # fragment-buddy primitive. The guest has no CPython and this is a Day-0
@@ -66,8 +68,12 @@ say() { echo "$@" | tee -a "$LOG"; }
 
 hog_mib() {
 	local avail
+	# The helper treats this as a cap and stops when the kernel refuses
+	# more memory, so pass the full availability. A 75% share left the
+	# untouched remainder as order-10 blocks and the drill could never
+	# show order-7 failing.
 	avail="$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)"
-	echo $((avail * 75 / 100))
+	echo "$avail"
 }
 
 HOGB="${1:-$(hog_mib)}"
