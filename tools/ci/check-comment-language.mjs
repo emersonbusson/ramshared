@@ -18,7 +18,15 @@ export const MAX_FILE_BYTES = 512 * 1024
 export const MAX_VALIDATION_LOG_BYTES = 1024 * 1024
 export const MAX_PATHS = 2_000
 export const MAX_FINDINGS = 10_000
-export const MAX_PROTECTED_INVENTORY_BYTES = 2 * 1024 * 1024
+// Protected inventory is append-only by design (validation.md is an append log
+// capped at MAX_VALIDATION_LOG_BYTES, and docs/**/evidence grows per campaign).
+// Per-file caps bound each read; this ceiling only bounds total hashing work in
+// --all mode. Sized to the documented growth model, not to a point-in-time
+// snapshot: the 2026-09-30 inventory is 2.41 MiB and validation.md alone may
+// reach 1 MiB. `protected_inventory_stays_under_the_scanner_ceiling` fails when
+// the real tree approaches this value so growth is a test signal, not a silent
+// scan refusal.
+export const MAX_PROTECTED_INVENTORY_BYTES = 8 * 1024 * 1024
 export const RATCHET_BASELINE_PATH = 'tools/ci/comment-language-baseline.json'
 export const RATCHET_SCHEMA_PATH = 'tools/ci/comment-language-baseline.schema.json'
 export const RATCHET_SCHEMA = 'ramshared-comment-language-ratchet/v1'
@@ -529,7 +537,7 @@ function countFindings(findings, classification) {
   }
 }
 
-function addProtectedDigest(digest, relative, buffer, totalBytes) {
+export function addProtectedDigest(digest, relative, buffer, totalBytes) {
   const nextTotal = totalBytes + buffer.length
   if (nextTotal > MAX_PROTECTED_INVENTORY_BYTES) {
     throw new LanguageError('protected-inventory-size-limit')
