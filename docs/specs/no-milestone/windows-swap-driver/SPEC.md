@@ -471,6 +471,22 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   ```bash
   node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/loader_unix.rs --min 80 --report-json tmp/windows-swap-driver-loader-unix-cov.json
   ```
+- **Windows loader platform E2E:** `loader_win.rs` is `#[cfg(windows)]` and has no LLVM
+  instrumented regions on a Linux coverage run, so it cannot carry a `rust-line-coverage`
+  owner. It is owned by the `windows-platform-e2e` entry
+  `windows-swap-driver-loader-win-platform-e2e`, which binds the named static contract
+  `loader_win_adapter_contract` in `scripts/windows/Test-AutonomousBrokerStatic.ps1` to the
+  named live drill `three_round_sha` in `scripts/windows/Run-GuestAutonomousLifecycle.ps1`.
+  The static half asserts the RF-4/DT-5 adapter contract on the source: only the Win32
+  `LoadLibraryW`/`GetProcAddress`/`FreeLibrary` triad with no POSIX `dlopen*` call, null-handle
+  refusal in `sym`/`close` before any API call, NUL-terminated UTF-16 module path, `error()`
+  formatting the Win32 code alone with no pointer or path, and `close` mapping the FreeLibrary
+  BOOL to the dlclose-style 0/-1 status. That static suite was executed on 2026-09-30 through
+  Windows PowerShell 5.1 and reported `PASS loader_win_adapter_contract` together with the four
+  granular `loader_win_*` checks. The live half reaches `loader_win` through
+  `cuda_probe` → `Cuda::load()` on Windows and is **not** executed in this campaign; it stays
+  covered by the open "Corrected Windows physical lifecycle qualification" gate until a
+  supervised Windows lab run records `three_round_sha`.
 - **Kahneman discipline:** #14 + #1 (ITEM-1 Map).
 
 ### `crates/ramshared-cuda/Cargo.toml`  *(ITEM-1 — RF-4, DT-16)*
@@ -524,6 +540,29 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
 | --- | --- |
 | — | None. The local `VramBackend` definition in `wsl2d/backend.rs` is **replaced** by re-export (ITEM-2); it is not a file to delete. Additive Day-0. |
 
+<!-- rust-slice-platform-e2e-v1
+{
+  "schema_version": 1,
+  "id": "windows-swap-driver-loader-win-platform-e2e",
+  "kind": "windows-platform-e2e",
+  "files": [
+    "crates/ramshared-cuda/src/loader_win.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-cuda/src/loader_win.rs",
+      "static": {
+        "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+        "test": "loader_win_adapter_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+        "test": "three_round_sha"
+      }
+    }
+  ]
+}
+-->
 ## Observability
 
 **Metrics / counters (service — ETW or perf counters):**

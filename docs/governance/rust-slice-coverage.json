@@ -1471,6 +1471,48 @@
         "crates/ramshared-winsvc/src/ntpagefile.rs"
       ],
       "min": 80
+    },
+    {
+      "id": "windows-swap-driver-loader-win-platform-e2e",
+      "kind": "windows-platform-e2e",
+      "spec": "docs/specs/no-milestone/windows-swap-driver/SPEC.md",
+      "files": [
+        "crates/ramshared-cuda/src/loader_win.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-cuda/src/loader_win.rs",
+          "static": {
+            "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+            "test": "loader_win_adapter_contract"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+            "test": "three_round_sha"
+          }
+        }
+      ]
+    },
+    {
+      "id": "windows-storport-driver-adapter-platform-e2e",
+      "kind": "windows-platform-e2e",
+      "spec": "docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md",
+      "files": [
+        "crates/ramshared-winsvc/src/windows_driver.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-winsvc/src/windows_driver.rs",
+          "static": {
+            "path": "scripts/windows/Test-ProductOnlineStatic.ps1",
+            "test": "windows_driver_mapped_queue_contract"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+            "test": "all_registered_depths_have_zero_disk_retries"
+          }
+        }
+      ]
     }
   ]
 }

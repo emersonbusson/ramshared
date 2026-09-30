@@ -30,6 +30,8 @@ $guestLifecycle = Get-Content (Join-Path $RepoRoot `
         "scripts\windows\Run-GuestAutonomousLifecycle.ps1") -Raw
 $hostLifecycle = Get-Content (Join-Path $RepoRoot `
         "scripts\windows\Run-HostAutonomousLifecycle.ps1") -Raw
+$loaderWin = Get-Content (Join-Path $RepoRoot `
+        "crates\ramshared-cuda\src\loader_win.rs") -Raw
 
 Assert-Static ($broker -match [regex]::Escape("\\.\pipe\RamSharedBroker.v1")) `
     "canonical_product_pipe" "fixed named-pipe endpoint is compiled into the broker"
@@ -77,5 +79,35 @@ Assert-Static ($broker -notmatch "TcpListener" -and $online -notmatch "TcpStream
 Assert-Static ($guestLifecycle -notmatch "Lab-LeaseBroker|TcpListener" -and
     $hostLifecycle -notmatch "Lab-LeaseBroker|TcpListener") `
     "NO_LAB_BROKER_REFERENCE" "autonomous guest/host campaigns consume packaged services"
+
+# RF-4 / DT-5 Windows loader twin of `loader_unix.rs`: Win32 triad only, every
+# entry point refuses a null handle before any API call, the module path is a
+# NUL-terminated UTF-16 string, and `error()` formats the Win32 code alone.
+Assert-Static ($loaderWin -match "LoadLibraryW" -and
+    $loaderWin -match "GetProcAddress" -and
+    $loaderWin -match "FreeLibrary" -and
+    $loaderWin -notmatch "\bdlopen\s*\(|\bdlsym\s*\(|\bdlclose\s*\(") `
+    "loader_win_uses_only_the_win32_loader_triad" `
+    "loader_win binds LoadLibraryW/GetProcAddress/FreeLibrary and no POSIX dlopen call"
+Assert-Static ($loaderWin -match "fn open\([\s\S]{0,600}LoadLibraryW" -and
+    $loaderWin -match "fn sym\([\s\S]{0,400}handle\.is_null\(\)" -and
+    $loaderWin -match "fn close\([\s\S]{0,400}handle\.is_null\(\)") `
+    "loader_win_null_handle_is_refused_before_any_api_call" `
+    "sym/close short-circuit a null handle; open only reaches LoadLibraryW after conversion"
+Assert-Static ($loaderWin -match "encode_utf16\(\)\.chain\(Some\(0\)\)" -and
+    $loaderWin -match "CStr::from_ptr") `
+    "loader_win_module_path_is_nul_terminated_utf16" `
+    "open converts the CStr to a NUL-terminated wide string for LoadLibraryW"
+Assert-Static ($loaderWin -match "GetLastError" -and
+    $loaderWin -match "Windows error code: 0x" -and
+    $loaderWin -notmatch "\{:p\}|as usize|as u64") `
+    "loader_win_error_reports_code_only" `
+    "error() formats the Win32 code and leaks no pointer or module path"
+Assert-Static ($loaderWin -match "fn close\([\s\S]{0,600}FreeLibrary" -and
+    $loaderWin -match "matching dlclose behavior") `
+    "loader_win_close_matches_dlclose_status" `
+    "close maps FreeLibrary BOOL to the dlclose-style 0 success / -1 failure"
+# Roll-up reached only when every loader_win assertion above has passed.
+Write-Output "PASS loader_win_adapter_contract"
 
 $results

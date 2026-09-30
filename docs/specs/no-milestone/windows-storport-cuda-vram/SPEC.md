@@ -166,7 +166,25 @@ Evidence is executable tests + live lab campaigns (not “code exists”). Unche
   `PASS_VALID_QUEUE`, `REFUSE_FOREIGN_OWNER`, `REFUSE_RESERVED_REGISTER`, `REFUSE_BAD_RING`,
   `REFUSE_RING_INDEX_JUMP`, `REFUSE_RESERVED_CQE`, `REFUSE_UNKNOWN_IOCTL`,
   `COMPLETION_REENTRY_NO_SLOT_REUSE`, `RUNDOWN_UNMAP_AFTER_COPY` (#13).
+- Platform E2E ownership: the file is `#![cfg(windows)]` and has no LLVM instrumented
+  regions on a Linux coverage run, so it is owned by the `windows-platform-e2e` entry
+  `windows-storport-driver-adapter-platform-e2e`, which binds the named static contract
+  `windows_driver_mapped_queue_contract` in `scripts/windows/Test-ProductOnlineStatic.ps1`
+  to the named live drill `all_registered_depths_have_zero_disk_retries` in
+  `scripts/windows/Run-GuestAutonomousLifecycle.ps1`. The static half asserts the DT-4/DT-5/DT-6
+  adapter contract on the source: the Windows-gated unsafe-confined shape, the ABI-v1 IOCTL
+  codes derived from `FILE_DEVICE_MASS_STORAGE`/`METHOD_BUFFERED` with `ioctl_code(0..=4)`, one
+  pending `COMMIT_AND_FETCH` refused when one is already outstanding and cancelled/drained
+  through a single `OVERLAPPED` via `CancelIoEx`+`GetOverlappedResult`, ring-index publication
+  through `AtomicU32` `Acquire`/`Release`, `IoctlError` Display as pointer-free stable classes,
+  and every `WindowsMappedQueue` allocation exit path freeing its regions. That static suite was
+  executed on 2026-09-30 through Windows PowerShell 5.1 and reported
+  `PASS windows_driver_mapped_queue_contract`. The live half registers the mapped queue through
+  the product Online path and is **not** executed in this campaign; the refusal/Verifier drills
+  listed above and the live registration drill stay covered by the open "Corrected Windows
+  physical lifecycle qualification" gate until a supervised Windows lab run records them.
 - Cover target: N/A — E2E-only; Windows handle/MDL behavior requires WDK driver plus Verifier.
+  No Linux line percentage is claimed for this file.
 - Kahneman: ITEM-3 row.
 
 **`crates/ramshared-winsvc/src/evidence.rs`**
@@ -407,6 +425,29 @@ Tests: `./scripts/docs-check.sh`. Cover: N/A — docs.
 None. The lab backend remains an explicitly named VM instrument; its references are deleted only from
 the product binary and product installer.
 
+<!-- rust-slice-platform-e2e-v1
+{
+  "schema_version": 1,
+  "id": "windows-storport-driver-adapter-platform-e2e",
+  "kind": "windows-platform-e2e",
+  "files": [
+    "crates/ramshared-winsvc/src/windows_driver.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-winsvc/src/windows_driver.rs",
+      "static": {
+        "path": "scripts/windows/Test-ProductOnlineStatic.ps1",
+        "test": "windows_driver_mapped_queue_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+        "test": "all_registered_depths_have_zero_disk_retries"
+      }
+    }
+  ]
+}
+-->
 ## Observability
 
 | Signal | Where | Level / type |

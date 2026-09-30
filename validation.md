@@ -10674,3 +10674,103 @@ cite this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence.
 If GitHub retires or repurposes the `windows-latest` / `windows-2025`
 images, or drops the Hyper-V role from them, this claim is void until
 re-measured.
+
+## 2026-09-30 20:51 -03 — Windows-only Rust adapters given platform-E2E owners (EVD-0135)
+
+**What:** Closed the last two production `src/**/*.rs` paths that had no
+`docs/governance/rust-slice-coverage.json` owner and would have blocked
+`plan-rust-slice-coverage.mjs` with `changed-rust-file-unmapped`:
+`crates/ramshared-cuda/src/loader_win.rs` and
+`crates/ramshared-winsvc/src/windows_driver.rs`. Both are `#[cfg(windows)]`
+modules with no LLVM instrumented regions on a Linux coverage run, so a
+`rust-line-coverage` owner would report a false 0%. Each is now owned by a
+`windows-platform-e2e` entry pairing a named static contract with a named live
+drill, and the static half was executed on this host.
+
+**Category:** `invariant`
+
+**How to measure:**
+```bash
+node tools/ci/plan-rust-slice-coverage.mjs --changed-files tmp/win-two.txt
+REPO_WIN='\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared'
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+  -File "$REPO_WIN\scripts\windows\Test-AutonomousBrokerStatic.ps1" -RepoRoot "$REPO_WIN"
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+  -File "$REPO_WIN\scripts\windows\Test-ProductOnlineStatic.ps1" -RepoRoot "$REPO_WIN"
+```
+
+**Measured data:**
+`plan-rust-slice-coverage.mjs --changed-files tmp/win-two.txt` →
+`RUST_SLICE_COVERAGE_STATUS=READY` with
+`RUST_SLICE_PLATFORM_E2E_REQUIRED=windows-swap-driver-loader-win-platform-e2e` and
+`RUST_SLICE_PLATFORM_E2E_REQUIRED=windows-storport-driver-adapter-platform-e2e`, exit 0.
+`--all` → READY, 54 mapped entries, exit 0, no `platform-*` or `coverage-*` findings.
+Selecting every `crates/**/src/**/*.rs` reports exactly two
+`changed-rust-file-unmapped`, both the concurrently-edited
+`crates/ramshared-vram/src/codec.rs` and `crates/ramshared-vram/src/worker_telemetry.rs`
+(uncommitted at measurement time, deliberately not measured); the third walk hit,
+`crates/ramshared-cli/src/monitor_pressure_tests.rs`, is correctly excluded as a
+test-only path module and produces no finding.
+
+Windows PowerShell 5.1.26100.9444 static runs (host is WSL2; scripts reached over
+the `\\wsl.localhost\Ubuntu-24.04` UNC path):
+`Test-AutonomousBrokerStatic.ps1` exit 0, 22/22 named checks PASS including the five
+new `loader_win_*` checks and the roll-up `PASS loader_win_adapter_contract`;
+`Test-ProductOnlineStatic.ps1` exit 0, 5/5 PASS including
+`PASS windows_driver_mapped_queue_contract`. Combined 28 PASS lines, 0 FAIL.
+Both harnesses remain registered in `scripts/windows/Test-WindowsCiStatic.ps1`
+(`Name = "Test-AutonomousBrokerStatic.ps1"`, `Name = "Test-ProductOnlineStatic.ps1"`).
+
+Static contract asserted on `loader_win.rs`: Win32 `LoadLibraryW`/`GetProcAddress`/
+`FreeLibrary` triad with no POSIX `dlopen(`/`dlsym(`/`dlclose(` call, `sym`/`close`
+null-handle refusal before any API call, `encode_utf16().chain(Some(0))` NUL-terminated
+wide path from `CStr::from_ptr`, `error()` formatting `Windows error code: 0x` from
+`GetLastError` with no `{:p}` or integer pointer cast, and `close` mapping the
+FreeLibrary BOOL to the documented dlclose-style 0/-1 status.
+
+Static contract asserted on `windows_driver.rs`: `#![cfg(windows)]` +
+`#![allow(unsafe_code)]`, ABI-v1 IOCTL codes from
+`FILE_DEVICE_MASS_STORAGE = 0x0000_002d` / `METHOD_BUFFERED = 0` via
+`ioctl_code(0..=4)`, single pending `COMMIT_AND_FETCH` (`if self.pending` →
+`"commit already pending"`) cancelled and drained through one `OVERLAPPED` with
+`CancelIoEx` + `GetOverlappedResult`, ring indices published with
+`AtomicU32` `Ordering::Release` / observed with `Ordering::Acquire`,
+`IoctlError` Display as pointer-free stable classes, and every
+`WindowsMappedQueue` allocation exit path freeing its regions (reverse order in
+the `try_new` error paths).
+
+**Verdict:** 🟡 partial — static half ✅ (real execution, 28 PASS / 0 FAIL);
+live half not executed in this campaign.
+
+**Next action:** run `scripts/windows/Run-GuestAutonomousLifecycle.ps1` on a
+supervised Windows lab and record `three_round_sha` (for `loader_win.rs`, reached
+through `cuda_probe` → `Cuda::load()` on `nvcuda.dll`) and
+`all_registered_depths_have_zero_disk_retries` (for `windows_driver.rs`, reached
+through the product Online `register_queue` path). The deeper IOCTL refusal suite
+`scripts/windows/Invoke-WinDriveIoctlValidation.ps1` remains the SPEC-named live
+list for `windows_driver.rs`. Until those land, the open "Corrected Windows
+physical lifecycle qualification" gate stays the honest owner of the gap.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0135`.
+**Owner role:** `ci-contract-engineer`.
+**Observed at:** `2026-09-30T23:51:00-03:00` (static harness runs on this host).
+**Verified at:** `2026-09-30T23:51:00-03:00`.
+**Source revision:** `b7e9f0082852` (working tree also carries these five paths:
+`scripts/windows/Test-AutonomousBrokerStatic.ps1`,
+`scripts/windows/Test-ProductOnlineStatic.ps1`,
+`docs/governance/rust-slice-coverage.json`,
+`docs/specs/no-milestone/windows-swap-driver/SPEC.md`,
+`docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md`).
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until a supervised Windows lab run records the two named live
+drills, at which point the live half of this entry is superseded rather than
+deleted. Keep the exact static output count (22 + 5 = 27 named checks plus the
+two harness roll-ups): a reader who sees only "PASS" will over-claim that the
+live drills ran.
+**Freshness:** Superseded as soon as `Run-GuestAutonomousLifecycle.ps1` records
+`three_round_sha` and `all_registered_depths_have_zero_disk_retries` for these two
+sources, or as soon as either static harness or either Rust source changes.
+Never cite this entry as WDK, Driver Verifier, IOCTL refusal, GPU, or
+three-tier-stress qualification evidence — the static half is source-contract
+assertion only.

@@ -15,6 +15,8 @@ $mainPath = Join-Path $RepoRoot "crates\ramshared-winsvc\src\main.rs"
 $mainText = Get-Content -LiteralPath $mainPath -Raw
 $hostPath = Join-Path $RepoRoot "crates\ramshared-winsvc\src\windows_host.rs"
 $hostText = Get-Content -LiteralPath $hostPath -Raw
+$driverPath = Join-Path $RepoRoot "crates\ramshared-winsvc\src\windows_driver.rs"
+$driverText = Get-Content -LiteralPath $driverPath -Raw
 $registerIdx = $text.IndexOf('link.register_queue(&reg)')
 $findIdx = $text.IndexOf('WindowsHostState::find_lun')
 $onlineLogIdx = $text.IndexOf('product Online: run_id={run_id}')
@@ -79,5 +81,53 @@ if ($mainText -notmatch 'set_service_status\(ServiceStatus\s*\{[\s\S]{0,500}curr
     throw "scm_stop_pending_status_error_is_logged failed"
 }
 Write-Output "PASS scm_stop_pending_status_error_is_logged"
+
+# DT-4 / DT-5 / DT-6 `windows_driver.rs` adapter contract: the mapped queue is
+# Windows-only and isolates every unsafe block; IOCTL codes derive from the
+# shared ABI constants; one pending COMMIT_AND_FETCH is cancelled and drained
+# through a single OVERLAPPED; ring indices publish with Release and observe
+# with Acquire; `IoctlError` Display carries stable classes and no pointers;
+# allocation error paths free in reverse order with no leak.
+if ($driverText -notmatch '#!\[cfg\(windows\)\]' -or
+    $driverText -notmatch '#!\[allow\(unsafe_code\)\]') {
+    throw "windows_driver_mapped_queue_contract: adapter is not Windows-gated unsafe-confined"
+}
+foreach ($token in @('FILE_DEVICE_MASS_STORAGE: u32 = 0x0000_002d',
+                     'METHOD_BUFFERED: u32 = 0',
+                     'IOCTL_REGISTER: u32 = ioctl_code(0)',
+                     'IOCTL_UNREGISTER: u32 = ioctl_code(1)',
+                     'IOCTL_COMMIT: u32 = ioctl_code(2)',
+                     'IOCTL_CREATE: u32 = ioctl_code(3)',
+                     'IOCTL_DESTROY: u32 = ioctl_code(4)')) {
+    if (-not $driverText.Contains($token)) {
+        throw ("windows_driver_mapped_queue_contract: missing ABI token " + $token)
+    }
+}
+if ($driverText -notmatch 'if self\.pending' -or
+    $driverText -notmatch 'commit already pending' -or
+    $driverText -notmatch 'CancelIoEx' -or
+    $driverText -notmatch 'GetOverlappedResult' -or
+    $driverText -notmatch 'fn cancel_and_drain\([\s\S]{0,400}GetOverlappedResult') {
+    throw "windows_driver_mapped_queue_contract: single pending COMMIT is not cancelled and drained"
+}
+if ($driverText -notmatch 'AtomicU32' -or
+    $driverText -notmatch 'Ordering::Acquire' -or
+    $driverText -notmatch 'Ordering::Release' -or
+    $driverText -notmatch 'fn load_idx\([\s\S]{0,300}Ordering::Acquire' -or
+    $driverText -notmatch 'fn store_idx\([\s\S]{0,300}Ordering::Release') {
+    throw "windows_driver_mapped_queue_contract: ring indices do not publish Acquire/Release"
+}
+if ($driverText -match '\{:p\}' -or
+    $driverText -notmatch 'impl std::fmt::Display for IoctlError' -or
+    $driverText -notmatch 'IoctlError::Timeout => write!\(f, "timeout"\)') {
+    throw "windows_driver_mapped_queue_contract: IoctlError Display is not pointer-free stable classes"
+}
+if ($driverText -notmatch 'Err\(error\) => \{\s*free_region\(sq, sq_bytes\)' -or
+    $driverText -notmatch 'Err\(error\) => \{\s*free_region\(cq, cq_bytes\);\s*free_region\(sq, sq_bytes\)' -or
+    $driverText -notmatch 'impl Drop for WindowsMappedQueue' -or
+    $driverText -notmatch 'free_region\(self\.sq, self\.sq_bytes\);\s*free_region\(self\.cq, self\.cq_bytes\);\s*free_region\(self\.data, self\.data_bytes\)') {
+    throw "windows_driver_mapped_queue_contract: mapped regions are not freed on every exit path"
+}
+Write-Output "PASS windows_driver_mapped_queue_contract"
 
 Write-Output "PASS Test-ProductOnlineStatic"
