@@ -14,7 +14,7 @@ Evidence lives in [validation.md](validation.md) and feature IMPL files.
 
 ### v0.10.0 — LKML Upstream RFC v2 & Tier 3 Cascade Qualification (2026-09)
 
-- Upstream Linux Kernel Driver RFC v2 submitted to LKML and Microsoft WSL ([microsoft/WSL#41054](https://github.com/microsoft/WSL/issues/41054)).
+- Upstream **`drivers/block` RamShared VRAM driver** RFC v2 submitted to LKML, and a separate Microsoft WSL config feature request ([microsoft/WSL#41054](https://github.com/microsoft/WSL/issues/41054)). This bullet does **not** refer to the Hyper-V/VMBus ring-buffer series, whose unversioned v1 went to `linux-hyperv` on 2026-09-17 and whose v2 remains an unsent draft (see `docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/`).
 - Consolidated Linux kernel drivers, multi-tier memory management, and fail-safe recovery into a unified production architecture.
 - Historical Tier 3 cascade saturation evidence is retained in the benchmark and validation registries. It is not EVD-0040, which records zero-copy CUDA host mapping only.
 - High-resolution vector diagrams (Inter & JetBrains Mono) with infinite resolution across displays.

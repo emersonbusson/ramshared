@@ -4,7 +4,7 @@
 
 ## Status
 
-**PARTIAL — the current public v2 candidate has seven tracked patches. Hosted run 36574925363 passed all seven staged x86_64/arm64 builds, the WSL 6.18.40.1 backport build, and KUnit 24/24 on x86_64 plus 14/14 on the WSL backport. The candidate is not installed on the daily WSL host. Live GPADL/UIO lifecycle, source-matched host behavior, and SEV-SNP/TDX/Arm CCA evidence remain open.**
+**PARTIAL — the current public v2 candidate has seven tracked patches. Hosted run 36574925363 passed all seven staged x86_64/arm64 builds, the WSL 6.18.40.1 backport build, and KUnit 24/24 on x86_64 plus 14/14 on the WSL backport. A kernel built from this worktree's `vmbus-ring-buffer-upstream-v2` branch head `a5cedb4de6f8` is installed on the daily WSL host as Build #9 (`kernel-ramshared-v6`, receipt-matched source, EVD-0117/0118); that is the WSL-derived candidate, not a boot of the seven-patch mainline series against v7.3-rc4. Live GPADL/UIO lifecycle, forced order-zero fallback, and SEV-SNP/TDX/Arm CCA evidence remain open.**
 
 EVD-0111 reviewed a dirty candidate at `a022ac393ecaab845682f5afe2be6be792aedde2` and found that its attempted cleanup helper confused host rescind with local unload and missed partial GPADL establishment. That audit's statement that no candidate build or KUnit had run described that dirty snapshot at that time. The current public series tracks patch `0007-gpadl-lifetime-reclaim.patch`; EVD-0112 records its hosted build and KUnit results. Those tests do not establish live VMBus protocol behavior or CoCo safety.
 
@@ -230,8 +230,11 @@ GPADL header declaration. Strict checkpatch reports zero warnings for the
 patches.
 
 The WSL 6.18 backport remains a separate source tree with its own DXG GPADL
-consumer audit. The exact current candidate has not been booted on the daily
-WSL host. The initial series was unversioned: its cover is `[PATCH 0/2]` with
+consumer audit. The daily WSL host now boots Build #9 from this branch head
+`a5cedb4de6f8` (receipt `/mnt/c/wsl/kernel-ramshared-v6.receipt`); the seven-
+patch mainline series itself has still not been booted there, because it
+targets Linux v7.3-rc4 and does not apply to the WSL tree. The initial series
+was unversioned: its cover is `[PATCH 0/2]` with
 `Message-ID` stem `20260918014017.2536753` with cover suffix `-1` and patch
 2/2 suffix `-3`. The archive headers
 confirm these were sent on September 17, 2026 (local time); the archive

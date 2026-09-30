@@ -8968,3 +8968,680 @@ Stress, multi-vendor GPU, and Windows physical campaigns stay unqualified.
 **Verdict:** 🟡 `PARTIAL` — kernel `#9` is the active WSL image with matching
 receipt and a clean boot/lifecycle sample; A/B, race, CoCo, and stress proofs
 remain open.
+
+## 2026-09-30 01:55 -03 — post-reboot idempotent cascade start/stop on kernel #9
+
+**What:** Against the EVD-0115 direct install and booted custom kernel `#9`,
+reattached the sealed origin after the WSL restart, refreshed Guardian to
+`HEALTHY`, minted a fresh host-resume lease, and ran attended cascade
+`up`/`down`/`up`/`up` cycles with swapoff-first teardown. This closes the
+"repeat idempotent start/stop after a full WSL reboot" criterion of the Legacy
+WSL2 service handoff gate.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0119`.
+**Owner role:** post-reboot cascade lifecycle and idempotent re-entry proof.
+**Observed at:** `2026-09-30T04:55:56Z`.
+**Verified at:** `2026-09-30T04:55:56Z`.
+**Source revision:** `05e3c1c416c1d98838418fcfb4356c3ec861b087`.
+**Kernel candidate revision:** `a5cedb4de6f887b5ac6d7394dbc7851cc4a71db0`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0115 through EVD-0118. This is one attended
+post-reboot lifecycle sample on one host. It does not qualify unattended boot
+auto-start, a same-host bundled/custom A/B, CoCo transition, multi-vendor GPU,
+or three-tier stress.
+**Freshness:** Booted kernel `6.18.40.1-microsoft-standard-WSL2+` build `#9`;
+`sha256sum /mnt/c/wsl/kernel-ramshared-v6` =
+`24ac89168096b1dfbd4fda18f19b2aebeeca9742d19ce808dfba4ea0b3be8b2a`
+(matching receipt). Installed CLI `v0.15.0 · 5e6b5845 (clean)` at `/usr/local`,
+SHA-256 `05a55677…b1639` (CLI) and `5d67e2d1…141ed` (daemon). Before the
+campaign the cascade was `Off` with only fallback swap
+`SANITIZED_EXISTING_WSL_SWAP_DEVICE`, origin detached, and no
+`/run/ramshared` lease.
+**Category:** host prerequisite re-establishment / host-gate lease /
+idempotent cascade lifecycle / anti-hang teardown.
+**How to measure:** Elevated `Boot-CascadeElevated.ps1` ran
+`Manage-RamSharedOrigin.ps1 -Action attach` with approval token
+`RAMSHARED_ORIGIN_5GIB_PARTUUID`, returning `state=ATTACHED` for PARTUUID
+`SANITIZED_ORIGIN_PARTUUID` (device `SANITIZED_ORIGIN_DEVICE`, 5 GiB), then
+started scheduled task `RamSharedWslGuardian.v1` (`task_state=Running`) which
+published `state=HEALTHY`, `reason=watching`, `boot_id=SANITIZED_BOOT_ID`.
+`safety/ramshared-host-gate.sh` printed `RAMSHARED_HOST_GATE=NORMAL_BOOT` and
+minted `/run/ramshared/host-resume-lease.json`
+(`source=fresh_sealed_guardian_proof`, same `boot_id`).
+`ramshared up --vram 4096 --zram 2048` armed `zram0` prio 200 (2 GiB, lzo-rle)
+and `nbd0` prio 100 (4 GiB, 1 connection) over SSD-authoritative origin with
+fallback `SANITIZED_EXISTING_WSL_SWAP_DEVICE` prio -2; `status` reported
+`phase=Armed (armed_low_vram_used)`,
+`protection=READY (guaranteed_vram_tier_armed)`, `topology_ok=true`,
+`ghost=false`, `order_ok=true`, daemon `alive`.
+`ramshared down` printed `swapoff ok: /dev/nbd0` then `swapoff ok: /dev/zram0`
+and `cascade unmounted (swapoff-first, no broad kill)`, returning to
+`phase=Off` with only `SANITIZED_EXISTING_WSL_SWAP_DEVICE` and `daemon dead`.
+A second `up` re-armed the
+same three tiers, and a duplicate `up` left the **same daemon PID** and
+identical topology (idempotent re-entry, no second daemon). A `dmesg` scan for
+`BUG:`, `Oops`, `panic`, `FORTIFY`, `UAF`, and `Call Trace` matched no kernel
+fault (only the benign `panic=-1` boot parameter).
+**Remaining boundary:** Boot **auto-start** still does not occur: `wsl2-cascade-boot`
+is `UNQUALIFIED` and `PRD.md` revision 2 requires a native in-program bootstrap
+(RF-7..RF-10) before enablement. `SANITIZED_PRODUCT_PATH/current` remains on
+`v0.15.0-b788c17` while `/usr/local` is `5e6b5845` (product-path skew).
+`seal-kernel-pair.sh` cannot run: the layout inventory and QEMU stamp are
+absent and `/mnt/c/wsl/modules-ramshared.vhdx` is dated 2026-07-10 versus the
+2026-09-29 kernel `#9` build. Same-host bundled/custom A/B, GPADL/UIO race
+reproduction, CoCo transition, multi-vendor GPU, and three-tier stress remain
+open.
+**Verdict:** 🟡 `PARTIAL` — post-reboot idempotent `up`/`down`/`up` and clean
+swapoff-first teardown are proven on kernel `#9` against the EVD-0115 install;
+unattended boot auto-start, sealed kernel/modules pair, and `/opt` promotion
+remain open.
+
+## 2026-09-30 06:35 -03 — GPU budget chain: dual-LUID, software-heap, and mutation-frame fixes
+
+**What:** Root-caused and fixed three reproduced defects that left
+`cache_state: UNAVAILABLE` and `gpu_budget: null` on the live RTX 2060 WSL2
+host, then re-armed the cascade and observed a `driver_reported` budget bound to
+the real host LUID with the cache `ACTIVE`.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0120`.
+**Owner role:** GPU adapter correspondence, software-heap rejection, cache
+mutation framing, and live driver-reported budget proof.
+**Observed at:** `2026-09-30T09:29:48Z`.
+**Verified at:** `2026-09-30T09:29:58Z`.
+**Source revision:** `05e3c1c416c1d98838418fcfb4356c3ec861b087`.
+**Provenance note:** the GPU-budget delta is **uncommitted** on top of that
+revision; the installed daemon SHA-256 is `6016878b…70a96`, `BINARY_MATCH`
+against `/usr/local/bin/ramsharedd`.
+**Kernel candidate revision:** booted `6.18.40.1-microsoft-standard-WSL2+`
+build `#9`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0115 through EVD-0119. This is one attended
+campaign on one single-adapter NVIDIA host. It does not qualify multi-adapter
+selection, AMD, Intel, CoCo, or three-tier stress.
+**Freshness:** `nvidia-smi` reports one `NVIDIA GeForce RTX 2060`, 6144 MiB
+total. Guest `ENUM_ADAPTERS2` lists one display adapter
+(`num_adapters=1`, `num_sources=0`). `/usr/share/vulkan/icd.d/` has no NVIDIA
+ICD, so Vulkan can only see Mesa here.
+**Category:** reproduced defect / adapter identity / cache framing / live
+telemetry.
+
+### Defects (each reproduced, none inferred)
+
+**D1 — WSL2 dual-LUID namespace divergence.**
+Live probe: `/dev/dxg` `ENUM_ADAPTERS2` returned
+`00000000:455c7025` for the RTX 2060, while `cuDeviceGetLuid` and Windows DXGI
+`IDXGIAdapter1::GetDesc1` both returned `00000000:00012055`. Windows SDK
+`d3dkmthk.h` matches our `AdapterInfo` (20 B) / `EnumAdapters2` (16 B)
+`QueryVideoMemoryInfo` (56 B) layouts, so the struct layout is not the bug.
+WSL kernel `ioctl.c` shows `inf->adapter_luid = entry->luid;` (VM-bus channel
+LUID) and that `host_adapter_luid` is never copied to userspace. Result before
+the fix: `CUDA adapter 0 budget rejected: dxg adapter LUID 00000000:00012055 not
+found`, `gpu_budget_guard=allocator_only reason=unavailable_or_unmatched_luid`.
+
+**D2 — software rasterizer accepted as VRAM.**
+`VulkanProvider::open_exact` accepted llvmpipe; its host-RAM heap was reported
+`DriverReported`, so Mesa became a fake VRAM cache
+(`key=6d65736132352e322e382d3075627500` = `mesa25.2.8-0ubu`,
+`safe_target_bytes=4294967296`), then
+`isolated GPU cache unavailable: cache mutation exceeds nonblocking frame limit`.
+
+**D3 — cache mutation frame exceeded by real NBD write size.**
+`AuthoritativeOriginBackend::write_at` forwarded the whole block-layer payload to
+`BestEffortCache::update`, while `IpcCacheClient` fails closed above
+`MAX_MUTATION_FRAME_DATA_BYTES` (64 KiB) and permanently revokes the cache.
+Measured live: `/sys/block/nbd0/queue/max_sectors_kb = 4096` (4 MiB) and
+`max_hw_sectors_kb = 32768` (32 MiB) versus a 64 KiB frame limit — up to 64×
+oversized. The read-miss `promote` path had the same defect.
+
+### Fixes (Day-0, no shims)
+
+- `AdapterCorrespondence::{SharedLuid, SoleAdapter}` in
+  `ramshared-wsl2d::gpu_budget`: exact LUID match, else `AdapterNotFound` plus
+  a single sole adapter; anything else is unprovable and stays allocator-only.
+  `constrained_budget` re-enforces the proof. Named tests:
+  `sole_adapter_correspondence_accepts_split_wsl2_luid_namespaces`,
+  `adapter_not_found_falls_back_to_sole_adapter_correspondence`,
+  `ambiguous_or_absent_sole_adapter_never_assumes_correspondence`.
+- `VulkanProvider::is_hardware_gpu()` (`DISCRETE_GPU` | `INTEGRATED_GPU`);
+  `budget_snapshot` never returns `DriverReported` for a software device type,
+  and the candidate loop logs
+  `Vulkan adapter N skipped: not a hardware GPU`.
+- `MAX_CACHE_MUTATION_BYTES` (64 KiB) with `mutation_frames()` splitting both
+  `update` and `promote`. Named tests:
+  `large_write_is_framed_to_the_cache_mutation_limit` (4 MiB → 64 frames),
+  `large_promote_is_framed_to_the_cache_mutation_limit`.
+- A pre-existing `ramsharedd` bin-test compile break
+  (`FrameHeader::decode` returns `Option`) was fixed so the suite builds.
+
+### Measurements (condition: `idle`, n = 10 over 20 s)
+
+`scripts/p0/measure-vram-headroom.sh 20 2`, read-only:
+
+| Metric | min | max | mean | stddev | unit |
+| --- | --- | --- | --- | --- | --- |
+| Free VRAM | 3601 | 3615 | 3612 | 4 | MiB |
+| Used VRAM | 2340 | 2354 | 2342 | — | MiB |
+| RAM available | 7957 | 7984 | 7973 | — | MiB |
+| Swap used | 4 | 4 | 4 | — | MiB |
+
+Volatility of free VRAM = range/mean = **0.4%**. Host has ~3.6 GiB of stable
+idle VRAM under the observed desktop load.
+
+### Before → action → after
+
+| Field | Before (defects live) | After (fix installed) |
+| --- | --- | --- |
+| `cache_state` | `UNAVAILABLE` | `ACTIVE` |
+| `ok` | `false` | `true` |
+| `gpu_budget` | `null` | present |
+| `gpu_budget.adapter` | — | `cuda`, key `1d3109d8…e0346db6` |
+| `gpu_budget.adapter.luid` | — | `00000000:00012055` (host DXGI) |
+| `gpu_budget.source` | — | `driver_reported` |
+| `gpu_budget.total_bytes` | — | `6441992192` (6144 MiB) |
+| `gpu_budget.budget_bytes` | — | `4211671040` (4016 MiB) |
+| `gpu_budget.used_bytes` | — | `1358495744` |
+| `gpu_budget.available_bytes` | — | `2853175296` (2721 MiB) |
+| `vram_cached_kib` | 0 | 262144 (256 MiB) |
+| `cache_target_kib` | 4194304 (bogus Mesa) | 1360780 (1328 MiB) |
+| `gpu_headroom_kib` | `null` | 2786304 |
+
+Daemon log after the fix (verbatim, append-only log still holds the older
+lines):
+`Vulkan adapter 0 skipped: not a hardware GPU (name="llvmpipe (LLVM 20.1.2, 256 bits)")`;
+`gpu_adapter_selected backend=Cuda ordinal=0 key=1d3109d8…e0346db6 safe_target_bytes=1393439539`;
+`gpu_budget_guard=dxg adapter=00000000:455c7025 correspondence=SoleAdapter`.
+No further `isolated GPU cache unavailable` line appears after that pair.
+
+Stability: three telemetry samples 5 s apart were identical
+(`ok=true`, `cache=ACTIVE`, `cached_mib=256`, `headroom_mib=2721`,
+`budget_mib=4016`, `used_mib=1295`, `src=driver_reported`).
+
+### Validation gates
+
+`cargo fmt` clean; `cargo clippy` clean on the touched crates;
+`cargo test -p ramshared-block -p ramshared-wsl2d -p ramshared-vulkan
+-p ramshared-dxg` green (128 + 6 + 171 + 115 + …). The CLI suite reports
+434 passed / 1 failed, the failure being the pre-existing
+`up_with_config_refuses_missing_safety_net_before_runtime_setup`
+(confirmed still failing with these changes stashed). A one-off flake of
+`supervisor::tests::bounded_systemctl_adapter_reaps_its_owned_timeout_fixture`
+and of `daemon_nbd_recovery_activation_does_not_block_nbd_jobs` appeared only
+under multi-crate parallel load; both passed 5/5 in isolation and the wsl2d
+suite passed 3/3 parallel and 3/3 serial.
+
+**Honest reading:** the GPU budget chain is proven end-to-end on **one**
+single-adapter NVIDIA host under WSL2, with a real `driver_reported` budget
+bound to the host DXGI LUID and a cache holding 256 MiB. The accounting gap
+versus `nvidia-smi` (2721 MiB budget-available vs 3666 MiB `memory.free`) is a
+known WDDM budget-vs-free difference and is not reconciled here. `SoleAdapter`
+correspondence is sound only while exactly one adapter exists on each side; a
+second adapter must fall back to `SharedLuid` or stay allocator-only. The
+DEMOTE / VRAM-return action (returning cached pages to a GPU application
+under load) is **not**
+covered here: `cascade-hog` is not built. Multi-vendor GPU, CoCo, and
+three-tier stress remain open.
+
+**Verdict:** 🟡 `PARTIAL` — D1, D2 and D3 are reproduced, fixed, and proven
+live with a real driver-reported budget and an active cache on one host;
+DEMOTE return, multi-adapter, and multi-vendor qualification remain open.
+
+## 2026-09-30 07:02 -03 — CASCADE DEMOTE drill: swapoff of the VRAM tier under cgroup pressure
+
+**What:** Proved the DEMOTE **action** end to end on the live WSL2 host: with
+716800 active pages already spilled into `/dev/nbd0`, ran the same `swapoff`
+the daemon issues for Corruption/WDDM-constrained demote, while `ramsharedd`
+kept serving read-back, then verified page integrity through the fault-in and
+restored the tier.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0121`.
+**Owner role:** DEMOTE action path (`spawn_swapoff`), spill integrity, A1 sink
+presence.
+**Observed at:** `2026-09-30T06:55:00Z`.
+**Verified at:** `2026-09-30T07:02:00Z`.
+**Source revision:** `05e3c1c416c1d98838418fcfb4356c3ec861b087`.
+**Provenance note:** the drill harness and `scripts/p0/cascade_hog.c` are
+**uncommitted** on top of that revision. The raw harness log was written to an
+ephemeral `/tmp` path and is no longer retained; the measurements below are the
+recorded run output and the harness is reproducible from the command line.
+**Kernel candidate revision:** booted `6.18.40.1-microsoft-standard-WSL2+`
+build `#9`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0120. One attended campaign on one single-adapter
+NVIDIA host. Does not qualify the canary *trigger* (that is unit-tested in
+`crates/ramshared-wsl2d/src/residency.rs`), unattended demote, or multi-vendor.
+**Freshness:** Host state at drill time: one `NVIDIA GeForce RTX 2060`, 6144
+MiB total; booted kernel `6.18.40.1-microsoft-standard-WSL2+` build `#9`;
+cascade armed by `ramshared up --vram 4096 --zram 2048`; `ramsharedd` alive for
+the whole drill; Windows watchdog `RamSharedWslGuardian.v1` `Running`.
+**Category:** reproduced proof / action path / integrity.
+
+### Method
+
+`scripts/p0/measure-cascade-demote.sh` (root) with
+`HOG_MB=2800 CAP_MB=256 RESTORE=1`. `scripts/p0/cascade_hog.c` is the
+consumer: it fills every page with a deterministic per-page pattern
+(`page_word`), signals `/tmp/cv-filled`, holds until `/tmp/cv-go`, then re-reads
+and compares. A mismatch is real corruption — no reference copy is kept. The
+hog is confined to a cgroup v2 `memory.max=256M` so the excess is pushed into
+the cascade; `memory.swap.max` is set to `max`. Host-safety: the Windows
+watchdog `RamSharedWslGuardian.v1` was `Running` for the whole drill. No
+`kill -9` of the daemon, no global thrash.
+
+The harness now builds `cascade-hog` from source when no binary is present
+(`cc -O2 -Wall -Wextra -Werror -std=gnu11`) and takes `FILL_TIMEOUT_S`
+(default 600), because a 2800 MiB fill under a 256 MiB cap spills at roughly
+2 MiB/s and outlives a fixed 90 s wait. `scripts/p0/cascade_hog.c` passes
+`checkpatch.pl` with 0 errors and 0 warnings.
+
+### Before → after
+
+| Step | Evidence |
+| --- | --- |
+| Preflight | three tiers present — `zram0` prio 200, `/dev/nbd0` prio 100, `sdb` prio −2; A1 sink below VRAM satisfied; `ramsharedd` alive |
+| Fill | 716800 pages = 2800 MiB written and accounted |
+| Before DEMOTE | `nbd=696 MiB zram=2047 MiB vhdx=0 MiB` |
+| DEMOTE | `swapoff /dev/nbd0 OK in 141692 ms` (141.7 s) with the daemon serving read-back |
+| After DEMOTE | `nbd=ABSENT`; zram and VHDX still active (A1 holds) |
+| Integrity | `verified 716800 pages, 0 pages with corruption, 0 bad words` |
+| Verdict | `>>> DEMOTE OK: 696 MiB of active pages left VRAM; 0 corruption in hog; sink active.` |
+| RESTORE | `/usr/sbin/swapon -p 100 /dev/nbd0` → `RESTORE ok`; all three tiers back; `cache_state: ACTIVE` |
+
+Exit code `0`. After restore the VRAM cache reported 1280 MiB against a 1328
+MiB target (it had been 256 MiB before the drill), i.e. the drill exercised the
+cache write path as well as the migrate path.
+
+### Measurements
+
+| Metric | Value | Unit | n |
+| --- | --- | --- | --- |
+| Pages filled and verified | 716800 | pages | 1 |
+| Active pages that left VRAM | 696 | MiB | 1 |
+| `swapoff /dev/nbd0` duration | 141692 | ms | 1 |
+| Corruption | 0 | bad words | 1 |
+| Mismatched pages | 0 | pages | 1 |
+
+Single run (`n=1`): this is a correctness proof of the action path, not a
+performance benchmark. It is therefore **not** registered in
+`docs/benchmarks/results.jsonl` as a performance baseline.
+
+### Honest reading
+
+The DEMOTE **action** is proven safe: 696 MiB of active pages migrated out of
+the VRAM tier in 141.7 s with bit-exact integrity and a live sink. This does
+**not** mean the daemon will decide to demote when a GPU application needs the
+memory — that decision depends on the budget signal, which EVD-0122 shows was
+defective. Trigger and action are separate, and only the action is proven here.
+
+**Verdict:** 🟢 `PASS` — DEMOTE action, spill integrity, and RESTORE are proven
+on kernel `#9` on one host. Canary trigger remains unit-tested only;
+unattended demote remains open.
+
+## 2026-09-30 07:40 -03 — GPU budget containment: per-process budget blindness and the device-wide NVML fix
+
+**What:** Reproduced and root-caused why RamShared does not get out of the way
+of a VRAM consumer, then fixed the budget to read device-wide occupancy and
+revalidated on the live host. Before the fix the cache returned 10% of its
+pages under a 3 GiB consumer and the budget never moved; after the fix the
+cache returned **all** of its pages and the budget tracked the consumer.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0122`.
+**Owner role:** GPU budget authority, containment chain, device-wide occupancy.
+**Observed at:** `2026-09-30T07:06:00Z`.
+**Verified at:** `2026-09-30T07:40:07Z`.
+**Source revision:** `05e3c1c416c1d98838418fcfb4356c3ec861b087`.
+**Provenance note:** `crates/ramshared-cuda/src/nvml.rs` and the
+`budget_snapshot` change are **uncommitted** on top of that revision. Installed
+daemon SHA-256 `913daa2c5492c003df4627801885db4eb822c2059bdcb8fef929738100504697`,
+`BINARY_MATCH` against `/usr/local/bin/ramsharedd`.
+**Kernel candidate revision:** booted `6.18.40.1-microsoft-standard-WSL2+`
+build `#9`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0120 and EVD-0121. One attended campaign on one
+single-adapter NVIDIA host. Multi-vendor GPU, multi-adapter, CoCo, and
+three-tier stress remain open.
+**Freshness:** Host state at revalidation time: one `NVIDIA GeForce RTX 2060`,
+6144 MiB total; NVML `libnvidia-ml.so.1` resolvable from `/usr/lib/wsl/lib`;
+booted kernel `6.18.40.1-microsoft-standard-WSL2+` build `#9`; cascade re-armed
+after a clean `down`/`up` cycle with the fixed daemon; `cache_state: ACTIVE`.
+**Category:** reproduced defect / root cause / fix / live revalidation.
+
+### Defect (reproduced, not inferred)
+
+Staged probe `scripts/p0/vram_ramp.c` — allocates `<step> MiB` of device memory
+per stage with `cuMemAlloc` + `cuMemsetD8` so the driver accounts every page,
+holds, then frees. It never touches swap or RamShared state. Sampler reads
+`nvidia-smi` and `/run/ramshared/cache-status.json` every 2 s.
+
+**Phase A — 3 GiB consumer (`vram-ramp 256 3072 6 25`), 78 samples:**
+
+| Metric | Before | Peak | After release |
+| --- | --- | --- | --- |
+| `nvidia-smi` used | 2298 MiB | 4421 MiB | 2290 MiB |
+| `gpu_budget.used_bytes` | 2191 MiB | **2191 MiB** | **2191 MiB** |
+| `gpu_budget.available_bytes` | 2721 MiB | **2721 MiB** | **2721 MiB** |
+| `vram_cached_kib` | 1280 MiB | 1152 MiB | 1152 MiB |
+
+The cache returned **128 MiB of 3072 MiB (10%)**, and the target never moved.
+That is not containment.
+
+**Phase B — staleness ruled out.** The budget carries
+`gpu_budget.sampled_at_unix_ms`. During a 2 GiB hold the sample age oscillated
+between 0 and 5.9 s — the daemon *is* refreshing — while the values stayed
+pinned at `2191`/`2721`. Fresh snapshot, wrong number. Staleness is excluded.
+
+**Phase C — the two sources are both per-process.**
+
+| Source | Live reading during a 2 GiB external hold | Tracks the consumer? |
+| --- | --- | --- |
+| `cuMemGetInfo` (third process, own context) | `used=634 free=3461 total=4095` pinned across 25 samples / 50 s | **No** |
+| WDDM `QUERY_VIDEO_MEMORY_INFO` | `current_usage=2191` pinned | **No** |
+| NVML `nvmlDeviceGetMemoryInfo` | `used` 2770 → 4789 → 2654 MiB | **Yes** |
+| `nvidia-smi` (same NVML data) | 2353 → 4484 → 2353 MiB | **Yes** |
+
+`cuMemGetInfo` under WSL2 GPU-PV accounts the calling process's paravirtual
+channel, not the adapter: a third process's own context reported a constant
+`634 MiB` used while another process held 2 GiB. Note it also reported
+`total=4095 MiB` against a 6144 MiB adapter, which is further evidence that the
+figure is a channel/partition view rather than the device.
+
+The WDDM path is equally scoped. WSL kernel
+`drivers/hv/dxgkrnl/ioctl.c` `dxgkio_query_vidmem_info` rejects any non-zero
+`args.process` with `-EINVAL` and sends `process->host_handle` in the VMBus
+command, so the host resolves the query against **that** dxgkrnl process. Our
+`QueryVideoMemoryInfo` layout matches the UAPI `d3dkmt_queryvideomemoryinfo`
+(56 bytes) exactly — the struct is not the bug; the scope is.
+
+`constrained_budget` already takes
+`min(allocator.available, wddm_available)`. Both inputs were blind, so the min
+was blind. The design was right; the source was wrong.
+
+### Fix (Day-0, no shims)
+
+`crates/ramshared-cuda/src/nvml.rs` adds a runtime NVML loader beside the
+existing CUDA loader (same `dlopen`/`load_sym` path, same NVIDIA driver
+package, no build-time SDK):
+
+- `nvmlInit_v2`, `nvmlDeviceGetHandleByIndex_v2` (fallback without `_v2`),
+  `nvmlDeviceGetMemoryInfo`, `nvmlShutdown`.
+- `Context::device_memory()` returns device-wide used/free/total.
+- `VramProvider::budget_snapshot` for `Context` now sources occupancy from
+  NVML. `Context::mem_info` remains the raw `cuMemGetInfo` call and is
+  documented as allocator-local.
+- `Cuda::load` **fails closed** if NVML is absent. A silent fallback to
+  `cuMemGetInfo` would reintroduce the defect, so a host without NVML gets no
+  budget and therefore no VRAM cache.
+
+Named tests:
+`budget_follows_device_wide_nvml_not_allocator_local_mem_info` (mock NVML and
+mock `cuMemGetInfo` deliberately disagree; the budget must follow NVML),
+`raw_mem_info_stays_allocator_local`,
+`nvml_memory_layout_matches_driver_struct`.
+Dependency documented in `crates/ramshared-cuda/README.md` (runtime candidates
+and the fail-closed rationale).
+
+### Revalidation (same host, same probe, after deploy)
+
+Deploy: `ramshared down` (swapoff-first, clean) → `scripts/install.sh` from the
+local build (`BINARY_MATCH`) → `ramshared up --vram 4096 --zram 2048`. Then
+`vram-ramp 256 3072 2 15` with the same 2 s sampler:
+
+| Metric | Before fix (peak) | After fix (peak) | After fix (released) |
+| --- | --- | --- | --- |
+| `nvidia-smi` used | 4421 MiB | 4820 MiB | 1583 MiB |
+| `gpu_budget.used_bytes` | 2191 MiB | **5009 MiB** | **1854 MiB** |
+| `gpu_budget.available_bytes` | 2721 MiB | **1134 MiB** | **2721 MiB** |
+| `vram_cached_kib` | 1152 MiB | **0 MiB** | 0 MiB |
+
+`b_used` now climbs with the consumer and falls back when it releases;
+`b_avail` tracks down and recovers; the cache drops from 256 MiB to **0 MiB**
+under pressure — it gets completely out of the way, which is the intended
+behaviour when a GPU application needs the memory.
+
+### Measurements (condition: `loaded`, external VRAM consumer present)
+
+| Metric | Value | Unit | n |
+| --- | --- | --- | --- |
+| Consumer peak | 3072 | MiB | 2 |
+| Cache yielded before fix | 128 | MiB (10%) | 1 |
+| Cache yielded after fix | 256 | MiB (100%) | 1 |
+| Budget peak `used_bytes` before fix | 2191 | MiB | 1 |
+| Budget peak `used_bytes` after fix | 5009 | MiB | 1 |
+| `cuMemGetInfo` volatility during hold | 0 | MiB | 25 samples |
+| NVML volatility during hold | 2019 | MiB | 14 samples |
+
+Probes: `scripts/p0/vram_ramp.c` (consumer) and
+`scripts/p0/vram_free_probe.c` (third-process `cuMemGetInfo` reader). Both are
+read-only with respect to RamShared and free everything on exit.
+
+### Residual gaps (not closed here)
+
+- The cache did not re-grow after the consumer released. Re-growth is
+  demand-driven (cache fills on swap access), so this is not claimed as a
+  defect, but it is **not** proven to recover either.
+- When idle, `b_avail` clamps at 2721 MiB — the WDDM per-process figure is the
+  binding `min` and is more conservative than NVML free. Harmless for
+  containment (the truthful lower number binds under pressure) but it leaves an
+  unexplained idle ceiling of about 880 MiB versus NVML free.
+- `SoleAdapter` correspondence still assumes exactly one adapter on each side.
+- AMD, Intel, multi-adapter, CoCo, and three-tier stress remain open.
+
+### Tests
+
+`cargo test -p ramshared-cuda -p ramshared-vram -p ramshared-wsl2d` green:
+24 + 7 + 171 + 115 + 5 + 1 + 4 + 15 + 1 + 1 + 1 + 1 = **346 passed, 0 failed**.
+`./scripts/docs-check.sh` → `✓ docs-check OK`. `cargo fmt` clean; `cargo clippy
+-p ramshared-cuda --lib --all-targets` clean.
+
+**Verdict:** 🟢 `PASS` for the containment slice — the budget is device-wide,
+it tracks an external VRAM consumer, and the cache returns its pages under
+pressure. Multi-vendor, multi-adapter, CoCo, and idle-ceiling reconciliation
+remain open, so this is not a universal qualification.
+
+---
+
+## 2026-09-30 12:35 -03 — cuda-rust-native-tiering ITEM-1 + ITEM-2: codec contract, compressed cache, and CPU-codec control arm
+
+**What:** Implemented and validated SSDV3 STEP 3 for `cuda-rust-native-tiering`
+ITEM-1 and ITEM-2: the provider-side `GpuCacheCodec` contract with a
+deterministic `FakeCodec`, the bounded compressed-cache extent/slab layer, and
+the worker wiring for optional lossless cache compression. Closed two real
+fragilities found while proving the slice (`SlabSpan` free-addressing and
+compressed-extent reclaim). Recorded the NFR-6b measurement-only CPU-codec
+control arm as the ITEM-2 exit and ITEM-3 entry gate. 223 tests, 0 failures,
+cover gate PASSED on all three business-logic files. No GPU and no nvCOMP were
+used; no performance claim is made.
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0123`.
+**Owner role:** Cache compression codec contract, compressed extent/slab layer, isolated GPU worker wiring.
+**Observed at:** `2026-09-30T15:35:31Z`.
+**Verified at:** `2026-09-30T15:35:31Z`.
+**Source revision:** `7adf0fcf71769361bd76b65488ce3125b433f4f5`.
+**Provenance note:** The ITEM-1/ITEM-2 source, tests, and doc updates are
+**uncommitted** on top of that revision. No daemon rebuild, no host install,
+and no `BINARY_MATCH` claim: this entry is host-side test/coverage evidence
+only, not a deployment qualification.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep with EVD-0122. Host-side harness only (no GPU, no nvCOMP).
+ITEM-3 stays gated on the nvCOMP runtime and its pre-decode checksum
+mechanism; ITEM-5 paired GPU runs do not exist yet.
+**Freshness:** Host state at test time: WSL2 kernel
+`6.18.40.1-microsoft-standard-WSL2+`; `cargo test` / `cargo clippy` /
+`check-rust-slice-coverage.mjs` run directly on the workspace with
+`CARGO_BUILD_JOBS=1`; no cascade state was touched and no host pressure was
+applied.
+**Category:** implementation / named-test / coverage-gate.
+
+### Scope
+
+Lossless compression of the **disposable VRAM cache** only (RF-1..RF-9,
+DT-1..DT-11). The SSD origin, Linux swap format, block ABI, and Windows
+pagefile are unchanged and remain authoritative. Compression is experimental
+and `compression_enabled = false` by default (DT-9).
+
+### Implemented
+
+- `crates/ramshared-vram/src/codec.rs` — `GpuCacheCodec<M: VramMemory>`
+  contract over provider-owned VRAM slabs (a host-side codec cannot implement
+  the trait), `CodecId`/`CodecStatus`/`VramSpan`/`VramOutputReservation`/
+  `CodecAlignments`/`CodecChunkResult`, shared `crc32`, and a deterministic
+  `FakeCodec` (RLE wire format, `CodecId::Fake`, counters on compress/decode).
+- `crates/ramshared-block/src/compressed_cache.rs` — bounded extent index,
+  `SlabSpan` full addressing, coalescing free-range 2 MiB slab allocator,
+  `split_extent` (≤ 64 KiB), `invalidate_overlaps` (DT-6), `read_coverage`
+  (exact / contiguous / gap / overlap), LRU timestamps on compressed extents.
+- `crates/ramshared-block/src/gpu_cache_worker.rs` — DT-9 default-off;
+  16 MiB read ceiling checked before allocation (DT-4); invalidate-before-publish
+  (DT-6); provider-side `checksum_batch` before decode, mismatch refuses without
+  invoking the decoder (DT-7); strictly-smaller usefulness gate (DT-10);
+  `CODEC_SUBDEADLINE = 20 ms` inside `CACHE_READ_BUDGET = 50 ms` (DT-3); codec
+  faults leave the raw cache serving and do not revoke the client (DT-11);
+  admission on the full parent free floor
+  `required_free_bytes(configured, runtime_headroom)` with
+  `RUNTIME_FREE_BUFFER_BYTES = 640 MiB` (DT-4 / NFR-2).
+- `crates/ramshared-block/tests/cpu_codec_control_arm.rs` — NFR-6b
+  measurement-only CPU-codec control arm **outside** `GpuCacheCodec`: identical
+  DT-4 extents, host-memory encode/decode with the same lossless RLE, same
+  metric envelope and integrity checks. Never a trait implementation, never a
+  runtime provider, never a production fallback.
+
+### Two fragilities found and closed
+
+1. **`VramSpanAllocator::free()` was slab-ambiguous.** `VramSpan.offset` is
+   slab-local, so with ≥ 2 slabs a free of offset 0 always landed in slab 0.
+   Fixed with `SlabSpan { slab_index, span }` and an index-authoritative
+   `free()` that refuses an unknown index. Proof:
+   `free_addresses_the_slab_not_the_offset`.
+2. **Host-pressure reclaim never released compressed VRAM.**
+   `reclaim_under_host_pressure()` only evicted raw chunks. Fixed with
+   `last_accessed` LRU on compressed extents and a fallback in
+   `evict_coldest_chunk()`. Proof: `worker_evicts_compressed_lru_extent`.
+
+Both are recorded as contract notes in `IMPL.md` so they are not "fixed" back.
+
+### Two test-assertion errors corrected (not product defects)
+
+1. A two-extent read over one compressed and one **raw** extent legitimately
+   misses: DT-10 publishes a non-shrinking extent raw, so compressed coverage
+   has a gap and the raw path/origin serves. The test now uses two compressible
+   extents to exercise the assembly it claims to.
+2. A partial overlapping update legitimately leaves the untouched tail as a
+   gap: DT-6 invalidates the **whole** overlapping entry before publishing the
+   replacement, which is what makes "never returns stale bytes" true. The test
+   now asserts the miss and the later complete assembly.
+
+**Measured data:** 223 tests passed, 0 failed (159 `ramshared-block` lib +
+17 `gpu_cache_compression` + 7 `cpu_codec_control_arm` + 6
+`gpu_worker_protocol` + 34 `ramshared-vram` lib). `cargo clippy
+-p ramshared-vram -p ramshared-block --all-targets` = 0 errors, 0 warnings.
+Cover gate `check-rust-slice-coverage.mjs --min 80`:
+`ramshared-vram/src/codec.rs` **90.1%** (317/352),
+`ramshared-block/src/compressed_cache.rs` **89.9%** (222/247),
+`ramshared-block/src/gpu_cache_worker.rs` **86.3%** (623/722). Gate **PASSED**.
+
+### How to measure
+
+```bash
+CARGO_BUILD_JOBS=1 cargo clippy -p ramshared-vram -p ramshared-block --all-targets
+CARGO_BUILD_JOBS=1 cargo test  -p ramshared-vram -p ramshared-block
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-vram,ramshared-block \
+  --files crates/ramshared-vram/src/codec.rs,crates/ramshared-block/src/compressed_cache.rs,crates/ramshared-block/src/gpu_cache_worker.rs \
+  --min 80
+```
+
+### Residual gaps (not closed here)
+
+- **ITEM-3 gated** — no nvCOMP / `libnvcomp` on this host and no pre-decode
+  checksum mechanism resolved. DT-7 must not be weakened to a host readback.
+  The CPU-codec control arm record is its entry gate, not its answer.
+- **ITEM-4** versioned telemetry envelope is not implemented;
+  `cached_bytes`/`target_bytes` are still physical only.
+- **ITEM-5** paired raw/compressed GPU runs do not exist. No performance claim
+  is made here — every number above is a host-side test/coverage figure.
+- Reserve-floor contract **value** drift in the parent worker SPEC is still
+  unreconciled upstream (512 MiB env vs `max(1536 MiB, 20%)`).
+- Multi-vendor GPU, multi-adapter, CoCo (SEV-SNP / TDX / Arm CCA), and
+  three-tier stress remain open.
+
+**Verdict:** 🟡 `PARTIAL` — ITEM-1 and ITEM-2 are implemented, covered, and
+green on this host with no hardcoded failures and no stub returns. Promotion
+past experimental, any performance claim, and any nvCOMP implementation stay
+blocked on the gates above.
+
+## 2026-09-30 13:13 -03 — upstream vmbus contribution audit and phantom-blocker reconciliation
+
+Read-only audit of the Hyper-V/VMBus upstream contribution against Michael
+Kelley's 2026-09-22 review of the unversioned v1 send, plus a live check of
+the installed kernel. Then a documentation-only reconciliation of stale host
+identity claims. No code, config, kernel, or host state was changed.
+
+### Audit result
+
+- The 2026-09-17/18 unversioned 2-patch series is the only VMBus mail ever
+  sent (Message-ID stem `20260918014017.2536753`). Kelley confirmed the
+  order-7 problem and rejected the `vzalloc()` fallback for CoCo guests,
+  requesting a redesign on Kameron Carr's `vmbus_alloc_buffer()`. The PDF in
+  the operator's Downloads folder is that review reply, not an accepted patch.
+- The seven-patch v2 candidate already implements Kelley's five points
+  (`struct vmbus_buffer`, folded GPADL ownership, `gpadl.leak`, removal of
+  `HV_GPADL_BUFFER_DECRYPTED`, universal `vmbus_alloc_buffer()`). It is
+  **unsent by PRD policy** and the GAP-REGISTER gate stays **BLOCKED**.
+  Nothing is merged, reviewed-by, acked-by, or rejected upstream.
+
+### Live host check (kernel #9)
+
+- Running: `6.18.40.1-microsoft-standard-WSL2+ #9 SMP PREEMPT_DYNAMIC
+  Tue Sep 29 21:30:04 -03 2026`.
+- Receipt `/mnt/c/wsl/kernel-ramshared-v6.receipt` reports
+  `source_commit=a5cedb4de6f8…`, `build_number=9`, `source_tree_state=clean`.
+  That commit is the exact HEAD of branch `vmbus-ring-buffer-upstream-v2` in
+  `WSL2-Linux-Kernel-contribution` — the Build #6 source-unmatched gap is
+  closed for the running image.
+- Observed on this boot: 0 `page allocation failure: order:7`, 0 `accept4
+  failed`, `vmbus_alloc_buffer`/`vmbus_free_buffer` present in `/proc/kallsyms`,
+  103 VMBus devices, `zram` loaded (the old Validate-KernelBuild6.sh zram
+  failure no longer applies).
+- BUG-1/2/3/5/8/9/11 and G2 source fixes are present in this tree
+  (`d9a1a3a8d6f6`, `a8042f978bc0`, `b64d516de5fc`, `4ea7c35d2cd8`,
+  `b99248f63e43`, `0dcd3ad5d996`, `68700eb5aa8a`, `805418bd7021`).
+
+### What is still open (unchanged)
+
+1. Live GPADL create/teardown/host-rescind/local-rescind/close/partial-post
+   interleaving on ordinary Hyper-V.
+2. UIO subchannel mmap close/unregister, including a deterministic BUG-3
+   hold-in-mmap reproducer.
+3. Forced order-7 buddy failure showing the order-zero fallback execute on
+   this exact candidate. KUnit fault injection is not physical fragmentation.
+   The VMBus map-retention hypothesis (EVD-0088/0089/0091) has not been
+   re-measured on #9.
+4. SEV-SNP / TDX / Arm CCA CoCo transitions — host is a Ryzen 5 3600 and
+   cannot supply those modes (EVD-0056). Until that evidence exists the
+   series stays PARTIAL and unsent.
+5. BUG-2/3/9 runtime reproducers (source fixes alone do not close them).
+6. DXG greater-than-4-GiB boundary and PFN-pin-until-destroy proof.
+7. Sealed kernel/modules pair: `modules-ramshared.vhdx` is dated 2026-07-10
+   against kernel #9 of 2026-09-29, so module-to-VHDX provenance is unproven
+   and `seal-kernel-pair.sh` cannot promote.
+8. Operator review and explicit approval before any `[PATCH v2 n/7]` email.
+
+### Documentation reconciliation (this entry)
+
+- `docs/reliability/GAP-REGISTER.md`: freeze and VMBus rows no longer claim
+  the booted host is Build #6 with CLI 0.14.1 and "neither candidate
+  installed"; added a Latest Evidence section for EVD-0114–EVD-0123.
+- `docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/IMPL.md`: status no
+  longer says the candidate is not installed; distinguishes the installed
+  WSL-derived Build #9 from the unbooted seven-patch mainline series.
+- `ROADMAP.md`: the v0.10.0 "RFC v2 submitted to LKML" bullet now names the
+  `drivers/block` series explicitly and states it is not the VMBus series.
+- Kernel fork `Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/mimoaudite.md`:
+  BUG-1 and BUG-8 rows and the "fix candidates" paragraph now record their
+  landed source fixes.
+
+`node tools/generate-docs-index.mjs --check` → in sync.
+`node tools/check-broken-links.mjs` → no broken markdown links.
+
+**Verdict:** 🟡 `PARTIAL` — audit complete; phantom blockers removed. The
+upstream send remains blocked on the eight open items above. No runtime or
+CoCo claim is made by this entry.
