@@ -63,11 +63,12 @@ echo "HYPERV_DRILL_VMBUS present=$VMBUS_PRESENT devices=$VMBUS_DEVICES"
 
 if [ "$VMBUS_PRESENT" = yes ]; then
 	# Class ids only. Device instance ids are host-assigned and uninteresting,
-	# so they are deliberately not printed.
+	# so they are deliberately not printed. The attribute is class_id (with an
+	# underscore); classid does not exist and silently yields an empty field.
 	for d in /sys/bus/vmbus/devices/*; do
 		[ -e "$d" ] || continue
-		cls=$(cat "$d/classid" 2>/dev/null)
-		echo "HYPERV_DRILL_DEVICE classid=$cls"
+		cls=$(cat "$d/class_id" 2>/dev/null)
+		echo "HYPERV_DRILL_DEVICE class_id=$cls"
 	done
 fi
 
@@ -167,26 +168,44 @@ FAULTS=$(dmesg 2>/dev/null |
 echo "HYPERV_DRILL_FAULTS count=${FAULTS:-0}"
 
 # --- verdict -----------------------------------------------------------------
-# PASS requires a real VMBus guest, the candidate symbols present, at least one
-# drill that actually executed, and a clean dmesg. A drill that skipped is not
-# a pass and is reported as such.
+# Drill exit codes:
+#   0  PASS         the drill ran its stress path cleanly
+#   1  FAIL         candidate damage, or the exercise could not run
+#   2  REFUSE       a guard tripped. Inside this guest that is a wiring fault,
+#                   not a host-safety refusal: this guest IS the disposable one.
+#   3  INCONCLUSIVE (fragmentation only) measurement ran but pressure was
+#                   insufficient. Not a failure, and not a gate closure.
+#
+# PASS requires a real VMBus guest, the candidate symbols present, a clean
+# dmesg, and every drill that ran to have run cleanly. INCONCLUSIVE is green
+# for the job and PARTIAL for the gate. A refused or failed drill is FAIL.
 RESULT=FAIL
+SCOPE=none
 if [ "$VMBUS_PRESENT" = yes ] &&
 	[ "${SYMS:-0}" -gt 0 ] &&
 	[ "${SPLATS:-0}" -eq 0 ] &&
 	[ "${FAULTS:-0}" -eq 0 ]; then
-	if [ "$LIFECYCLE_STATUS" = 0 ] || [ "$FRAG_STATUS" = 0 ]; then
+	if [ "$LIFECYCLE_STATUS" = 0 ] && [ "$FRAG_STATUS" = 0 ]; then
 		RESULT=PASS
+		SCOPE=ordinary-hyperv-gpadl-uio-and-ring-under-fragmentation
+	elif [ "$LIFECYCLE_STATUS" = 0 ] && [ "$FRAG_STATUS" = 3 ]; then
+		RESULT=PARTIAL
+		SCOPE=lifecycle-pass-fragment-inconclusive
 	fi
 fi
 if [ "$LIFECYCLE_STATUS" = 2 ] || [ "$FRAG_STATUS" = 2 ]; then
-	# The drills refuse with exit 2. A refusal inside this guest is a wiring
-	# fault, not a host-safety refusal: this guest IS the disposable one.
 	RESULT=FAIL
+	SCOPE=drill-refused
+fi
+if [ "$LIFECYCLE_STATUS" = 1 ] || [ "$FRAG_STATUS" = 1 ]; then
+	RESULT=FAIL
+	SCOPE=drill-failed
 fi
 
 echo "HYPERV_DRILL_RESULT status=$RESULT"
 echo "HYPERV_DRILL_RESULT lifecycle=$LIFECYCLE_STATUS fragment=$FRAG_STATUS splats=${SPLATS:-0} faults=${FAULTS:-0}"
+echo "HYPERV_DRILL_RESULT scope=$SCOPE"
+echo "HYPERV_DRILL_SCOPE note=no-co-co-hardware; co-co-chunked-fallback-not-exercised"
 echo "HYPERV_DRILL_DONE"
 
 sync

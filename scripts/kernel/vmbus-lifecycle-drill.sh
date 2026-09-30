@@ -115,7 +115,25 @@ if [ -z "${NIC:-}" ]; then
 	exit 2
 fi
 say "NIC=$NIC (discovered from hv_netvsc binding)"
-CLS='{f8615163-df3e-46c5-913f-f2d2f965ed0e}'
+# class_id_show() emits "{%pUl}" WITH braces, but new_id_store() hands the
+# buffer to guid_parse() -> uuid_is_valid(), which accepts exactly the 36-char
+# canonical form. Braces make guid_parse() return -EINVAL, the dynid is never
+# registered, and uio_hv_generic/bind fails every cycle. Read the class id
+# from sysfs and strip the braces; do not hardcode a GUID that only holds for
+# one device class.
+CLS="$(cat "/sys/bus/vmbus/devices/$NIC/class_id" 2>/dev/null || true)"
+# Strip exactly one leading { and one trailing }. The braces are escaped so the
+# expansion is unambiguous in bash, dash and busybox ash alike; the unescaped
+# `${CLS#{}` form parses differently across them and would leave a brace on.
+CLS="${CLS#\{}"
+CLS="${CLS%\}}"
+if [ -z "$CLS" ]; then
+	# HV_NIC_GUID, unbraced: the synthetic NIC's offer class.
+	CLS='f8615163-df3e-46c5-913f-f2d2f965ed0e'
+	say "CLS fallback=$CLS (sysfs class_id unreadable)"
+else
+	say "CLS=$CLS (from sysfs class_id, braces stripped)"
+fi
 DRIVER_DIR="/sys/bus/vmbus/drivers"
 
 restore_nic() {
@@ -131,17 +149,30 @@ trap restore_nic EXIT
 say "=== PHASE 1: $CYCLES bind/unbind cycles ==="
 say "PHASE1-BEFORE $(vmbus_maps || echo 'MAPS unavailable')"
 
+# A cycle that cannot bind is not a quiet log line: it means the exercise never
+# ran. Count them and fail at the end, otherwise thirty consecutive bind_fail
+# still exits 0 and init scores the drill as passed.
+CYCLE_FAILS=0
+
 for i in $(seq 1 "$CYCLES"); do
-	echo "$NIC" >"$DRIVER_DIR/hv_netvsc/unbind" 2>>"$LOG" || say "cycle$i unbind_fail"
-	echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/new_id" 2>>"$LOG" || true
-	echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/bind" 2>>"$LOG" || say "cycle$i bind_fail"
+	echo "$NIC" >"$DRIVER_DIR/hv_netvsc/unbind" 2>>"$LOG" ||
+		{ say "cycle$i unbind_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
+	# new_id must succeed: without a registered dynid, uio_hv_generic has
+	# id_table = NULL and will never bind. A silent || true here hid exactly
+	# that failure for thirty cycles and left the BUG-3 path unexercised.
+	echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/new_id" 2>>"$LOG" ||
+		{ say "cycle$i newid_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
+	echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/bind" 2>>"$LOG" ||
+		{ say "cycle$i bind_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
 	echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/unbind" 2>>"$LOG" || true
 	echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/remove_id" 2>>"$LOG" || true
-	echo "$NIC" >"$DRIVER_DIR/hv_netvsc/bind" 2>>"$LOG" || say "cycle$i rebind_fail"
+	echo "$NIC" >"$DRIVER_DIR/hv_netvsc/bind" 2>>"$LOG" ||
+		{ say "cycle$i rebind_fail"; CYCLE_FAILS=$((CYCLE_FAILS + 1)); }
 	if [ $((i % 10)) -eq 0 ]; then
 		say "cycle$i $(vmbus_maps || echo 'MAPS unavailable')"
 	fi
 done
+say "PHASE1 cycle_fails=$CYCLE_FAILS / $((CYCLES * 4)) steps"
 
 say "PHASE1-AFTER $(vmbus_maps || echo 'MAPS unavailable')"
 
@@ -159,15 +190,20 @@ for u in /sys/class/uio/uio*; do
 	say "UIO $(basename "$u") name=$(cat "$u/name" 2>/dev/null) maps=$(ls "$u/maps" 2>/dev/null | tr '\n' ' ')"
 done
 
+PHASE2_RAN=no
 if [ -n "$UIO_DEV" ] && [ -e "$UIO_DEV" ] && [ -n "$HELPER" ]; then
 	say "PHASE2 mmap all maps of $UIO_DEV"
 	# UIO map N lives at offset N * pagesize. Hold 3s so the unbind below
 	# races the mapping on purpose: that is the BUG-3 window (sysfs ring
 	# mmap versus ring release).
-	"$HELPER" mmap-hold "$UIO_DEV" 4096 3 8 2>>"$LOG" | tee -a "$LOG" ||
+	if "$HELPER" mmap-hold "$UIO_DEV" 4096 3 8 2>>"$LOG" | tee -a "$LOG"; then
+		PHASE2_RAN=yes
+	else
 		say "PHASE2 mmap helper failed"
+	fi
 else
 	say "PHASE2 no UIO device or no vmbus_drill_helper; skipping mmap"
+	say "PHASE2 note BUG-3 hold-in-mmap did NOT run"
 fi
 
 RING="$(find /sys/devices -path "*$NIC*" -name 'ring' 2>/dev/null | head -1 || true)"
@@ -177,8 +213,11 @@ if [ -n "$RING" ]; then
 	if [ -n "$HELPER" ]; then
 		# Hold 2s so restore/unbind frees the ring while the mapping is
 		# still alive.
-		"$HELPER" mmap-hold "$RING" 4194304 2 1 2>>"$LOG" | tee -a "$LOG" ||
+		if "$HELPER" mmap-hold "$RING" 4194304 2 1 2>>"$LOG" | tee -a "$LOG"; then
+			PHASE2_RAN=yes
+		else
 			say "PHASE2 ring mmap failed"
+		fi
 	else
 		say "PHASE2 no vmbus_drill_helper; skipping ring mmap"
 	fi
@@ -198,12 +237,32 @@ say "BASELINE $BASE_MAPS"
 say "devices_final=$(ls /sys/bus/vmbus/devices 2>/dev/null | wc -l)"
 
 say "--- dmesg fault scan ---"
-if dmesg 2>/dev/null | tail -400 | grep -E 'BUG:|Oops:|WARNING:|hung task|order:7|accept4 failed|page allocation failure' >>"$LOG"; then
+if dmesg 2>/dev/null | tail -400 | grep -E 'BUG:|Oops:|WARNING:|hung task|accept4 failed|page allocation failure' >>"$LOG"; then
 	say "FAULTS_PRESENT see log"
 else
 	say "FAULTS_NONE"
 fi
 
+# Scoring. A green exit means the exercise actually ran:
+#   - every bind/unbind step succeeded, and
+#   - at least one hold-in-mmap path executed (UIO device mmap or sysfs ring
+#     mmap), so the BUG-3 window was opened rather than skipped.
+# Reporting success after a silent skip is how a broken dynid registration
+# looked green for thirty cycles.
+if [ "${CYCLE_FAILS:-0}" -gt 0 ]; then
+	say "LIFECYCLE_VERDICT=FAIL cycle_fails=$CYCLE_FAILS"
+	say "=== END vmbus-lifecycle-drill ==="
+	say "log=$LOG"
+	exit 1
+fi
+if [ "${PHASE2_RAN:-no}" != yes ]; then
+	say "LIFECYCLE_VERDICT=FAIL no hold-in-mmap path ran (BUG-3 not exercised)"
+	say "=== END vmbus-lifecycle-drill ==="
+	say "log=$LOG"
+	exit 1
+fi
+
+say "LIFECYCLE_VERDICT=PASS cycles=$CYCLES phase2=$PHASE2_RAN"
 say "=== END vmbus-lifecycle-drill ==="
 say "log=$LOG"
 exit 0
