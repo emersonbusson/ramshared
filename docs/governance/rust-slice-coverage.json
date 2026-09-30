@@ -1398,6 +1398,30 @@
         "crates/ramshared-cuda/src/loader_unix.rs"
       ],
       "min": 80
+    },
+    {
+      "id": "cuda-nvml-device-wide-occupancy",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/vram-host-safety-and-dynamic-tiering/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cuda",
+        "--files",
+        "crates/ramshared-cuda/src/nvml.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cuda-nvml-cov.json"
+      ],
+      "packages": [
+        "ramshared-cuda"
+      ],
+      "files": [
+        "crates/ramshared-cuda/src/nvml.rs"
+      ],
+      "min": 80
     }
   ]
 }

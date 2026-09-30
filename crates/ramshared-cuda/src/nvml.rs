@@ -230,11 +230,34 @@ pub(crate) mod mock {
 
     thread_local! {
         static MEM: Cell<(u64, u64, u64)> = const { Cell::new((0, 0, 0)) };
+        static MEM_RESULT: Cell<NvmlResult> = const { Cell::new(NVML_SUCCESS) };
+        static HANDLE_NULL: Cell<bool> = const { Cell::new(false) };
+        static ERROR_STRING_NULL: Cell<bool> = const { Cell::new(false) };
     }
 
     /// Sets `(used, free, total)` returned by the mock, in bytes.
     pub(crate) fn set_device_memory(used: u64, free: u64, total: u64) {
         MEM.with(|cell| cell.set((used, free, total)));
+    }
+
+    /// Makes the mock `nvmlDeviceGetMemoryInfo` return `code` instead of
+    /// success. A budget must handle NVML refusing the call, not only a
+    /// happy reading.
+    pub(crate) fn set_memory_result(code: NvmlResult) {
+        MEM_RESULT.with(|cell| cell.set(code));
+    }
+
+    /// Makes the mock `nvmlDeviceGetHandleByIndex` succeed and leave the
+    /// device handle null, which is how a driver signals an unusable index
+    /// while still returning `NVML_SUCCESS`.
+    pub(crate) fn set_handle_returns_null(yes: bool) {
+        HANDLE_NULL.with(|cell| cell.set(yes));
+    }
+
+    /// Makes the mock `nvmlErrorString` return a null pointer, which is how a
+    /// driver declines to describe a status code.
+    pub(crate) fn set_error_string_returns_null(yes: bool) {
+        ERROR_STRING_NULL.with(|cell| cell.set(yes));
     }
 
     unsafe extern "C" fn mock_init() -> NvmlResult {
@@ -247,6 +270,10 @@ pub(crate) mod mock {
 
     unsafe extern "C" fn mock_handle(ordinal: c_uint, device: *mut NvmlDevice) -> NvmlResult {
         // SAFETY: device is a valid out-pointer provided by the caller.
+        if HANDLE_NULL.with(|cell| cell.get()) {
+            unsafe { *device = core::ptr::null_mut() };
+            return NVML_SUCCESS;
+        }
         unsafe { *device = (ordinal as usize + 1) as NvmlDevice };
         NVML_SUCCESS
     }
@@ -255,13 +282,25 @@ pub(crate) mod mock {
         if device.is_null() {
             return -1;
         }
+        let code = MEM_RESULT.with(|cell| cell.get());
+        if code != NVML_SUCCESS {
+            return code;
+        }
         let (used, free, total) = MEM.with(|cell| cell.get());
         // SAFETY: memory is a valid out-pointer provided by the caller.
         unsafe { *memory = NvmlMemory { total, free, used } };
         NVML_SUCCESS
     }
 
-    /// Builds a mock NVML handle for unit tests.
+    unsafe extern "C" fn mock_error_string(_r: NvmlResult) -> *const c_char {
+        if ERROR_STRING_NULL.with(|cell| cell.get()) {
+            return core::ptr::null();
+        }
+        c"mock nvml error".as_ptr()
+    }
+
+    /// Builds a mock NVML handle for unit tests. `nvmlErrorString` is left
+    /// unresolved, so callers exercise the numeric fallback.
     pub(crate) fn build() -> Nvml {
         Nvml {
             _lib: Lib(core::ptr::null_mut()),
@@ -274,6 +313,21 @@ pub(crate) mod mock {
             },
         }
     }
+
+    /// Builds a mock NVML whose `nvmlErrorString` symbol is resolved, so the
+    /// driver-provided description path is exercised as well as the fallback.
+    pub(crate) fn build_with_error_string() -> Nvml {
+        Nvml {
+            _lib: Lib(core::ptr::null_mut()),
+            syms: NvmlSyms {
+                init: mock_init,
+                shutdown: mock_shutdown,
+                device_get_handle_by_index: mock_handle,
+                device_get_memory_info: mock_memory,
+                error_string: Some(mock_error_string),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +336,19 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+
+    /// Restores mock defaults when the injecting test ends, including on
+    /// panic, so a failure does not poison later tests on the
+    /// single-threaded coverage runner.
+    struct MockReset;
+
+    impl Drop for MockReset {
+        fn drop(&mut self) {
+            mock::set_memory_result(NVML_SUCCESS);
+            mock::set_handle_returns_null(false);
+            mock::set_error_string_returns_null(false);
+        }
+    }
 
     #[test]
     fn nvml_memory_layout_matches_driver_struct() {
@@ -306,13 +373,108 @@ mod tests {
     }
 
     #[test]
-    fn negative_ordinal_is_rejected() {
-        // No library needed: the guard runs before any driver call.
-        let e = NvmlError::Call {
-            op: "nvmlDeviceGetHandleByIndex_v2",
-            code: -1,
-            msg: format!("negative device ordinal {}", -1),
-        };
-        assert!(e.to_string().contains("negative device ordinal"));
+    fn display_covers_load_and_symbol_variants() {
+        let load = NvmlError::Load("no candidate opened".into());
+        assert_eq!(
+            load.to_string(),
+            "failed to load NVML library: no candidate opened"
+        );
+
+        let symbol = NvmlError::Symbol("nvmlInit_v2".into());
+        assert_eq!(
+            symbol.to_string(),
+            "required NVML symbol missing: nvmlInit_v2"
+        );
+    }
+
+    #[test]
+    fn map_sym_preserves_symbol_names_and_stringifies_other_errors() {
+        let named = map_sym(crate::driver::CudaError::Symbol("nvmlInit_v2".into()));
+        match named {
+            NvmlError::Symbol(name) => assert_eq!(name, "nvmlInit_v2"),
+            other => panic!("expected Symbol variant, got {other:?}"),
+        }
+
+        // A non-Symbol CudaError is still surfaced as a missing symbol,
+        // keeping the NVML error vocabulary to the two load-time causes.
+        let other = map_sym(crate::driver::CudaError::Load("candidate.so".into()));
+        let s = other.to_string();
+        assert!(s.contains("required NVML symbol missing"), "got: {s}");
+        assert!(s.contains("candidate.so"), "got: {s}");
+    }
+
+    #[test]
+    fn negative_ordinal_is_rejected_before_any_driver_call() {
+        let _reset = MockReset;
+        let nvml = mock::build();
+        let e = nvml.device_memory(-1).unwrap_err();
+        assert!(e.to_string().contains("negative device ordinal -1"));
+    }
+
+    #[test]
+    fn null_device_handle_is_reported_not_followed() {
+        let _reset = MockReset;
+        mock::set_handle_returns_null(true);
+        let nvml = mock::build();
+        let e = nvml.device_memory(0).unwrap_err();
+        let s = e.to_string();
+        assert!(s.contains("null device handle"), "got: {s}");
+        assert!(s.contains("nvmlDeviceGetHandleByIndex_v2"), "got: {s}");
+    }
+
+    #[test]
+    fn check_rejects_non_success_and_falls_back_without_error_string() {
+        let _reset = MockReset;
+        mock::set_memory_result(-3);
+        let nvml = mock::build();
+        let e = nvml.device_memory(0).unwrap_err();
+        // error_string is unresolved on this mock, so the fallback names the code.
+        let s = e.to_string();
+        assert!(s.contains("nvmlDeviceGetMemoryInfo"), "got: {s}");
+        assert!(s.contains("nvmlReturn_t=-3"), "got: {s}");
+    }
+
+    #[test]
+    fn err_string_prefers_driver_description_and_survives_null() {
+        let _reset = MockReset;
+        mock::set_memory_result(-5);
+        let nvml = mock::build_with_error_string();
+        let e = nvml.device_memory(0).unwrap_err();
+        let s = e.to_string();
+        assert!(s.contains("mock nvml error"), "got: {s}");
+
+        // A driver that declines to describe the code falls back to the numeric.
+        mock::set_error_string_returns_null(true);
+        let e = nvml.device_memory(0).unwrap_err();
+        let s = e.to_string();
+        assert!(s.contains("nvmlReturn_t=-5"), "got: {s}");
+    }
+
+    /// Real NVML load against whatever NVIDIA stack the host provides. With
+    /// the driver present this covers candidate selection, symbol resolution,
+    /// `nvmlInit_v2`, and a real device read; without it, the candidate loop
+    /// failure path. Both outcomes are legitimate and the assertions pin
+    /// whichever happened.
+    #[test]
+    fn load_reports_whatever_the_host_nvidia_stack_provides() {
+        match Nvml::load() {
+            Ok(nvml) => {
+                let mem = nvml.device_memory(0).expect("device 0 must report memory");
+                assert!(
+                    mem.total > 0,
+                    "device 0 must report non-zero total: {mem:?}"
+                );
+                assert!(mem.used <= mem.total, "occupancy must be coherent: {mem:?}");
+            }
+            Err(e) => {
+                let s = e.to_string();
+                assert!(
+                    s.starts_with("failed to load NVML library")
+                        || s.starts_with("required NVML symbol missing")
+                        || s.contains("nvmlInit_v2"),
+                    "load failure must be descriptive, got: {s}"
+                );
+            }
+        }
     }
 }

@@ -108,6 +108,7 @@
 | File | Change | Named verification |
 | --- | --- | --- |
 | `crates/ramshared-vram/src/lib.rs` | Central budget and identity contract | `budget_target_preserves_reserve_after_existing_use`; `adapter_identity_matches_cross_api_only_through_shared_luid` |
+| `crates/ramshared-cuda/src/nvml.rs` | Device-wide VRAM occupancy authority (`nvmlDeviceGetMemoryInfo`), which is what the budget must describe so the cache can get out of the way of a GPU application | `display_covers_load_and_symbol_variants`; `map_sym_preserves_symbol_names_and_stringifies_other_errors`; `negative_ordinal_is_rejected_before_any_driver_call`; `null_device_handle_is_reported_not_followed`; `check_rejects_non_success_and_falls_back_without_error_string`; `err_string_prefers_driver_description_and_survives_null`; `load_reports_whatever_the_host_nvidia_stack_provides` |
 | `crates/ramshared-cuda/src/vram_impl.rs` | CUDA adapter implements the shared budget and memory traits | `test_vram_error_conversion_out_of_range`; `test_vram_error_conversion_provider`; `mock_driver_exercises_memory_and_mapping_raii` |
 | `crates/ramshared-wsl2d/src/gpu_budget.rs` | Candidate selection, reserve sizing, WDDM composition | `direct_broker_slice_preserves_live_reserve_canary_and_alignment`; `mismatched_stale_future_and_malformed_budgets_are_rejected` |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | Live per-allocation admission | `worker_budget_target_never_exceeds_current_available_headroom`; `worker_respects_headroom_floor` |
@@ -119,6 +120,7 @@
 | Production path | Test | Kind | Kahneman | Coverage |
 | --- | --- | --- | --- | --- |
 | `ramshared-vram/src/lib.rs` | named budget and identity tests above | unit | #13 | >=80% changed logic |
+| `ramshared-cuda/src/nvml.rs` | named load, guard, and error-path tests above | unit | #13/#16 | >=80% changed logic |
 | `ramshared-wsl2d/src/gpu_budget.rs` | freshness, WDDM, slice, and adapter selection tests | unit | #13 | Slice coverage is owned by the isolated GPU cache-worker SPEC. |
 | `ramshared-block/src/gpu_cache_worker.rs` | target, allocation, and revoke tests | unit | #16/#17 | >=80% changed logic |
 | `ramshared-block/src/isolated_origin.rs` | `cache_timeout_falls_back_to_origin` | unit | #16 | >=80% changed logic |
@@ -132,6 +134,17 @@ cargo fmt --all -- --check
 cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d
 cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-dxg -p ramshared-vulkan -p ramshared-wsl2d --all-targets -- -D warnings
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/vram_impl.rs --min 80
+```
+
+NVML device-wide occupancy coverage. `nvml.rs` is loaded at runtime through the
+platform loader, so the host NVIDIA stack is optional: with the driver present
+the gate covers candidate selection, symbol resolution, `nvmlInit_v2`, and a
+real device read, and without it the candidate-loop failure path. Both outcomes
+are legitimate and both keep the file above the 80% floor. Measured 2026-09-30
+on the WSL2 host with `libnvidia-ml.so.1` present: 92.8% lines (155/167).
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/nvml.rs --min 80 --report-json tmp/cuda-nvml-cov.json
 ```
 
 Live `before → action → after` evidence for GPU allocation, cache revocation,
