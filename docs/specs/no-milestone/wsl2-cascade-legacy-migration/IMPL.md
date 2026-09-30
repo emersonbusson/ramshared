@@ -4,7 +4,7 @@
 
 ## Status
 
-Implemented (source) · cover **85.4%** · E2E env-bound · daemon proof pending.
+Implemented (source) · cover **83.5% / 80.0%** · E2E env-bound · daemon proof pending.
 
 This document must remain partial until the required watchdog-supervised live
 path has a recorded legitimate result and refusal result. Source tests alone
@@ -22,16 +22,25 @@ do not close a privileged WSL2 cascade migration.
 
 ## Validation
 
+**Re-measured 2026-09-30** after the coverage-gate denominator fix (excluding
+`#[cfg(not(test))]` adapter-glue regions) and the `cascade_io` test batteries.
+
 - RED checkpoint: `62506cf8 test(cli): reproduce legacy cascade migration command`.
-- `cargo test -p ramshared-cli --bin ramshared -- --test-threads=1`:
-  **280 passed, 0 failed** (64.15 s).
-- `cargo clippy -p ramshared-cli --all-targets -- -D warnings`: exit 0.
-- `cargo fmt --all -- --check`: exit 0.
-- Slice cover: `crates/ramshared-cli/src/cascade/mod.rs` **86.0%**
-  (1,757/2,042 lines), threshold 80%.
-- `./scripts/docs-check.sh`: exit 0.
+- `cargo test -p ramshared-cli --bin ramshared`:
+  **461 passed, 0 failed**.
+- `cargo test -p ramshared-cli --bin ramshared -- legacy_migration -- --test-threads=1`:
+  **8 passed, 0 failed** (named SPEC tests).
+- `cargo test -p ramshared-cli --bin ramshared -- public_control_commands_parse_exactly`:
+  **1 passed**.
+- `cargo clippy -p ramshared-cli --all-targets -- -D warnings`: clean.
+- `cargo fmt -p ramshared-cli -- --check`: clean.
+- Slice cover (metric `lines`, threshold 80%):
+  - `crates/ramshared-cli/src/cascade/mod.rs`: **83.5%** (1,236/1,480 lines)
+  - `crates/ramshared-cli/src/cascade/cascade_io.rs`: **80.0%** (2,785/3,480 lines)
+  - **Coverage gate PASSED.**
+- `./scripts/docs-check.sh`: OK.
 - BINARY_MATCH or replaced-daemon listener proof and live watchdog evidence:
-  pending.
+  pending (env-bound).
 
 ## Gaps
 
