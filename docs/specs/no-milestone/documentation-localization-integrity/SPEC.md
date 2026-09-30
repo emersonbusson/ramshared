@@ -254,13 +254,27 @@ rewritten; a corrected revision supersedes it.
 
 ## Validation checklist
 
-- [ ] `node --check tools/ci/check-documentation-localization.mjs`
-- [ ] Focused `node --test tools/ci/check-documentation-localization.test.mjs`
-- [ ] Per-file Node lines/branches/functions coverage ≥80%.
-- [ ] `node tools/ci/check-documentation-localization.mjs --all` exits 0.
-- [ ] Missing, stale, broken-switch, authority, and protected-path fixtures exit 1.
-- [ ] `node tools/check-broken-links.mjs --check` passes for localized docs.
-- [ ] `scripts/docs-check.sh` includes and runs the checker/tests.
-- [ ] No protected history/index/claims/evidence/Windows/Rust files changed.
+- [x] `node --check tools/ci/check-documentation-localization.mjs` (2026-09-30: OK.)
+- [x] Focused `node --test tools/ci/check-documentation-localization.test.mjs`
+  (2026-09-30: 18/18 pass.)
+- [x] Per-file Node lines/branches/functions coverage ≥80%.
+  (2026-09-30: 98.23% lines, 87.15% branches, 100.00% functions.)
+- [x] `node tools/ci/check-documentation-localization.mjs --all` exits 0.
+  (2026-09-30: `FILES=2 FINDINGS=0 LOCALIZATION_STATUS=PARTIAL` — PARTIAL is the
+  declared incremental-translation state, not a scan failure.)
+- [x] Missing, stale, broken-switch, authority, and protected-path fixtures exit 1.
+  (2026-09-30: `missing_required_localization_fails`, `stale_source_hash_fails`,
+  `stale_translation_hash_fails`, `broken_language_switch_fails`,
+  `authority_claim_is_rejected_without_echo`,
+  `protected_normative_localization_path_fails` all green.)
+- [x] `node tools/check-broken-links.mjs --check` passes for localized docs.
+  (2026-09-30: `no broken markdown links (scan=docs/)`.)
+- [x] `scripts/docs-check.sh` includes and runs the checker/tests.
+  (2026-09-30: `run_gate documentation-localization` and
+  `run_gate documentation-localization-tests` both present and PASS.)
+- [x] No protected history/index/claims/evidence/Windows/Rust files changed.
+  (2026-09-30: this Step 3 pass touches only this SPEC checklist; no
+  `docs/reliability/`, `docs/INDEX.md`, `docs/specs/**/evidence/**`, Windows
+  or Rust source file is in the change set.)
 
 `BINARY_MATCH`: N/A — no daemon, driver, or runtime surface.

@@ -214,17 +214,30 @@ only as legacy-unqualified and cannot support PASS.
 
 ## Validation checklist
 
-- [ ] `node --test tools/ci/check-benchmark-evidence.test.mjs`
-- [ ] `node --test tools/ci/check-spec-evidence.test.mjs`
-- [ ] `node tools/ci/check-benchmark-evidence.mjs --check`
-- [ ] `node tools/ci/check-spec-evidence.mjs --check`
-- [ ] `./scripts/docs-check.sh` twice with identical exit/output
-- [ ] `node tools/generate-docs-index.mjs --check`
-- [ ] `cargo test -p ramshared-cli -j 1 monitor_benchmark_`
-- [ ] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/monitor.rs --min 80`
-- [ ] `git diff --check`
-- [ ] Every matrix test name exists and every refusal returns non-zero
-- [ ] Live CLI evidence contains before/action/after counts and no public-sensitive values
+- [x] `node --test tools/ci/check-benchmark-evidence.test.mjs` (2026-09-30: 29/29 pass.)
+- [x] `node --test tools/ci/check-spec-evidence.test.mjs` (2026-09-30: 10/10 pass.)
+- [x] `node tools/ci/check-benchmark-evidence.mjs --check` (2026-09-30: OK —
+  `sections=10 records=11 legacy=10 public_surfaces=5 public_claims=18`.)
+- [x] `node tools/ci/check-spec-evidence.mjs --check` (2026-09-30: OK —
+  `SPEC evidence manifests OK (count=4)`.)
+- [x] `./scripts/docs-check.sh` twice with identical exit/output
+  (2026-09-30: two runs, exit 0 both, byte-identical logs.)
+- [x] `node tools/generate-docs-index.mjs --check` (2026-09-30: `docs/INDEX.md is in sync`.)
+- [x] `cargo test -p ramshared-cli -j 1 monitor_benchmark_` (2026-09-30: 4/4 pass —
+  `rejects_legacy_unqualified_status`, `accepts_promotable_v1_evidence`,
+  `rejects_nonpromotable_evidence`, `rejects_dirty_or_incomplete_evidence`.)
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/monitor.rs --min 80` (2026-09-30: 84.6% (2172/2567) — PASS.)
+- [x] `git diff --check` (2026-09-30: clean.)
+- [x] Every matrix test name exists and every refusal returns non-zero
+  (2026-09-30: all four named tests present and green; each `rejects_*` asserts a
+  refusal rather than a value.)
+- [x] Live CLI evidence contains before/action/after counts and no public-sensitive values
+  (2026-09-30: `evidence/validation-summary.json` carries `before` / `action` /
+  `after` count objects and only integers and booleans — no paths, hostnames,
+  keys or user identifiers. The 2026-09-30 re-run reports
+  `sections=10 records=11 legacy=10 public_surfaces=5 public_claims=18`, which
+  is the current after-state; the committed summary remains the recorded
+  historical capture.)
 
 Rollback trigger: revert the validator integration if one malformed, duplicate,
 hash-mismatched, secret-bearing, statistically forged, incomparable or non-PASS

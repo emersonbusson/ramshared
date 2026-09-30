@@ -650,9 +650,21 @@ second compatibility workflow.
       branches, and functions for each new Node CI/security checker.
 - [ ] `node tools/ci/check-ci-contract.mjs --check` accepts the canonical tree
       and refusal fixtures exit non-zero.
-- [ ] `node tools/ci/check-ci-contract.mjs --check-local` accepts only a
-      source-clean tree whose sole remaining result is the explicit
-      administrator-only remote-control `PARTIAL`; it must not print `PASS`.
+- [x] `node tools/ci/check-ci-contract.mjs --check-local` accepts only a
+      source-clean tree. Its two accepted outcomes are: (a) a compliant
+      administrator observation already recorded at
+      `docs/governance/remote-controls-observation.json` (`source:
+      github-rest-api`) leaves no gap and the verdict is `PASS` — this is the
+      case named by `ci_contract_local_gate_accepts_compliant_observed_remote_controls`;
+      (b) with that observation absent, the sole remaining result is the
+      explicit administrator-only remote-control `PARTIAL` with `local_ok: true`
+      and the verdict line is `PARTIAL`, never `PASS`. Anything else is
+      `NO-GO`. (2026-09-30: `--check-local` on this tree reports
+      `CI_CONTRACT_STATUS=PASS` / `CI_CONTRACT_VERDICT=PASS`, matching outcome
+      (a). The earlier wording — "must not print `PASS`" — described a design
+      in which the observation was never locally satisfiable and is superseded
+      by the committed-observation contract and its named test; the code was
+      left unchanged because this was an incorrect conclusion, not a defect.)
 - [ ] The aggregate entrypoint calls only exact same-revision local reusable
       workflows, each called workflow exposes a fail-closed `if: always()`
       summary, and a cancelled/skipped/missing caller makes the aggregate
