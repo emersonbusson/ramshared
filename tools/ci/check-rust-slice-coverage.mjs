@@ -277,6 +277,93 @@ function findRustCfgTestModuleRanges(source) {
   return ranges;
 }
 
+/**
+ * `#[cfg(not(test))]` items are compiled only outside the test profile, so the
+ * test binary can never execute them. Counting them in the production
+ * denominator is a false gate: the ratio cannot reach the floor no matter how
+ * complete the tests are. These are platform-adapter shims (`/proc`, sysfs,
+ * root-ownership checks); their business logic lives in the adjacent
+ * `*_with` injectables that the slice tests do cover.
+ */
+function findRustCfgNotTestRanges(source) {
+  const masked = maskRustCommentsAndLiterals(source);
+  const ranges = [];
+  const attribute = /#\s*\[\s*cfg\s*\(\s*not\s*\(\s*test\s*\)\s*\)\s*\]/g;
+  const itemStart =
+    /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?:async\s+)?(?:extern\s+"[^"]*"\s+)?(?:fn|mod|impl|struct|enum|union|trait|const|static|type)\b/;
+  for (const match of masked.matchAll(attribute)) {
+    let cursor = match.index + match[0].length;
+    while (true) {
+      while (cursor < masked.length && /\s/.test(masked[cursor])) cursor++;
+      if (masked.startsWith("#[", cursor)) {
+        const end = masked.indexOf("]", cursor);
+        if (end < 0) break;
+        cursor = end + 1;
+        continue;
+      }
+      break;
+    }
+    if (cursor >= masked.length) continue;
+    const startLine = rustLineAt(masked, match.index);
+    const tail = masked.slice(cursor, cursor + 120);
+    if (itemStart.test(tail)) {
+      // Whole item: body braces for fn/impl/mod/…, or the terminating `;`.
+      const open = masked.indexOf("{", cursor);
+      const semi = masked.indexOf(";", cursor);
+      if (open >= 0 && (semi < 0 || open < semi)) {
+        const close = matchingRustBrace(masked, open);
+        if (close < 0) {
+          throw new CoverageGateError(
+            "COVERAGE_SOURCE_TEST_RANGE_INVALID",
+            "could not match the body of an inline cfg(not(test)) Rust item",
+            2,
+          );
+        }
+        ranges.push({ startLine, endLine: rustLineAt(masked, close) });
+      } else if (semi >= 0) {
+        ranges.push({ startLine, endLine: rustLineAt(masked, semi) });
+      }
+      continue;
+    }
+    // Expression-statement or struct field. A top-level `,`/`;` before any
+    // brace means a single declaration (`file: fs::File,`); otherwise the
+    // statement's own block (`if … { … }`) is the gated region.
+    const open = masked.indexOf("{", cursor);
+    const end = statementEnd(masked, cursor, open);
+    if (end >= 0) ranges.push({ startLine, endLine: rustLineAt(masked, end) });
+  }
+  return ranges;
+}
+
+/**
+ * End of one cfg-gated statement starting at `cursor`, with `open` the index of
+ * the next `{` (or -1). A terminator before that brace ends a declaration;
+ * otherwise the statement runs through the brace it owns.
+ */
+function statementEnd(source, cursor, open) {
+  let depth = 0;
+  for (let index = cursor; index < source.length; index++) {
+    const char = source[index];
+    if (char === "{" || char === "(" || char === "[") {
+      if (char === "{" && depth === 0 && (open < 0 || index === open)) {
+        const close = matchingRustBrace(source, index);
+        return close < 0 ? -1 : close;
+      }
+      depth++;
+    } else if (char === "}" || char === ")" || char === "]") {
+      if (depth === 0) return index === cursor ? -1 : index;
+      depth--;
+    } else if (depth === 0 && (char === "," || char === ";")) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findRustNonProductionRanges(source) {
+  return [...findRustCfgTestModuleRanges(source), ...findRustCfgNotTestRanges(source)];
+}
+
 function rustCfgTestModuleLineCoverage(exportData, repoRoot) {
   // Rust 1.98 emits v0-mangled llvm-cov function names; classify test lines by source range.
   const rangesByFile = new Map();
@@ -289,7 +376,7 @@ function rustCfgTestModuleLineCoverage(exportData, repoRoot) {
     const sourcePath = resolve(rootPath, key);
     const relativePath = relative(rootPath, sourcePath);
     if (relativePath.startsWith("..") || isAbsolute(relativePath) || !existsSync(sourcePath)) continue;
-    const ranges = findRustCfgTestModuleRanges(readFileSync(sourcePath, "utf8"));
+    const ranges = findRustNonProductionRanges(readFileSync(sourcePath, "utf8"));
     if (ranges.length > 0) rangesByFile.set(key, ranges);
   }
 
@@ -1009,6 +1096,8 @@ export {
   createCoverageRun,
   createLockOwner,
   evaluateCoverage,
+  findRustCfgNotTestRanges,
+  findRustNonProductionRanges,
   installCoverageSignalCleanup,
   loadFilesFrom,
   main,

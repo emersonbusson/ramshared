@@ -1132,7 +1132,8 @@ fn format_cache_telemetry_labels(cache: &WorkerCacheTelemetry) -> String {
 fn collect_process_snapshot(
     proc_root: &Path,
     limit: usize,
-) -> (Vec<ProcessObservation>, ProcessMemoryTotals) {    let mut processes = fs::read_dir(proc_root)
+) -> (Vec<ProcessObservation>, ProcessMemoryTotals) {
+    let mut processes = fs::read_dir(proc_root)
         .ok()
         .into_iter()
         .flatten()
@@ -5349,7 +5350,9 @@ mod tests {
 
         // The rendered line for a kept sample still carries the bounded refusal
         // reason and never a payload.
-        let line = format_cache_telemetry_labels(&cache_telemetry_from_value(Some(&fresh_value), now).unwrap());
+        let line = format_cache_telemetry_labels(
+            &cache_telemetry_from_value(Some(&fresh_value), now).unwrap(),
+        );
         assert!(line.contains("codec-subdeadline"));
     }
 }
