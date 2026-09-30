@@ -404,6 +404,20 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
 - **External dependencies (only `[target.'cfg(windows)']`):** `windows`/`windows-sys` (IOCTL, `MmXxx` through handles, `Win32_PageFileUsage`), `windows-service` (SCM), `ntapi` or own FFI for `NtCreatePagingFile`/`RtlGetVersion`, `serde`+`toml`.
 - **Reference pattern:** `ramshared-agent` (broker client) + `ramshared-wsl2d/main.rs` (single-thread VRAM I/O loop, `run_nbd`); memory-broker SPEC P2 (cross-compile gating).
 - **Required tests:** `driver_link` roundtrip against a **fake driver** (in-memory `DeviceIoControl` mock) — SQE READ/WRITE/FLUSH → RAM backend → CQE; `broker_tenant` `LeaseRequest`→`Granted` against fake broker; `ntpagefile` fallback (unsupported build → graceful `Err`); `config` parse. (Pure, run on Linux; bin is stub — DT-16.)
+- **Coverage (ITEM-7 pure logic):** `ntpagefile.rs` and `smoke.rs` are business logic that
+  runs on Linux — `ntpagefile` degrades every OS-touching helper to `NotWindows`, and
+  `post_boot_smoke` is an injected-input pure function. The `#[cfg(windows)]` FFI stubs
+  (`create_secondary_impl`/`remove_secondary_impl`/`current_build` Windows arm) are the
+  only env-bound surface and stay gated by the live Windows ITEM-7 evidence.
+  Measured 2026-09-30: `ntpagefile.rs` 98.4% lines (61/62), `smoke.rs` 100.0% (21/21).
+  Named tests: `allow_list_26200_only`; `unsupported_build_is_graceful`; `invalid_sizes`;
+  `empty_volume_is_refused_before_the_build_check`; `remove_rejects_unsupported_build`;
+  `display_names_every_error_variant`; `linux_os_touching_helpers_degrade_to_not_windows`;
+  `all_good`; `every_missing_input_degrades_with_its_own_check_name`;
+  `degrade_detail_describes_the_missing_artifact`.
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/smoke.rs,crates/ramshared-winsvc/src/ntpagefile.rs --min 80 --report-json tmp/windows-swap-driver-winsvc-pagefile-cov.json
+  ```
 - **Kahneman discipline:** ITEM-6/ITEM-7 in the Map.
 
 ### `drivers/windows/tools/poolstress/` (`poolstress.c`, `poolstress.inf`)  *(ITEM-8 — RF-7, DT-11; VM-only)*

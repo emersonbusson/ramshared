@@ -1446,6 +1446,31 @@
         "crates/ramshared-agent/src/bin/ramshared_host_agent.rs"
       ],
       "min": 80
+    },
+    {
+      "id": "windows-swap-driver-pagefile-smoke",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-swap-driver/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-winsvc",
+        "--files",
+        "crates/ramshared-winsvc/src/smoke.rs,crates/ramshared-winsvc/src/ntpagefile.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/windows-swap-driver-winsvc-pagefile-cov.json"
+      ],
+      "packages": [
+        "ramshared-winsvc"
+      ],
+      "files": [
+        "crates/ramshared-winsvc/src/smoke.rs",
+        "crates/ramshared-winsvc/src/ntpagefile.rs"
+      ],
+      "min": 80
     }
   ]
 }

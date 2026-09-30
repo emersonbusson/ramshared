@@ -150,6 +150,18 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn vol() -> PathBuf {
+        PathBuf::from("V:\\")
+    }
+
+    fn mvp() -> OsBuild {
+        OsBuild {
+            major: 10,
+            minor: 0,
+            build: 26200,
+        }
+    }
+
     #[test]
     fn allow_list_26200_only() {
         assert!(is_supported_build(26200));
@@ -159,9 +171,8 @@ mod tests {
 
     #[test]
     fn unsupported_build_is_graceful() {
-        let vol = PathBuf::from("V:\\");
         let e = create_secondary(
-            &vol,
+            &vol(),
             256 * 1024 * 1024,
             1024 * 1024 * 1024,
             Some(OsBuild {
@@ -179,36 +190,87 @@ mod tests {
 
     #[test]
     fn invalid_sizes() {
-        let vol = PathBuf::from("V:\\");
-        let e = create_secondary(
-            &vol,
-            0,
-            1,
-            Some(OsBuild {
-                major: 10,
-                minor: 0,
-                build: 26200,
-            }),
-        )
-        .unwrap_err();
+        let e = create_secondary(&vol(), 0, 1, Some(mvp())).unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_)));
+
+        // min above max is the same refusal as a zero minimum.
+        let e = create_secondary(&vol(), 5, 4, Some(mvp())).unwrap_err();
         assert!(matches!(e, PagefileError::Api(_)));
     }
 
-    #[cfg(not(windows))]
+    /// Both entry points refuse an empty volume before touching the build
+    /// allow-list, so a missing argument can never reach the OS API.
     #[test]
-    fn linux_create_is_not_windows() {
-        let vol = PathBuf::from("V:\\");
-        let e = create_secondary(
-            &vol,
-            1,
-            2,
+    fn empty_volume_is_refused_before_the_build_check() {
+        let empty = PathBuf::new();
+        let e = create_secondary(&empty, 1, 2, Some(mvp())).unwrap_err();
+        assert_eq!(e, PagefileError::InvalidPath);
+
+        let e = remove_secondary(&empty, Some(mvp())).unwrap_err();
+        assert_eq!(e, PagefileError::InvalidPath);
+    }
+
+    #[test]
+    fn remove_rejects_unsupported_build() {
+        let e = remove_secondary(
+            &vol(),
             Some(OsBuild {
                 major: 10,
                 minor: 0,
-                build: 26200,
+                build: 22631,
             }),
         )
         .unwrap_err();
+        assert!(matches!(
+            e,
+            PagefileError::UnsupportedBuild { build: 22631 }
+        ));
+    }
+
+    #[test]
+    fn display_names_every_error_variant() {
+        assert!(
+            PagefileError::UnsupportedBuild { build: 22631 }
+                .to_string()
+                .contains("22631")
+        );
+        assert_eq!(
+            PagefileError::NotWindows.to_string(),
+            "pagefile API is Windows-only"
+        );
+        assert!(
+            PagefileError::Api("boom".into())
+                .to_string()
+                .contains("boom")
+        );
+        assert_eq!(
+            PagefileError::InvalidPath.to_string(),
+            "invalid pagefile path"
+        );
+    }
+
+    /// On a non-Windows host every OS-touching helper degrades to
+    /// `NotWindows`, including the `build: None` path that probes the running
+    /// OS instead of taking an injected value.
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_os_touching_helpers_degrade_to_not_windows() {
+        assert!(matches!(
+            current_build().unwrap_err(),
+            PagefileError::NotWindows
+        ));
+        assert!(!supported_build());
+
+        let e = create_secondary(&vol(), 1, 2, None).unwrap_err();
+        assert_eq!(e, PagefileError::NotWindows);
+
+        let e = create_secondary(&vol(), 1, 2, Some(mvp())).unwrap_err();
+        assert_eq!(e, PagefileError::NotWindows);
+
+        let e = remove_secondary(&vol(), None).unwrap_err();
+        assert_eq!(e, PagefileError::NotWindows);
+
+        let e = remove_secondary(&vol(), Some(mvp())).unwrap_err();
         assert_eq!(e, PagefileError::NotWindows);
     }
 }
