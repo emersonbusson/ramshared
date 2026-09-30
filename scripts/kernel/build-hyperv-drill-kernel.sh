@@ -329,7 +329,8 @@ want = open(cpio, 'rb').read()
 assert raw == want, 'embedded initramfs differs from the built cpio'
 plain = gzip.decompress(want) if want[:2] == b'\x1f\x8b' else want
 for sig in (b'HYPERV_DRILL_BOOT', b'vmbus_drill_helper', b'MMAP_HOLD',
-            b'vmbus-lifecycle-drill', b'MLOCK_HOG'):
+            b'vmbus-lifecycle-drill', b'MLOCK_HOG', b'FRAGMENT_BUDDY',
+            b'vmbus-fragmentation-drill', b'class_id'):
     assert sig in plain, f'{sig.decode()} missing from the initramfs'
 print('IMAGE initramfs=ok bytes=%d' % len(want))
 PY

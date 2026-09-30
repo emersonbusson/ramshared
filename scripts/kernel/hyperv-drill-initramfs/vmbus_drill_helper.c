@@ -12,6 +12,7 @@
  * Usage:
  *   vmbus_drill_helper mmap-hold <path> <bytes> <hold_seconds> [count]
  *   vmbus_drill_helper mlock-hog <mib> <hold_seconds>
+ *   vmbus_drill_helper fragment-buddy <mib> <hold_seconds>
  *
  * mmap-hold maps <count> regions of <bytes> at sequential page-aligned
  * offsets and keeps them alive for <hold_seconds>. UIO map N lives at offset
@@ -20,8 +21,17 @@
  *
  * mlock-hog allocates <mib> MiB anonymously, populates every page, locks it
  * with mlock(2) and holds for <hold_seconds>. Locked pages resist compaction
- * and drain high-order free blocks, which is what the order-zero fallback
- * drill needs. It prints MLOCK_HOG ready=1 only after the lock succeeds.
+ * and drain high-order free blocks. It prints MLOCK_HOG ready=1 only after
+ * the lock succeeds.
+ *
+ * fragment-buddy is the one the order-zero drill actually needs. A single
+ * large hog splits the buddy only as far as it must and leaves the untouched
+ * remainder as high-order blocks, so order-7 still succeeds and the drill
+ * reports INCONCLUSIVE. This mode instead takes <mib> as many independent
+ * 64 KiB chunks, then frees every other chunk and mlocks the rest. No two
+ * neighbouring chunks are free at once, so nothing above order-4 can coalesce,
+ * order-7 must fail, and the freed chunks still satisfy order-0 fallback.
+ * It prints FRAGMENT_BUDDY ready=1 only after the pattern is in place.
  *
  * Never prints addresses. Evidence must not carry KASLR material.
  */
@@ -172,11 +182,99 @@ static int do_mlock_hog(int argc, char **argv)
 	return 0;
 }
 
+/*
+ * Take <mib> as independent 64 KiB chunks, then free every other one and
+ * mlock the survivors. A free chunk's buddy is always held, so the free list
+ * tops out at order-4 and order-7 cannot form. The freed chunks keep order-0
+ * available, which is exactly the state the fallback has to survive.
+ *
+ * 64 KiB keeps the VMA count well under the default max_map_count even at
+ * several GiB: 4 KiB chunks would need one VMA per page and hit the limit
+ * after ~65k of them.
+ */
+#define FRAG_CHUNK (64L * 1024)
+#define FRAG_MAX_CHUNKS 32768
+
+static int do_fragment_buddy(int argc, char **argv)
+{
+	long mib, hold, want, got = 0, freed = 0, locked = 0, i, off;
+	void **maps;
+
+	if (argc < 3) {
+		fprintf(stderr, "usage: fragment-buddy <mib> <hold_seconds>\n");
+		return 2;
+	}
+	mib = parse_long(argv[1], "mib");
+	hold = parse_long(argv[2], "hold_seconds");
+	if (mib <= 0 || mib > (long)(16 * 1024)) {
+		fprintf(stderr, "HELPER mib out of range\n");
+		return 2;
+	}
+
+	want = (mib * 1024 * 1024) / FRAG_CHUNK;
+	if (want > FRAG_MAX_CHUNKS)
+		want = FRAG_MAX_CHUNKS;
+	if (want < 2) {
+		fprintf(stderr, "HELPER mib too small to fragment\n");
+		return 2;
+	}
+
+	maps = calloc((size_t)want, sizeof(*maps));
+	if (!maps) {
+		fprintf(stderr, "HELPER calloc: %s\n", strerror(errno));
+		return 1;
+	}
+
+	for (i = 0; i < want; i++) {
+		char *m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
+			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+
+		if (m == MAP_FAILED)
+			break;
+		for (off = 0; off < FRAG_CHUNK; off += 4096)
+			m[off] = 1;
+		maps[i] = m;
+		got++;
+	}
+
+	/* Free every other chunk. Each freed chunk's buddy stays allocated. */
+	for (i = 0; i < got; i += 2) {
+		munmap(maps[i], FRAG_CHUNK);
+		maps[i] = NULL;
+		freed++;
+	}
+
+	/* Pin the survivors so compaction cannot reassemble high orders. */
+	for (i = 1; i < got; i += 2) {
+		if (maps[i] && mlock(maps[i], FRAG_CHUNK) == 0)
+			locked++;
+	}
+
+	printf("FRAGMENT_BUDDY ready=1 chunks=%ld held=%ld freed=%ld locked=%ld chunk_kib=64\n",
+	       got, got - freed, freed, locked);
+	fflush(stdout);
+
+	if (hold > 0)
+		sleep((unsigned int)hold);
+
+	for (i = 1; i < got; i += 2) {
+		if (maps[i]) {
+			munlock(maps[i], FRAG_CHUNK);
+			munmap(maps[i], FRAG_CHUNK);
+		}
+	}
+	free(maps);
+	printf("FRAGMENT_BUDDY released held=%ld\n", got - freed);
+	fflush(stdout);
+	return got > 1 ? 0 : 1;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
 		"usage: vmbus_drill_helper mmap-hold <path> <bytes> <hold_seconds> [count]\n"
-		"       vmbus_drill_helper mlock-hog <mib> <hold_seconds>\n");
+		"       vmbus_drill_helper mlock-hog <mib> <hold_seconds>\n"
+		"       vmbus_drill_helper fragment-buddy <mib> <hold_seconds>\n");
 }
 
 int main(int argc, char **argv)
@@ -189,6 +287,8 @@ int main(int argc, char **argv)
 		return do_mmap_hold(argc - 1, argv + 1);
 	if (strcmp(argv[1], "mlock-hog") == 0)
 		return do_mlock_hog(argc - 1, argv + 1);
+	if (strcmp(argv[1], "fragment-buddy") == 0)
+		return do_fragment_buddy(argc - 1, argv + 1);
 	usage();
 	return 2;
 }
