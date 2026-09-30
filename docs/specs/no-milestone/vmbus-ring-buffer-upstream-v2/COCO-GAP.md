@@ -124,9 +124,11 @@ qualified — the following are **true and separately evidenced**:
   every run including a gate self-test. See
   [`COCO-STATIC-PROOF.md`](COCO-STATIC-PROOF.md). This is stronger than a
   design argument and **still does not close any row of the table above**.
-- Hosted build/Sparse/checkpatch/KUnit gates pass for the predecessor
-  seven-patch bytes (runs 36574925363, 36590352003). The current six-patch
-  bytes supersede them and await a fresh hosted run.
+- Hosted build/Sparse/checkpatch/KUnit gates pass for the current six-patch
+  pinned bytes (run 36763981097 on `7e4ccc98d32f`, all three jobs green,
+  including both CoCo gate self-tests). Runs 36574925363 and 36590352003
+  qualified the predecessor seven-patch bytes and are not evidence for this
+  candidate.
 - Ordinary x86_64 Hyper-V runtime on an earlier four-commit snapshot passed
   normal-path GPADL create/teardown and UIO mmap (`EVD-0054`). That is not
   the current candidate and not a CoCo platform.

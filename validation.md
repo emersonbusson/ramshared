@@ -10106,4 +10106,112 @@ source or fixtures.
 **Source revision:** `bd0611c6`
 **Lifecycle:** `reviewable`.
 **Retention:** Keep until the series is sent or withdrawn. If any patch is edited again, regenerate `series/SHA256SUMS` in the same commit and re-run the six-stage check; this entry then becomes the pre-edit baseline.
-**Freshness:** Hosted runs 36574925363 and 36590352003 do **not** qualify these bytes. Before any claim that build/Sparse/KUnit gates pass on this candidate, a fresh hosted run must execute against the pinned `series/SHA256SUMS`. Never cite the predecessor runs as evidence for the six-patch series.
+**Freshness:** Hosted runs 36574925363 and 36590352003 do **not** qualify these bytes. Never cite the predecessor runs as evidence for the six-patch series. That requirement is now satisfied by hosted run 36763981097 on `7e4ccc98d32f` (EVD-0130): build/Sparse/checkpatch/KUnit gates pass against the pinned `series/SHA256SUMS`. Re-open this gate only if any patch file is edited again — then regenerate `series/SHA256SUMS` in the same commit and require a fresh hosted run before repeating the claim.
+
+## 2026-09-30 16:29 -03 — six-patch pinned bytes qualified in hosted CI (EVD-0130)
+
+**What:** Hosted run
+[36763981097](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36763981097)
+executed the full `vmbus-upstream.yml` gate set against contribution-fork
+commit `7e4ccc98d32f`, which carries the six-patch v2 series pinned by
+`series/SHA256SUMS`. All three jobs completed `success` with no failed or
+skipped step inside any job.
+
+**Question:** Do the build/Sparse/checkpatch/KUnit/CoCo-invariant gates pass
+on the *current* six-patch candidate, or only on its predecessor?
+
+**Answer:** They pass on the current candidate. Measured on run 36763981097:
+
+| Gate | Result |
+| --- | --- |
+| `wsl-backport` build `W=1` + Sparse | PASS |
+| `wsl-backport` KUnit (`hyperv-vmbus-gpadl-lifetime` 12 + `hyperv-uio-hv-generic-mmap` 3) | PASS 15/15 |
+| `kernel (x86_64)` apply + build, all 6 stages | PASS |
+| `kernel (x86_64)` cumulative `checkpatch.pl --strict --no-tree` | PASS at every stage |
+| `kernel (x86_64)` `Enforce CoCo static invariants` | PASS, **both gate self-tests green** |
+| `kernel (x86_64)` 20 named VMBus/UIO KUnit cases | PASS 20/20 |
+| `kernel (arm64)` apply + build + Sparse | PASS |
+| `series/SHA256SUMS` byte-pin | PASS (`sha256sum -c`, 6/6) |
+
+Run 36762560212 on the preceding commit `dbf05cc05ca8` was **red** and is
+part of this record, not omitted: `wsl-backport` failed
+`vmbus_buffer_cleanup_repeated_test` with
+`Expected buffer.addr == ((void *)0)` at `drivers/hv/channel.c:1539` and a
+`WARNING` at `__vmbus_free_buffer` line 1053 (`WARN_ON_ONCE` in the `!owner`
+branch), 14/15 KUnit passing. The `kernel` job was skipped because it has
+`needs: wsl-backport`.
+
+Root cause: commit `a8042f978bc0` ("free retained buffers under the reclaim
+lock") restructured `__vmbus_free_buffer()` to clear `buffer->pages` under
+`vmbus_retained_buffers_lock` and dropped `memset(buffer, 0, sizeof(*buffer))`
+from the retain-success branch. `vmbus_buffer_retain()` copies the record into
+the owner and nulls `buffer->owner`, but leaves `addr`/`chunks`/`chunk_cnt`
+set, so a repeated free observed `owner == NULL` with a non-empty buffer and
+warned instead of taking the documented "Safe to call twice" no-op. The
+non-retain path already ended in a memset; the test asserts exactly that
+contract.
+
+Fix: fork commit `7e4ccc98d32f` restores the memset on the retain-success
+path (7 lines). `scripts/checkpatch.pl -f drivers/hv/channel.c` reports
+`total: 0 errors, 0 warnings` and "ready for submission".
+
+**Scope boundary, stated explicitly:** this defect lived in the **WSL
+backport tree only**. The mainline six-patch series has a different
+`vmbus_release_buffer()` in `0006-gpadl-lifetime-reclaim.patch` that memsets
+on every path (empty buffer, no owner, and owner transfer) and is guarded by
+`vmbus_buffer_repeated_owner_release_test`. The mainline candidate never
+carried the bug, and the applied tree was never modified by the fix.
+
+Why it surfaced only at `dbf05cc05ca8`: commits `b64d516de5fc` and
+`a8042f978bc0` changed `drivers/hv/channel.c` after the last green run
+(36590352003 on `de5138b5ebc3`). The push `de5138b5ebc3..dbf05cc05ca8` was
+the first to send them to CI. A green run qualifies the SHA it ran against,
+not a branch tip that later grew commits.
+
+**What this closes:** the source-level qualification gap that EVD-0129 named
+as outstanding. Build, Sparse, strict checkpatch, the 20 named KUnit cases,
+the CoCo static invariants and **both gate self-tests** now have hosted
+evidence bound to the pinned six-patch `series/SHA256SUMS`.
+
+**What this does not close, and must not be read as closing:**
+
+- COCO-1..5. No hosted runner is a confidential guest. A QEMU/TCG CoCo boot
+  is forbidden evidence theatre. The only non-silicon route is an Azure
+  Confidential VM (`DCasv5`/`ECasv5` SEV-SNP, `DCesv5`/`ECesv5` TDX); Arm CCA
+  has no cloud SKU.
+- Live GPADL response/rescind interleaving, UIO subchannel mmap
+  close/unregister including the hold-in-mmap window, forced order-7
+  fragmentation producing the order-zero fallback, and the 100-cycle buffer
+  balance. Those need a real Hyper-V guest. QEMU cannot provide VMBus.
+- WSL-backport lifecycle runtime qualification. A `wsl-backport` KUnit pass
+  is a QEMU/KUnit run; it is not Hyper-V and not CoCo.
+
+**Verdict:** 🟡 PARTIAL — the source-level qualification gap is closed. The
+six-patch pinned bytes now have hosted build/Sparse/checkpatch/KUnit and
+CoCo-invariant evidence, including both gate self-tests. CoCo-1..5, live
+GPADL/UIO runtime interleaving and forced order-zero fallback remain open and
+are not claimed.
+
+**Category:** kernel-source-audit
+
+**How to measure:** push the contribution-fork branch and read
+`gh run view 36763981097 --repo emersonbusson/WSL2-Linux-Kernel --json jobs`.
+Expect three jobs `success`. Independently, on the pinned bytes:
+`(cd series && sha256sum -c SHA256SUMS)` must report 6/6 `OK`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0130`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-09-30T19:29:29Z`.
+**Verified at:** `2026-09-30T19:29:29Z`.
+**Source revision:** `e6354d94`
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the series is sent or withdrawn. If any file under
+`series/` is edited, regenerate `series/SHA256SUMS` in the same commit and
+require a fresh hosted run; this entry then becomes the pre-edit baseline.
+**Freshness:** Re-run on any change to `series/*.patch`,
+`.github/workflows/vmbus-upstream.yml`, `coco-static-invariants.py`, or
+`drivers/hv/channel.c` in either tree. Never cite runs 36574925363 or
+36590352003 as evidence for this candidate — they qualified predecessor
+bytes. Never cite run 36762560212 as a pass; it is the recorded red baseline
+for the `a8042f978bc0` omission.

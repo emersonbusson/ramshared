@@ -9,10 +9,15 @@ six-patch shape is the 2026-09-30 hygiene pass: the order-vector correction
 is folded into the patch that introduces the KUnit case it repairs, the
 `test(hv):` subjects are retitled, and every mail is regenerated with
 `git format-patch`. The applied tree is byte-identical to the previous
-seven-patch candidate, so the source-level findings below still describe it,
-but **hosted runs 36574925363 and 36590352003 qualify the previous bytes,
-not these**. A fresh hosted run on the pinned `series/SHA256SUMS` is required
-before any claim that the build/KUnit gates pass on this candidate.
+seven-patch candidate, so the source-level findings below still describe it.
+**Hosted run
+[36763981097](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36763981097)
+on commit `7e4ccc98d32f` qualifies the pinned six-patch `series/SHA256SUMS`:
+all three jobs green** — `wsl-backport` (15/15 KUnit), `kernel (x86_64)`
+(every stage applied and built, strict checkpatch, both CoCo gate self-tests,
+20/20 named KUnit cases), and `kernel (arm64)` (build + Sparse). Runs
+36574925363 and 36590352003 qualify the predecessor bytes and must not be
+cited for this candidate.
 
 A kernel built from this worktree's `vmbus-ring-buffer-upstream-v2` branch
 head `a5cedb4de6f8` is installed on the daily WSL host as Build #9
@@ -122,13 +127,13 @@ qualification.
 
 ## Blocking gaps
 
-1. Hosted run 36574925363 passed all seven patch stages of the **predecessor
-   bytes** on x86_64 and arm64, the WSL 6.18.40.1 backport build, and x86_64
-   KUnit 24/24; the WSL backport KUnit run passed 14/14. Those bytes were
-   superseded by the 2026-09-30 six-patch hygiene pass; a fresh hosted run on
-   the current `series/SHA256SUMS` is outstanding. The order-zero fallback
-   test exercises injected allocation failures. These hosted tests do not
-   simulate live allocator fragmentation or host response/rescind
+1. Hosted run 36763981097 passed all six patch stages of the **current
+   pinned bytes** on x86_64 and arm64, the WSL 6.18.40.1 backport build
+   (15/15 KUnit), and x86_64 KUnit 20/20 named cases, with both CoCo gate
+   self-tests green. Hosted run 36574925363 covered the predecessor
+   seven-patch bytes and is not evidence for this candidate. The order-zero
+   fallback test exercises injected allocation failures. These hosted tests do
+   not simulate live allocator fragmentation or host response/rescind
    interleaving. Arm64 KUnit is skipped.
 2. An earlier four-commit v7.3-rc4 snapshot was linked and booted on ordinary
    x86_64 Hyper-V. This does not qualify the current six-patch v2 series, the
