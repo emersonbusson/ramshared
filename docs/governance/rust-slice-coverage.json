@@ -1159,6 +1159,30 @@
           ]
         }
       ]
+    },
+    {
+      "id": "cuda-rust-native-tiering-compressed-cache",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/cuda-rust-native-tiering/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-block",
+        "--files",
+        "crates/ramshared-block/src/compressed_cache.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/compressed-cache-cov.json"
+      ],
+      "packages": [
+        "ramshared-block"
+      ],
+      "files": [
+        "crates/ramshared-block/src/compressed_cache.rs"
+      ],
+      "min": 80
     }
   ]
 }

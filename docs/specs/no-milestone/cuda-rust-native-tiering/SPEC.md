@@ -390,12 +390,40 @@ All names marked “to add” are planned tests, not tests already present.
 | Origin authority | crates/ramshared-block/src/isolated_origin.rs :: compressed_cache_fault_falls_back_to_origin | unit | #16 | existing source coverage gate |
 | CPU-codec control arm | crates/ramshared-block/tests/cpu_codec_control_arm.rs :: cpu_codec_arm_roundtrip_is_byte_exact | measurement harness | #9 | N/A — harness |
 
+## Coverage commands
+
+Each business-logic source file declared above is gated by its own exact
+invocation. The command text below is the contract consumed by
+`docs/governance/rust-slice-coverage.json`; do not reformat it.
+
+**crates/ramshared-block/src/compressed_cache.rs**
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/compressed_cache.rs --min 80 --report-json tmp/compressed-cache-cov.json
+```
+
 ## Validation checklist
 
 - [ ] cargo fmt --all -- --check
 - [ ] cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings
 - [ ] cargo test -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli
-- [ ] Coverage for all touched Rust business-logic files: node tools/ci/check-rust-slice-coverage.mjs with the package/file list above and --min 80.
+- [x] Coverage for `crates/ramshared-block/src/compressed_cache.rs`
+  (2026-09-30: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/compressed_cache.rs --min 80 --report-json tmp/compressed-cache-cov.json`
+  — 90.0% lines (224/249), gate PASSED. All five named unit tests in
+  `compressed_cache::tests` are present and green: `extent_split_respects_maximum`,
+  `allocator_coalesces_and_refuses_fragmented_request`,
+  `overlap_invalidation_removes_only_affected_entries`,
+  `metadata_budget_caps_entry_count`,
+  `zero_physical_target_allocates_no_metadata`.)
+- [ ] Coverage for `crates/ramshared-vram/src/codec.rs` — not yet gated. The
+  file is declared above with "Cover target: at least 80% on business logic",
+  but no `docs/governance/rust-slice-coverage.json` entry owns it and no
+  measured invocation is recorded here. Do not claim this row until the exact
+  command is bound in this SPEC, registered in the map, and measured on a tree
+  without uncommitted work in that file.
+- [ ] Coverage for `crates/ramshared-cuda/src/nvcomp.rs` — N/A yet. The file is
+  not created; ITEM-3 is gated on the exact nvCOMP pre-decode checksum
+  mechanism (DT-7). Its cover target is not applicable before the file exists.
 - [ ] Every test matrix name exists and passes; hardware tests stay ignored unless exact prerequisites and fresh budget pass.
 - [ ] Exact NVIDIA test checks sm75+, nvCOMP runtime/toolkit/driver versions, adapter identity, codec statuses, corrupt-entry refusal, and exact bytes.
 - [ ] Live userspace path proves before/action/after on an isolated non-pressure canary origin; no forced cascade, kernel-module, WDK, or swap-stress test.
