@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 353,
-    "classified": 350,
+    "total": 354,
+    "classified": 351,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -2515,6 +2515,18 @@
       "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md",
       "disposition": "classified",
       "ruleId": "ssdv3-gap-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-STATIC-PROOF.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-coco-static-proof",
       "verification": {
         "state": "unverified"
       },

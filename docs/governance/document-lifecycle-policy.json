@@ -602,6 +602,18 @@
         "state": "unverified"
       },
       "registeredAt": "2026-09-30T17:02:15Z"
+    },
+    {
+      "id": "ssdv3-coco-static-proof",
+      "pattern": "docs/specs/**/COCO-STATIC-PROOF.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": {
+        "state": "unverified"
+      },
+      "registeredAt": "2026-09-30T17:30:00Z"
     }
   ],
   "exclusions": [
