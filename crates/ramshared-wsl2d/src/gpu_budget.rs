@@ -33,6 +33,18 @@ pub fn worker_config_for_candidate(
     candidate_safe_target_bytes: u64,
 ) -> GpuWorkerConfig {
     config.target_bytes = config.target_bytes.min(candidate_safe_target_bytes);
+    // One chunk must fit inside the admitted target. When live headroom is
+    // tight the safe target can collapse below the configured chunk size
+    // (DT-3 subtracts the display reserve and runtime buffer from what is
+    // already free). A chunk larger than the target can never be allocated
+    // (`allocate_and_write` refuses when `cached + chunk > target`), so the
+    // cache would report ACTIVE yet stay inert at zero bytes.
+    if config.target_bytes == 0 {
+        config.chunk_bytes = 0;
+    } else {
+        let max_chunk = usize::try_from(config.target_bytes).unwrap_or(usize::MAX);
+        config.chunk_bytes = config.chunk_bytes.min(max_chunk).max(1);
+    }
     config
 }
 
@@ -567,6 +579,32 @@ mod tests {
             worker_config_for_candidate(requested, 8_000).target_bytes,
             4_000
         );
+    }
+
+    #[test]
+    fn selected_candidate_shrinks_chunk_to_fit_tight_safe_target() {
+        // Live headroom can collapse below one configured chunk (DT-3 reserve
+        // plus runtime buffer subtracted from already-free bytes). The worker
+        // must still be able to place at least one chunk inside the target.
+        let requested = GpuWorkerConfig {
+            target_bytes: 4 * 1024 * 1024 * 1024,
+            chunk_bytes: 128 * 1024 * 1024,
+            reserve_floor_bytes: 2 * 1024 * 1024 * 1024,
+            compression_enabled: false,
+        };
+
+        let fitted = worker_config_for_candidate(requested, 34_603_008);
+        assert_eq!(fitted.target_bytes, 34_603_008);
+        assert_eq!(fitted.chunk_bytes, 34_603_008);
+
+        // A chunk that already fits is left alone.
+        let roomy = worker_config_for_candidate(requested, 512 * 1024 * 1024);
+        assert_eq!(roomy.chunk_bytes, 128 * 1024 * 1024);
+
+        // Zero target disables chunking rather than leaving a stale size.
+        let none = worker_config_for_candidate(requested, 0);
+        assert_eq!(none.target_bytes, 0);
+        assert_eq!(none.chunk_bytes, 0);
     }
 
     fn wddm_budget(high: u32, low: u32, sampled_at: Instant) -> BudgetSnapshot {
