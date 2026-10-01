@@ -473,11 +473,7 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 The canonical line-coverage owner for the independently testable swap lifecycle is:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-wsl2d \
-  --files crates/ramshared-wsl2d/src/swap.rs \
-  --min 80 \
-  --report-json tmp/memory-broker-wsl2d-daemon-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/swap.rs --min 80 --report-json tmp/memory-broker-wsl2d-daemon-cov.json
 ```
 
 The daemon entrypoint remains owned by a named adapter-test contract. Its
@@ -558,11 +554,7 @@ non-test behavior changed and must not be represented as a localization-only
 differential:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-wsl2d \
-  --files crates/ramshared-wsl2d/src/backend.rs \
-  --min 80 \
-  --report-json tmp/memory-broker-wsl2d-backend-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/backend.rs --min 80 --report-json tmp/memory-broker-wsl2d-backend-cov.json
 ```
 
 The two environment-bound GPU checks were moved from that production module to
@@ -623,11 +615,7 @@ The ublk shared-memory and composite-teardown business paths use this separate
 canonical slice gate:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-uring,ramshared-wsl2d \
-  --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs \
-  --min 80 \
-  --report-json tmp/memory-broker-ublk-safety-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-uring,ramshared-wsl2d --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs --min 80 --report-json tmp/memory-broker-ublk-safety-cov.json
 ```
 
 The bounded support-policy tests imported from the PR audit use:

@@ -298,11 +298,7 @@ fixtures with a bounded receive/join deadline. They do not allocate CUDA,
 require root, configure swap, start a daemon, or use a physical socket.
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-wsl2d \
-  --files crates/ramshared-wsl2d/src/conn.rs \
-  --min 80 \
-  --report-json tmp/wsl2-conn-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/conn.rs --min 80 --report-json tmp/wsl2-conn-cov.json
 ```
 
 The inflight range model is the pure I/O-atomicity contract for the same NBD

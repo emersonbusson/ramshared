@@ -247,11 +247,7 @@ revert this ITEM and keep the cascade disabled pending investigation.
 **Canonical cover gate:**
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-cli \
-  --files crates/ramshared-cli/src/bounded_process.rs \
-  --min 80 \
-  --report-json tmp/cascade-transport-orchestration-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/bounded_process.rs --min 80 --report-json tmp/cascade-transport-orchestration-cov.json
 ```
 
 ### Adapter contract and coverage boundary

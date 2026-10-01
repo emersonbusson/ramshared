@@ -260,11 +260,7 @@ source/static evidence and leaves unavailable live evidence `PARTIAL`.
 The canonical coverage owner for the origin block backend is:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-block \
-  --files crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs \
-  --min 80 \
-  --report-json tmp/wsl2-revocable-vram-origin-block-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs --min 80 --report-json tmp/wsl2-revocable-vram-origin-block-cov.json
 ```
 
 ## Validation checklist

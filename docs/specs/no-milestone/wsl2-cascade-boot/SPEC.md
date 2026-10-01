@@ -443,7 +443,7 @@ Kinds: unit · integration · kselftest · WDK/SDV/Verifier · drill/E2E.
 - [ ] `cargo fmt --all -- --check`
 - [ ] `CARGO_BUILD_JOBS=1 cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli -- --test-threads=1`
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/boot.rs --min 80`
+- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/boot.rs --min 80 --report-json tmp/wsl2-cascade-native-bootstrap-cov.json`
 - [ ] Linux LKM checks: **N/A** — this slice changes no C/Rust kernel code
 - [ ] Windows InfVerif / SDV / Driver Verifier / lab VM: **N/A** — no Windows driver surface in this slice
 - [ ] Live path for this product surface: `bash -n` on the touched shell scripts;
