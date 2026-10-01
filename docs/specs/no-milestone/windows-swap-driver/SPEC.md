@@ -240,11 +240,18 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   `GFP_ATOMIC`).
 - [ ] **Input validation (service):** lease `bytes` revalidated in service before forwarding to broker;
   broker already rejects `> total` (`broker_srv.rs:412`).
-- [ ] **`unsafe`/FFI (Rust):** CUDA-Windows (ITEM-1), `driver_link` (ITEM-6), `ntpagefile` (ITEM-7) each
+- [x] **`unsafe`/FFI (Rust):** CUDA-Windows (ITEM-1), `driver_link` (ITEM-6), `ntpagefile` (ITEM-7) each
   use `// SAFETY:` per block; safe surface without `unsafe` (`ramshared-cuda` pattern).
-- [ ] **Secrets/pointers:** no hardcoded credential; **no kernel address logged** (WPP/ETW without
+  (2026-10-01: `crates/ramshared-cuda/src/loader_win.rs` has 8 `unsafe {` blocks and 8 `// SAFETY:`
+  comments, 1:1, added this session; `crates/ramshared-winsvc/src/driver_link.rs` (849 lines) and
+  `crates/ramshared-winsvc/src/ntpagefile.rs` (276 lines) contain zero `unsafe`, `extern`, raw
+  pointer casts, or IOCTL calls — pure safe surface, so the per-block rule is vacuously met.)
+- [x] **Secrets/pointers:** no hardcoded credential; **no kernel address logged** (WPP/ETW without
   pointers — aligned with `coding.md`: never leak KASLR); telemetry without PII (pagefile content is
-  process memory — **never** log payload).
+  process memory — **never** log payload). (2026-10-01: verified by source scan of
+  `drivers/windows/ramshared/*.c` — zero hits for `password|credential|secret|token|api_key|apikey`;
+  zero for `%p|%px|KASLR|kernel address|0xffff`; zero for pagefile/payload content on any
+  `log|trace|wpp|etw|DbgPrint|KdPrint` path.)
 - [ ] **Kernel Oops/internal error:** failing IOCTL returns generic NTSTATUS; no implementation detail or
   internal offset leaks to Ring-3.
 
@@ -690,22 +697,22 @@ kernel-page drill with confirmed residency (DT-21).
 
 **Service + libraries (Rust userspace):**
 
-- [ ] Clean `cargo fmt --all -- --check`
-- [ ] Clean `cargo clippy --workspace --all-targets -- -D warnings` (new crates + bin stub)
-- [ ] Green `cargo test --workspace` (new pure tests + existing no regression; Windows bin = Linux stub, DT-16)
-- [ ] Green `cargo audit` + `cargo deny check` with `windows*`/`ntapi`/`toml`
+- [x] Clean `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] Clean `cargo clippy --workspace --all-targets -- -D warnings` (new crates + bin stub) (2026-10-01: `CARGO_BUILD_JOBS=1 cargo clippy --workspace --all-targets -- -D warnings` → exit 0, zero warnings.)
+- [x] Green `cargo test --workspace` (new pure tests + existing no regression; Windows bin = Linux stub, DT-16) (2026-10-01: `CARGO_BUILD_JOBS=1 cargo test --workspace` → 1785 passed, 0 failed, 26 ignored across 57 suites, exit 0.)
+- [x] Green `cargo audit` + `cargo deny check` with `windows*`/`ntapi`/`toml` (2026-10-01: `cargo audit` → 193 crate dependencies scanned, exit 0. `cargo deny check` → advisories ok, bans ok, licenses ok, sources ok, exit 0.)
 - [ ] **RNF-8:** PASS `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` + `qemu-broker-drill.sh` drills; **no `arbiter.rs` diff**
 - [ ] `#[ignore]` CUDA `nvcuda.dll` on RTX 2060 (ITEM-1) — plausible `mem_info`
 
 **Docs:**
 
-- [ ] Regenerated `docs/INDEX.md` (status `SPEC`); valid Kahneman-anchor links
+- [x] Regenerated `docs/INDEX.md` (status `SPEC`); valid Kahneman-anchor links (2026-10-01: `node tools/generate-docs-index.mjs --check` → `✓ docs/INDEX.md is in sync.` Kahneman anchors resolve to `#disc-N` in `docs/methodology/kahneman-disciplines.md`.)
 - [ ] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` updated in the same structural-slice commit
 
 **Cognitive gates:**
 
-- [ ] Every critical ITEM points to `docs/methodology/kahneman-disciplines.md` (Map) with exact anchor
-- [ ] Every critical step records required question, minimum evidence, and abort trigger
+- [x] Every critical ITEM points to `docs/methodology/kahneman-disciplines.md` (Map) with exact anchor (2026-10-01: all 9 distinct `#disc-N` anchors in this SPEC resolve to `docs/methodology/kahneman-disciplines.md`: `#disc-1`, `#disc-2`, `#disc-3`, `#disc-5`, `#disc-6`, `#disc-9`, `#disc-11`, `#disc-13`, `#disc-14`.)
+- [x] Every critical step records required question, minimum evidence, and abort trigger (2026-10-01: the Kahneman map at the `Step / ITEM | Kahneman discipline | Link | Required question | Minimum evidence | Abort trigger` table has zero empty or `—` cells across every critical row.)
 - [ ] No vague language at a critical point without observable criterion
 - [ ] **R7 gate (ITEM-8):** kernel-page drill has run and `DEGRADATION-MATRIX` is updated
   **before** any load on the real host
