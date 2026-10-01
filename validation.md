@@ -11377,12 +11377,44 @@ high orders, so those faults have to come out of the order-7-and-up blocks
 still free. `exhausted=1` now means the measured condition holds. The drill
 script takes the helper's `high_order_7plus` third value as authoritative.
 
-Source revision: `42ee9237b6bd`. `10000`-line note: this entry does not
-qualify the candidate for upstream submission. It records two harness
-failures and the fix that addresses them; the third EVD-0134 acceptance
-signal remains open until a run reports `high_order_7plus_blocks=0` with
+**Verdict:** 🟡 partial — the OOM pin sits in the wrong window on both
+guests: held through the allocation it starves Unmovable and the helper dies
+before `ready=1` on one, and dropped at `ready=1` it lets the punch destroy
+the measured pattern on the other. Both failures are one lever on the wrong
+side of the measurement, not a candidate defect. The fix is recorded here and
+not yet proven by a clean run, and the third EVD-0134 acceptance signal
+remains open until a run reports `high_order_7plus_blocks=0` with
 `exhausted=1` on the pattern that was measured, not on a re-read after the
 pattern was lost.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36800977305 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `oom-killer`, `oom_score_adj`, `ready=1`, `FRAGMENT_BUDDY`,
+`high_order_7plus`, `HYPERV_DRILL_RESULT`. The decisive pair is the OOM block
+position relative to `ready=1` and the `high_order_7plus` value captured at
+that marker, never a re-read after the pattern is gone.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0140`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T01:24:53Z`.
+**Verified at:** `2026-10-01T01:54:00Z`.
+**Source revision:** `42ee9237b6bd`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep both job halves together — the guest panic and the
+destroyed pattern are one root cause read from two symptoms, and either alone
+reads as an unrelated failure. Keep this entry explicitly non-qualifying: it
+records two harness failures and the fix that addresses them, not upstream
+submission evidence.
+**Freshness:** Superseded as soon as a run keeps the OOM pin only through the
+hold and reports `high_order_7plus_blocks=0` with `exhausted=1` on the pattern
+that was measured. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
+GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
+drops the Hyper-V role from them, this claim is void until re-measured.
 
 ## 2026-10-01 02:36 -03 — the pin window is proven; the chase floor and the rebind are not what they looked like (EVD-0141)
 
@@ -11573,12 +11605,43 @@ lifecycle. Contribution-fork `4f1b44ee8048` — the candidate workflow skips
 `0000-*` the way the drill workflow always has. Both pushed together as
 `4f1b44ee8048`; the resulting runs are scored separately.
 
-Source revision: `bac075bbf292` (drills as measured), `4f1b44ee8048` (fixes).
-`10000`-line note: this entry does not qualify the candidate for upstream
-submission. It proves the OOM pin window, retires a mis-attributed rebind
-failure, and records the correction of EVD-0140. The third EVD-0134
-acceptance signal remains open until a run reports
-`high_order_7plus_blocks=0` with `exhausted=1`.
+**Verdict:** 🟡 partial — the OOM pin window is proven: covering exactly the
+hold is the first configuration in which both guests survive and the helper's
+own measurement and the script's later re-read agree exactly. The run also
+retires a mis-attributed rebind failure and corrects EVD-0140's reading of the
+chase floor. The third EVD-0134 acceptance signal remains open until a run
+reports `high_order_7plus_blocks=0` with `exhausted=1`, so this entry does not
+qualify the candidate for upstream submission.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36803317912 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `oom_score_adj`, `ready=1`, `FRAGMENT_BUDDY`, `high_order_7plus`,
+`HYPERV_DRILL_RESULT`. The decisive fact is the agreement between the
+helper's third `high_order_7plus` value and the script's `/proc/buddyinfo`
+re-read while the pin covers only the hold.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0141`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T02:36:00Z`.
+**Verified at:** `2026-10-01T02:36:00Z`.
+**Source revision:** `bac075bbf292`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the pin-window proof next to the EVD-0140 correction —
+the pair is what shows the earlier two failures were one lever in the wrong
+window, not two independent defects. Keep the drilled revision
+`bac075bbf292` distinct from the fix revision `4f1b44ee8048`: the measurements
+belong to the former. Keep this entry explicitly non-qualifying: it proves the
+pin window and retires a mis-attributed rebind failure, not upstream
+submission evidence.
+**Freshness:** Superseded as soon as a run reports
+`high_order_7plus_blocks=0` with `exhausted=1`. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
+GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
+drops the Hyper-V role from them, this claim is void until re-measured.
 
 ## 2026-10-01 03:05 -03 — fragmentation-first is proven; the chase floor counts pages the buddy does not report (EVD-0142)
 
@@ -11705,4 +11768,45 @@ the quantity actually counted. `order0_free_pages()` is removed outright —
 Day-0, no dead paths. Helper builds clean with
 `cc -O2 -Wall -Wextra -Werror -static`.
 
-Source revision: `4f1b44ee8048` (as measured), `b54451c44eb5` (fix).
+**Verdict:** 🟡 partial — fragmentation-first ordering fixes the rebind and
+the map balance after the full bind → probe → unbind → rebind cycle is exact
+(`count=12 bytes=20279296 pages=4939`, identical to the lifecycle
+`BASELINE`), and the candidate build is green on all three jobs for the first
+time since the cover letter landed. The chase floor did not close the third
+EVD-0134 acceptance signal, and its failure is measurement, not candidate
+behaviour: `buddyinfo` omits the per-cpu page cache, so a floor on its order-0
+count reads 1 right after a punch that freed 4096 pages and forbids the split
+it exists to allow. `high_order_7plus_blocks=0` with `exhausted=1` remains
+open.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36806229800 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `FRAGMENT_BUDDY`, `held=`, `freed=`, `pairs=`, `chase=`, `exhausted=`,
+`stop=`, `high_order_7plus`, `after_fragment MAPS`. The decisive arithmetic is
+the windows-2025 buddyinfo account: `expected buddyinfo 6267` == `observed
+buddyinfo 6267`, with the 4096 punched pages contributing zero.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0142`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T03:05:00Z`.
+**Verified at:** `2026-10-01T03:05:00Z`.
+**Source revision:** `4f1b44ee8048`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the buddyinfo account (before/locked/overhead/expected/
+observed) next to the `chase=0` line — the pair is the root-cause argument
+that the punched pages never reach buddyinfo, and either alone is
+unconvincing. Keep the measured revision `4f1b44ee8048` distinct from the fix
+revision `b54451c44eb5` (RamShared `c2fea8a9`). Keep the candidate-build
+green result separate from the drill verdict: a green build is not gate
+closure.
+**Freshness:** Superseded as soon as a run of `b54451c44eb5` or later reports
+`high_order_7plus_blocks=0` with `exhausted=1` under
+`stop=chase-unsplit-floor`. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence beyond
+the named candidate-build result. If GitHub retires or repurposes the
+`windows-latest` / `windows-2025` images, or drops the Hyper-V role from them,
+this claim is void until re-measured.
