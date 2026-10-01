@@ -709,6 +709,7 @@
       "documented_surface": {
         "implementation_paths": [
           "crates/ramshared-agent/src/bin/ramshared_host_agent.rs",
+          "crates/ramshared-agent/src/lib.rs",
           "crates/ramshared-agent/src/local.rs",
           "crates/ramshared-agent/src/main.rs",
           "crates/ramshared-agent/src/win_mem.rs",
@@ -992,6 +993,7 @@
           "crates/ramshared-block/src/gpu_cache_worker.rs",
           "crates/ramshared-block/src/ipc_cache_client.rs",
           "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-cuda/src/nvml.rs",
           "crates/ramshared-cuda/src/vram_impl.rs",
           "crates/ramshared-vram/src/lib.rs",
           "crates/ramshared-wsl2d/src/gpu_budget.rs",
@@ -1140,6 +1142,7 @@
           "scripts/windows/Invoke-WinDriveIoctlValidation.ps1",
           "scripts/windows/Measure-RamSharedDiskIo.ps1",
           "scripts/windows/README.md",
+          "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
           "scripts/windows/Run-GuestExhaustive.ps1",
           "scripts/windows/Run-GuestProductOnline.ps1",
           "scripts/windows/Run-HostExhaustive.ps1",
@@ -1151,6 +1154,7 @@
           "scripts/windows/Test-GuestProductOnlineStatic.ps1",
           "scripts/windows/Test-HostExhaustiveStatic.ps1",
           "scripts/windows/Test-PagefileRefusalManufacturedStatic.ps1",
+          "scripts/windows/Test-ProductOnlineStatic.ps1",
           "scripts/windows/Test-WinDrivePreflightStatic.ps1",
           "scripts/windows/Test-WinPagingFilesConcreteStatic.ps1",
           "scripts/windows/WinDriveBackend.cs"
@@ -1188,7 +1192,9 @@
           "crates/ramshared-winsvc/src/proto.rs",
           "crates/ramshared-wsl2d/src/backend.rs",
           "crates/ramshared-wsl2d/src/broker_srv.rs",
-          "scripts/windows/Build-Drivers.ps1"
+          "scripts/windows/Build-Drivers.ps1",
+          "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+          "scripts/windows/Test-AutonomousBrokerStatic.ps1"
         ],
         "test_paths": []
       },
@@ -1390,8 +1396,10 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/inflight.rs",
           "crates/ramshared-wsl2d/src/conn.rs",
-          "crates/ramshared-wsl2d/src/main.rs"
+          "crates/ramshared-wsl2d/src/main.rs",
+          "crates/ramshared-wsl2d/src/state.rs"
         ],
         "test_paths": []
       },

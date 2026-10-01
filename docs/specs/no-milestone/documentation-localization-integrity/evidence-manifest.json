@@ -4,7 +4,7 @@
   "status": "DONE",
   "spec": {
     "path": "docs/specs/no-milestone/documentation-localization-integrity/SPEC.md",
-    "sha256": "5e2aa2c94ce782d2ee07fde9f9e59e0483704cc9cb9cf3867db39c587f9a0e2b"
+    "sha256": "22cce6fa991564c3084d51961efb7226c52f22af4cd8e54cd914930c1c973426"
   },
   "tests": [
     {

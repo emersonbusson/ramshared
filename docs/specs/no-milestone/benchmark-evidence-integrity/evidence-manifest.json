@@ -4,7 +4,7 @@
   "status": "PARTIAL",
   "spec": {
     "path": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
-    "sha256": "d806b5d3313f24daa5b043189d713f0f1671cd5c15cfd4eb4572df4a845be262"
+    "sha256": "b31559050a31b145cf47c2882d23649edb93e02e6e09df6897a16727ef07e2f6"
   },
   "tests": [
     {
