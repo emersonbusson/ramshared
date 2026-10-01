@@ -37,7 +37,8 @@
  * order-0 fallback. Hole count is capped: the property is what matters,
  * not the density, and an uncapped punch drains the Unmovable slab through
  * vm_area_dup() until out_of_memory() panics an unkillable guest. It
- * prints FRAGMENT_BUDDY ready=1 only after the pattern is in place.
+ * prints FRAGMENT_BUDDY ready=1 only after the pattern is in place, and
+ * only then drops the OOM pin and restores vm.min_free_kbytes.
  *
  * The loop stops on the measured condition, not on hard refusal:
  * pagefault_out_of_memory() only warns and retries the fault, so touching
@@ -52,12 +53,20 @@
  * pattern cannot be built and this mode fails closed instead of reporting a
  * pattern it never created.
  *
- * The allocation loop also lowers vm.min_free_kbytes for its duration and
- * restores it before punching holes. Without that, the min watermark hides
+ * The allocation loop also lowers vm.min_free_kbytes and keeps it low
+ * through the punch and the ready=1 measurement. The min watermark hides
  * free high-order blocks from userspace faults: buddyinfo still lists them,
  * MemAvailable says there is nothing left, and the loop stops with the test
  * condition unmet no matter how low the floor sits. The read-back in the
- * report is the value actually in force, not the value asked for.
+ * report is the value actually in force, not the value asked for. It is
+ * restored only after ready=1, so the channel-open exercise that follows
+ * runs against the normal reserve.
+ *
+ * The OOM pin stays on for the same window. Dropping it before the punch
+ * let out_of_memory() kill this process mid-pattern -- the pages came back,
+ * high orders reappeared, and ready=1 never printed. A capped punch of
+ * FRAG_HOLE_CAP holes is nothing like the quarter-million-hole slab drain
+ * that panicked the guest; it cannot starve Unmovable on its own.
  *
  * Never prints addresses or PFNs. Evidence must not carry KASLR material.
  */
@@ -233,15 +242,18 @@ static int do_mlock_hog(int argc, char **argv)
 #define FRAG_MAX_CHUNKS 48000
 #define FRAG_PAGE 4096L
 /*
- * Allocation-phase floor. Low enough that the last order-7 block in the
- * free remainder can still be split -- the first measured run stopped at
- * 8 MiB with one such block left -- and high enough that a page fault
- * cannot run into pagefault_out_of_memory() (which retries forever
- * against an unkillable process). 2 MiB is 512 pages: more than one
- * 64 KiB chunk needs to fault in, far below the point where a fault
- * cannot be satisfied.
+ * Allocation-phase floor. Only consulted while order-7 remains: the test
+ * condition itself is the stop once it is met, so a soft floor has nothing
+ * left to guard.
+ *
+ * The first min_free_kbytes run stopped at 2 MiB of MemAvailable with 9.6
+ * MiB still free in buddyinfo -- five high-order blocks among them. Those
+ * pages are allocatable; the estimate just treats the reserve as
+ * unavailable. Stopping there is how the test condition stays unmet. 256 kB
+ * is far enough below that estimate to reach them and still above the point
+ * where a single 64 KiB fault cannot be satisfied at all.
  */
-#define FRAG_SAFETY_KB 2048L
+#define FRAG_HARD_KB 256L
 /*
  * Hole-phase caps. Punching one hole per eligible page needs one
  * vm_area_struct per surviving run. On a 2 GiB guest that is ~250k slab
@@ -372,11 +384,13 @@ static long mem_available_kb(void)
 }
 
 /*
- * Pin or unpin this process against the OOM killer. Pin only while the
- * allocation loop is building the pattern: a kill there is a clean
- * INCONCLUSIVE, a hang is not. Unpin before punching holes -- that phase
- * allocates slab, and an unkillable process plus an Unmovable shortage is
- * a guest panic, not a drill failure.
+ * Pin or unpin this process against the OOM killer. The pin stays on from
+ * the start of allocation until after the ready=1 measurement: a kill in
+ * that window destroys the pattern and turns a finished drill into
+ * INCONCLUSIVE_NO_PATTERN, which is what happened when the pin was dropped
+ * before the punch. It is dropped only once the pattern has been measured,
+ * so the channel-open exercise that follows can OOM-reclaim this process
+ * rather than deadlock the guest.
  */
 static void set_oom_adj(const char *value)
 {
@@ -508,36 +522,39 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * no longer holds a free block of order 7 or above -- that is the
 	 * test condition, measured, not inferred.
 	 *
-	 * The order-7 test runs BEFORE the MemAvailable floor. The first
-	 * measured run stopped on the floor with one order-7 block still in
-	 * the free remainder: the floor, not the buddy, was what kept the
-	 * test condition unmet. The floor is a last resort against
-	 * pagefault_out_of_memory(), which on this kernel only warns and
-	 * retries the fault, so touching into true exhaustion with an
-	 * unkillable process hangs instead of failing.
+	 * The order-7 test runs every chunk and BEFORE any floor. A 32-chunk
+	 * cadence walked past blocks that a single chunk would have split,
+	 * and the soft floor stopped the loop while order-7 was still
+	 * present. Both are ways to leave the test condition unmet without
+	 * ever being short of memory.
+	 *
+	 * The hard floor is a last resort against pagefault_out_of_memory(),
+	 * which on this kernel only warns and retries the fault, so touching
+	 * into true exhaustion with an unkillable process hangs instead of
+	 * failing. It is only consulted while order-7 remains; once the
+	 * condition is met the first check breaks out.
 	 */
 	for (i = 0; i < want; i++) {
 		char *m;
 		long high;
 
-		if ((got % 32) == 0) {
-			high = high_order_blocks();
-			if (high == 0) {
-				stopped = 1;
-				stop_reason = "order7-depleted";
-				break;
-			}
+		high = high_order_blocks();
+		if (high == 0) {
+			stopped = 1;
+			stop_reason = "order7-depleted";
+			break;
 		}
 
 		avail_kb = mem_available_kb();
-		if (avail_kb >= 0 && avail_kb < FRAG_SAFETY_KB) {
+		if (avail_kb >= 0 && avail_kb < FRAG_HARD_KB) {
 			/*
-			 * Floor reached. If order-7 is already gone we are
-			 * done; otherwise this is a real shortage and we
-			 * must stop rather than fault into a hang.
+			 * True exhaustion: not the MemAvailable estimate
+			 * hiding high orders behind the watermark, but the
+			 * point where a fault cannot be satisfied. Stop
+			 * rather than hang.
 			 */
 			stopped = 1;
-			stop_reason = "memavailable-floor";
+			stop_reason = "memavailable-hard-floor";
 			break;
 		}
 
@@ -637,23 +654,13 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * VMA and allocates a vm_area_struct from the Unmovable slab; a quarter
 	 * million of them drained that pool on a 2 GiB guest and the resulting
 	 * out_of_memory() panicked the machine because this process was
-	 * unkillable. Cap the holes, drop the OOM pin first, and stop punching
-	 * before slab starves. FRAG_HOLE_CAP holes still free 16 MiB of
-	 * order-0 -- far more than the 2 MiB ring needs -- and the held buddies
-	 * keep order-7 from reforming.
+	 * unkillable. Cap the holes at FRAG_HOLE_CAP and the slab demand
+	 * disappears: 4096 vm_area_structs cannot starve Unmovable, so the
+	 * OOM pin and the lowered watermark both stay in force through the
+	 * punch. FRAG_HOLE_CAP holes still free 16 MiB of order-0 -- far more
+	 * than the 2 MiB ring needs -- and the held buddies keep order-7 from
+	 * reforming.
 	 */
-	/*
-	 * Restore the watermark before punching. The pattern is in place --
-	 * pages are locked and buddies are held -- so raising the reserve
-	 * again does not rebuild high orders, and the vm_area_dup() slab
-	 * the punch needs should allocate against the normal reserve rather
-	 * than eating into it. The channel open that follows needs that
-	 * reserve too, to allocate its ring.
-	 */
-	if (min_free_saved > 0)
-		min_free_kb_write(min_free_saved);
-
-	set_oom_adj("0\n");
 	for (i = 0; i < got && freed_pages < FRAG_HOLE_CAP; i++) {
 		char *m = maps[i];
 
@@ -686,6 +693,17 @@ static int do_fragment_buddy(int argc, char **argv)
 	       locked, pairs, want, FRAG_HOLE_CAP, stopped, stop_reason,
 	       high_before, high_locked, high_after);
 	fflush(stdout);
+
+	/*
+	 * Pattern measured; drop the levers. The channel-open exercise that
+	 * runs while we hold needs the normal watermark to allocate its ring,
+	 * and must be able to OOM-reclaim this process rather than deadlock
+	 * the guest. The pages stay locked and the holes stay open either
+	 * way, so the pattern is intact for the rest of the hold.
+	 */
+	if (min_free_saved > 0)
+		min_free_kb_write(min_free_saved);
+	set_oom_adj("0\n");
 
 	if (hold > 0)
 		sleep((unsigned int)hold);

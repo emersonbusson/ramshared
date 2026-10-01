@@ -11114,3 +11114,146 @@ shows `high_order_7plus_blocks=0` with `exhausted=1`. Re-run on any change to
 this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
 GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
 drops the Hyper-V role from them, this claim is void until re-measured.
+
+## 2026-10-01 01:25 -03 — the watermark lever reaches the blocks; the punch then OOM-kills the helper (EVD-0139)
+
+**What:** Run
+[36798464398](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36798464398)
+(`Hyper-V runtime drill`, `conclusion=success`, contribution-fork SHA
+`f84e6d40ac79`, completed `2026-10-01T01:05:30Z`) re-ran the drills after the
+`vm.min_free_kbytes` watermark lever. All three jobs are green:
+`drill-kernel`, `drill-runtime (windows-latest)` and `drill-runtime
+(windows-2025)`. The workflow-level `success` is harness health; the drill
+verdict is still **PARTIAL**.
+
+**Question:** Does lowering `vm.min_free_kbytes` for the allocation loop let it
+reach the high-order blocks the min watermark was hiding, and does restoring it
+before the punch keep the helper alive?
+
+**Answer: the lever works, the restore-before-punch ordering kills the
+measurement.**
+
+**The lever reaches the hidden blocks** (`windows-latest`, first attempt):
+
+```
+FRAGMENT_BUDDY min_free_kbytes saved=5704 set=512 now=512
+FRAGMENT_BUDDY start cap_chunks=32064 high_order_7plus=507
+FRAGMENT_BUDDY allocated chunks=31546 high_order_7plus=507->3 locked=31546 stop=memavailable-floor
+```
+
+`saved=5704 set=512 now=512` is the read-back: the write took. `507->3` is a
+deeper drain than any previous run, which confirms EVD-0138's root cause — the
+min watermark, not the buddy, was what kept those blocks out of reach.
+
+**Then the helper is OOM-killed before `ready=1`:**
+
+```
+vmbus_drill_hel invoked oom-killer: gfp_mask=0x40cc0(GFP_KERNEL|__GFP_COMP), order=0, oom_score_adj=0
+Out of memory: Killed process 304 (vmbus_drill_hel) total-vm:2024112kB, anon-rss:2023132kB
+FRAGMENT did not reach a ready state
+```
+
+`oom_score_adj=0` is the smoking gun: the pin had already been dropped, and
+`GFP_KERNEL|__GFP_COMP order=0` is the `vm_area_dup()` slab the punch needs for
+`__split_vma`. Restoring `min_free_kbytes` **and** unpinning before punching
+put the punch phase against the normal 5.7 MiB reserve with a killable
+allocator. The process died mid-pattern, its ~2 GiB of locked pages came back,
+and high orders reappeared — `high_order_7plus=523` in the post-mortem buddy,
+close to the 507 the drill started from. `VERDICT=INCONCLUSIVE_NO_PATTERN`.
+
+**`windows-2025` survived the punch and shows the next wall** (the soft floor):
+
+| Fact | windows-latest | windows-2025 |
+| --- | --- | --- |
+| `min_free_kbytes` read-back | `saved=5704 set=512 now=512` | same (see note below) |
+| `allocated ... high_order_7plus` | `507->3`, `memavailable-floor` | `503->5`, `memavailable-floor` |
+| `ready=1 ... high_order_7plus` | *never printed* (OOM) | `503->5->5`, `freed=4096`, `exhausted=1`, `pagemap=1` |
+| `high_order_7plus_blocks` (script) | `523` (post-mortem) | `5` |
+| `VERDICT` | `INCONCLUSIVE_NO_PATTERN` | `INCONCLUSIVE_ORDER7_STILL_AVAILABLE` |
+| `LIFECYCLE_VERDICT` | `PASS cycles=30 phase2=yes` | `PASS cycles=30 phase2=yes` |
+
+`windows-2025`'s post-pattern buddyinfo is the new root-cause pair:
+
+```
+Node 0, zone DMA32  451  2  1  2  1  2  10  2  2  1  0
+```
+
+`order0=451 … order6=10 order7=2 order8=2 order9=1 order10=0` — **9.6 MiB of
+free pages including five high-order blocks**, while the loop stopped on
+`FRAG_SAFETY_KB=2048`. The watermark is no longer the wall; the **soft floor
+is**. The pages are allocatable, `MemAvailable` just still treats part of the
+remainder as unavailable, and stopping at 2 MiB leaves exactly the blocks the
+test condition is about.
+
+**Measurement note — the missing `min_free` line was the console tail, not a
+different binary.** Both jobs checked out `f84e6d40ac79` and share one
+initramfs artifact. The drill script echoed `grep FRAGMENT_BUDDY | tail -3`,
+which kept `start`/`allocated`/`ready` and dropped `min_free_kbytes` whenever
+the fourth line existed. `windows-latest` printed only three lines (it died
+before `ready=1`), so its `min_free` line survived the tail and the other
+guest's did not. The `tail -6` correction is commit `7904267ccde2`.
+
+**Lifecycle half is fully green on both guests** (unchanged from EVD-0138):
+
+| Fact | windows-latest | windows-2025 |
+| --- | --- | --- |
+| `PHASE1 cycle_fails` | `0 / 120 steps` | `0 / 120 steps` |
+| `MMAP_HOLD /dev/uio0` | `maps=5` | `maps=5` |
+| `MMAP_HOLD` sysfs ring | `maps=1` | `maps=1` |
+| `PHASE2 hold-in-mmap window` | `OPEN` | `OPEN` |
+| `FAULTS_NONE` | ✅ | ✅ |
+| `accept4_failures` | `0` | `0` |
+
+**What this run still does NOT prove** (unchanged):
+
+1. **The order-zero fallback cannot run on this guest** — `order7_dmesg=0`,
+   `vmbus_uses_shared_page_chunks()` false on hosted x86_64.
+2. **No host-rescind / GPADL response-rescind interleaving.**
+3. **No CoCo.** COCO-1..5 remain open; this entry is never a CoCo gate.
+4. **`high_order_7plus_blocks=0` is not reached**, so the third EVD-0134
+   acceptance signal is still open.
+
+**Root cause fixed in the same work stream:** keep `oom_score_adj=-1000`
+through the punch (4096 `vm_area_struct`s cannot starve Unmovable the way
+250k did), restore `min_free_kbytes` only **after** `ready=1` so the measured
+pattern is captured before the levers drop, and replace the soft floor with a
+256 kB hard floor consulted only while order-7 remains, checked every chunk
+rather than every 32.
+
+**Verdict:** 🟡 partial — the watermark lever is proven (`507->3` with a
+successful read-back) and the lifecycle half is fully green on both guests, but
+`HYPERV_DRILL_RESULT status=PARTIAL scope=lifecycle-pass-fragment-inconclusive`
+on both, so the EVD-0134 gate is not closed. The candidate is not implicated:
+`SPLATS=0`, `FAULTS=0`, `accept4_failures=0`, `LIFECYCLE_VERDICT=PASS`, and the
+BUG-3 window is open on both guests. The OOM kill is a drill-harness defect,
+not a VMBus one.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36798464398 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `min_free_kbytes`, `FRAGMENT_BUDDY`, `oom-killer`, `high_order_7plus`,
+`Node 0, zone`, `VERDICT`, `HYPERV_DRILL_RESULT`. The decisive triple is the
+`min_free_kbytes` read-back, the `allocated ... high_order_7plus=A->B` line,
+and the OOM block: together they separate "the lever was pulled" from "the
+lever reached the blocks" from "the punch then destroyed the pattern". A closed
+gate needs `high_order_7plus_blocks=0` with `exhausted=1` and `pagemap=1`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0139`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T01:05:30Z`.
+**Verified at:** `2026-10-01T01:25:00Z`.
+**Source revision:** `f84e6d40ac79`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the OOM line next to the `oom_score_adj=0` value — the pair
+is the root-cause argument for the punch-phase death, and either alone reads as
+a generic memory failure. Keep the `min_free_kbytes` read-back next to the
+`507->3` drain: the read-back is what proves the write took. Keep
+`conclusion=success` clearly separated from `HYPERV_DRILL_RESULT status=PARTIAL`.
+**Freshness:** Superseded as soon as a run keeps the OOM pin through the punch
+and shows `high_order_7plus_blocks=0` with `exhausted=1`. Re-run on any change
+to `.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
+GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
+drops the Hyper-V role from them, this claim is void until re-measured.
