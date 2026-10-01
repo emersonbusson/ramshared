@@ -13723,3 +13723,131 @@ by a run where raising the recycle rate reduces the residue page total.
 Re-read both runtime jobs before citing. Job-level `success` on
 `hyperv-runtime-drill` is never a gate closure. Never cite this entry as
 CoCo or send-gate evidence.
+
+
+---
+
+**What:** Run 36892314395 (fork `5e474cac2fed`) scored. The no-recycle chase
+held every chunk (`holes=0 pairs=0`), split 21/20 high-order blocks instead
+of 7, held 75.75/76.25 MiB instead of 5 MiB, and drove the order-7-and-up
+residue to **2816 pages (wl) / 2944 pages (w25)** — the first time in the
+seven-run series the residue has come in below the 3584-page baseline.
+
+**Verdict:** 🟡 partial — third signal still open, but the model change is
+confirmed and the rollback trigger does **not** fire
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY chase=… holes=…` and the buddyinfo
+line after `ready=1` from both `drill-runtime` jobs. `holes=0 pairs=0` is
+the proof the recycle is gone. The residue is the order-7-and-up **page**
+total from that buddyinfo line (field 5+k for order k, k ≥ 7, times 2^k),
+not the block count. Score the third signal only from `RESULT … (reread=…)`
+— the helper's third `high_order_7plus=` value is what the script prints,
+but **reread is authoritative** when they disagree (w25: helper=6, reread=5;
+the buddyinfo line has 5 blocks). Compare residue page totals across runs
+before citing any lever.
+
+**Measured, both guests, run 36892314395 vs 36883261849 vs 36887735012:**
+
+| | 36883261849 wl | 36887735012 wl | **36892314395 wl** | 36883261849 w25 | 36887735012 w25 | **36892314395 w25** |
+| --- | --- | --- | --- | --- | --- | --- |
+| recycle rate (holes/chunk) | 10.15 | 15.68 | **0** | 10.19 | 15.75 | **0** |
+| `chase=` chunks | 3227 | 4096 (cap) | **1212** | 3215 | 4096 (cap) | **1220** |
+| chase pages held | 18864 (73.7 MiB) | 1299 (5.07 MiB) | **19392 (75.75 MiB)** | 18672 | 1020 (3.98 MiB) | **19520 (76.25 MiB)** |
+| `high_order_7plus=` | 25→7 | 25→18 | 26→**5** | 26→5 | 26→19 | 26→**6** |
+| blocks split by chase | 18 | 7 | **21** | 21 | 7 | **20** |
+| `unsplit=` at stop | 697 | 1062 | **566** | 853 | 927 | **271** |
+| `stop=` | chase-memfree-margin | memfree-margin (main) | **chase-memfree-margin** | chase-memfree-margin | memfree-margin (main) | **chase-memfree-margin** |
+| `exhausted=` | 0 | 0 | 0 | 0 | 0 | 0 |
+| blocks ≥7 at ready | 7 | 18 | **5** | 5 | 19 | **5** |
+| pages ≥7 at ready | **3584** | 16896 | **2816** | **3584** | 17152 | **2944** |
+| MiB ≥7 at ready | 14.0 | 66.0 | **11.0** | 14.0 | 67.0 | **11.5** |
+| order-10 blocks left | 2 | 16 | **2** | 3 | 16 | **2** |
+
+Buddyinfo after `ready=1`:
+`wl  1 1 0 2 2 1 2 2 0 1 2` — n7=2 n8=0 n9=1 n10=2 → 5 blocks / **2816 pages**.
+`w25 0 1 1 2 2 1 2 1 1 1 2` — n7=1 n8=1 n9=1 n10=2 → 5 blocks / **2944 pages**.
+
+Both guests land on 5 blocks / 11.0–11.5 MiB. The page totals differ
+(2816 vs 2944) because the block shapes differ — this is the first run in
+the series where the two guests did **not** converge on the same page
+total, which is itself evidence that the recycle had been manufacturing
+the convergence.
+
+**The model change is confirmed.** Holding is what splits. The chase split
+21/20 high-order blocks instead of 7 — three times as many — because every
+held page is gone from every list `__rmqueue_smallest` can serve, so the
+next fault has to come out of a block that is still free. Net hold went
+from 5.07 MiB to 75.75 MiB, exactly the ~80 MiB the 16 MiB floor allows
+under a 96 MiB main margin. `holes=0 pairs=0` on both guests: the recycle
+is gone, and with it the isolated order-0 flood that had been shielding
+the high-order blocks. `unsplit` fell to 566/271 from 1062/927 — the
+recycle had been refilling it without splitting.
+
+**What is left, and why.** `stop=chase-memfree-margin` on both guests: the
+16 MiB floor bound with 5 blocks still standing, and 2 of those 5 are
+order-10 (2048 of the 2816 pages on wl, 2048 of the 2944 on w25). The
+floor is the wall. Of the ~16 MiB of `MemFree` at the stop, 11.0–11.5 MiB
+is order-7-and-up and the rest is the low-order trail the splits left
+behind plus pcp (`unsplit=566` on wl = 1 buddyinfo order-0 page + 565 in
+pcp). The chase consumed 75.75 MiB and would have needed 11 MiB more to
+deplete the standing high-order — memory the floor is there to protect.
+
+**Rollback trigger does NOT fire.** The trigger named "a residue page total
+at or above 3584". The residue is 2816 (wl) and 2944 (w25), both below
+3584. This is the first measurable progress on the third signal since
+EVD-0156 fixed the baseline at 3584. The no-recycle chase stands.
+
+**No damage.** `order7_dmesg=0 accept4_failures=0 oops=0 rebind=yes`,
+`PHASE1 cycle_fails=0 / 120 steps`, `MMAP_HOLD path=/dev/uio0 … maps=5`
+and `…/channels/14/ring … maps=1`, `LIFECYCLE_VERDICT=PASS cycles=30
+phase2=yes` on both guests. `HYPERV_DRILL_RESULT lifecycle=0 fragment=3
+splats=0 faults=0`, `scope=lifecycle-pass-fragment-inconclusive`. The
+`hv_vmbus`/`hv_netvsc` probe failures (`-22` / `-EINVAL`) are pre-existing
+on the drill VMs — same marks on every run of this series. The trigger
+names probe `-12` (`-ENOMEM`); that did not occur.
+
+**`high_order_7plus_blocks_helper=` was empty on wl** (a dropped serial
+byte) and `helper=6 reread=5` on w25. The reread is authoritative in both
+cases; the buddyinfo line independently shows 5 blocks on each guest. Do
+not "fix" the source for a dropped byte.
+
+**The next lever is the floor itself, and it is a floor question, not a
+model question.** The 16 MiB `FRAG_CHASE_HARD_KB` was chosen conservatively
+after run 36879744347 OOM-panicked a guest at 4 MiB (EVD-0155). The
+restored watermark is `min_free_kbytes≈5694 kB` and the ring needs ~2 MiB,
+so 8 MiB is the arithmetic floor and 10 MiB is the cautious one. Dropping
+the floor by X MiB reduces the residue by roughly X MiB: at 8 MiB the chase
+holds 8 MiB more, which comes out of the 11 MiB of standing high-order and
+should split the two order-10 blocks. That is a **constant change on a
+safety floor** — the same class of move that panicked a guest last time —
+so it gets its own rollback trigger naming reversion on OOM, oops, probe
+-12, or a residue that does not fall below 2816. The alternative named in
+EVD-0157 (a pcp drain after the punch) addresses the post-ready working
+set, not the residue: draining pcp moves isolated order-0 pages to the
+buddy's order-0 list and cannot split an order-10 block.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0158`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T16:39:00Z`.
+**Verified at:** `2026-10-01T16:52:00Z`.
+**Source revision:** `5e474cac2fed`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three-run residue ladder in view
+(36883261849 / 36887735012 / 36892314395 at 3584 / 16896 / 2816 pages on
+wl). Without the 16896 row the 2816 cannot be shown to be a model effect
+rather than noise. Keep `holes=0 pairs=0` beside the 75.75 MiB hold: the
+zero rate and the full hold are the same fact. Keep the w25
+`helper=6 reread=5` disagreement in view so the reread rule stays
+visible. Keep the pre-existing probe `-22` lines so the next run does not
+re-attribute them.
+**Freshness:** Superseded for the residue claim by any run whose
+order-7-and-up page total moves off 2816 (wl) / 2944 (w25). Superseded for
+the third-signal claim only by `exhausted=1` with `reread=0`. Superseded
+for the hold-is-what-splits claim only by a run where a non-holding change
+reduces the residue below 2816 without reducing the floor. Re-read both
+runtime jobs before citing. Job-level `success` on `hyperv-runtime-drill`
+is never a gate closure. Never cite this entry as CoCo or send-gate
+evidence.
