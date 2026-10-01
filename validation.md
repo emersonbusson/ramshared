@@ -12275,3 +12275,424 @@ pid. Re-run on any change to `pid_file.rs`, the `run()` claim site, the CLI's
 `stop_daemon_gracefully_at`. Never cite this entry as VRAM cache, NBD swap,
 LUID-binding, or kernel-module qualification evidence — none of those were
 touched.
+
+---
+
+## 2026-10-01 03:10 -03 — the chase ate its own punch fuel, then the unsplit drop let it eat the margin too (EVD-0146)
+
+**What:** Run 36813796538 (fork `97114ebadb5d`, `FRAG_CHASE_UNSPLIT` 512→128)
+is a regression against run 36811867648. Both guests completed the lifecycle
+and balance signals green and then died in the chase phase before
+`FRAGMENT_BUDDY ready=1` ever printed. The OOM killer took `vmbus_drill_hel`
+pid 102 on both:
+
+```
+[    1.977920] vmbus_drill_hel invoked oom-killer: gfp_mask=0x140dca(GFP_HIGHUSER_MOVABLE|__GFP_ZERO|__GFP_COMP), order=0, oom_score_adj=0
+[    1.978023] oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),task=vmbus_drill_hel,pid=102,uid=0
+[    1.978028] Out of memory: Killed process 102 (vmbus_drill_hel) total-vm:1998056kB, anon-rss:1996972kB, file-rss:4kB, shmem-rss:680kB, UID:0 pgtables:3976kB oom_score_adj:0
+```
+
+`oom_score_adj:0` confirms the helper was still unpinned, which is the designed
+fail-safe window: the pin covers only the hold after `ready=1`. The drill
+correctly reported `VERDICT=INCONCLUSIVE_NO_PATTERN (fragment-buddy never
+reported ready=1)` and `HYPERV_DRILL_RESULT status=PARTIAL`; both jobs stayed
+green.
+
+| Signal | windows-2025 | windows-latest |
+| --- | --- | --- |
+| `LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes` | ✅ | ✅ |
+| `after_fragment MAPS count=12 bytes=20279296 pages=4939` | ✅ exact | ✅ exact |
+| `rebind=yes`, `order7_dmesg=0`, `accept4_failures=0`, `oops=0` | ✅ | ✅ |
+| `HYPERV_DRILL_RESULT status=PARTIAL` ×3 intact | ✅ | ✅ |
+| `FRAGMENT_BUDDY allocated ... stop=memfree-margin` | ✅ `30983 chunks, 503->10` | ✅ `30976 chunks, 499->10` |
+| `chase=` / `ready=1` | ❌ absent | ❌ absent |
+| OOM kill, `oom_score_adj=0`, `anon-rss:1996972kB` | ✅ | ✅ |
+| `RESULT high_order_7plus_blocks` | `506 (reread=506)` — pattern released | `539 (reread=539)` — pattern released |
+| `VERDICT` | `INCONCLUSIVE_NO_PATTERN` | `INCONCLUSIVE_NO_PATTERN` |
+| job | success | success |
+
+### Why 512→128 made it worse, not better
+
+EVD-0144 recorded run 36811867648 stopping at `unsplit=504/498` with
+`high_order_7plus` still at 9 and 8, and blamed the floor level. That blame
+was half right. The floor did stop the split cycle early — but it stopped it
+early *because the chase had already spent its budget draining the punch
+fuel*.
+
+The helper's phase order was: allocate main pattern → punch 4096
+buddy-isolated holes → chase. Those 4096 holes are 16 MiB of isolated
+order-0 pages. A buddy allocator serves order-0 before it splits anything
+higher, so the chase's first chunks were satisfied entirely from the holes.
+Run 36811867648's `chase=254` × 16 pages = 15.9 MiB — the fuel, exactly —
+and then the unsplit floor tripped with `high_order_7plus` untouched at 9.
+
+Dropping the floor to 128 pages let the chase continue past the fuel. It
+then did split the high-order blocks, and that is what killed it: peak hold
+was the 16 MiB of re-taken fuel plus the high-order splits on top of a
+`1920 MiB` main pattern, past the `1950 MiB` ceiling the 2048 MiB guest
+imposes (`MemTotal` ≈ 2004 MiB, kernel and page tables taking the rest).
+The structural identity is that peak hold during the chase is
+`main_pattern + held`, and at a 32 MiB margin the main pattern alone leaves
+only ~14 MiB of budget — less than the 16 MiB of fuel the chase is forced
+to carry.
+
+### Why raising the margin alone cannot fix it
+
+`main_pattern ≈ guest − kernel − margin` and `held ≈ H` (the high-order
+residue in the margin), so `main + H ≈ guest − kernel − unsplit` regardless
+of `FRAG_HARD_KB`. Raising the margin shrinks the main pattern by exactly
+the amount it grows H. That is why the fix that shipped in `5df19bb1f70c`
+(fork) / `52e49c67` (RamShared) is a *phase reorder*, not a bigger reserve:
+punch after the chase, so the 16 MiB never enters the chase's RSS and the
+ring allocation still gets it. `FRAG_HARD_KB` moves 32→96 MiB anyway,
+because the reorder changes what the margin is for — the chase now faults
+into it directly instead of into its own holes — and `FRAG_CHASE_CAP` moves
+2048→4096 as headroom for that longer run. A `FRAG_CHASE_HARD_KB` (48 MiB
+MemFree) backstop was added alongside the unsplit floor.
+
+Two design candidates were evaluated and rejected before the reorder:
+recycling chase chunks with a chunk-local buddy punch (recycled pages' buddies
+live in prior chunks, so they are not re-punched and net hold degrades to
+~66%, still over budget at H ≈ 92 MiB), and recycling against the global
+`seen` set (recycled pages bounce with zero net hold, but the allocator then
+keeps serving those same isolated order-0 pages and the chase never forces
+new high-order splits). The 1-page-per-order-7 target is unreachable from
+userspace: the allocator serves order-0/pcp first and the caller cannot pick
+which block a fault draws from.
+
+**What this run does NOT prove:** it is a failed-run root-cause entry. The
+fix (`5df19bb1f70c`) has not been scored yet; run 36823337153 is the one
+that will decide whether `high_order_7plus_blocks=0` with `exhausted=1` is
+reachable on ordinary x86_64. Nothing here exercises the CoCo chunked
+order-N→order-0 fallback, which remains unreachable on a hosted runner
+(`vmbus_uses_shared_page_chunks()` is false on ordinary x86_64).
+
+**Verdict:** 🔴 fails — designed fail-safe held, root cause identified
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** re-run `hyperv-runtime-drill.yml` on a commit at
+`5df19bb1f70c` or later and score the third EVD-0134 signal:
+`RESULT high_order_7plus_blocks=0 (reread=...) exhausted=1` with
+`stop=order7-depleted` and `VERDICT=PASS_RING_ALLOCATION_UNDER_FRAGMENTATION`.
+Re-run on any change to the helper's phase order, `FRAG_HARD_KB`,
+`FRAG_CHASE_CAP`, `FRAG_CHASE_UNSPLIT`, or `FRAG_CHASE_HARD_KB`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0146`.
+**Owner role:** `kernel-validation-engineer`.
+**Observed at:** `2026-10-01T04:09:28Z`.
+**Verified at:** `2026-10-01T04:20:00Z`.
+**Source revision:** `97114ebadb5d`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the OOM line (`anon-rss:1996972kB`, `oom_score_adj:0`)
+next to `chase=254 × 16 pages = 15.9 MiB` from run 36811867648 — the pair is
+the punch-fuel trap. Keep the `1920 MiB` main-pattern figure and the
+`1950 MiB` ceiling with the structural identity
+`peak ≈ guest − kernel − unsplit`, so a future margin change is not mistaken
+for headroom. Keep the two rejected recycle designs in the text; both look
+obvious from the code and both are wrong for the reasons given.
+**Freshness:** Superseded the moment a run at `5df19bb1f70c` or later reports
+`high_order_7plus_blocks=0` with `exhausted=1` and
+`VERDICT=PASS_RING_ALLOCATION_UNDER_FRAGMENTATION`. Until then this is the
+standing explanation for the open third signal. Never cite this entry as
+CoCo chunked-fallback, GPADL/UIO lifecycle, or production-kernel evidence —
+it is a failed drill run and its root cause.
+
+---
+
+## 2026-10-01 09:36 -03 — the naive grep counted test code as production, and production had none (EVD-0147)
+
+**What:** A fragility sweep of every production Rust, C/kernel, and
+script/tool surface in the tree, classifying each hit as reproduced defect /
+static risk / incorrect conclusion. The naive `grep -rn '\.unwrap()\|\.expect('`
+reported 319 hits in `crates/ramshared-wsl2d/src/main.rs` alone. That figure
+is wrong: it counted `mod tests` bodies. Splitting each file at its first
+`#[cfg(test)]` (and skipping `tests/` integration directories) leaves the
+production region with **zero** occurrences of every marker under test.
+
+Measured on `51b33a52` at 2026-10-01T12:36Z:
+
+| Surface | Files scanned | `unwrap()` | `expect()` | `panic!` | `TODO`/`FIXME`/`HACK`/`unimplemented!` | Classification |
+| --- | --- | --- | --- | --- | --- | --- |
+| Rust production (`crates/**/src`, text before first `#[cfg(test)]`) | 116 | **0** | **0** | **0** | **0** | — |
+| C/kernel (`*.c`, `*.h`) | — | n/a | n/a | **0** | **0** | — |
+| `scripts/` + `tools/` (`*.sh`, `*.ps1`, `*.mjs`) | — | n/a | n/a | n/a | 18 raw, **0 real** | 16 × `mktemp …XXXXXX` template matches `XXX`; 2 × checkers that *detect* placeholders (`check-gap-register.mjs:22` `BAD_PLACEHOLDERS`, `check-documentation-governance.mjs:186` rollback-trigger linter); 1 × test fixture (`check-gap-register.test.mjs:89`) → **incorrect conclusion** |
+
+| Verdict axis | Count | Where it landed |
+| --- | --- | --- |
+| Reproduced defect | **0** | nothing to fix on this axis |
+| Static risk | **0** | nothing to harden on this axis |
+| Incorrect conclusion | **3 classes** | the 319-in-main.rs figure, the 23-in-driver.rs figure (also `mod tests`), and the 18 script markers (regex matched `XXXXXX`) |
+
+Method (reproducible): walk `crates/` skipping `target/` and any `tests/`
+directory; for each `*.rs`, cut at the first `^\s*#\[cfg\(test\)\]`; run
+`\.unwrap\s*\(|\.expect\s*\(|\bpanic!\s*\(|\b(TODO|FIXME|XXX|HACK|unimplemented!|todo!)\b`
+over what remains. Separately `grep -rnE "TODO|FIXME|XXX|HACK"` over
+`*.c`/`*.h` (excluding `target/`, `out/`) and over
+`scripts/`+`tools/` `*.sh`/`*.ps1`/`*.mjs`.
+
+**Verdict:** ✅
+
+**Category:** fragility-audit / production-source-hygiene.
+
+**What this does NOT prove:** This is a static marker scan, not a behavioral
+result. It does not prove the absence of logic bugs, races, lock-order
+errors, DMA/lifetime faults, or any GPU/kernel/NBD runtime property. It does
+not qualify the uncommitted crate edits still sitting in the worktree
+(`bounded_process.rs`, `codec.rs`, `worker_telemetry.rs`, `main.rs`); those
+still need a `cargo test`/`clippy` pass under GuardWSL before they may be
+committed. It is not a coverage gate, a `BINARY_MATCH`, or a live cascade
+proof. Never cite this entry as a substitute for
+`check-rust-slice-coverage.mjs`, a three-tier qualification, or the Windows
+physical campaign.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0147`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T12:36:00Z`.
+**Verified at:** `2026-10-01T12:36:42Z`.
+**Source revision:** `51b33a52`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the 319/23/18 false figures next to their corrections —
+the pair is the point of the entry, and a future reader who re-runs the naive
+grep will otherwise re-derive the same wrong conclusion. Keep the
+`mktemp …XXXXXX` explanation next to the scripts row, since the `XXX`
+substring in an opaque temp-file template is the only reason that row is
+nonzero. Keep the exact split rule (first `#[cfg(test)]`, `tests/` skipped)
+with the 116-file count, so a re-run is comparable and a change in that count
+is visible.
+**Freshness:** Superseded on any commit that adds a production `unwrap`,
+`expect`, `panic!`, `TODO`, `FIXME`, `HACK`, or `unimplemented!` outside a
+`#[cfg(test)]` region or `tests/` directory, and on any change that moves
+test code across that boundary. Re-run on any such candidate before citing
+this entry. Never cite this entry as VRAM cache, NBD swap, LUID-binding,
+kernel-module, or performance qualification evidence — nothing in this entry
+executed product code.
+
+---
+
+## 2026-10-01 09:58 -03 — two IMPL matrices named tests that were never in the tree (EVD-0148)
+
+**What:** A sweep for the DT-11 failure mode — a SPEC/IMPL asserting that a
+named test exists and passes when the identifier is not in the source. Every
+backticked snake_case token on a line that also claims `PASS` / `[x]` /
+`passed` / `green` under `docs/specs/**` was resolved against every test
+declaration surface in the tree: Rust `fn`/`mod`, `node:test` `test|it|describe`
+names, shell `test_<name>()` and `pass <name>` and `printf|echo "PASS <name>"`,
+and PowerShell `It`/`Describe` plus `Write-Output "PASS <name>"` /
+`"<name>=PASS"` / `"<name>: ok"`.
+
+From 2383 candidate tokens the first pass reported 591 unmatched. After
+teaching the resolver the four harness conventions above, and after excluding
+schema-field-looking names (`*_sec`, `*_bytes`, `*_mib`, `*_sha256`, …), 25
+remained. Classifying each:
+
+| Class | Count | Members |
+| --- | --- | --- |
+| **Reproduced defect** — IMPL asserted a PASS against an identifier that has never existed | **1** | `boot_refuses_deploy_shaped_invocation` (`wsl2-cascade-boot/IMPL.md`) — zero occurrences in any commit back to `c9ee700a`, the commit that added the boot entrypoint. The real test is `boot_refuses_deploy_arguments` (`crates/ramshared-cli/src/cascade/boot.rs`). |
+| **Reproduced defect** — IMPL did not follow a source rename | **1** | `config_draft_wizard_saves_tier_caps_as_unapplied_ceilings` (`resource-configuration-center/IMPL.md`) — renamed in `ad663272` to `config_draft_wizard_saves_planned_caps_as_unenforced_draft_policy` when `TierCaps` became `PlannedTierCaps`. |
+| **Incorrect conclusion** — resolver false positive | **20** | Contract/phase/codename tokens, not tests: `co_ring_buffer`, `co_external_memory` (DT-2 contract names), `vmbus_retained_buffers_lock` (kernel lock), `vmbus_reclaim_busy_ref_defers_free_test` (upstream patch name), `current_run_teardown`, `signer_trust_remove`, `final_zero_residue` (Windows campaign phases), `nbd_lifecycle_before_action_after`, `relay_gate_before_action_after` (E2E campaign names), `sdv_retired_from_wdk_vs2022_plus` (decision), `ready_for_review` (PR label), `serve_broker_jobs` (production fn `serve_broker_jobs_with_poll`), `gpu_headroom_shortfall` (error-code string), `cell_timeout_budget_property_order_is_semantic` (`"<name>=PASS"` form, exists in `Invoke-NbdBenchmarkMatrix.ps1`), `preflight_honors_raise_only_override` (`"<name>: ok"` form, exists in `test-preflight-reserve-floor.sh`), `partial_timeout_integrity_not_promoted` (`"<name>=REFUSED"` form, exists in `Invoke-NbdBenchmarkMatrix.ps1`), and `gpu_measurement_failure_is_explicit_and_not_green`, which matched only because the audit's own `PASS|…|green` alternation caught the substring `green` in `not_green`. |
+| **Honest open gap** — SPEC target matrix, not a PASS claim | **2** | `test_elastic_recovery_promotes_on_green_settle` (`elastic-vram-cooperative-tier` RF-5 coverage column, whole matrix is aspirational), `benchmark_binds_volume_caps_bytes_and_verifies_cleanup` (`resource-configuration-center`, row already marked `N/A — privileged helper`). |
+| **Stale header, not a missing test** | **1** | The `wsl2-cascade-boot` 14/14 table header said "for boot.rs" while `boot_command_parses_and_dispatches` and `boot_command_rejects_unknown_options` live in `main.rs`. Header scoped; all 14 names resolve. |
+
+Both reproduced defects are fixed in `92025f58`. Historical records were
+deliberately **not** rewritten: `resource-configuration-center/AUDIT-2.5.md:50`
+and `validation.md:8697` still name the pre-rename identifier, which was
+correct when they were written, and this file is append-only.
+
+**Verdict:** ✅ (defects corrected; no remaining IMPL PASS claim names a
+nonexistent test)
+
+**Category:** spec-code-consistency / documentation-accuracy.
+
+**What this does NOT prove:** Every `Required tests:` row in a PARTIAL SPEC is
+a target matrix, not a claim of existence; this sweep does not implement those
+missing tests and must not be cited as having done so. It does not execute any
+test. The 25-name residue was resolved by convention matching and manual
+classification, not by running the suites. Hosted Windows campaign rows in
+`windows-task-manager-disk-counters` and `wsl2-nbd-product-readiness` remain
+unexecuted here regardless of naming. Never cite this entry as coverage,
+`BINARY_MATCH`, or live qualification evidence.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0148`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T12:58:00Z`.
+**Verified at:** `2026-10-01T12:58:02Z`.
+**Source revision:** `92025f58`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the two defect names next to their corrections and next to
+`c9ee700a` / `ad663272` — the revision pair is what distinguishes "never
+existed" from "renamed and not followed". Keep the `"<name>=PASS"` /
+`"<name>: ok"` / `"<name>=REFUSED"` examples with the 591→25 reduction, so a
+future resolver is not re-tuned against the wrong baseline. Keep the
+`not_green` self-match: it is the failure mode of any alternation-based audit.
+**Freshness:** Superseded on any IMPL/SPEC edit that adds a PASS claim naming a
+test, and on any test rename. Re-run the resolver before citing this entry
+after a rename sweep. Never cite this entry as VRAM cache, NBD swap,
+LUID-binding, kernel-module, or performance qualification evidence — nothing
+in this entry executed product code.
+
+---
+
+## 2026-10-01 06:19 -03 — the reorder fixed the OOM; the residue is 43 MiB of order-10 and 48 MiB was the wrong backstop (EVD-0149)
+
+**What:** Run 36823337153 (fork `5df19bb1f70c`, the punch-after-the-chase
+reorder) is the first post-reorder fragmentation run. Both jobs completed
+the full lifecycle and printed `FRAGMENT_BUDDY ready=1` — which run
+36813796538 never did. The phase reorder closed EVD-0146's failure mode:
+no OOM kill, no panic, `oom_score_adj=0` throughout the allocation, and
+the designed pin still taken only after `ready=1`.
+
+The third EVD-0134 signal is still red.
+
+| Signal | windows-latest | windows-2025 |
+| --- | --- | --- |
+| `LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes` | ✅ | ✅ |
+| `FRAGMENT_BUDDY ready=1` printed (no OOM) | ✅ | ✅ |
+| `chunks` / `pages` | `29900` / `478400` | `29959` / `479344` |
+| `held=4104 freed=4096 pairs=4096` | ✅ punch cap bound | ✅ punch cap bound |
+| `chase=` / `high_order_7plus` | `700` / `496->24->13` | `688` / `499->26->14` |
+| `unsplit=` at stop | `877` | `432` |
+| `stop=` | `chase-memfree-margin` | `chase-memfree-margin` |
+| buddyinfo at `ready=1` | `0 1 0 1 0 1 1 2 0 1 10` | `1 1 1 1 0 0 1 1 0 2 10` |
+| `RESULT high_order_7plus_blocks` | `13 (reread=13)` | `14 (reread=13)` |
+| `exhausted=` | **0** | **0** |
+| `order7_dmesg=0 accept4_failures=0 oops=0 rebind=yes` | ✅ | ✅ |
+| `HYPERV_DRILL_RESULT status=PARTIAL` `lifecycle=0 fragment=3` | ✅ | ✅ |
+| `VERDICT` | `INCONCLUSIVE_CAP_REACHED` | `INCONCLUSIVE_CAP_REACHED` |
+| job | success | success |
+
+Both jobs checked out `5df19bb1f70ce41c42ff808aa5dd8e3b44aa963a`. The
+windows-latest `ready=1` line as recovered from the job log reads
+`pairs=496` and `high_order7plus` (no underscore); the `5df19bb1f70c`
+printf emits `pairs=` once per punched hole and spells
+`high_order_7plus`, and `pairs` increments only alongside `freed_pages`,
+so `pairs` must equal `freed` (`4096`, as windows-2025 reports). That
+line is long enough to overrun the guest serial console; two bytes were
+dropped in transit. The shell's `RESULT` line is shorter and arrived
+intact on both jobs. Quote windows-2025 for `pairs`/`high_order_7plus`
+and treat the windows-latest line as serial-mangled in those two fields
+only — its buddyinfo and RESULT lines are the ones the residue math
+below is built on.
+
+### The residue, measured
+
+buddyinfo at `ready=1` on windows-latest:
+
+```
+Node 0, zone    DMA32      0      1      0      1      0      1      1      2      0      1     10
+```
+
+Field 5 is order 0, field 5+k is order k. So the free high-order blocks
+are n7=2, n8=0, n9=1, n10=10 — **13 blocks**, `2*128 + 1*512 + 10*1024
+= 11008 pages = 43.0 MiB`, of which **40 MiB is order-10 alone**. That is
+what the chase still had to demote when the backstop fired.
+
+`held=4104` is not the hold. The punch loop stops at
+`freed_pages < FRAG_HOLE_CAP`, so it examined only 8200 of the 478400
+pages. Total hold after the punch is `478400 - 4096 = 474304 pages =
+1852.75 MiB`, and the chase added `700 * 16 = 11200 pages = 43.75 MiB`,
+for a peak of **1896.5 MiB** against the ~1950 MiB anon-rss ceiling the
+2048 MiB guest imposes.
+
+### Why 48 MiB was exactly the wrong level
+
+`FRAG_CHASE_HARD_KB` was 48 MiB. The residue is 43 MiB and the unsplit
+floor costs another ~3.4 MiB, so the backstop sat *at* the demotion
+threshold: it fired the moment the chase would have started splitting
+the order-10s. That is visible in the result — `chase=700` spent 43.75
+MiB of RSS and demoted 11 of 24 blocks (24→13), and the 10 order-10s
+were never touched. Demoting the remaining 13 blocks at full hold costs
+another ~43 MiB, pushing peak to ~1940 MiB and MemFree under any safe
+floor: the OOM killer would take the helper again, exactly as in
+EVD-0146. Lowering the backstop alone does not fix it.
+
+Raising `FRAG_HARD_KB` does not either. Peak hold is
+`main_pattern + chase_hold ≈ guest − kernel − unsplit_floor`, independent
+of `FRAG_HARD_KB`: a bigger margin shrinks the main pattern by exactly
+what it grows the residue. Scale-invariant — a bigger guest does not help.
+
+### The lever is net hold, not margin
+
+Recycle each chase chunk before the next one faults in: read its 16 PFNs
+via pagemap, `munmap` every page whose PFN is even and whose buddy
+`pfn+1` is also in this chunk and stays mapped — the same buddy-isolation
+rule the main punch already uses. The freed page's buddy is then always
+held, so nothing above order-0 can coalesce, and the survivors still
+serve order-0. Steady state is 8 pages held + 8 returned as isolated
+order-0 per chunk; the next chunk re-takes those 8 plus 8 new, so the
+order-10 is still demoted while net hold grows by 8 pages per chunk.
+
+For the 43 MiB residue that is **~21.5 MiB of net RSS instead of 43**,
+and peak becomes `1852.75 + 21.5 ≈ 1874 MiB` — 76 MiB under the ceiling.
+The recycled pages re-entering the buddy is the point: they are the
+circulating half. VMA cost is 8 holes per chunk, bounded by a new
+`FRAG_CHASE_HOLE_CAP` (8192) the same way `FRAG_HOLE_CAP` bounds the main
+punch; the residue is gone long before it binds.
+
+Two earlier recycle designs were rejected and are recorded in EVD-0146:
+chunk-local buddy punch at ~66% net hold (still over budget at H ≈ 92
+MiB), and global `seen`-set recycle (bounces with zero net hold and never
+forces a new split). This one is chunk-local at 50%, and the isolation
+rule is what makes the difference.
+
+### Action taken after this run (not yet scored)
+
+In `vmbus_drill_helper.c`: inline per-chunk recycle in the chase loop
+(`punch_chunk_isolated()`), `FRAG_CHASE_HARD_KB` 49152L → 16384L (48 →
+16 MiB, above the 128-page unsplit floor and still leaving room for the
+ring allocation that follows), `FRAG_CHASE_HOLE_CAP` 8192L added.
+`ready=1` and the chase line now also report `chase_holes=` /
+`chase_pairs=`. The recycle is not covered by this entry — run 36823337153
+predates it.
+
+**What this run does NOT prove:** it does not close the third EVD-0134
+signal — `exhausted=0`, 13 high-order blocks free, the buddy could still
+satisfy an order-7 request outright. It does not exercise the CoCo
+chunked order-N→order-0 fallback, which remains unreachable on ordinary
+x86_64 (`vmbus_uses_shared_page_chunks()` is false there; the
+fallback is CoCo/arm64-only and no hosted runner can reach it). It does
+not re-score the GPADL/UIO lifecycle signals beyond what the same run
+already reported green. Nothing here is a production-kernel claim.
+
+**Verdict:** 🔴 fails — designed stop held, residue measured, third signal open
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** re-run `hyperv-runtime-drill.yml` on a commit that
+carries the chase recycle and score the third EVD-0134 signal:
+`RESULT high_order_7plus_blocks=0 (reread=0) exhausted=1` with
+`stop=order7-depleted` and
+`VERDICT=PASS_RING_ALLOCATION_UNDER_FRAGMENTATION`. Re-run on any change
+to `FRAG_HARD_KB`, `FRAG_CHASE_HARD_KB`, `FRAG_CHASE_CAP`,
+`FRAG_CHASE_UNSPLIT`, `FRAG_CHASE_HOLE_CAP`, or the phase order.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0149`.
+**Owner role:** `kernel-validation-engineer`.
+**Observed at:** `2026-10-01T06:19:07Z`.
+**Verified at:** `2026-10-01T13:22:00Z`.
+**Source revision:** `5df19bb1f70c`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the buddyinfo row `0 1 0 1 0 1 1 2 0 1 10` next to
+the arithmetic `13 blocks = 11008 pages = 43.0 MiB, 40 MiB of it
+order-10` — that pair is the reason a 48 MiB backstop cannot work and a
+bigger margin cannot either. Keep `held=4104` beside
+`total hold = 474304 pages = 1852.75 MiB`, so the punch-loop counter is
+never again mistaken for the hold. Keep the peak identity
+`peak ≈ guest − kernel − unsplit_floor` with the 1896.5 MiB figure and
+the ~1950 MiB ceiling. Keep the serial-console mangling note
+(`pairs=496`, `high_order7plus`) next to the windows-2025 clean line —
+it is the failure mode of citing a long `ready=1` line recovered from a
+QEMU serial log.
+**Freshness:** Superseded the moment a run carrying the chase recycle
+reports `high_order_7plus_blocks=0` with `exhausted=1` and
+`VERDICT=PASS_RING_ALLOCATION_UNDER_FRAGMENTATION`. Also superseded for
+the residue figures by any run whose buddyinfo at the chase stop shows a
+different high-order shape than n10-dominated. Until then this is the
+standing measurement of the post-reorder state and the justification for
+the recycle. Never cite this entry as CoCo chunked-fallback, GPADL/UIO
+lifecycle, sealed-kernel-pair, or production-kernel evidence — it is a
+fragmentation drill run whose third signal is open.
