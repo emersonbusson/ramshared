@@ -12181,3 +12181,97 @@ for the chunked order-zero fallback — that path is not reachable on these
 guests. If GitHub retires or repurposes the `windows-latest` /
 `windows-2025` images, or drops the Hyper-V role from them, this claim is
 void until re-measured.
+
+## 2026-10-01 01:50 -03 — the daemon owned no pid record, so status called a live process dead (EVD-0145)
+
+**What:** `ramsharedd` now owns `/run/ramshared/ramsharedd.pid`. Previously
+only `spawn_daemon_with_deadline` in `crates/ramshared-cli/src/cascade/cascade_io.rs`
+wrote that record, so a `ramsharedd` started outside `ramshared up`/`boot`
+never produced one and the previous instance's file stayed behind.
+`ramshared status` then reported `daemon: dead pid=null` for a live process.
+
+Reproduced on this host before the fix. `/run/ramshared/ramsharedd.pid` held
+`268636`, mtime `2026-09-30 04:38:43`, and `/proc/268636` did not exist. A
+live `ramsharedd` was running as pid `2543940`, `/proc/2543940/comm` =
+`ramsharedd`, started `2026-10-01 01:42:25` with parent `/init` (pid
+`2147570`) — i.e. launched outside the CLI spawn path. `ramshared status`
+reported `daemon: dead pid=null` while that process was alive.
+`/run/ramshared/cache-status.json` already carried
+`daemon_instance_id: "2543940-8351476"`, matching
+`daemon_instance_id_from_pid(2543940)`, so the daemon knew its own identity
+and simply had no record of it.
+
+After the fix (`crates/ramshared-wsl2d/src/pid_file.rs`, claimed from
+`run()` before the plan executes), the same direct launch — binary invoked
+by hand, never through the CLI — produced:
+
+| Step | pid record | `/proc/<pid>/comm` | `ramshared status` daemon line |
+| --- | --- | --- | --- |
+| before | `268636` (stale, 2026-09-30) | `/proc/268636` absent | `daemon: dead pid=null` |
+| direct launch of the fixed binary | `2557387` | `ramsharedd` | `daemon: alive pid=2557387` |
+| after `TERM` (`DemoteAll reason=shutdown` → `broker RAM stopped`) | released, file absent | — | `daemon: dead pid=null` |
+
+The record was written as the sealed shape
+`legacy_runtime_record_value` accepts: root-owned regular file, mode `0644`
+(`mode & 0o022 == 0`), decimal pid only. Claim is exclusive — a record
+already naming a live `ramsharedd` returns `AlreadyExists` instead of
+stealing the identity `stop_daemon_gracefully_at` uses to TERM the exact
+process. `Drop` releases the record only when it still names this process,
+so a superseding daemon is never un-recorded by the one it replaced.
+
+Unit coverage: 6 named tests in `pid_file::tests`
+(`claim_records_own_pid_and_drop_releases_it`,
+`record_is_sealed_root_owned_regular_file`,
+`drop_does_not_release_a_record_owned_by_a_replacement`,
+`claim_refuses_a_record_held_by_another_live_ramsharedd`,
+`stale_record_naming_a_dead_pid_is_not_an_owner`, `zero_pid_is_rejected`).
+`cargo test -p ramshared-wsl2d`: 179 lib + 121 bin + integration, 0 failed.
+`cargo clippy -p ramshared-wsl2d --all-targets -- -D warnings` clean.
+
+**What this run does NOT prove:** pid `2543940` was still running the
+pre-fix binary at `/usr/local/bin/ramsharedd` (mtime `2026-10-01 01:34`)
+during this measurement and still had no pid record, so `ramshared status`
+still reported `dead pid=null` for that instance. The defect is closed in
+source and proven on the new binary; closing it on the live host requires
+replacing that instance with a build at `f04ed860` or later. `/dev/nbd0`
+was sized 8388608 sectors (4 GiB) and was **not** in `/proc/swaps` at the
+time (only `zram0` prio 200 and `/dev/sdb` prio −2), so the measurement did
+not exercise a live NBD swap tier. No `ramshared down`/`up` lifecycle round
+was run.
+
+**Verdict:** ✅ works
+
+**Category:** daemon-identity / runtime
+
+**How to measure:** Start `ramsharedd` directly (no `ramshared up`), then
+`cat /run/ramshared/ramsharedd.pid`, `cat /proc/$(cat
+/run/ramshared/ramsharedd.pid)/comm`, and `ramshared status | grep ^daemon:`.
+The three rows of the table above must hold in order. Re-run after any
+change to `crates/ramshared-wsl2d/src/pid_file.rs`,
+`crates/ramshared-wsl2d/src/main.rs` `run()`, or the CLI's
+`daemon_alive_pid_from` / `verified_daemon_pid` contract.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0145`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T04:50:00Z`.
+**Verified at:** `2026-10-01T04:56:00Z`.
+**Source revision:** `f04ed860`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three-row before/direct-launch/after table next to
+the stale record `268636` (mtime `2026-09-30 04:38:43`) and the live pre-fix
+pid `2543940` with parent `/init` — the pair is the reproduced defect. Keep
+the `2557387-8397513` instance id shape next to the `cache-status.json`
+`2543940-8351476` row: the daemon already knew its identity and lacked only
+the record. Keep the measured revision `f04ed860` distinct from the pre-fix
+installed binary at `/usr/local/bin/ramsharedd` mtime `2026-10-01 01:34`.
+Keep the `What this run does NOT prove` block with the table — a green
+direct-launch proof is not a live NBD swap-tier qualification and is not a
+`ramshared down`/`up` lifecycle round.
+**Freshness:** Superseded as soon as a `ramsharedd` at `f04ed860` or later
+is running as the host's product daemon and `ramshared status` reports its
+pid. Re-run on any change to `pid_file.rs`, the `run()` claim site, the CLI's
+`PID_FILE` path, or `daemon_alive_pid_from` / `verified_daemon_pid` /
+`stop_daemon_gracefully_at`. Never cite this entry as VRAM cache, NBD swap,
+LUID-binding, or kernel-module qualification evidence — none of those were
+touched.
