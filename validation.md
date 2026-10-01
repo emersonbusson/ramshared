@@ -15079,3 +15079,93 @@ gained from `cascade.conf`, or if a live bare `up` is executed on a host with a
 sealed origin and a written `cascade.conf`.
 
 ---
+
+## 2026-10-01 20:52 -03 — a wrong `--vram` reached device mutation before anything refused it (EVD-0166)
+
+**What:** `parse_up_args_from` accepted any `--vram` inside the generic
+`1024..=24576` MiB window and never compared it to the sealed origin
+`logical_capacity_mib`. The daemon **did** refuse the mismatch
+(`validate_origin_manifest_identity`, `logical_size !=
+manifest.logical_capacity_mib`), but only after `up`/`boot` had begun
+`setup_new_cascade`. A wrong `VRAM_MIB` in `/etc/ramshared/cascade.conf`, or a
+wrong `--vram`, produced a half-state and a dead daemon instead of a refusal.
+
+**Classification:** **reproduced defect in the control flow** (late refusal),
+not a static risk and not an incorrect conclusion. The safety property — a
+logical capacity may not leave the seal — was already enforced, so there is no
+unsealed-capacity hole; the defect is **where** it is enforced. The anti-hang
+contract at the top of `cascade/mod.rs` is about half-states; a refusal that
+lands after device mutation creates one.
+
+**Before → after:**
+
+| Stage that refuses `--vram` ≠ seal | Source | Devices touched first? |
+| --- | --- | --- |
+| daemon startup (`validate_origin_manifest_identity`) | parent of `ce9c70f7` | yes — `setup_new_cascade` has run |
+| `parse_up_args_from`, before any mutation | `ce9c70f7` | no |
+
+Named test: `vram_leaving_the_sealed_capacity_is_refused_before_any_mutation`
+— covers both a too-small (`2048`) and a too-large (`8192`) override against a
+seal of `4096`, which is the Kahneman #13 negative case for this check. The
+daemon side is independently pinned by the existing
+`validate_origin_manifest_identity(&manifest, &legitimate, 8 * GIB).is_err()`
+assertion in `crates/ramshared-wsl2d/src/main.rs`, so the CLI now refuses the
+same input the daemon would have refused — one rule, enforced earlier.
+
+**The deliberate remaining half of DT-3 (now closed differently):** `vram_mb`
+still does not *come from* `cascade.conf`; it comes from the seal, and
+`VRAM_MIB` is accepted only when it agrees. That is stricter and safer than
+EVD-0165 assumed: the earlier "What this run does NOT prove" row that left
+`vram_mb` divergence open is answered here by refusal, not by adoption.
+
+**Validation:**
+- `cargo test -p ramshared-cli --bins` → **548 passed, 0 failed**.
+- `cargo clippy -p ramshared-cli --bins -- -D warnings` → clean.
+- `rustfmt --edition 2024 --check` on `cascade/mod.rs` → clean.
+- Commit `ce9c70f7`, body carries `Rollback trigger:`, no attribution trailers.
+- Three existing tests that pinned a `--vram` unequal to the fixture seal were
+  retargeted to the seal (`4096`) or to a matching fixture
+  (`logical_capacity_mib=1024`), so the new rule is what they now exercise.
+
+**What this run does NOT prove:**
+- **No live `up`/`boot` with a wrong `--vram` was executed.** The before column
+  is the control-flow position of the daemon check and its named test, not a
+  live half-state produced on this host. Deliberately: manufacturing that
+  half-state is exactly the anti-hang hazard this change removes.
+- **`boot` remains blocked on `verify_host_lease`**; this does not change the
+  "cascades not active on WSL2 start" gap.
+- Not boot-round, vsock, multi-vendor GPU, CoCo, or screenshot-challenge
+  evidence.
+
+**Verdict:** ✅ works (late refusal moved to parse time), ⚠️ partial (no live
+wrong-`--vram` half-state produced; boot lease gate untouched)
+
+**Category:** cascade lifecycle; sealed origin capacity contract; half-state
+prevention
+**How to measure:** Against a sealed origin whose `logical_capacity_mib` is
+N, `ramshared up --vram M` for any `M != N` must fail before the first device
+command, and the error must name the sealed capacity. The companion negative
+case is mandatory: `M == N` must still parse. The daemon must independently
+refuse a `--size` of `M != N`, so the two surfaces can never disagree in the
+permissive direction. Re-run after any change to `parse_up_args_from`'s
+`vram_mb` validation or to `validate_origin_manifest_identity`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0166`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T23:52:55Z`.
+**Verified at:** `2026-10-01T23:52:55Z`.
+**Source revision:** `ce9c70f7`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the before/after table (daemon-stage refusal vs parse-stage
+refusal) beside the `validate_origin_manifest_identity` `8 * GIB` assertion —
+that pair is the whole finding. Keep the `What this run does NOT prove` note
+that no live half-state was manufactured: producing one is the hazard, and
+that must stay visible. Never cite this entry as live-`up`, boot-round, or
+lease-gate qualification evidence.
+**Freshness:** Superseded on any change to the `vram_mb` versus
+`sealed_capacity_mib` check in `parse_up_args_from`, to
+`validate_origin_manifest_identity`, or if a live wrong-`--vram` run is ever
+performed under an approved window.
+
+---
