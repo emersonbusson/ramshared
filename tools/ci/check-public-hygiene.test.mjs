@@ -1016,6 +1016,17 @@ test('rejects_private_profile_email_token_key_and_kernel_address', () => {
   assert.deepEqual(new Set(findings.map((item) => item.rule)), new Set(['PRIVATE_WINDOWS_PATH', 'EMAIL', 'TOKEN', 'PRIVATE_KEY', 'KERNEL_ADDRESS']))
 })
 
+test('systemd_unit_names_are_never_flagged_as_emails', () => {
+  const units = [
+    'user@1000.service',
+    'user-runtime-dir@1000.service',
+    'session-2.scope',
+    'dbus.socket',
+  ].join('\n')
+  const findings = scanText('validation.md', units, undefined, AS_OF)
+  assert.equal(findings.filter((item) => item.rule === 'EMAIL').length, 0)
+})
+
 test('every_concrete_public_identity_class_fails_even_beside_historical_warning', () => {
   const text = [
     noExecutionWarning(), 'win11-wsl-lab', rawArtifactPath(), hyperVPath(), rawArtifactRunPath(), timestampRun(), rawRunId(),

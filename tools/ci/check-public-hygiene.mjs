@@ -348,7 +348,7 @@ const rules = [
   ['PRIVATE_UNIX_PATH', /\/home\/(?!<|\$|user(?:\/|>))[A-Za-z0-9._-]+\//i, 'private-unix-path'],
   ['PRIVATE_WINDOWS_PATH', /\b[A-Za-z]:\\Users\\(?!<|Public\\|Default\\|%)[^\\\s"']+\\/i, 'private-windows-profile-path'],
   ['PRIVATE_WSL_PATH', /\\\\wsl(?:\.localhost)?\\[^\\\s]+\\(?:home\\)?[^\\\s]+\\/i, 'private-wsl-path'],
-  ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i, 'personal-email-address'],
+  ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?!service\b|socket\b|target\b|timer\b|mount\b|swap\b|path\b|device\b|slice\b|scope\b)[A-Z]{2,}\b/i, 'personal-email-address'],
   ['TOKEN', /\b(?:gh[opusr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b/, 'credential-token'],
   ['PRIVATE_KEY', new RegExp(['-{5}BEGIN ', '(?:RSA |OPENSSH |EC |DSA )?', 'PRIVATE KEY-{5}'].join('')), 'private-key-material'],
   ['KERNEL_ADDRESS', /\bffff[0-9a-f]{8,}\b/i, 'raw-kernel-address'],
