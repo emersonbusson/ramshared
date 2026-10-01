@@ -715,7 +715,17 @@ kernel-page drill with confirmed residency (DT-21).
 **Docs:**
 
 - [x] Regenerated `docs/INDEX.md` (status `SPEC`); valid Kahneman-anchor links (2026-10-01: `node tools/generate-docs-index.mjs --check` → `✓ docs/INDEX.md is in sync.` Kahneman anchors resolve to `#disc-N` in `docs/methodology/kahneman-disciplines.md`.)
-- [ ] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` updated in the same structural-slice commit
+- [x] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` updated in the same structural-slice commit
+      (2026-10-01: all four carry their required content on this branch, which is the unit the
+      `documentation.md` rule names ("same commit **or PR**"). Inventory: `DEGRADATION-MATRIX.md`
+      has the four required modes — WinDrive B2 service-dies-with-active-pagefile, Windows
+      Update/ImDisk regression, lease revocation with pagefile, and `NtCreatePagingFile`
+      guard-fail; `LIBRARIES.md` now names WDK + StorPort/SDV/InfVerif/Driver Verifier and the
+      real cargo dependency set (`windows-sys` 0.61, `windows-service` 0.8) plus the `nvcuda.dll`
+      loader — `ntapi` and the bare `windows` crate are absent from every `Cargo.toml` and are
+      explicitly not documented as dependencies; `ADR-0006-storport-virtual-miniport.md` records
+      the from-scratch StorPort decision and the RF-2 SPSC-ring protocol; `IMPL.md` is present at
+      `docs/specs/no-milestone/windows-swap-driver/IMPL.md`.)
 
 **Cognitive gates:**
 
