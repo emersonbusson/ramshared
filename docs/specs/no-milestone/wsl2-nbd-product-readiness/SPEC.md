@@ -209,8 +209,9 @@ sealed release and return a stable refusal code.
   timeout is not inferred as cleanup. Live call receipts remain open.
 - [x] Public evidence excludes usernames, private paths, tokens, addresses,
   raw logs, and machine-specific identifiers.
-- [ ] Kernel/uAPI/IRQ/lock lifetime: N/A for this source-only slice;
-  any future kernel surface requires its own SPEC and platform gate.
+- [x] Kernel/uAPI/IRQ/lock lifetime: N/A for this source-only slice;
+  any future kernel surface requires its own SPEC and platform gate
+  (2026-10-01: confirmed — zero C/kernel code in this slice.)
 
 ## Files create/modify/delete
 
@@ -481,7 +482,7 @@ does not complete an environment-bound row:
 - [x] `node tools/ci/check-rust-slice-coverage.mjs` passes for each touched
   business-logic file at minimum 80%; no coverage claim is made for shell
   orchestration.
-- [ ] The exact NBD pure-model owner is `wsl2-nbd-product-readiness` and its
+- [x] The exact NBD pure-model owner is `wsl2-nbd-product-readiness` and its
   per-file gate is:
 
 ```bash
@@ -492,6 +493,10 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ram
   coverage owner: its exact two-line N3/NBD module declaration projection is
   owned by `microsoft-native-vram-memory-tier-n3-module-export-glue` in the N3
   SPEC and must not gain a re-export or any other glue.
+
+  Measured 2026-10-01: `nbd_readiness.rs` lines 99.4% (168/169), gate
+  PASSED at the named 80% minimum. Report:
+  `tmp/wsl2-nbd-product-readiness-cov.json`.
 - [x] Static/manufactured tests cover legitimate and refusal pairs in the
   corrected matrix implementation, including DT-NBD-40 overflow, all supported
   capacities, trailing fields, and strict Windows custody.

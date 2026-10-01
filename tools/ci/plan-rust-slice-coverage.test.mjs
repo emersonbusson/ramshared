@@ -2154,6 +2154,78 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
   assert.equal(ambiguousEvidenceResult.errors.some((item) => item.rule === 'test-only-ignored-evidence-missing'), true)
 })
 
+test('comment_language_test_only_localization_requires_immutable_base_proof', () => {
+  // DT-12: the test-only localization differential is fail-closed without an
+  // immutable-base proof. No GPU command is ever spawned by this slice.
+  const entry = testOnlyLocalizationEntry()
+  const map = { schema_version: 3, entries: [entry] }
+
+  // 1. No baseRevision at all → refused before any projection or spawn.
+  const noBase = testOnlyLocalizationRoot(entry)
+  const noBaseResult = selectCoverageEntries(map, entry.files, noBase, {})
+  assert.equal(noBaseResult.ok, false)
+  assert.equal(noBaseResult.errors.some((item) => item.rule === 'test-only-differential-base-required'), true)
+
+  // 2. baseRevision that is not a full 40-hex SHA → refused.
+  const shortSha = testOnlyLocalizationRoot(entry)
+  const shortShaResult = selectCoverageEntries(map, entry.files, shortSha, {
+    baseRevision: 'abc123',
+    readBaseFile: testOnlyBaseReader(entry),
+  })
+  assert.equal(shortShaResult.ok, false)
+
+  // 3. Base source missing → refused (cannot prove production projection).
+  const missingBase = testOnlyLocalizationRoot(entry)
+  const missingBaseResult = selectCoverageEntries(map, entry.files, missingBase, {
+    baseRevision: 'a'.repeat(40),
+    readBaseFile: () => null,
+  })
+  assert.equal(missingBaseResult.ok, false)
+
+  // 4. Base evidence without the named ignored-GPU PASS commands → refused.
+  const noEvidence = testOnlyLocalizationRoot(entry)
+  const noEvidenceResult = selectCoverageEntries(map, entry.files, noEvidence, {
+    baseRevision: 'b'.repeat(40),
+    readBaseFile: testOnlyBaseReader(entry, TEST_ONLY_BASE_SOURCE, 'no commands here'),
+  })
+  assert.equal(noEvidenceResult.ok, false)
+  assert.equal(noEvidenceResult.errors.some((item) => item.rule === 'test-only-ignored-evidence-missing'), true)
+
+  // 5. The two exact test-only source paths (files[] and verifications[].source)
+  //    must agree; a mismatch refuses.
+  const mismatched = testOnlyLocalizationEntry()
+  mismatched.verifications[0].source = 'crates/fixture/src/other.rs'
+  const mismatchRoot = testOnlyLocalizationRoot(mismatched)
+  const mismatchResult = validateCoverageMap({ schema_version: 3, entries: [mismatched] }, mismatchRoot)
+  assert.equal(mismatchResult.ok, false)
+  assert.equal(mismatchResult.errors.some((item) => item.rule === 'test-only-source-files-mismatch'), true)
+
+  // 6. With a complete immutable-base proof the entry is accepted and only the
+  //    exact package test is spawned — never an ignored GPU command.
+  const proven = testOnlyLocalizationRoot(entry)
+  const calls = []
+  const provenResult = selectCoverageEntries(map, entry.files, proven, {
+    baseRevision: 'c'.repeat(40),
+    readBaseFile: testOnlyBaseReader(entry),
+  })
+  assert.equal(provenResult.ok, true)
+  assert.equal(provenResult.state, 'READY')
+  const execution = runCoveragePlan(provenResult.entries, {
+    root: proven,
+    spawn(command, args) {
+      calls.push({ command, args })
+      return { status: 0 }
+    },
+  })
+  assert.equal(execution.ok, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].command, 'cargo')
+  assert.deepEqual(calls[0].args, ['test', '-p', 'fixture', '--lib'])
+  for (const call of calls) {
+    assert.equal(call.args.includes('--ignored'), false, 'GPU command must not be rerun by this slice')
+  }
+})
+
 test('no_rust_change_is_explicit_no_change_not_skip', () => {
   const root = fixtureRoot('```bash\nnode tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80\n```\n')
   const result = selectCoverageEntries(coverageMap(), ['README.md'], root)

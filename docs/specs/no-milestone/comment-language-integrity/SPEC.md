@@ -795,10 +795,23 @@ repeated run does not modify fixture bytes or repository files.
   path or an explicitly permitted external standard. (2026-10-01: same scan, zero findings.)
 - [x] `git diff --check -- docs/specs/no-milestone/comment-language-integrity/`
   passes. (2026-09-30: clean.)
-- [ ] Only this SPEC, the scanner, its named test module, the strict ratchet
+- [x] Only this SPEC, the scanner, its named test module, the strict ratchet
   schema, the existing diff workflow, the exact DT-11 coverage map/planner
   test, the DT-12 test-only map/planner contract, and the named bounded mutable
   English batches are modified by this Step 3 implementation.
+  (2026-10-01: scope audit — the comment-language-integrity Step 3 surface is
+  `docs/specs/no-milestone/comment-language-integrity/SPEC.md`,
+  `tools/ci/check-comment-language.mjs`,
+  `tools/ci/check-comment-language.test.mjs`,
+  `tools/ci/comment-language-baseline.schema.json`,
+  `.github/workflows/comment-language.yml`,
+  `tools/ci/plan-rust-slice-coverage.mjs`, and
+  `tools/ci/plan-rust-slice-coverage.test.mjs`. Current session changes to
+  this surface are exactly the SPEC checklist and the DT-12 planner test
+  `comment_language_test_only_localization_requires_immutable_base_proof` —
+  both in the allowed set. No scanner, schema, workflow, or map file is
+  modified. Other SPEC edits in the same working tree belong to separate
+  feature SPECs and are outside this Step 3 boundary.)
 
 - [x] `node --check tools/ci/check-comment-language.mjs` (2026-09-30: OK.)
 - [x] Focused `node --test tools/ci/check-comment-language.test.mjs`
@@ -850,9 +863,24 @@ repeated run does not modify fixture bytes or repository files.
   broker protocol 97.5%, slices 87.3%, broker_srv 80.6%, canary_probe 91.2%,
   residency 98.1%, telemetry 100.0%. The CUDA probe row was re-measured at
   98.2% and is owned by `cuda-probe-planning-coverage`.)
-- [ ] DT-12 accepts only the two exact test-only source paths after a full-base
+- [x] DT-12 accepts only the two exact test-only source paths after a full-base
   lexical projection proves their production text unchanged, package tests pass,
   and the immutable base contains all named ignored-GPU PASS commands. No GPU
   command is rerun by this slice.
+  (2026-10-01: named test
+  `comment_language_test_only_localization_requires_immutable_base_proof`
+  added and green — 1 passed, 0 failed. Proves: (1) missing `baseRevision`
+  refuses with `test-only-differential-base-required`; (2) non-full-SHA base
+  refuses; (3) missing base source refuses; (4) base evidence without the
+  named ignored-GPU `**PASS**.` commands refuses with
+  `test-only-ignored-evidence-missing`; (5) `files[]` vs
+  `verifications[].source` mismatch refuses with
+  `test-only-source-files-mismatch` — the two exact test-only source paths
+  must agree; (6) with a complete immutable-base proof the entry is READY
+  and only `cargo test -p fixture --lib` is spawned — `--ignored` never
+  appears in any spawned argv. Companion tests
+  `test_only_localization_differential_accepts_declared_cfg_test_change`
+  and `test_only_localization_differential_refuses_spoofed_or_production_change`
+  remain green. Full planner suite: 48 passed, 0 failed.)
 
 `BINARY_MATCH`: N/A — no daemon, driver, or runtime surface.

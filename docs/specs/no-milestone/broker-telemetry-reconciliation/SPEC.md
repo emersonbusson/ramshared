@@ -375,7 +375,16 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ra
 - [ ] QEMU ublk-RAM drill PASS **without** the flag (zero regression, RNF-4)
 
 **Docs:**
-- [ ] `IMPL.md` (STEP 3) + `P0-RESULTS.md` (`tol_frac`/`streak` cell)
+- [x] `IMPL.md` (STEP 3) + `P0-RESULTS.md` (`tol_frac`/`streak` cell)
+  (2026-10-01: both artifacts present and complete. `IMPL.md` carries the
+  STEP-3 status line, RF/ITEM file map, measured validation numbers
+  (`cargo test -p ramshared-wsl2d --lib` 179 passed / 0 failed; workspace
+  green; clippy/fmt clean; QEMU broker drill PASS with
+  `KTEST-TELEMETRY=ok`), the closed DT-7 calibration reasoning, and the
+  four multi-agent review fixes. `docs/reliability/memory-broker-p0-results.md`
+  §6 records the calibration cell `tol_frac=0.10` / `streak=3` with the
+  measured `reconcile_delta ≈ -1.0` under normal swap and the
+  zero-false-positive derivation.)
 
 **Cognitive gates:**
 - [x] ITEM-2/3/7/8 with discipline + link + question + evidence + abort
