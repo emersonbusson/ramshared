@@ -143,7 +143,18 @@ restore_nic() {
 	echo "$NIC" >"$DRIVER_DIR/hv_netvsc/bind" 2>>"$LOG" || true
 	say "RESTORE driver=$(readlink -f "/sys/bus/vmbus/devices/$NIC/driver" 2>/dev/null || echo none)"
 }
-trap restore_nic EXIT
+
+# The BUG-3 holds run in the background so their mappings are alive while
+# restore_nic frees the ring. Reap them on every exit path so a failed cycle
+# cannot leave a helper holding /dev/uio0 after the script is gone.
+HOLD_PIDS=""
+cleanup() {
+	restore_nic
+	for hp in $HOLD_PIDS; do
+		wait "$hp" 2>/dev/null || true
+	done
+}
+trap cleanup EXIT
 
 # --- phase 1: lifecycle balance (open/close) --------------------------------
 say "=== PHASE 1: $CYCLES bind/unbind cycles ==="
@@ -202,34 +213,38 @@ for u in /sys/class/uio/uio*; do
 	say "UIO $(basename "$u") name=$(cat "$u/name" 2>/dev/null) maps=$(ls "$u/maps" 2>/dev/null | tr '\n' ' ')"
 done
 
-PHASE2_RAN=no
+# mmap-hold sleeps `hold` seconds before releasing, so it has to run
+# CONCURRENTLY with the teardown. Running it in the foreground mapped, held,
+# released, and only then let restore_nic run -- the mapping was already gone
+# when the ring was freed, so the BUG-3 window was never open and a green run
+# proved nothing about mmap-versus-release. Background it, give it a second to
+# place the mappings, then tear down underneath them.
 if [ -n "$UIO_DEV" ] && [ -e "$UIO_DEV" ] && [ -n "$HELPER" ]; then
-	say "PHASE2 mmap all maps of $UIO_DEV"
-	# UIO map N lives at offset N * pagesize. Hold 3s so the unbind below
-	# races the mapping on purpose: that is the BUG-3 window (sysfs ring
-	# mmap versus ring release).
-	if "$HELPER" mmap-hold "$UIO_DEV" 4096 3 8 2>>"$LOG" | tee -a "$LOG"; then
-		PHASE2_RAN=yes
-	else
-		say "PHASE2 mmap helper failed"
-	fi
+	say "PHASE2 mmap all maps of $UIO_DEV (held across teardown)"
+	# UIO map N lives at offset N * pagesize. 8 maps of 4 KiB covers every
+	# map the driver advertises.
+	"$HELPER" mmap-hold "$UIO_DEV" 4096 8 8 >>"$LOG" 2>&1 &
+	HOLD_PIDS="$HOLD_PIDS $!"
 else
-	say "PHASE2 no UIO device or no vmbus_drill_helper; skipping mmap"
-	say "PHASE2 note BUG-3 hold-in-mmap did NOT run"
+	say "PHASE2 no UIO device or no vmbus_drill_helper; skipping UIO mmap"
+	say "PHASE2 note UIO hold-in-mmap did NOT run"
 fi
 
 RING="$(find /sys/devices -path "*$NIC*" -name 'ring' 2>/dev/null | head -1 || true)"
 if [ -n "$RING" ]; then
 	say "PHASE2 sysfs ring present: ${RING#/sys}"
-	say "PHASE2 ring mmap attempt"
 	if [ -n "$HELPER" ]; then
-		# Hold 2s so restore/unbind frees the ring while the mapping is
-		# still alive.
-		if "$HELPER" mmap-hold "$RING" 4194304 2 1 2>>"$LOG" | tee -a "$LOG"; then
-			PHASE2_RAN=yes
-		else
-			say "PHASE2 ring mmap failed"
-		fi
+		# hv_uio_new_channel() opens subchannels with ring_bytes = SZ_2M,
+		# and VMBUS_RING_SIZE(SZ_2M) is 512 pages. hv_uio_ring_mmap_prepare()
+		# treats pgoff as a page offset into that ring, so mapping 4 MiB at
+		# pgoff 0 asked for 1024 pages of a 512-page ring and
+		# hv_uio_mmap_range_valid() correctly rejected it. Map the ring at
+		# its real size. chan_attr_ring_buffer has no .size, so the length
+		# is not discoverable from stat(); it is fixed at SZ_2M by the
+		# driver.
+		say "PHASE2 ring mmap 2097152 bytes = SZ_2M subchannel ring (held across teardown)"
+		"$HELPER" mmap-hold "$RING" 2097152 8 1 >>"$LOG" 2>&1 &
+		HOLD_PIDS="$HOLD_PIDS $!"
 	else
 		say "PHASE2 no vmbus_drill_helper; skipping ring mmap"
 	fi
@@ -237,10 +252,29 @@ else
 	say "PHASE2 no sysfs ring found"
 fi
 
+# Give the helpers time to open their mappings before the teardown races them.
+sleep 2
+
 say "=== PHASE 2 teardown while maps held (BUG-3 window) ==="
 say "PHASE2-BEFORE-TEARDOWN $(vmbus_maps || echo 'MAPS unavailable')"
 restore_nic
 say "PHASE2-AFTER-TEARDOWN $(vmbus_maps || echo 'MAPS unavailable')"
+
+# Collect the hold results. A mapping that was alive when restore_nic freed
+# the ring is the BUG-3 window; maps=0 means it never opened. The MMAP_HOLD
+# lines go to the console so the uploaded artifact carries the numbers (and
+# the errno when a mmap fails).
+for p in $HOLD_PIDS; do
+	wait "$p" 2>/dev/null || true
+done
+say "--- MMAP_HOLD evidence ---"
+grep 'MMAP_HOLD\|HELPER mmap\|HELPER open' "$LOG" | tee -a "$LOG" || true
+if grep -qE 'MMAP_HOLD path=.* maps=[1-9]' "$LOG"; then
+	PHASE2_RAN=yes
+	say "PHASE2 hold-in-mmap window OPEN (mapping alive across restore_nic)"
+else
+	say "PHASE2 hold-in-mmap window did NOT open (no mapping succeeded)"
+fi
 
 # --- phase 3: reconciliation -------------------------------------------------
 say "=== PHASE 3: reconciliation ==="
@@ -257,10 +291,12 @@ fi
 
 # Scoring. A green exit means the exercise actually ran:
 #   - every bind/unbind step succeeded, and
-#   - at least one hold-in-mmap path executed (UIO device mmap or sysfs ring
-#     mmap), so the BUG-3 window was opened rather than skipped.
-# Reporting success after a silent skip is how a broken dynid registration
-# looked green for thirty cycles.
+#   - at least one mapping was alive while restore_nic freed the ring
+#     (MMAP_HOLD ... maps>0 observed before teardown returned), so the
+#     BUG-3 window was open rather than merely prepared.
+# Reporting success after a silent skip -- or after a mapping that was
+# already released -- is how a broken dynid registration looked green for
+# thirty cycles and how a closed window looked like a hold-in-mmap pass.
 if [ "${CYCLE_FAILS:-0}" -gt 0 ]; then
 	say "LIFECYCLE_VERDICT=FAIL cycle_fails=$CYCLE_FAILS"
 	say "=== END vmbus-lifecycle-drill ==="
@@ -268,7 +304,7 @@ if [ "${CYCLE_FAILS:-0}" -gt 0 ]; then
 	exit 1
 fi
 if [ "${PHASE2_RAN:-no}" != yes ]; then
-	say "LIFECYCLE_VERDICT=FAIL no hold-in-mmap path ran (BUG-3 not exercised)"
+	say "LIFECYCLE_VERDICT=FAIL no mapping survived into the teardown (BUG-3 window not open)"
 	say "=== END vmbus-lifecycle-drill ==="
 	say "log=$LOG"
 	exit 1

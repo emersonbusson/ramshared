@@ -25,9 +25,13 @@
 # daily WSL2 environment. Swap is never activated here.
 #
 # usage: vmbus-fragmentation-drill.sh [hog_mib] [logfile]
-#   hog_mib  cap in MiB; default MemAvailable. The helper allocates 64 KiB
-#            chunks until the kernel refuses or the cap is reached, then
-#            frees every other one.
+#   hog_mib  ceiling in MiB; default MemTotal. The helper allocates 64 KiB
+#            chunks until /proc/buddyinfo shows no free block of order 7 or
+#            above, then unmaps one member of every physical buddy pair whose
+#            buddy it also holds. The ceiling must be above what the guest can
+#            allocate: if the loop stops at the ceiling the untouched
+#            remainder still holds order-10 blocks and the drill correctly
+#            reports INCONCLUSIVE.
 #
 # Depends on vmbus_drill_helper (static, see hyperv-drill-initramfs/) for the
 # fragment-buddy primitive. The guest has no CPython and this is a Day-0
@@ -67,13 +71,15 @@ guard
 say() { echo "$@" | tee -a "$LOG"; }
 
 hog_mib() {
-	local avail
-	# The helper treats this as a cap and stops when the kernel refuses
-	# more memory, so pass the full availability. A 75% share left the
-	# untouched remainder as order-10 blocks and the drill could never
-	# show order-7 failing.
-	avail="$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)"
-	echo "$avail"
+	local total
+	# MemTotal, not MemAvailable. The helper treats this as a ceiling the
+	# allocation loop must never reach: it stops when /proc/buddyinfo shows
+	# order-7 depleted, and reports exhausted=1. Passing a share of
+	# MemAvailable (the previous default) stopped the loop at the ceiling
+	# with the untouched remainder still holding order-10 blocks, so
+	# order-7 never failed and the drill reported INCONCLUSIVE every run.
+	total="$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)"
+	echo "$total"
 }
 
 HOGB="${1:-$(hog_mib)}"
@@ -89,11 +95,12 @@ buddy
 
 # --- fragment: break high-order contiguity, leave order-0 available ---------
 # A single large mlock hog only splits the buddy as far as it must and leaves
-# the untouched remainder as order-10 blocks. The last run hogged 1464 MiB and
-# still had 120 order-10 blocks free, so order-7 never failed and the drill
-# reported INCONCLUSIVE. fragment-buddy takes the same budget as many 64 KiB
-# chunks and frees every other one: no two neighbours are free, nothing above
-# order-4 can coalesce, and the freed chunks still serve order-0.
+# the untouched remainder as order-10 blocks. fragment-buddy instead
+# allocates until /proc/buddyinfo shows order-7 depleted -- the test
+# condition, measured -- and then unmaps one member of every physical buddy
+# pair (pfn even) whose buddy it also holds, so a freed page's buddy is
+# always held, nothing above order-0 can coalesce, and the survivors still
+# serve order-0.
 say "=== FRAGMENT ${HOGB} MiB as 64 KiB chunks ==="
 if [ -z "$HELPER" ]; then
 	say "REFUSE: vmbus_drill_helper not found; cannot fragment without fragment-buddy"
@@ -104,14 +111,24 @@ fi
 "$HELPER" fragment-buddy "$HOGB" 600 >>"$LOG" 2>&1 &
 HOGPID=$!
 
-for _ in $(seq 1 60); do
-	grep -q 'FRAGMENT_BUDDY ready=1' "$LOG" 2>/dev/null && break
+FRAG_READY=no
+for _ in $(seq 1 120); do
+	if grep -q 'FRAGMENT_BUDDY ready=' "$LOG" 2>/dev/null; then
+		FRAG_READY=yes
+		break
+	fi
 	sleep 1
 done
-if ! grep -q 'FRAGMENT_BUDDY ready=1' "$LOG" 2>/dev/null; then
-	say "FRAGMENT did not reach ready state"
+# The helper writes both the ready and the refusal lines to the log; echo the
+# decisive one to the console so the uploaded artifact carries it.
+grep 'FRAGMENT_BUDDY ' "$LOG" | tail -3 | tee -a "$LOG" || true
+FRAG_LINE="$(grep 'FRAGMENT_BUDDY ready=1' "$LOG" | tail -1 || true)"
+if [ "$FRAG_READY" != yes ]; then
+	say "FRAGMENT did not reach a ready state"
+elif [ -z "$FRAG_LINE" ]; then
+	say "FRAGMENT refused to build the pattern (see FRAGMENT_BUDDY line above)"
 else
-	grep 'FRAGMENT_BUDDY ready=1' "$LOG" | tail -1 | tee -a "$LOG"
+	say "FRAGMENT pattern in place"
 fi
 
 say "--- BUDDY AFTER FRAGMENT ---"
@@ -204,15 +221,32 @@ case "$NIC_DRIVER" in
 *hv_netvsc*) REBOUND=yes ;;
 esac
 
-say "RESULT high_order_7plus_blocks=${HIGH_ORDER:-unknown} order7_dmesg=$ORDER7 accept4_failures=$ACCEPT oops=$OOPS rebind=$REBOUND"
+# exhausted=1 is what separates "the buddy was deprived of order-7" from
+# "we stopped early and the untouched remainder still has it". The previous
+# runs looked like the second while the log said the first, because the cap
+# was MemAvailable and the loop stopped at the ceiling before order-7 was
+# gone. stop= names why the loop ended.
+EXHAUSTED="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*exhausted=\([0-9]*\).*/\1/p')"
+PAGEMAP="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*pagemap=\([0-9]*\).*/\1/p')"
+STOPREASON="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*stop=\([a-z0-9-]*\).*/\1/p')"
+say "RESULT high_order_7plus_blocks=${HIGH_ORDER:-unknown} exhausted=${EXHAUSTED:-unknown} pagemap=${PAGEMAP:-unknown} stop=${STOPREASON:-unknown} order7_dmesg=$ORDER7 accept4_failures=$ACCEPT oops=$OOPS rebind=$REBOUND"
 
 # Exit codes for init:
 #   0  PASS            pressure achieved and ring allocation survived it
-#   3  INCONCLUSIVE    measurement ran but the buddy still had order-7 supply
+#   3  INCONCLUSIVE    measurement ran but the test condition was not met
 #   1  FAIL            candidate damage, or the channel would not reopen
 #   2  REFUSE          guard tripped (see top of file)
 RC=0
-if [ "${HIGH_ORDER:-1}" -gt 0 ]; then
+if [ -z "$FRAG_LINE" ]; then
+	say "VERDICT=INCONCLUSIVE_NO_PATTERN (fragment-buddy never reported ready=1)"
+	RC=3
+elif [ "${EXHAUSTED:-0}" != 1 ]; then
+	say "VERDICT=INCONCLUSIVE_CAP_REACHED (exhausted=${EXHAUSTED:-unknown} stop=${STOPREASON:-unknown}; ceiling stopped the loop before order-7 was depleted, untouched remainder still holds high orders)"
+	RC=3
+elif [ "${PAGEMAP:-0}" != 1 ]; then
+	say "VERDICT=INCONCLUSIVE_NO_PAGEMAP (holes were virtual, not physical buddy pairs)"
+	RC=3
+elif [ "${HIGH_ORDER:-1}" -gt 0 ]; then
 	say "VERDICT=INCONCLUSIVE_ORDER7_STILL_AVAILABLE (high_order_7plus_blocks=$HIGH_ORDER; pattern did not break contiguity)"
 	RC=3
 elif [ "$REBOUND" = yes ] && [ "$ACCEPT" -eq 0 ] && [ "$OOPS" -eq 0 ]; then

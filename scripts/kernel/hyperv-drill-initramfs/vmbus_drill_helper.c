@@ -27,18 +27,34 @@
  * fragment-buddy is the one the order-zero drill actually needs. A single
  * large hog splits the buddy only as far as it must and leaves the untouched
  * remainder as high-order blocks, so order-7 still succeeds and the drill
- * reports INCONCLUSIVE. This mode takes <mib> as a cap and keeps allocating
- * 64 KiB chunks until the kernel refuses, then frees every other chunk and
- * mlocks the rest. No two neighbouring chunks are free at once, so nothing
- * above order-4 can coalesce, order-7 must fail, and the freed chunks still
- * satisfy order-0 fallback. It prints FRAGMENT_BUDDY ready=1 only after the
- * pattern is in place.
+ * reports INCONCLUSIVE. This mode takes <mib> as a ceiling the loop must not
+ * reach and allocates 64 KiB chunks until /proc/buddyinfo shows no free
+ * block of order 7 or above -- the test condition, measured rather than
+ * inferred. It then punches physical buddy holes: one member of every
+ * (pfn, pfn^1) pair whose buddy is also ours is unmapped. A freed page's
+ * buddy is always held, so nothing above order-0 can coalesce, order-7
+ * cannot reappear, and the survivors still satisfy order-0 fallback. It
+ * prints FRAGMENT_BUDDY ready=1 only after the pattern is in place.
  *
- * Never prints addresses. Evidence must not carry KASLR material.
+ * The loop stops on the measured condition, not on hard refusal:
+ * pagefault_out_of_memory() only warns and retries the fault, so touching
+ * into true exhaustion with an unkillable process hangs instead of failing.
+ *
+ * Freeing every other virtual chunk does not give that guarantee: adjacent
+ * virtual chunks are not necessarily physical buddies, so freed chunks can
+ * reassemble into order-7 blocks and the drill reports INCONCLUSIVE. The
+ * pagemap PFN check is what makes the claim airtight. It needs
+ * CAP_SYS_ADMIN (init runs this inside the disposable guest) and
+ * CONFIG_PROC_PAGE_MONITOR (enabled in the drill kernel); without both the
+ * pattern cannot be built and this mode fails closed instead of reporting a
+ * pattern it never created.
+ *
+ * Never prints addresses or PFNs. Evidence must not carry KASLR material.
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,13 +116,16 @@ static int do_mmap_hold(int argc, char **argv)
 	 */
 	fd = open(path, O_RDWR);
 	if (fd < 0) {
-		fprintf(stderr, "HELPER open %s: %s\n", path, strerror(errno));
+		/* stdout: the guest console is the evidence channel */
+		printf("HELPER open %s: %s\n", path, strerror(errno));
+		fflush(stdout);
 		return 1;
 	}
 
 	maps = calloc((size_t)count, sizeof(*maps));
 	if (!maps) {
-		fprintf(stderr, "HELPER calloc: %s\n", strerror(errno));
+		printf("HELPER calloc: %s\n", strerror(errno));
+		fflush(stdout);
 		close(fd);
 		return 1;
 	}
@@ -116,8 +135,9 @@ static int do_mmap_hold(int argc, char **argv)
 		void *m = mmap(NULL, (size_t)bytes, PROT_READ, MAP_SHARED, fd, off);
 
 		if (m == MAP_FAILED) {
-			fprintf(stderr, "HELPER mmap %s[%ld] off=%lld: %s\n",
-				path, i, (long long)off, strerror(errno));
+			printf("HELPER mmap %s[%ld] off=%lld: %s\n",
+			       path, i, (long long)off, strerror(errno));
+			fflush(stdout);
 			break;
 		}
 		maps[i] = m;
@@ -195,22 +215,129 @@ static int do_mlock_hog(int argc, char **argv)
 }
 
 /*
- * Take <mib> as independent 64 KiB chunks, then free every other one and
- * mlock the survivors. A free chunk's buddy is always held, so the free list
- * tops out at order-4 and order-7 cannot form. The freed chunks keep order-0
- * available, which is exactly the state the fallback has to survive.
- *
- * 64 KiB keeps the VMA count well under the default max_map_count even at
- * several GiB: 4 KiB chunks would need one VMA per page and hit the limit
- * after ~65k of them.
+ * 64 KiB chunks: large enough that the allocation phase stays well under
+ * max_map_count, small enough that the buddy splits them out of high-order
+ * blocks one at a time.
  */
 #define FRAG_CHUNK (64L * 1024)
-#define FRAG_MAX_CHUNKS 32768
+#define FRAG_MAX_CHUNKS 48000
+#define FRAG_PAGE 4096L
+#define FRAG_SAFETY_KB 8192L
+
+/*
+ * Punching one hole per freed page needs one VMA per surviving run, which is
+ * far more than a normal process. The default 65530 is exhausted long before
+ * the buddy is, so raise it first. Best effort: if the write fails the
+ * pattern below fails closed and says so.
+ */
+static void raise_max_map_count(void)
+{
+	int fd = open("/proc/sys/vm/max_map_count", O_WRONLY);
+
+	if (fd < 0)
+		return;
+	if (write(fd, "1048576\n", 8) < 0) {
+		/* best effort */
+	}
+	close(fd);
+}
+
+/*
+ * Free blocks at order 7 and above, across all zones. This is the condition
+ * the drill is actually about: while any remain, the buddy can still satisfy
+ * an order-7 request outright and the fallback is not under test.
+ *
+ * buddyinfo layout is `Node <n>, zone <name>` followed by one count per
+ * order, so order-0 is field 5 and order-7 is field 12.
+ */
+static long high_order_blocks(void)
+{
+	FILE *f = fopen("/proc/buddyinfo", "r");
+	char line[512];
+	long sum = 0;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		char *save = NULL;
+		char *tok = strtok_r(line, " \t\n", &save);
+		int field = 0;
+
+		while (tok) {
+			field++;
+			if (field > 4 && field - 5 >= 7) {
+				char *end = NULL;
+				long v = strtol(tok, &end, 10);
+
+				if (end != tok)
+					sum += v;
+			}
+			tok = strtok_r(NULL, " \t\n", &save);
+		}
+	}
+	fclose(f);
+	return sum;
+}
+
+static long mem_available_kb(void)
+{
+	FILE *f = fopen("/proc/meminfo", "r");
+	char line[256];
+	long kb = -1;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		if (strncmp(line, "MemAvailable:", 13) == 0) {
+			kb = strtol(line + 13, NULL, 10);
+			break;
+		}
+	}
+	fclose(f);
+	return kb;
+}
+
+/*
+ * PFN of a populated page. Returns 0 and stores the PFN, or -1 when the
+ * entry is absent, swapped out, or pagemap is withholding PFNs (no
+ * CAP_SYS_ADMIN). PFNs are used only to choose which pages to unmap and
+ * are never printed.
+ */
+static int pagemap_pfn(int fd, void *addr, unsigned long *pfn)
+{
+	uint64_t ent;
+	unsigned long idx = (unsigned long)addr / (unsigned long)FRAG_PAGE;
+
+	if (pread(fd, &ent, sizeof(ent),
+		  (off_t)idx * (off_t)sizeof(ent)) != (ssize_t)sizeof(ent))
+		return -1;
+	if (!(ent & (1ULL << 63)))
+		return -1;
+	*pfn = (unsigned long)(ent & ((1ULL << 55) - 1));
+	return *pfn ? 0 : -1;
+}
+
+static void pfn_setbit(unsigned long *bits, unsigned long pfn)
+{
+	bits[pfn / (8 * sizeof(long))] |= 1UL << (pfn % (8 * sizeof(long)));
+}
+
+static int pfn_getbit(const unsigned long *bits, unsigned long pfn)
+{
+	return !!(bits[pfn / (8 * sizeof(long))] &
+		  (1UL << (pfn % (8 * sizeof(long)))));
+}
 
 static int do_fragment_buddy(int argc, char **argv)
 {
-	long mib, hold, want, got = 0, freed = 0, locked = 0, i, off, stopped = 0;
+	long mib, hold, want, got = 0, locked = 0, i, off, stopped = 0;
+	long freed_pages = 0, held_pages = 0, no_pfn = 0, pairs = 0;
+	long high_before, high_after, avail_kb;
 	void **maps;
+	unsigned long *pfns = NULL, *seen = NULL;
+	unsigned long max_pfn = 0, seen_words = 0;
+	int pmfd;
+	const char *stop_reason = "ceiling";
 
 	if (argc < 3) {
 		fprintf(stderr, "usage: fragment-buddy <mib> <hold_seconds>\n");
@@ -224,11 +351,11 @@ static int do_fragment_buddy(int argc, char **argv)
 	}
 
 	/*
-	 * The mib argument is a cap, not a quota. A fixed 75% share leaves
-	 * the untouched remainder as order-10 blocks, so order-7 never fails
-	 * and the drill reports INCONCLUSIVE. Allocate until the kernel says
-	 * no, up to this cap; splitting down to the watermark is what actually
-	 * removes the high-order supply.
+	 * mib is a ceiling the allocation loop must never reach, not a
+	 * quota. Passing a share of MemAvailable stops the loop while the
+	 * untouched remainder still holds order-10 blocks, so order-7 never
+	 * fails and the drill reports INCONCLUSIVE. The caller passes
+	 * MemTotal; the loop stops when the test condition is met.
 	 */
 	want = (mib * 1024 * 1024) / FRAG_CHUNK;
 	if (want > FRAG_MAX_CHUNKS)
@@ -238,10 +365,12 @@ static int do_fragment_buddy(int argc, char **argv)
 		return 2;
 	}
 
+	raise_max_map_count();
+
 	/*
 	 * This guest is disposable and this process is the point of the
 	 * drill. Keep the OOM killer off us: if memory truly runs out the
-	 * fault fails and we stop there instead of being killed mid-pattern.
+	 * allocation stops instead of us being killed mid-pattern.
 	 */
 	{
 		int oom = open("/proc/self/oom_score_adj", O_WRONLY);
@@ -255,53 +384,181 @@ static int do_fragment_buddy(int argc, char **argv)
 	}
 
 	maps = calloc((size_t)want, sizeof(*maps));
-	if (!maps) {
-		fprintf(stderr, "HELPER calloc: %s\n", strerror(errno));
+	pfns = calloc((size_t)want * (FRAG_CHUNK / FRAG_PAGE), sizeof(*pfns));
+	if (!maps || !pfns) {
+		printf("HELPER calloc: %s\n", strerror(errno));
+		fflush(stdout);
+		free(maps);
+		free(pfns);
 		return 1;
 	}
 
-	for (i = 0; i < want; i++) {
-		char *m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
-			       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	high_before = high_order_blocks();
+	printf("FRAGMENT_BUDDY start cap_chunks=%ld high_order_7plus=%ld\n",
+	       want, high_before);
+	fflush(stdout);
 
-		if (m == MAP_FAILED) {
+	/*
+	 * Allocate 64 KiB chunks and touch every page. Stop when the buddy
+	 * no longer holds a free block of order 7 or above -- that is the
+	 * test condition, measured, not inferred.
+	 *
+	 * Do not run to hard refusal: pagefault_out_of_memory() on this
+	 * kernel only warns and retries the fault, so touching into true
+	 * exhaustion with an unkillable process hangs instead of failing.
+	 * The MemAvailable floor stops us first and is still far below any
+	 * order-7 supply.
+	 */
+	for (i = 0; i < want; i++) {
+		char *m;
+		long high;
+
+		avail_kb = mem_available_kb();
+		if (avail_kb >= 0 && avail_kb < FRAG_SAFETY_KB) {
 			stopped = 1;
+			stop_reason = "memavailable-floor";
 			break;
 		}
-		for (off = 0; off < FRAG_CHUNK; off += 4096)
+
+		m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (m == MAP_FAILED) {
+			stopped = 1;
+			stop_reason = "mmap-refused";
+			break;
+		}
+		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE)
 			m[off] = 1;
 		maps[i] = m;
 		got++;
+
+		if ((got % 256) == 0) {
+			high = high_order_blocks();
+			if (high == 0) {
+				stopped = 1;
+				stop_reason = "order7-depleted";
+				break;
+			}
+		}
+	}
+	/* One final check: the loop may have stopped on the ceiling. */
+	if (stopped == 0 && high_order_blocks() == 0) {
+		stopped = 1;
+		stop_reason = "order7-depleted";
 	}
 
-	/* Free every other chunk. Each freed chunk's buddy stays allocated. */
-	for (i = 0; i < got; i += 2) {
-		munmap(maps[i], FRAG_CHUNK);
-		maps[i] = NULL;
-		freed++;
-	}
-
-	/* Pin the survivors so compaction cannot reassemble high orders. */
-	for (i = 1; i < got; i += 2) {
-		if (maps[i] && mlock(maps[i], FRAG_CHUNK) == 0)
+	/*
+	 * Pin the pages before punching holes so compaction cannot migrate
+	 * survivors into the gaps and rebuild high orders under us.
+	 */
+	for (i = 0; i < got; i++) {
+		if (mlock(maps[i], FRAG_CHUNK) == 0)
 			locked++;
 	}
 
-	printf("FRAGMENT_BUDDY ready=1 chunks=%ld held=%ld freed=%ld locked=%ld chunk_kib=64 cap_chunks=%ld exhausted=%ld\n",
-	       got, got - freed, freed, locked, want, stopped);
+	pmfd = open("/proc/self/pagemap", O_RDONLY);
+	if (pmfd < 0) {
+		printf("FRAGMENT_BUDDY ready=0 pagemap=0 reason=open:%s\n",
+		       strerror(errno));
+		fflush(stdout);
+		free(maps);
+		free(pfns);
+		return 2;
+	}
+
+	/* Pass 1: collect every PFN we own and the high-water mark. */
+	for (i = 0; i < got; i++) {
+		char *m = maps[i];
+
+		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE) {
+			unsigned long pfn;
+
+			if (pagemap_pfn(pmfd, m + off, &pfn) != 0) {
+				no_pfn++;
+				continue;
+			}
+			pfns[i * (FRAG_CHUNK / FRAG_PAGE) + off / FRAG_PAGE] =
+				pfn + 1; /* 0 means "no pfn" in the array */
+			if (pfn > max_pfn)
+				max_pfn = pfn;
+		}
+	}
+
+	if (no_pfn > 0 || max_pfn == 0) {
+		printf("FRAGMENT_BUDDY ready=0 pagemap=0 no_pfn=%ld reason=pfn-incomplete\n",
+		       no_pfn);
+		fflush(stdout);
+		close(pmfd);
+		free(maps);
+		free(pfns);
+		return 2;
+	}
+
+	seen_words = max_pfn / (8 * sizeof(long)) + 2;
+	seen = calloc(seen_words, sizeof(*seen));
+	if (!seen) {
+		printf("HELPER calloc pfn-set: %s\n", strerror(errno));
+		fflush(stdout);
+		close(pmfd);
+		free(maps);
+		free(pfns);
+		return 1;
+	}
+	for (i = 0; i < got * (FRAG_CHUNK / FRAG_PAGE); i++) {
+		if (pfns[i])
+			pfn_setbit(seen, pfns[i] - 1);
+	}
+
+	/*
+	 * Pass 2: unmap every page whose PFN is even and whose buddy (pfn+1)
+	 * is also ours and will be held. A freed page's buddy is then always
+	 * held, so nothing above order-0 can coalesce and the survivors still
+	 * serve order-0 requests. Pages whose buddy is not ours are held:
+	 * freeing them could pair with leftover free memory and rebuild the
+	 * high orders we just drained.
+	 */
+	for (i = 0; i < got; i++) {
+		char *m = maps[i];
+
+		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE) {
+			unsigned long pfn =
+				pfns[i * (FRAG_CHUNK / FRAG_PAGE) + off / FRAG_PAGE];
+			if (!pfn) {
+				held_pages++;
+				continue;
+			}
+			pfn--;
+			if ((pfn & 1UL) == 0 && pfn_getbit(seen, pfn + 1)) {
+				if (munmap(m + off, (size_t)FRAG_PAGE) == 0) {
+					freed_pages++;
+					pairs++;
+				} else {
+					held_pages++;
+				}
+			} else {
+				held_pages++;
+			}
+		}
+	}
+
+	high_after = high_order_blocks();
+	printf("FRAGMENT_BUDDY ready=1 chunks=%ld pages=%ld held=%ld freed=%ld locked=%ld pairs=%ld chunk_kib=64 cap_chunks=%ld exhausted=%ld pagemap=1 stop=%s high_order_7plus=%ld->%ld\n",
+	       got, got * (FRAG_CHUNK / FRAG_PAGE), held_pages, freed_pages,
+	       locked, pairs, want, stopped, stop_reason, high_before,
+	       high_after);
 	fflush(stdout);
 
 	if (hold > 0)
 		sleep((unsigned int)hold);
 
-	for (i = 1; i < got; i += 2) {
-		if (maps[i]) {
-			munlock(maps[i], FRAG_CHUNK);
-			munmap(maps[i], FRAG_CHUNK);
-		}
-	}
+	for (i = 0; i < got; i++)
+		munmap(maps[i], FRAG_CHUNK);
+	free(seen);
 	free(maps);
-	printf("FRAGMENT_BUDDY released held=%ld\n", got - freed);
+	free(pfns);
+	close(pmfd);
+	printf("FRAGMENT_BUDDY released held=%ld freed=%ld\n",
+	       held_pages, freed_pages);
 	fflush(stdout);
 	return got > 1 ? 0 : 1;
 }

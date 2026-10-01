@@ -40,6 +40,12 @@ mount -t tmpfs tmpfs /dev/shm 2>/dev/null
 mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
 mount -t tracefs tracefs /sys/kernel/tracing 2>/dev/null
 
+# The fragmentation pattern punches one hole per freed page, which needs far
+# more VMAs than a normal process. The default 65530 is exhausted long before
+# the buddy is. Raised here as well as in the helper so the limit is already
+# in place when the first mmap runs.
+echo 1048576 >/proc/sys/vm/max_map_count 2>/dev/null || true
+
 # Serial console: make sure the UEFI stub's console=ttyS0 actually shows up.
 if [ -c /dev/console ]; then
 	exec >/dev/console 2>/dev/console
@@ -142,10 +148,13 @@ fi
 if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
 	export NIC
 	echo "HYPERV_DRILL_PHASE name=fragmentation"
-	# 75% of MemAvailable, not a fixed 512 MiB: the whole point of this drill
-	# is to drain the free high-order blocks. A fixed hog that leaves most of
-	# RAM free guarantees the INCONCLUSIVE outcome.
-	FRAG_HOG=$(awk '/MemAvailable/{print int($2 / 1024 * 75 / 100)}' /proc/meminfo)
+	# MemTotal, not a share of MemAvailable: the helper treats this as a
+	# ceiling the allocation loop must never reach, and stops only when the
+	# kernel refuses. A 75% share stopped the loop with the untouched
+	# remainder still holding order-10 blocks, so order-7 never failed and
+	# the drill reported INCONCLUSIVE every run. MemTotal is above what the
+	# guest can allocate, so exhausted=1 and the high-order supply is real.
+	FRAG_HOG=$(awk '/MemTotal/{print int($2 / 1024)}' /proc/meminfo)
 	echo "HYPERV_DRILL_FRAGMENT hog_mib=${FRAG_HOG:-0}"
 	sh /scripts/vmbus-fragmentation-drill.sh "${FRAG_HOG:-512}" /var/tmp/fragment.log
 	FRAG_STATUS=$?
