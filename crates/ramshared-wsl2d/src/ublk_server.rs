@@ -110,23 +110,17 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         return ERANGE;
     }
 
-    // Command guard
-    if !matches!(
-        req.cmd,
-        Command::Read | Command::Write | Command::Flush | Command::Trim
-    ) {
-        return EINVAL;
-    }
-
-    if req.cmd == Command::Trim {
-        return 0; // discard: safe no-op in the MVP
-    }
-
+    // Command dispatch is exhaustive so a new `Command` variant is a compile
+    // error here, never a panic on the device I/O path.
     let served = match req.cmd {
         Command::Read => backend.read_at(req.offset, &mut buf[..len]).map(|()| len),
         Command::Write => backend.write_at(req.offset, &buf[..len]).map(|()| len),
         Command::Flush => backend.flush().map(|()| 0),
-        _ => unreachable!(),
+        // Discard is a safe no-op in the MVP. Disconnect is not an ublk request
+        // command — the device lifecycle is STOP/DEL_DEV driven — so `Disc` and
+        // unknown opcodes are rejected like any other unsupported command.
+        Command::Trim => return 0,
+        Command::Disc | Command::Unknown(_) => return EINVAL,
     };
 
     match served {
