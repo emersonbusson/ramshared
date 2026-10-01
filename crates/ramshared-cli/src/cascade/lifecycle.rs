@@ -1010,4 +1010,99 @@ mod tests {
             assert!(json.contains(field), "missing {field}: {json}");
         }
     }
+
+    // ── RF-10 display honesty (DT-6) ────────────────────────────────────
+
+    #[test]
+    fn status_text_reports_off_and_blocked_without_live_daemon() {
+        // Kahneman #1: the dashboard describes reality. Without a live daemon
+        // the text surface must report `off` / `blocked` — never `active`.
+        //
+        // Case 1: clean off (no tiers, no daemon) → phase Off, protection Off.
+        let clean = CascadeSnapshot {
+            zram: TierSample::default(),
+            vram: TierSample::default(),
+            disk: TierSample::default(),
+            ghost: false,
+            order_ok: true,
+            daemon_alive: false,
+            daemon_pid: None,
+            capacity_guaranteed: false,
+            disk_baseline_kib: None,
+            demote: DemoteSnapshot::default(),
+            active_kib: DEFAULT_ACTIVE_KIB,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Off,
+            cache_state: CacheState::Off,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: None,
+            vram_cached_kib: None,
+            gpu_headroom_kib: None,
+            gpu_budget: None,
+            ssd_origin_written_kib: None,
+            fallback_swap_used_kib: None,
+            measurement_errors: Vec::new(),
+        };
+        let view = derive_lifecycle(&clean);
+        assert_eq!(view.phase, CascadePhase::Off);
+        let prot = protection_state(&view, &clean);
+        assert_eq!(prot, ProtectionState::Off);
+        assert_eq!(prot.as_str(), "OFF");
+
+        // Case 2: half cascade (vram swap still mounted, daemon dead) →
+        // protection Blocked. This is the state that must never read Active.
+        let mut half = clean.clone();
+        half.vram.present = true;
+        half.vram.prio = Some(100);
+        half.vram.size_kib = 2_097_148;
+        half.capacity_guaranteed = false;
+        half.cache_state = CacheState::Off;
+        let view = derive_lifecycle(&half);
+        let prot = protection_state(&view, &half);
+        assert_eq!(prot, ProtectionState::Blocked);
+        assert_eq!(prot.as_str(), "BLOCKED");
+        let overall = overall_state(&view, &half);
+        assert!(!overall.is_ok(), "half cascade without daemon is not ok");
+    }
+
+    #[test]
+    fn status_json_never_publishes_active_without_live_daemon() {
+        // Kahneman #1 / DT-6: the `--json` surface must never claim
+        // `"activation":{"active":true}` or `"cache_state":"ACTIVE"` when the
+        // daemon is not alive. A stale green is worse than a red.
+        let snap = CascadeSnapshot {
+            zram: TierSample::default(),
+            vram: TierSample::default(),
+            disk: TierSample::default(),
+            ghost: false,
+            order_ok: true,
+            daemon_alive: false,
+            daemon_pid: None,
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
+            demote: DemoteSnapshot::default(),
+            active_kib: DEFAULT_ACTIVE_KIB,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state: CacheState::Active,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(2_097_148),
+            vram_cached_kib: Some(0),
+            gpu_headroom_kib: Some(2_097_152),
+            gpu_budget: None,
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
+        };
+        let view = derive_lifecycle(&snap);
+        let json = render_status_json(&view, &snap, "2026-09-30T00:00:00Z");
+        assert!(
+            json.contains("\"activation\":{\"active\":false"),
+            "activation must be false without a live daemon: {json}"
+        );
+        assert!(
+            !json.contains("\"activation\":{\"active\":true"),
+            "activation must never be true without a live daemon: {json}"
+        );
+    }
 }

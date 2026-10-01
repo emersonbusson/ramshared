@@ -10,6 +10,7 @@ UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
 HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service
 WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice
 CURRENT_SELECTOR="$PRODUCT_ROOT/current"
+APPROVAL_DIR=/var/lib/ramshared/approvals
 APPROVED_VERSION=
 LEGACY_UNIT_APPROVED_HASH=
 LOWER_SINK=
@@ -935,6 +936,17 @@ systemctl daemon-reload
 SYSTEMD_RELOAD_COMPLETED=1
 # NBD_INSTALL_POST_WRITE_PHASE=daemon-reloaded
 cleanup_replaced_auxiliary_unit_backups
+
+# RF-9 / DT-4: write the version-scoped approval token for the release just
+# installed. Remove any token for a different version so a stale approval
+# cannot authorize the wrong binary.
+mkdir -p -- "$APPROVAL_DIR"
+chmod 0755 -- "$APPROVAL_DIR"
+for stale in "$APPROVAL_DIR"/activate-*.token; do
+  [[ -e $stale ]] && [[ $stale != "$APPROVAL_DIR/activate-$RELEASE_VERSION.token" ]] && rm -f -- "$stale"
+done
+printf 'activate:%s\n' "$RELEASE_VERSION" >"$APPROVAL_DIR/activate-$RELEASE_VERSION.token"
+chmod 0400 "$APPROVAL_DIR/activate-$RELEASE_VERSION.token"
 
 trap - EXIT
 printf 'NBD_INSTALL_STATE=INSTALLED\n'

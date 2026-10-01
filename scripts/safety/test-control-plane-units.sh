@@ -74,13 +74,19 @@ for file in "$cascade" "$health" "$daemon"; do
 done
 for text in \
   'Type=simple' \
-  'ExecStart=/opt/ramshared/current/scripts/safety/cascade-controller.sh --execute' \
+  'ExecStart=/opt/ramshared/current/bin/ramshared boot' \
   'KillMode=process' \
   'SendSIGKILL=no' \
   'TimeoutStopSec=infinity'; do
   require_text "$cascade" "$text"
 done
-if grep -Eq '^ExecStop=' "$cascade" || grep -Eq '^TimeoutStopSec=[0-9]' "$cascade"; then
+for text in \
+  'ExecStop=' \
+  'ramshared down' \
+  'NBD_STOP_WINDOW=unbounded'; do
+  grep -Fq -- "$text" "$cascade" || { printf 'missing %s in %s\n' "$text" "$cascade" >&2; exit 1; }
+done
+if grep -Eq '^TimeoutStopSec=[0-9]' "$cascade"; then
   printf 'cascade unit may terminate the backend before clean shutdown proof\n' >&2; exit 1
 fi
 for text in \

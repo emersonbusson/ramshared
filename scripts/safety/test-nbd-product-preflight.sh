@@ -1284,6 +1284,12 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
     fail 'sealed_nbd_bundle_and_lifecycle_wiring installer is not immutable selector-only'
     failures=1
   fi
+  if ! grep -Fq 'activate-$RELEASE_VERSION.token' "$install" ||
+    ! grep -Fq 'chmod 0400' "$install" ||
+    ! grep -Fq 'activate:%s' "$install"; then
+    fail 'sealed_nbd_bundle_and_lifecycle_wiring installer does not write the version-scoped approval token'
+    failures=1
+  fi
   if ! grep -Fq 'STAGE_RELEASE="$STAGE/release"' "$bundle" ||
     ! grep -Fq 'nbd-product-preflight.sh' "$bundle" ||
     ! grep -Fq 'nbd-benchmark-cell.sh' "$bundle" ||
@@ -1306,8 +1312,9 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
     fail 'sealed_nbd_bundle_and_lifecycle_wiring bundle is not sealed NBD-only'
     failures=1
   fi
-  if ! grep -Fq '/opt/ramshared/current/scripts/safety/nbd-product-preflight.sh --check' "$service" ||
-    ! grep -Fq '/opt/ramshared/current/scripts/safety/cascade-controller.sh --execute' "$service" ||
+  if ! grep -Fq '/opt/ramshared/current/bin/ramshared boot' "$service" ||
+    ! grep -Fq 'ramshared down' "$service" ||
+    ! grep -Fq 'NBD_STOP_WINDOW=unbounded' "$service" ||
     ! grep -Fq 'KillMode=process' "$service" ||
     ! grep -Fq 'SendSIGKILL=no' "$service" ||
     ! grep -Fq 'TimeoutStopSec=infinity' "$service" ||
@@ -1656,6 +1663,7 @@ test_attended_derived_install_is_bound_and_sealed() {
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
     -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
     -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
+    -e "s|^APPROVAL_DIR=/var/lib/ramshared/approvals$|APPROVAL_DIR=$root/approvals|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   write_manifest "$source"
@@ -1705,6 +1713,7 @@ test_auxiliary_unit_conflict_refuses_and_rolls_back() {
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
     -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
     -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
+    -e "s|^APPROVAL_DIR=/var/lib/ramshared/approvals$|APPROVAL_DIR=$root/approvals|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   write_manifest "$source"
@@ -1735,6 +1744,7 @@ test_owned_auxiliary_unit_from_prior_selector_is_upgraded() {
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
     -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
     -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
+    -e "s|^APPROVAL_DIR=/var/lib/ramshared/approvals$|APPROVAL_DIR=$root/approvals|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   write_manifest "$source"
@@ -1793,6 +1803,7 @@ test_legacy_auxiliary_unit_migration_is_hash_bound() {
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
     -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
     -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
+    -e "s|^APPROVAL_DIR=/var/lib/ramshared/approvals$|APPROVAL_DIR=$root/approvals|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   write_manifest "$source"
