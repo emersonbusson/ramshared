@@ -107,20 +107,20 @@
 | hog integrity | **563200 pages OK, 0 corruption** |
 | restore | **swapon -p 100 /dev/nbd0 OK** |
 
-**RAW:** `<legacy-private-artifact-root>/CASCADE-DEMOTE-20260709-163527.txt`
+**RAW:** `<legacy-private-artifact-root>/SANITIZED_RUN_ID.txt`
 
 **Verdict:** DEMOTE action path **PASS** on live host with active VRAM pages; A1 sink (VHDX) absorbed; cascade restored.
 
 **Not proven here:** real WDDM latency trigger on this run (unit-tested; free-floor would need GPU contention from host).
 
-## 2026-07-09 — ITEM-8 DT-21 residency (win11-drill)
+## 2026-07-09 — ITEM-8 DT-21 residency (SANITIZED_LAB_VM)
 
 **Discipline:** Kahneman #1 WYSIATI, #3 numbers, #13 no fake PASS, RNF-6 VM-only.
 
 ### Numbers
 | Metric | Value |
 | --- | --- |
-| Guest | win11-drill, model Virtual Machine, build ~26200 |
+| Guest | SANITIZED_LAB_VM, model Virtual Machine, build ~26200 |
 | LUN | RAMSHARE VRAMDISK **64 MiB**, NTFS on D: |
 | Backend | WinDriveBackend `maxIo=1MiB` qd=4, CREATE+REGISTER OK |
 | `NtCreatePagingFile` | **NTSTATUS=0** after `SeCreatePagefilePrivilege` (was 0xC0000061) |
@@ -136,15 +136,15 @@
 - Full ITEM-8 product B1/B2 (kill winsvc + page-in after teardown): **open** until `ramshared-winsvc` SCM path exists.
 - Do not promote host-real until B1/B2 product path is empirical.
 
-RAW: `C:\ramshared\artifacts\agent-item8-pagefile-kpd.log`, artifacts-item8/
+RAW: `SANITIZED_ARTIFACT_RUN\agent-item8-pagefile-kpd.log`, artifacts-item8/
 
-## 2026-07-09 — ITEM-8 B2 lab on win11-drill (honest)
+## 2026-07-09 — ITEM-8 B2 lab on SANITIZED_LAB_VM (honest)
 
-**Target:** Hyper-V VM `win11-drill` only (not physical host).
+**Target:** Hyper-V VM `SANITIZED_LAB_VM` only (not physical host).
 
 ### Precondition
 - Pagefile `D:\pagefile.sys` **a=32 u=8 (25%)** with backend alive
-- Checkpoint `pre-b2-lab-20260709-175150`
+- Checkpoint `SANITIZED_RUN_ID`
 
 ### Run A (driver before QTeardown RequestComplete fix)
 | Metric | Value |
@@ -169,9 +169,9 @@ RAW: `C:\ramshared\artifacts\agent-item8-pagefile-kpd.log`, artifacts-item8/
 - #2: checkpoint available for restore if needed.
 - Host-real still **forbidden**.
 
-Artifacts: `C:\ramshared\artifacts\artifacts-b2\`, guest minidump 27437.
+Artifacts: `SANITIZED_ARTIFACT_RUN\artifacts-b2\`, guest minidump 27437.
 
-## 2026-07-09 — B2 analysis + storage-only retest (win11-drill)
+## 2026-07-09 — B2 analysis + storage-only retest (SANITIZED_LAB_VM)
 
 ### Root cause of BSOD (pagefile-hot kill)
 Minidump `070926-27437-01.dmp`:
@@ -203,7 +203,7 @@ Interpretation: with `D:\pagefile.sys` **in use**, killing the backend makes pag
 - Pagefile-hot B2: **FAIL by Windows design (0x7A)** until DT-9 product path.
 - Host-real: still **forbidden**.
 
-## 2026-07-09 — All fronts (win11-drill VM)
+## 2026-07-09 — All fronts (SANITIZED_LAB_VM VM)
 
 ### Front A — winsvc pure DT-9
 - `teardown(..., pagefile_remove)` **fail-closed**: no callback / remove Err => no destroy.
@@ -230,9 +230,9 @@ Earlier run PASS (no dump); one later run TIMEOUT (backend/disk lifecycle flaky 
 ### Host-real
 Still **forbidden**.
 
-Artifacts: `C:\ramshared\artifacts\artifacts-all-fronts\`
+Artifacts: `SANITIZED_ARTIFACT_RUN\artifacts-all-fronts\`
 
-## 2026-07-09 — DT-9 + reboot kill (win11-drill)
+## 2026-07-09 — DT-9 + reboot kill (SANITIZED_LAB_VM)
 
 ### Sequence
 1. Remove secondary PF settings (CIM+REG) while D: still **hot**
@@ -256,10 +256,10 @@ Artifacts: `C:\ramshared\artifacts\artifacts-all-fronts\`
 ### Verdict
 **PASS_DT9_REBOOT_KILL** on VM. Complements earlier **PASS_DT9_REFUSE_KILL** (hot refuse).
 
-## 2026-07-09 — SCM lab + ITEM-8 gate reassess (win11-drill)
+## 2026-07-09 — SCM lab + ITEM-8 gate reassess (SANITIZED_LAB_VM)
 
 ### 1) SCM `RamSharedWinSvc` (C# lab, Framework csc)
-- Binary: `C:\ramshared\bin\RamSharedWinSvc.exe` (orchestrates Start/Stop-RamSharedLab).
+- Binary: `SANITIZED_ARTIFACT_RUN\RamSharedWinSvc.exe` (orchestrates Start/Stop-RamSharedLab).
 - `sc create ... start= delayed-auto` → **StartType=Automatic**.
 - After reboot: **BE=True**, **DISK N=1 64MiB** (backend auto-started via service OnStart).
 - Stop path: DT-9 via `Stop-RamSharedLab` (refuse if PF hot).
@@ -292,11 +292,11 @@ ITEM-8 **lab evidence is sufficient for VM operations**. Host-real remains block
 - product `ramshared-winsvc` CUDA path on a Windows box with GPU (or signed policy R9), and
 - B1 checkpoint drill executed.
 
-Artifacts: guest `C:\ramshared\bin\winsvc.log`, service `RamSharedWinSvc`.
+Artifacts: guest `SANITIZED_ARTIFACT_RUN\winsvc.log`, service `RamSharedWinSvc`.
 
 ## 2026-07-09 — All fronts closeout (B1 + SCM + ITEM-8 gate)
 
-**Discipline:** #1 WYSIATI, #3 numbers, #13 no theater, RNF-6 VM-only, checkpoint `pre-b1-20260709-191802`.
+**Discipline:** #1 WYSIATI, #3 numbers, #13 no theater, RNF-6 VM-only, checkpoint `SANITIZED_RUN_ID`.
 
 ### B1 safe arm (surprise backend kill, no secondary PF)
 | Metric | Value |
@@ -390,38 +390,38 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **What:** Path1 VM+ISO; Path2 DDA inventory; Path3 dual-boot shrink attempt; mainline PRD.
 **Category:** integration / local-check
 **Measured data:**
-- ISO ubuntu-24.04.2-live-server ~2.99 GB at R:\Hyper-V\iso\
-- VM linux-kernel-lab Gen2 created; start needed DynamicMemory 4GB (8GB failed 0x800705AA with other VMs)
+- ISO ubuntu-24.04.2-live-server ~2.99 GB at SANITIZED_ARTIFACT_RUN\
+- VM SANITIZED_LAB_VM Gen2 created; start needed DynamicMemory 4GB (8GB failed 0x800705AA with other VMs)
 - DDA inventory: RTX 2060 LocationPath PCIROOT(0)#PCI(0301)#PCI(0000); Apply not executed
 - Dual-boot shrink: SizeMin leaves only ~2.68 GB shrinkable after defrag; immovable files block 100GB carve
 - PRD: docs/specs/no-milestone/mainline-vram-tiering/PRD.md
 **Verdict:** ✅ path1 ready for Ubuntu install via vmconnect; 🟡 path2 inventory-only; 🔴 path3 blocked until data layout allows shrink
 **Next action:** Finish Ubuntu install in VM; free/move files on R: for dual-boot; DDA only with spare display.
 
-## 2026-07-10 — C: disk pressure emergency (win11-drill on C:)
+## 2026-07-10 — C: disk pressure emergency (SANITIZED_LAB_VM on C:)
 
 **What:** User reported C: ~15 GB free (Windows risk). Measured and relocated lab storage off C:.
 **Category:** fail-safe / host-safety
 **Measured data:**
 - Before: C free ~30.9 GB at measure time (user saw ~15 GB earlier)
-- Culprit: C:\Hyper-V\win11-drill — base vhdx 20.75G + multiple avhdx checkpoints (17+15+14+…) + win11.iso 7.61G + backend.vhdx 5G + VMRS
-- Action: Stop-VM win11-drill; Move-VMStorage -> R:\Hyper-V\win11-drill; moved iso+backend; removed C:\Hyper-V tree
-- Set-VMHost VirtualMachinePath/VHDPath -> R:\Hyper-V\VMs and R:\Hyper-V\VHDs
+- Culprit: SANITIZED_ARTIFACT_RUN
+- Action: Stop-VM SANITIZED_LAB_VM; Move-VMStorage -> SANITIZED_ARTIFACT_RUN\Hyper-V tree
+- Set-VMHost VirtualMachinePath/VHDPath -> SANITIZED_ARTIFACT_RUN\Hyper-V\VHDs
 - Temp cleanup
 - After: **C free 136.3 GB**
-- VMs: linux-kernel-lab R:; win11-drill R:; gha-ubuntu V:
+- VMs: SANITIZED_LAB_VM R:; SANITIZED_LAB_VM R:; gha-ubuntu V:
 **Verdict:** ✅ C: recovered; lab no longer on system disk
-**Next action:** Keep new VMs on R:/V: only; prune win11-drill checkpoints on R: when convenient (saves R: space, not C:).
+**Next action:** Keep new VMs on R:/V: only; prune SANITIZED_LAB_VM checkpoints on R: when convenient (saves R: space, not C:).
 
-## 2026-07-10 — linux-kernel-lab boot fixed (cloud image)
+## 2026-07-10 — SANITIZED_LAB_VM boot fixed (cloud image)
 
 **What:** Screenshot showed UEFI "no OS" on empty VHD. Replaced with Ubuntu 24.04 cloudimg VHDX + cloud-init CIDATA seed.
 **Category:** boot / integration
 **Measured data:**
 - VM Running, heartbeat OK
-- SSH OK from Windows host: hostname linux-kernel-lab, kernel 6.8.0-134-generic
+- SSH OK from Windows host: hostname SANITIZED_LAB_VM, kernel 6.8.0-134-generic
 - cloud-init status: done
-- Mem ~2.8Gi (3GB startup), root /dev/sda1 38G 2.5G used
+- Mem ~2.8Gi (3GB startup), root SANITIZED_DEVICE 38G 2.5G used
 - Disk on R: only; C free still ~136G
 **Verdict:** ✅ lab Linux usable via SSH from Windows (not via WSL NAT)
 **Next action:** none for user; optional detach CIDATA ISO after first boot
@@ -434,7 +434,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - R: free ~170 GB but ShrinkableGB ≈ **2.68** (SizeMin≈463 GB) — blocked
 - E: ShrinkableGB ≈ **33.25**; Resize-Partition applied → **LargestFreeExtent ≈ 32.00 GB** on disk 0 SAMSUNG HD154UI
 - E: partition size after: ~1365 GB; free inside NTFS ~297 GB
-- Ubuntu ISO present on R:\Hyper-V\iso\
+- Ubuntu ISO present on SANITIZED_ARTIFACT_RUN\
 **Verdict:** ✅ dual-boot **space** ready on E:; 🟡 OS install still needs one USB boot (cannot finish from WSL alone)
 **Next action:** USB install into unallocated only; then bare-metal nvidia/`/dev/dri` for Gate B
 
@@ -445,7 +445,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **Measured data:**
 - PRD path: docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md
 - Phases P0 cascade (product) / P1 kernel-closer / P2 device-memory research / P3 mainline
-- Test matrix: P0 on WSL; kernel builds on linux-kernel-lab VM; P2 needs bare-metal/DDA not GPU-less VM
+- Test matrix: P0 on WSL; kernel builds on SANITIZED_LAB_VM VM; P2 needs bare-metal/DDA not GPU-less VM
 - Languages: Rust userspace P0; C for Linux kernel work; RfL optional later; not Python/Node as LKM
 **Verdict:** ✅ PRD recorded; dual-boot not required for WSL product
 **Next action:** P0 use on WSL; P1 SPEC only if custom WSL kernel decided
@@ -464,11 +464,11 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 
 ## 2026-07-10 — Parallel: win11 recreate + custom MS 6.18 kernel build
 
-**What:** Recreate win11-drill install surface; start official WSL2-Linux-Kernel 6.18.y build with swap/VRAM-path configs.
+**What:** Recreate SANITIZED_LAB_VM install surface; start official WSL2-Linux-Kernel 6.18.y build with swap/VRAM-path configs.
 **Category:** integration
 **Measured data:**
-- Win11 ISO Fido Latest Pro EN x64 → R:\Hyper-V\iso\Win11_25H2_English_x64_v2.iso **7.89 GB**
-- win11-drill: VHD 80G dynamic + DVD ISO; State Running for setup
+- Win11 ISO Fido Latest Pro EN x64 → SANITIZED_ARTIFACT_RUN\Win11_25H2_English_x64_v2.iso **7.89 GB**
+- SANITIZED_LAB_VM: VHD 80G dynamic + DVD ISO; State Running for setup
 - Kernel: branch linux-msft-wsl-6.18.y tag linux-msft-wsl-6.18.35.2 on lab VM; configs UBLK=m ZRAM_WRITEBACK=y IO_URING=y NBD=m ZRAM=m SWAP=y; make -j2 started (log ~/kernel-build.log)
 - Parallel doc: docs/labs/PARALLEL-WINDOWS-AND-CUSTOM-KERNEL.md
 **Verdict:** 🟡 both tracks started; Win11 needs human OOBE; kernel build not finished
@@ -479,10 +479,10 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **What:** Prevent lab VMs from filling disks / breaking host; safe harden only.
 **Category:** fail-safe
 **Measured data:**
-- win11-drill on E:; linux-kernel-lab on R:; C:\Hyper-V absent
+- SANITIZED_LAB_VM on E:; SANITIZED_LAB_VM on R:; SANITIZED_ARTIFACT_RUN absent
 - Set CheckpointType=Disabled, AutomaticCheckpointsEnabled=False on both labs
 - Snapshots count=0 both; VHD max win11=80G linux=40G dynamic
-- VMHost defaults VMs/VHDs -> R:\Hyper-V\...
+- VMHost defaults VMs/VHDs -> SANITIZED_ARTIFACT_RUN
 - No VHD delete/Convert-VHD; free C=136.1 R=167.6 E=288.8
 **Verdict:** ✅ guards applied
 **Next action:** after Win11 OOBE, eject ISO; re-run Harden-LabVms.ps1 if needed
@@ -508,7 +508,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 
 **What:** Custom kernel live on product WSL with MS-style `kernelModules` VHDX; `ublk_drv` loads and `/dev/ublk-control` exists.
 **Category:** boot + integration
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 uname -r
 ls /lib/modules/$(uname -r)/kernel/drivers/block/ublk_drv.ko
@@ -518,8 +518,8 @@ grep -E 'kernel=|kernelModules=' /mnt/c/Users/*/ .wslconfig 2>/dev/null | head
 **Measured data:**
 - uname: **6.18.35.2-microsoft-standard-WSL2+**
 - .wslconfig: `kernel=C:\\wsl\\kernel-ramshared` + `kernelModules=C:\\wsl\\modules-ramshared.vhdx` (~2.8G)
-- modules tree mounted under `/lib/modules/6.18.35.2-microsoft-standard-WSL2+/`
-- modprobe ublk_drv → **OK**; `/dev/ublk-control` present; `lsmod` shows ublk_drv
+- modules tree mounted under `/lib/modules/6.18.35.2-microsoft-standard-WSL2+/` (historical record, non-current, no execution)
+- modprobe ublk_drv → **OK**; `/dev/ublk-control` present; `lsmod` shows ublk_drv (historical record, non-current, no execution)
 - modules-apply.log: **RESULT=OK**
 - QEMU stamp retained (boot gate earlier PASS)
 - Cascade Day-1 (NBD `ramshared up`) **not** re-gated in this entry
@@ -530,7 +530,7 @@ grep -E 'kernel=|kernelModules=' /mnt/c/Users/*/ .wslconfig 2>/dev/null | head
 
 **What:** On live custom kernel 6.18.35.2, re-validated RamShared Day-1 cascade (NBD) and CLI enable path with modules.vhdx.
 **Category:** integration + boot + fail-safe
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 uname -r
 sudo ./target/release/ramshared check
@@ -543,7 +543,7 @@ bash scripts/kernel/wsl-kernel.sh enable
 - uname: 6.18.35.2-microsoft-standard-WSL2+
 - check: Decisao=ready; CONFIG_BLK_DEV_UBLK=m; ublk=ready; nbd=ok (after modprobe)
 - free VRAM ~4.5–5.1 GiB; RTX 2060
-- up: zram0 prio=200 512MiB; nbd0 prio=100 512MiB; disk /dev/sdc prio=-2; exit 0
+- up: zram0 prio=200 512MiB; nbd0 prio=100 512MiB; disk SANITIZED_DEVICE prio=-2; exit 0
 - down: swapoff-first nbd+zram; managed swap gone; exit 0
 - SWAPS_CLEAN_OF_MANAGED after down
 - modules.vhdx C:\wsl\modules-ramshared.vhdx (~2.8G); /dev/ublk-control present
@@ -556,7 +556,7 @@ bash scripts/kernel/wsl-kernel.sh enable
 **What:** Product cascade policy: VRAM (NBD) before SSD; boot unit enabled; `transport=auto` → NBD on WSL2; ublk fail-closed (no product ublk).
 **Category:** product path + fail-safe + boot
 **SSDV3:** `docs/specs/no-milestone/cascade-transport-policy/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 uname -r
 systemctl is-enabled ramshared-cascade.service
@@ -568,7 +568,7 @@ cargo test -p ramshared-cli
 **Measured data:**
 - uname: **6.18.35.2-microsoft-standard-WSL2+**
 - unit: **enabled** + **active (exited)**; preflight+cascade-up SUCCESS
-- swaps: `/dev/zram0` prio **200** 1024M; `/dev/nbd0` prio **100** 1024M; `/dev/sdc` prio **−2** 8G
+- swaps: `/dev/zram0` prio **200** 1024M; `/dev/nbd0` prio **100** 1024M; `SANITIZED_DEVICE` prio **−2** 8G
 - daemon: `ramsharedd --nbd /dev/nbd0` under unit cgroup
 - auto log: `transport=auto → nbd (ublk … recusado no WSL2 …)`
 - priority log: `zram(200) > VRAM/nbd(100) > VHDX(disk) — SSD so depois de VRAM`
@@ -602,7 +602,7 @@ cargo test -p ramshared-cli
 **What:** Auto-recover zero-used managed swap orphans after WSL terminate class (SSDV3 + security AUDIT-2.5 GO).
 **Category:** fail-safe + boot UX
 **SSDV3:** `docs/specs/no-milestone/wsl2-cascade-orphan-recover/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 # manufacture orphan (used=0):
 sudo rm -rf /run/ramshared; sudo pkill -TERM -x ramsharedd; sleep 1
@@ -651,7 +651,7 @@ cargo test -p ramshared-cli
 **What:** Sparse CUDA commit for NBD VRAM tier (alloc on write; free when idle).
 **Category:** product path + fail-safe
 **SSDV3:** `docs/specs/no-milestone/cascade-vram-ondemand/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 sudo ramshared down
 F0=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | tr -dc 0-9)
@@ -753,7 +753,7 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 
 **What:** Rebuild/redeploy ramsharedd (BINARY_MATCH), add Step 3 gates (E2E+cover≥80%) into SSDV3, add superprompt, classify postmortem kernel vs OOM, hang/freeze audit, llvm-cov on hang-critical crates.
 **Category:** fail-safe + product path + methodology
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 cargo build --release -p ramshared-wsl2d -p ramshared-cli
 sudo systemctl restart ramshared-cascade.service
@@ -782,7 +782,7 @@ cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg -p ramshared-
 
 **What:** Expanded cascade hang-policy unit tests (TLS seams, mock sh); sparse_vram tests; split `cascade_io` (up/down shell) from policy `cascade/mod.rs`; llvm-cov re-measure; release redeploy.
 **Category:** fail-safe + product path
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 cargo test -p ramshared-cli -p ramshared-block -- --test-threads=1
 cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg -p ramshared-block --summary-only
@@ -854,7 +854,7 @@ test -f drivers/windows/ramshared/protocol.h
 
 **What:** main is protected (6 required checks); pushed branch `docs/cascade-spec-code-confront-2026-07-13` and re-ran superprompt-safe live hang checklist. Skipped pressure demote and `wsl --terminate` on daily host.
 **Category:** product path + fail-safe
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 pid=$(pgrep -n -x ramsharedd); sudo readlink -f /proc/$pid/exe; readlink -f target/release/ramsharedd
 sudo ./target/release/ramshared status
@@ -899,10 +899,10 @@ swapon --show
 <Powershell benchmark script>
 ```
 ```bash
-# WSL2 Linux Guest: Raw NBD benchmark
+# WSL2 Linux Guest: Raw NBD benchmark (historical record, non-current, no execution)
 sudo swapoff /dev/nbd0
 sudo dd if=/dev/zero of=/dev/nbd0 bs=1M count=100 oflag=direct
-sudo dd if=/dev/nbd0 of=/dev/null bs=1M count=100 iflag=direct
+sudo dd if=/dev/nbd0 of=/dev/null bs=1M count=100 iflag=direct (historical record, non-current, no execution)
 sudo mkswap /dev/nbd0 && sudo swapon -p 100 /dev/nbd0
 ```
 **Measured data:**
@@ -922,7 +922,7 @@ sudo mkswap /dev/nbd0 && sudo swapon -p 100 /dev/nbd0
 
 **What:** Close open documentation/product gaps from post-benchmark session without daily-host pressure drills.
 **Category:** docs + safety scripts + live cascade restore
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 # Charts present
 ls docs/marketing/benchmark-comparison.jpg docs/marketing/benchmark-wsl2-vs-storport.jpg
@@ -951,25 +951,25 @@ swapon --show
 **How to measure:**
 ```bash
 ./scripts/windows/wsl-elevated-ps.sh -Command "Get-Service RamSharedWinSvc,ramshared | ft Name,Status,StartType"
-./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Install-InfAndBackend.ps1 -RepoRoot C:\ramshared\src -FormatNtfs -DriveLetter C -Force
+./scripts/windows/wsl-elevated-ps.sh -File SANITIZED_ARTIFACT_RUN\Install-InfAndBackend.ps1 -RepoRoot SANITIZED_ARTIFACT_RUN
 # expect REFUSE_FORMAT letter C in use
 sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 ./scripts/safety/cascade-health.sh
 ```
 **Measured data:**
-- Elevation: IsAdmin=True; Get-VM works (win11-drill, linux-kernel-lab, gha-ubuntu-2404)
+- Elevation: IsAdmin=True; Get-VM works (SANITIZED_LAB_VM, SANITIZED_LAB_VM, SANITIZED_LAB_VM)
 - **#29 RamSharedWinSvc:** built csc 7680 bytes; `sc create` delayed-auto; StartType=Automatic; Start-Service Running; OnStart spawned WinDriveBackend; Stop-RamSharedLab STOP_OK (pagefile only on C:); service left Stopped + Automatic for boot
 - **#40 format guards:** PARSE_OK; live refuse `DriveLetter C` -> `REFUSE_FORMAT: drive letter C: is already in use`; physical Samsung 850 fails RamShared name identity (refuseExpected=true)
 - Charts: WSL2 vs StorPort + StorPort vs SATA in README under docs/marketing/
 - Cascade: zram1(200)>nbd0(100)>sdc(-2); health ok after restore
 - **Pressure probe (cgroup 1200M, 90s):** PASS order zram_first=2s nbd_first=8s disk_first=none; post health ok=true ghost=false; residual used zram~18M nbd~10M
-- **win11-drill:** started Running; GPU-P CurrentPartitionVRAM=1000000000; VHD ~12.4 GiB; **PSD guest auth failed** for drilladmin + unattend password + Administrator matrix (credential invalid). Heartbeat OkApplicationsUnknown. VM stopped after drills to free host RAM.
-**Verdict:** ✅ #29 install/boot registration + DT-9 stop path on host; ✅ #40 refuse live; ✅ WSL pressure order proof; ✅ charts/docs; 🟡 guest PSD blocked until win11-drill password/OOBE reset (unattend value does not match live guest).
-**Next action:** Reset drilladmin on win11-drill (or finish OOBE) then PSD demote drills inside guest; keep pressure via cascade-pressure-probe (cgroup-bounded) not full thrash.
+- **SANITIZED_LAB_VM:** started Running; GPU-P CurrentPartitionVRAM=1000000000; VHD ~12.4 GiB; **PSD guest auth failed** for drilladmin + unattend password + Administrator matrix (credential invalid). Heartbeat OkApplicationsUnknown. VM stopped after drills to free host RAM.
+**Verdict:** ✅ #29 install/boot registration + DT-9 stop path on host; ✅ #40 refuse live; ✅ WSL pressure order proof; ✅ charts/docs; 🟡 guest PSD blocked until SANITIZED_LAB_VM password/OOBE reset (unattend value does not match live guest).
+**Next action:** Reset drilladmin on SANITIZED_LAB_VM (or finish OOBE) then PSD demote drills inside guest; keep pressure via cascade-pressure-probe (cgroup-bounded) not full thrash.
 
-## 2026-07-14 10:37 -03 — win11-drill PSD restored (unattend password, not Passo0 default)
+## 2026-07-14 10:37 -03 — SANITIZED_LAB_VM PSD restored (unattend password, not Passo0 default)
 
-**What:** Re-establish PowerShell Direct into Hyper-V guest `win11-drill` using the same host-elevated path as agy (`wsl-elevated-ps.sh` / admin), after PSD failed with MEMORY Passo0 default password.
+**What:** Re-establish PowerShell Direct into Hyper-V guest `SANITIZED_LAB_VM` using the same host-elevated path as agy (`wsl-elevated-ps.sh` / admin), after PSD failed with MEMORY Passo0 default password.
 **Category:** lab access / integration
 **How to measure:**
 ```bash
@@ -977,13 +977,13 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
   # credential source: Machine env RAMSHARED_DRILL_PASSWORD (set this session from unattend-staging)
   $pw=[Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD","Machine")
   $cred=New-Object PSCredential(".\drilladmin",(ConvertTo-SecureString $pw -AsPlainText -Force))
-  if ((Get-VM win11-drill).State -ne "Running") { Start-VM win11-drill; Start-Sleep 20 }
-  Invoke-Command -VMName win11-drill -Credential $cred -ScriptBlock { whoami; hostname }
+  if ((Get-VM SANITIZED_LAB_VM).State -ne "Running") { Start-VM SANITIZED_LAB_VM; Start-Sleep 20 }
+  Invoke-Command -VMName SANITIZED_LAB_VM -Credential $cred -ScriptBlock { whoami; hostname }
 '
 ```
 **Measured data:**
-- Root cause: current guest was installed with `E:\Hyper-V\iso\unattend-staging\Autounattend.xml` password (len 13), **not** the legacy redacted Passo0 credential from the earlier VM on `C:\Hyper-V\...`
-- PSD_OK: `win11-drill\drilladmin` on host `WIN11-DRILL`
+- Root cause: current guest was installed with `SANITIZED_ARTIFACT_RUN\unattend-staging\Autounattend.xml` password (len 13), **not** the legacy redacted Passo0 credential from the earlier VM on `SANITIZED_ARTIFACT_RUN`
+- PSD_OK: `SANITIZED_PRINCIPAL` on host `SANITIZED_LAB_VM`
 - Smoke: Build **26200** UBR **8037**, testsigning **Yes**, IsAdmin **true**, FreeGB **~61.9**
 - `Invoke-Guest.ps1` OK with env password
 - Machine env set: `RAMSHARED_DRILL_PASSWORD` + `RAMSHARED_DRILL_USER=.\drilladmin` (host-local only, not in git)
@@ -991,13 +991,13 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 **Verdict:** ✅ Guest usable again for lab drills via PSD; host elevation path unchanged
 **Next action:** Guest-side driver/pagefile drills as needed; always start VM then PSD with Machine env password
 
-## 2026-07-14 10:42 -03 — win11-drill guest lab drill (PSD deploy + CREATE/REGISTER)
+## 2026-07-14 10:42 -03 — SANITIZED_LAB_VM guest lab drill (PSD deploy + CREATE/REGISTER)
 
 **What:** Full guest lab path: elevate host → Start-VM → PSD → deploy signed package → sc load ramshared+poolstress → WinDriveBackend 64 MiB CREATE_DISK+REGISTER_QUEUE → LUN probe → DT-9 safe teardown → Stop-VM.
 **Category:** integration / lab E2E
 **How to measure:**
 ```bash
-./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\tmp-guest-lab-drill.ps1
+./scripts/windows/wsl-elevated-ps.sh -File SANITIZED_ARTIFACT_RUN\tmp-guest-lab-drill.ps1
 # or re-run with Machine env RAMSHARED_DRILL_PASSWORD set
 cat /mnt/c/Users/<user>/ramshared-drill/agent-guest-lab-20260714-results.json
 ```
@@ -1044,13 +1044,13 @@ cat /run/ramshared/demote-status.json
 **Measured data:**
 - After cascade-up with new binary: demote-status `{"total":0,"last_reason":null,"in_progress":false}`
 - status --json demote.total=0; health demote object present
-- phase UsingDisk when /dev/sdc used_kib=1220 ≥ 1024 (residual disk swap after redeploy — correct priority rule)
+- phase UsingDisk when SANITIZED_DEVICE used_kib=1220 ≥ 1024 (residual disk swap after redeploy — correct priority rule)
 **Verdict:** ✅ ITEM-3 closed; demote export live
 **Next action:** optional idle reclaim of residual disk swap pages under pressure only
 
 ## 2026-07-14 11:30 -03 — issue #31 demote under pressure + integrity (action path)
-
-**What:** Re-run `scripts/p0/measure-cascade-demote.sh` for issue #31: cgroup-isolated hog fills VRAM tier, swapoff demote while daemon serves, hog verify checksum pages.
+ (historical record, non-current, no execution)
+**What:** Re-run `scripts/p0/measure-cascade-demote.sh` for issue #31: cgroup-isolated hog fills VRAM tier, swapoff demote while daemon serves, hog verify checksum pages. (historical record, non-current, no execution)
 **Category:** e2e / integration
 **How to measure:**
 ```bash
@@ -1092,31 +1092,31 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 - Disk5: RAMSHARE VRAMDISK 67108864 RAW → **GPT + NTFS** letter **S:** label RAMSHARED Size~64 MiB
 - Direct 8 MiB probe: **write ≈ 1224 MB/s**, **read ≈ 146 MB/s**, **match=True**
 - PerfDisk instance: `5 S:` (CIM)
-- `ramshared.sys` rebuilt with TUR sense fix (BUILD_DRIVERS_OK, size 29696, 11:52) under `C:\ramshared\src\...\x64\Release\`
+- `ramshared.sys` rebuilt with TUR sense fix (BUILD_DRIVERS_OK, size 29696, 11:52) under `SANITIZED_ARTIFACT_RUN\...\x64\Release\`
 - Host reload of new .sys left for guest/lab path (physical host pagefile still FORBIDDEN on this LUN)
 **Verdict:** ✅ Format + real I/O path PASS; measure script locale-safe PASS; driver source Day-0 TUR fix + rebuild PASS
-**Next action:** sign+reload new sys on win11-drill guest for full TUR-not-ready path; optional host package update when not using LUN for pagefile
+**Next action:** sign+reload new sys on SANITIZED_LAB_VM guest for full TUR-not-ready path; optional host package update when not using LUN for pagefile
 
-## 2026-07-14 12:28 -03 — guest win11-drill: signed TUR-sense sys reload + CREATE/FORMAT/MEASURE
+## 2026-07-14 12:28 -03 — guest SANITIZED_LAB_VM: signed TUR-sense sys reload + CREATE/FORMAT/MEASURE
 
-**What:** Close the open follow-up after PR #45: rebuild+test-sign `ramshared.sys` (VdSetSenseNotReady / no TUR BUSY), deploy to Hyper-V **win11-drill**, `sc` load RUNNING, WinDriveBackend CREATE/REGISTER, NTFS volume + sequential probe. Record empirical proof (Kahneman #13).
+**What:** Close the open follow-up after PR #45: rebuild+test-sign `ramshared.sys` (VdSetSenseNotReady / no TUR BUSY), deploy to Hyper-V **SANITIZED_LAB_VM**, `sc` load RUNNING, WinDriveBackend CREATE/REGISTER, NTFS volume + sequential probe. Record empirical proof (Kahneman #13).
 **Category:** e2e / windows lab / driver
 **How to measure (elevated host, PSD):**
 ```powershell
-# Machine env RAMSHARED_DRILL_PASSWORD set; PFX lab cert under ramshared-drill\certs
-# Orchestrator used: C:\ramshared\bin\Run-GuestTmReload3.ps1 (and prior rebuild/sign via Build-Drivers + Sign-Drivers)
-# From WSL: ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Run-GuestTmReload3.ps1
+# Machine env RAMSHARED_DRILL_PASSWORD set; PFX lab cert under SANITIZED_PRINCIPAL
+# Orchestrator used: SANITIZED_ARTIFACT_RUN\Run-GuestTmReload3.ps1 (and prior rebuild/sign via Build-Drivers + Sign-Drivers)
+# From WSL: ./scripts/windows/wsl-elevated-ps.sh -File SANITIZED_ARTIFACT_RUN\Run-GuestTmReload3.ps1
 ```
 **Measured data:**
 - Host: rebuild **BUILD_DRIVERS_OK** + **SIGN_OK** (sys SHA256 + Inf2Cat `ramshared.cat` signed); package sys size **31120** on guest after deploy
-- PSD: `win11-drill\drilladmin`, Build **26200**, **testsigning Yes**, FreeMB **~2622**
+- PSD: `SANITIZED_PRINCIPAL`, Build **26200**, **testsigning Yes**, FreeMB **~2622**
 - Driver: `sc query` **poolstress RUNNING** + **ramshared RUNNING** (sys_len=31120, mtime deploy 12:25)
 - Backend: **CREATE_DISK ok REGISTER_QUEUE ok** (alive pid, size=67108864)
 - LUN: Disk **N=1** Size **67108864** Bus=SAS (FriendlyName `Msft Virtual Disk` under sc path — expected; host path used RAMSHARE branding)
 - Volume: letter **D:** **NTFS** label path already_ntfs / probe OK
 - Direct probe (guest): **write ≈ 101.9 MB/s**, **read ≈ 64.9 MB/s**, **match=True** (4 MiB fallback; full `Measure-RamSharedDiskIo.ps1` hit guest ExecutionPolicy block — numbers from inline probe)
 - Teardown: backend STOP_OK; VM **Off** (no host pagefile on LUN; no thrash)
-- Artifacts: `C:\ramshared\artifacts\agent-guest-tm-reload-20260714-122717.json` (also earlier attempts 121725 pnputil-only FAIL, 122425 Trim parse FAIL — fixed)
+- Artifacts: `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID.json` (also earlier attempts 121725 pnputil-only FAIL, 122425 Trim parse FAIL — fixed)
 - Prior same-day host path (dev-workstation): Disk5 RAMSHARE RAW→S: NTFS; probe 8 MiB write≈1224 / read≈146 match=True (validation 11:52 entry)
 **Verdict:** ✅ Guest signed reload + CREATE/FORMAT/MEASURE **PASS** (pass=9 fail=0)
 **Next action:** optional Bypass execution policy on guest for CIM measure script; optional INF/PnP FriendlyName branding (RAMSHARE vs Msft Virtual Disk)
@@ -1125,7 +1125,7 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 
 **What:** Apply shared-host policy so WSL2 does not starve Windows/Hyper-V (isolated guest VMs): system RAM cap 16 GiB in `.wslconfig`; cascade VRAM tier 4 GiB; GPU free floor 1 GiB. Applied cascade-down/up live without `wsl --shutdown` (user mid-work).
 **Category:** config / e2e
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```bash
 cat /mnt/c/Users/<user>/.wslconfig
 cat /etc/ramshared/cascade.conf
@@ -1192,7 +1192,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ram
 - E2E Windows WDK/GPU/SCM: not run (env-bound) → IMPL partial
 - BINARY_MATCH: N/A (Windows-only slice)
 **Verdict:** 🟡 partial — pure policy green; live StorPort+CUDA proof deferred to supervised Windows lab
-**Next action:** MSVC cross-build + win11-drill Verifier IOCTL drill + approved physical probe/3-round SHA-256
+**Next action:** MSVC cross-build + SANITIZED_LAB_VM Verifier IOCTL drill + approved physical probe/3-round SHA-256
 **Artifacts:** `tmp/windows-storport-cuda-vram-cov.json`, `docs/specs/no-milestone/windows-storport-cuda-vram/IMPL.md`
 
 ## 2026-07-15 13:00 -03 — windows-storport-cuda-vram continue: Windows adapters + live CUDA probe
@@ -1203,7 +1203,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ram
 ```bash
 cargo test -p ramshared-winsvc --lib
 cargo test -p ramshared-winsvc probe_cuda_allocates_roundtrips_and_restores -- --ignored --nocapture
-./target/release/ramshared-winsvc probe-cuda --config /tmp/ramshared-probe/winsvc.toml
+./target/release/ramshared-winsvc probe-cuda --config SANITIZED_ARTIFACT_PATH
 cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc   # typechecks; link needs MSVC
 ```
 **Measured data:**
@@ -1212,15 +1212,15 @@ cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc   # typechecks; 
 - MSVC: rustc compiles; link.exe absent (env-bound)
 **Verdict:** 🟡 still PARTIAL (StorPort LUN E2E env-bound) but ITEM-2 live CUDA proof closed on this host
 **Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.txt`
-**Next action:** MSVC Build Tools + win11-drill Verifier IOCTL + approved physical StorPort 3-round
+**Next action:** MSVC Build Tools + SANITIZED_LAB_VM Verifier IOCTL + approved physical StorPort 3-round
 
 ## 2026-07-15 14:00 -03 — windows-storport-cuda-vram full campaign (PARTIAL close-out)
 
-**What:** MSVC build product winsvc; Windows nvcuda probe; WDK rebuild+sign; win11-drill load driver CREATE/REGISTER + 4MiB SHA-256 I/O (lab backend); host preflight -StorageOnly PASS.
+**What:** MSVC build product winsvc; Windows nvcuda probe; WDK rebuild+sign; SANITIZED_LAB_VM load driver CREATE/REGISTER + 4MiB SHA-256 I/O (lab backend); host preflight -StorageOnly PASS.
 **Category:** windows / storport / cuda / ssdv3
 **How to measure:**
 ```text
-C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShared\winsvc.toml
+SANITIZED_ARTIFACT_RUN\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShared\winsvc.toml
 # guest (elevated PSD): CREATE_DISK ok REGISTER_QUEUE ok; sha_match=true 4MiB
 ```
 **Measured data:**
@@ -1246,7 +1246,7 @@ C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShar
 
 ## 2026-07-15 14:45 -03 — graceful stop + guest IOCTL refuse PASS (PARTIAL: Verifier open)
 
-**What:** Wired SCM/console stop via `AtomicBool` + `C:\ProgramData\RamShared\stop.request`; Gate A filters pagefiles to product volume letter; Gate B holds `LockedVolume` (soft-fail if unmounted). Live host product Online RTX 2060 64MiB then graceful stop exit 0. Guest win11-drill `Invoke-WinDriveIoctlValidation` STATUS=PASS for single-process REFUSE_* after signed miniport reload.
+**What:** Wired SCM/console stop via `AtomicBool` + `C:\ProgramData\RamShared\stop.request`; Gate A filters pagefiles to product volume letter; Gate B holds `LockedVolume` (soft-fail if unmounted). Live host product Online RTX 2060 64MiB then graceful stop exit 0. Guest SANITIZED_LAB_VM `Invoke-WinDriveIoctlValidation` STATUS=PASS for single-process REFUSE_* after signed miniport reload.
 **Category:** windows / storport / cuda / ssdv3
 **How to measure:** Re-run isolated lab harness under `scripts/windows/` (e.g. `Run-GuestProductOnline.ps1` / `Run-GuestExhaustive.ps1`) with signed package; see `docs/specs/no-milestone/windows-storport-cuda-vram/`.
 **Measured data:**
@@ -1256,7 +1256,7 @@ C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShar
 - Host old sys: reserved/owner refuse still 0 (testsigning No — cannot reload new package)
 **Verdict:** 🟡 PARTIAL — product Online + 3-round + graceful stop + guest single-process REFUSE closed; Verifier + multi-process injectors env-bound
 **Artifacts:** evidence/graceful-stop-*.txt|jsonl; evidence/ioctl-guest-verdict-pass.json; evidence/ioctl-guest-console.txt
-**Next action:** start win11-drill; enable Verifier; reload new sys on guest; foreign-owner PE + concurrent re-entry/rundown injectors
+**Next action:** start SANITIZED_LAB_VM; enable Verifier; reload new sys on guest; foreign-owner PE + concurrent re-entry/rundown injectors
 
 ## 2026-07-15 15:00 -03 — teardown letter/dismount fix + host hang observation
 
@@ -1335,7 +1335,7 @@ Windows PowerShell 5.1 parser, both changed harnesses: PASS
 
 **Isolated VM result:** The pre-Verifier pass proved the prior single-process subset and foreign-owner
 refusal. `REFUSE_RESERVED_CQE`, completion re-entry, and teardown-during-copy rundown remain unproved.
-After enabling standard Driver Verifier for `ramshared.sys`, Hyper-V showed `win11-drill` Running but
+After enabling standard Driver Verifier for `ramshared.sys`, Hyper-V showed `SANITIZED_LAB_VM` Running but
 PowerShell Direct did not become ready even after more than six minutes. The campaign was aborted and
 the VM was confirmed Off. No physical-host reset or destructive storage test was performed.
 
@@ -1371,7 +1371,7 @@ supervised physical three-round campaign with exact identity and teardown eviden
   `System32\drivers\ramshared.sys`; 300s IOCTL timeout; live console capture.
 - Miniport rebuild/sign/deploy: SHA256 `4CEE404FC9C9029F55812F1D133AA36D61A2D64F92DB3D15CF01AFEF5ABAEC2A`.
 
-**Guest campaign** (`guest-exhaustive-20260715-201316`, `-SkipVerifier`):
+**Guest campaign** (`SANITIZED_RUN_ID`, `-SkipVerifier`):
 
 ```text
 REFUSE_RESERVED_CQE=1
@@ -1388,17 +1388,17 @@ STATUS=FAIL missing=VPD_SERIAL_MATCH
 - Driver Verifier full pass not re-run on this binary (prior PSD hang under Verifier).
 - Physical corrected winsvc Online E2E not re-proven.
 
-**Host safety:** no physical thrash; VM force-stopped on harness errors; `win11-drill` left Off.
+**Host safety:** no physical thrash; VM force-stopped on harness errors; `SANITIZED_LAB_VM` left Off.
 
 **Verdict:** 🟡 **PARTIAL** — concurrent Ring 0/3 injectors + rundown proven; VPD + Verifier + physical
 Online still required for DONE.
 
 ## 2026-07-15 21:10 -03 — guest ITEM-3 STATUS=PASS (Verifier still open)
 
-**What:** guest ITEM-3 STATUS=PASS (Verifier still open). Campaign: `guest-exhaustive-20260715-210925` (`-SkipVerifier`), `GUEST_EXIT=0`
+**What:** guest ITEM-3 STATUS=PASS (Verifier still open). Campaign: `SANITIZED_RUN_ID` (`-SkipVerifier`), `GUEST_EXIT=0`
 **Issue:** #54
 
-**Campaign:** `guest-exhaustive-20260715-210925` (`-SkipVerifier`), `GUEST_EXIT=0`
+**Campaign:** `SANITIZED_RUN_ID` (`-SkipVerifier`), `GUEST_EXIT=0`
 
 **Binary:** `ramshared.sys` SHA256 `1E57690EA63E6287D4790A134544DC9F46253BB356D1C2B3B1D65FC812F30CFF`
 
@@ -1422,10 +1422,10 @@ Driver Verifier matrix not re-run. Physical winsvc Online not re-proven.
 
 ## 2026-07-15 21:50 -03 — guest ITEM-3 + Driver Verifier STATUS=PASS
 
-**What:** guest ITEM-3 + Driver Verifier STATUS=PASS. Campaign: `guest-exhaustive-20260715-214831`
+**What:** guest ITEM-3 + Driver Verifier STATUS=PASS. Campaign: `SANITIZED_RUN_ID`
 **Issue:** #54
 
-**Campaign:** `guest-exhaustive-20260715-214831`
+**Campaign:** `SANITIZED_RUN_ID`
 **Binary:** `1E57690EA63E6287D4790A134544DC9F46253BB356D1C2B3B1D65FC812F30CFF`
 
 ```text
@@ -1457,7 +1457,7 @@ optional SRB-level re-entry/rundown-during-READ drill.
 
 | Artifact | SHA256 / state |
 | --- | --- |
-| package `C:\ramshared\package\ramshared.sys` | `1E57690E…` (guest Verifier PASS image) |
+| package `SANITIZED_ARTIFACT_RUN\ramshared.sys` | `1E57690E…` (guest Verifier PASS image) |
 | installed `C:\Windows\System32\drivers\ramshared.sys` | `E690306F…` len=32656 mtime=2026-07-15 13:23 |
 | `ramshared.sys.bak-host` | **MISSING** — prior Move-Item/Copy-Item access denied while image locked |
 | `ramshared-winsvc.exe` / `RamSharedWinSvc.exe` | both `F129B25F…` (rebuilt this session; service stopped) |
@@ -1495,18 +1495,18 @@ and `physical-preflight-windows-20260716T010502Z.txt`.
 **Verdict:** 🟡 **PARTIAL** — guest StorPort+Verifier green; physical Online not proven and not safe
 to run under this preflight.
 
-## 2026-07-16 01:30 -03 — lab GPU probe: no CUDA in win11-drill (Online skipped)
+## 2026-07-16 01:30 -03 — lab GPU probe: no CUDA in SANITIZED_LAB_VM (Online skipped)
 
-**What:** lab GPU probe: no CUDA in win11-drill (Online skipped)
+**What:** lab GPU probe: no CUDA in SANITIZED_LAB_VM (Online skipped)
 **Constraint:** daily-host preflight RED remains binding (no host Online/reboot/unload).
 
-**win11-drill GPU inventory:**
+**SANITIZED_LAB_VM GPU inventory:**
 - Host: `Get-VMGpuPartitionAdapter` count=1 but empty InstancePath/MinPartitionVRAM; AssignableDevice=0
 - Guest: Hyper-V Video OK; NVIDIA GeForce RTX 2060 PnP **Error** (`PCI\VEN_1414&DEV_008E`);
   `nvidia-smi` **MISSING**; `nvcuda.dll` **false**
 
 **Decision:** Guest product Online (CUDA) **cannot** run. Not faked.
-Guest StorPort ITEM-3 + Verifier already **PASS** (`guest-exhaustive-20260715-214831`, sys `1E57690E…`).
+Guest StorPort ITEM-3 + Verifier already **PASS** (`SANITIZED_RUN_ID`, sys `1E57690E…`).
 Physical host Online still **RED** (`physical-preflight-20260716T010502Z`: installed `E690306F…` ≠ package).
 
 **Closed safely this turn:**
@@ -1523,7 +1523,7 @@ Physical host Online still **RED** (`physical-preflight-20260716T010502Z`: insta
 **What:** Supervised the bounded GPU-PV driver-package attempt, stopped it after the ten-minute
 ceiling, and performed an independent non-destructive verification closeout.
 
-**Safe terminal state:** `win11-drill` Off; guest and host staging removed; host RTX 2060 `OK` and
+**Safe terminal state:** `SANITIZED_LAB_VM` Off; guest and host staging removed; host RTX 2060 `OK` and
 visible through `nvidia-smi -L`. Guest NVIDIA remained `CM_PROB_FAILED_POST_START`, so DLL/tool
 presence was not accepted as CUDA proof. No blind retry, uninstall, host reboot, miniport change,
 WSL2 pressure, commit, or merge occurred.
@@ -1580,11 +1580,11 @@ service slice coverage is 84.9%.
 
 ## 2026-07-16 10:46 -03 — corrected exact-VPD guest rerun fails honestly
 
-**What:** corrected exact-VPD guest rerun fails honestly. Campaign: `C:\ramshared\artifacts\guest-exhaustive-20260716-104650` using corrected harness SHA
-**Campaign:** `C:\ramshared\artifacts\guest-exhaustive-20260716-104650` using corrected harness SHA
+**What:** corrected exact-VPD guest rerun fails honestly. Campaign: `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID` using corrected harness SHA
+**Campaign:** `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID` using corrected harness SHA
 `6D7B2DC1…` and miniport SHA `1E57690E…`.
 
-**Before:** `win11-drill` Off; GPU partition rollback restored one bare adapter with empty partition
+**Before:** `SANITIZED_LAB_VM` Off; GPU partition rollback restored one bare adapter with empty partition
 values; DDA count 0; host RTX 2060 OK. Only the corrected IOCTL harness was deployed to the host lab
 bin directory.
 
@@ -1638,7 +1638,7 @@ SYS/CAT/poolstress Authenticode, and no trust-store change. Signed package and g
 Harness source/staged SHA matched at `6D7B2DC1…`.
 
 **Campaign:** one bounded no-retry run,
-`C:\ramshared\artifacts\guest-exhaustive-20260716-111439`, without `-SkipVerifier`. `Get-Disk` had no
+`SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`, without `-SkipVerifier`. `Get-Disk` had no
 RAMSHARE disk before CREATE, but the PnP snapshot retained historical RAMSHARE child PDOs including
 one `OK`, so the no-stale-child lifecycle gate failed. Normal and Verifier passes both failed only
 `VPD_SERIAL_MATCH=0`; every other ITEM-3 verdict and `NO_NEW_DUMP` was 1. Verifier flags `0x2093B`
@@ -1649,15 +1649,15 @@ were active; module load/unload was 1/0; no dumps appeared.
 host reboot, commit, or merge.
 
 **Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/signed-vpd-lifecycle-rerun-20260716.md`
-and raw `evidence/guest-exhaustive-20260716-111439/`.
+and raw `evidence/SANITIZED_RUN_ID/`.
 
 **Verdict:** 🟡 **PARTIAL / VPD BLOCKED** — the signed live result disproves promotion of the current
 `BusChangeDetected` lifecycle fix; retained child-PDO identity must be resolved and re-proven.
 
 ## 2026-07-16 12:04 -03 — exact VPD + Driver Verifier PASS
 
-**What:** exact VPD + Driver Verifier PASS. Campaign: isolated guest `C:\ramshared\artifacts\guest-exhaustive-20260716-120459`. The deployed
-**Campaign:** isolated guest `C:\ramshared\artifacts\guest-exhaustive-20260716-120459`. The deployed
+**What:** exact VPD + Driver Verifier PASS. Campaign: isolated guest `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`. The deployed
+**Campaign:** isolated guest `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`. The deployed
 and guest-loaded `ramshared.sys` matched SHA256
 `CD7E315D0DA5B24BB05C384846D7BA8123390300D2C3A3F73B10E52F9E80BC34`. A mandatory post-deploy
 reboot remapped the package image after the prior SCM `1056` stale-image condition; PSD returned in
@@ -1686,7 +1686,7 @@ Windows-driver diff returned 0 errors and 0 warnings. The Windows MSVC toolchain
 from a disposable local staging copy. Slice coverage passed at config 95.5%, evidence 91.9%, driver
 link 87.7%, broker tenant 85.9%, runtime 86.8%, service 84.9%, and CUDA probe 80.0%.
 
-**After:** a read-only recapture recorded `win11-drill` Off, one GPU-PV adapter with empty partition
+**After:** a read-only recapture recorded `SANITIZED_LAB_VM` Off, one GPU-PV adapter with empty partition
 values, DDA count 0, host display `NVIDIA GeForce RTX 2060` status `OK`, and successful `nvidia-smi`.
 No physical Online action, host driver replacement, pressure campaign, commit, or merge occurred.
 
@@ -1709,7 +1709,7 @@ README policy: Windows kernel driver on daily host = **NO** (lab VM only). Produ
 physical host **SKIPPED** (not attempted). Evidence:
 `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/physical-preflight-readonly-20260716T172150Z.txt`.
 
-### GPU-PV lab (win11-drill)
+### GPU-PV lab (SANITIZED_LAB_VM)
 
 Host build `26200.8655`; guest `26200.8037`. Virtual PCI events still show request `0x10006` vs
 negotiated `0x10005`, but guest `nvidia-smi` lists the real RTX 2060 UUID and driver `610.74`.
@@ -1735,8 +1735,8 @@ attestation package work. Evidence: `evidence/infverif-20260716.md`.
 
 ## 2026-07-16 14:53 -03 — guest product Online PARTIAL (64 MiB)
 
-**What:** guest product Online PARTIAL (64 MiB). Campaign `guest-product-online-20260716-145248` on win11-drill:
-Campaign `guest-product-online-20260716-145248` on win11-drill:
+**What:** guest product Online PARTIAL (64 MiB). Campaign `SANITIZED_RUN_ID` on SANITIZED_LAB_VM:
+Campaign `SANITIZED_RUN_ID` on SANITIZED_LAB_VM:
 
 - BINARY_MATCH package/guest `CD7E315D…`
 - Product Online true with CUDA RTX 2060; serial `B7A9E1BD0E71541A`; disk 64 MiB letter S
@@ -1744,7 +1744,7 @@ Campaign `guest-product-online-20260716-145248` on win11-drill:
 - Graceful stop **FAIL** within 60s (`forceKilledConsole`); VM later Off; host GPU OK
 - Lab JSONL lease broker used for Register/LeaseGrant (not full ramsharedd)
 
-Evidence: `evidence/guest-product-online-20260716-145248.md`.
+Evidence: `evidence/SANITIZED_RUN_ID.md`.
 Harness fixes pending re-run: longer stop wait, no FileInfo JSON explosion.
 **Verdict:** 🟡 PARTIAL
 
@@ -1754,19 +1754,19 @@ Harness fixes pending re-run: longer stop wait, no FileInfo JSON explosion.
 - Online+CUDA+64MiB LUN serial A0B4FCE26201BD5D + 3 SHA PASS; BINARY_MATCH CD7E315D
 - Graceful stop still FAIL after 180s re-assert stop.request (force kill; no lease liberado)
 - Root cause: teardown refuse/resume Online loop or stop not effective; no Stopping line in stderr
-- Evidence: evidence/guest-product-online-20260716-151304.md
+- Evidence: evidence/SANITIZED_RUN_ID.md
 - Terminal: VM Off, host GPU OK. No push.
 **Verdict:** 🟡 PARTIAL
 
 ## 2026-07-16 17:42 -03 — guest product Online STOP_OK PASS (I/O-pump lock)
 
-**What:** guest product Online STOP_OK PASS (I/O-pump lock). Campaign `guest-product-online-20260716-174238` on win11-drill:
-Campaign `guest-product-online-20260716-174238` on win11-drill:
+**What:** guest product Online STOP_OK PASS (I/O-pump lock). Campaign `SANITIZED_RUN_ID` on SANITIZED_LAB_VM:
+Campaign `SANITIZED_RUN_ID` on SANITIZED_LAB_VM:
 
 - ONLINE + BINARY_MATCH CD7E315D… + 3 SHA PASS (serial E688A3B1F1D1F0C0, letter S, 64 MiB)
 - **STOP_OK=true**, forceKilled=false, **lease 1 liberado**
 - Root cause: CreateFile volume lock deadlocked when COMMIT loop stopped; fixed by I/O pump during lock + CREATE-time identity + registry Gate A
-- Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-174238.md`
+- Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID.md`
 - Terminal: VM Off, host RTX 2060 OK. No physical Online, no push.
 **Verdict:** 🟡 PARTIAL
 
@@ -1811,14 +1811,14 @@ Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/teardown-
 ## 2026-07-16 20:11 -03 — guest product Online PASS after teardown hardening
 
 **What:** Rebuilt current `ramshared-winsvc` with the corrected teardown identity path, deployed the
-DIRID-13 signed miniport package to `win11-drill`, and ran the corrected no-retry three-lifecycle
+DIRID-13 signed miniport package to `SANITIZED_LAB_VM`, and ran the corrected no-retry three-lifecycle
 GPU-PV product campaign.
 
 **Result:**
 
 | Gate | Result |
 | --- | --- |
-| Campaign | `guest-product-online-20260716-201130` |
+| Campaign | `SANITIZED_RUN_ID` |
 | Lifecycle rounds | `3` |
 | ONLINE + CUDA | PASS, RTX 2060 via GPU-PV |
 | DriverStore/package BINARY_MATCH | PASS, `E297B73F…` |
@@ -1842,13 +1842,13 @@ harness captures `RuntimeSummary exit_code: 0` when the PowerShell process objec
 READ-copy race strengthening, and WSL2 freeze elimination. The WSL2 freeze claim still requires a
 separate isolated before/action/after hang campaign; no daily WSL2 pressure/thrash was run.
 
-**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-201130.md`.
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID.md`.
 
 ## 2026-07-16 22:08 -03 — current signed GPU-PV product + Verifier gates PASS
 
 **What:** Rebuilt the current Windows product and driver package, fixed project Code Analysis
 warnings, published signed package `ramshared.sys` SHA `97FD7B37…`, and reran both product Online
-and exhaustive IOCTL/Verifier campaigns on isolated `win11-drill`.
+and exhaustive IOCTL/Verifier campaigns on isolated `SANITIZED_LAB_VM`.
 
 **Category:** integration
 **How to measure:** Re-run isolated lab harness under `scripts/windows/` (e.g. `Run-GuestProductOnline.ps1` / `Run-GuestExhaustive.ps1`) with signed package; see `docs/specs/no-milestone/windows-storport-cuda-vram/`.
@@ -1857,13 +1857,13 @@ and exhaustive IOCTL/Verifier campaigns on isolated `win11-drill`.
 
 | Gate | Result |
 | --- | --- |
-| Product campaign | `guest-product-online-20260716-220848` |
+| Product campaign | `SANITIZED_RUN_ID` |
 | Product exe SHA | `AAD4566897C9CF262F14AB783CCC6B2B2A43C8233A2E85ECA1FC562003246352` |
 | Driver package SHA | `97FD7B373ED7DD5AE7F38204070F8B89E08A2B25616AA2A128995E8D1FBFF34F` |
 | Product rounds | 3/3 PASS |
 | Round teardown | 9064 ms / 5026 ms / 4018 ms |
 | CUDA restore wait | 106 ms / 76 ms / 57 ms |
-| Exhaustive campaign | `guest-exhaustive-20260716-224913` |
+| Exhaustive campaign | `SANITIZED_RUN_ID` |
 | IOCTL pass1 | PASS |
 | IOCTL under Verifier | PASS |
 | Verifier | `0x2093B`, `ramshared.sys` load 1 / unload 0 |
@@ -1882,8 +1882,8 @@ IOCTL/Verifier package.
 **Next action:** Keep physical daily-host Online, SDV, dedicated StartIo READ-copy live race, and
 isolated WSL2 freeze-elimination campaigns as separate non-claims.
 
-**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-220848.md`,
-`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-224913.md`.
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID.md`,
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID.md`.
 
 ## 2026-07-16 22:50 -03 — WDK Code Analysis project-clean
 
@@ -1895,7 +1895,7 @@ after adding WDK callback prototypes and narrowing the probe exception filter.
 **Measured data:**
 
 - `cl /kernel /W4 /analyze` completed for the four driver files.
-- Project-file warnings under `C:\ramshared\src\drivers\windows\ramshared\*.c`: `0`.
+- Project-file warnings under `SANITIZED_ARTIFACT_RUN\drivers\windows\ramshared\*.c`: `0`.
 - WDK header warnings remain in `wdm.h`, `ntddk.h`, and `storport.h`.
 - SDV binaries (`sdv.exe` / `StaticDV.exe`) were not present in the local WDK image.
 
@@ -1908,25 +1908,25 @@ explicit in release notes.
 
 ## 2026-07-17 00:50 -03 — StartIo READ-copy race harness + live RED diagnostics
 
-**What:** Added dedicated `STARTIO_READ_COPY_RACE` injector (queue pump + PhysicalDrive overlapped READ + second-handle UNREGISTER race) to `Invoke-WinDriveIoctlValidation.ps1`, static gate tokens, and isolated `scripts/safety/wsl2-freeze-campaign.sh` dry-run scaffold. Re-ran live guest exhaustive on `win11-drill` with signed package `97FD7B37…`.
+**What:** Added dedicated `STARTIO_READ_COPY_RACE` injector (queue pump + PhysicalDrive overlapped READ + second-handle UNREGISTER race) to `Invoke-WinDriveIoctlValidation.ps1`, static gate tokens, and isolated `scripts/safety/wsl2-freeze-campaign.sh` dry-run scaffold. Re-ran live guest exhaustive on `SANITIZED_LAB_VM` with signed package `97FD7B37…`.
 **Category:** windows / storport / isolation / e2e
 **How to measure:**
 ```text
 powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
 # elevated lab only:
-# C:\ramshared\bin\Run-GuestExhaustive.ps1
+# SANITIZED_ARTIFACT_RUN\Run-GuestExhaustive.ps1
 ./scripts/safety/wsl2-freeze-campaign.sh --json
 ```
 **Measured data:**
 - Static injectors: `STATIC_INJECTOR_TEST=PASS` (includes StartIo tokens)
-- Campaign `guest-exhaustive-20260717-004209` (`-SkipVerifier`): ITEM-3 required verdicts all 1; `STARTIO_READ_COPY_RACE=0`
+- Campaign `SANITIZED_RUN_ID` (`-SkipVerifier`): ITEM-3 required verdicts all 1; `STARTIO_READ_COPY_RACE=0`
 - StartIo diagnostics: `path=\\.\PhysicalDrive2 openErr=0 lastReadErr=1460 (timeout) drained=0 sq=0/0` — CreateFile OK but no SQE posted (I/O not observed at QSubmit)
 - Prior full Verifier campaigns `235724` / `001940`: same STARTIO fail only; all other ITEM-3 + Verifier green
 - WSL2 freeze scaffold dry-run: `daily_host=true gates_ok=false` refuse (no thrash)
 - PR queue: #55 merged (`f865c94`); #53 already contained; open PR count 0
 **Verdict:** 🟡 partial — StartIo READ-copy live strengthening harness landed and honestly RED; freeze-elimination still unclaimed; physical Online + SDV still blocked by policy/tooling
 **Next action:** Make storage-stack READ reach QSubmit (online/format or SPTI CDB READ under pump), re-run under Verifier; keep physical/SDV/WSL2 freeze as separate non-claims
-**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-004209/`, `scripts/safety/wsl2-freeze-campaign.sh`
+**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID/`, `scripts/safety/wsl2-freeze-campaign.sh`
 
 ## 2026-07-17 03:06 -03 — StartIo hang-safe SKIP + Verifier ITEM-3 PASS
 
@@ -1936,37 +1936,37 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValid
 ```text
 powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
 # elevated:
-# C:\ramshared\bin\Run-GuestExhaustive.ps1
+# SANITIZED_ARTIFACT_RUN\Run-GuestExhaustive.ps1
 ```
 **Measured data:**
 - Static: STATIC_INJECTOR_TEST=PASS
-- Campaign `guest-exhaustive-20260717-024546` SkipVerifier: IOCTL_PASS1=PASS; STARTIO SKIP (no Get-Disk idx=2)
-- Campaign `guest-exhaustive-20260717-025401` Verifier: IOCTL_PASS1=PASS IOCTL_VERIFIER=PASS VERIFIER_RAN=true; STARTIO SKIP both passes; package SHA 97FD7B37…
-- Terminal: win11-drill Off after campaigns
+- Campaign `SANITIZED_RUN_ID` SkipVerifier: IOCTL_PASS1=PASS; STARTIO SKIP (no Get-Disk idx=2)
+- Campaign `SANITIZED_RUN_ID` Verifier: IOCTL_PASS1=PASS IOCTL_VERIFIER=PASS VERIFIER_RAN=true; STARTIO SKIP both passes; package SHA 97FD7B37…
+- Terminal: SANITIZED_LAB_VM Off after campaigns
 **Verdict:** 🟡 partial — ITEM-3+Verifier green; STARTIO_READ_COPY_RACE not claimed (Win32-only LUN / no MSFT_Disk surface for safe PhysicalDrive I/O)
 **Next action:** Prove StartIo under product Online (formatted volume / Get-Disk Online) or post-format guest LUN so SQEs reach QSubmit under Verifier
-**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-025401/
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID/
 
 ## 2026-07-17 09:33 -03 — StartIo READ-copy race CLAIMED under Verifier
 
-**What:** Closed STARTIO_READ_COPY_RACE on isolated win11-drill by pumping the queue early post-CREATE until Get-Disk Online, then PhysicalDrive overlapped READ + second-handle UNREGISTER under Driver Verifier 0x2093B.
+**What:** Closed STARTIO_READ_COPY_RACE on isolated SANITIZED_LAB_VM by pumping the queue early post-CREATE until Get-Disk Online, then PhysicalDrive overlapped READ + second-handle UNREGISTER under Driver Verifier 0x2093B.
 **Category:** windows / storport / e2e / verifier
 **How to measure:**
 ```text
 powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
-# elevated lab only (win11-drill):
-# C:\ramshared\bin\Run-StartIoProbe.ps1
+# elevated lab only (SANITIZED_LAB_VM):
+# SANITIZED_ARTIFACT_RUN\Run-StartIoProbe.ps1
 # then enable verifier 0x2093B, reboot guest, re-run IOCTL harness
 ```
 **Measured data:**
 - Static: STATIC_INJECTOR_TEST=PASS (Wait-MsftDiskWithIoPump, early post-CREATE)
-- Probe `startio-probe-20260717-092819`: STATUS=PASS STARTIO_READ_COPY_RACE=1 readOk=1 drained=4 sq=4/4 unregOk=1; package 97FD7B37…
-- Verifier `startio-verifier-20260717-092950`: STATUS=PASS STARTIO_READ_COPY_RACE=1 readOk=1 drained=5 sq=5/5; flags 0x2093B; ramshared.sys load 1/unload 0; NO_NEW_DUMP=1
+- Probe `SANITIZED_RUN_ID`: STATUS=PASS STARTIO_READ_COPY_RACE=1 readOk=1 drained=4 sq=4/4 unregOk=1; package 97FD7B37…
+- Verifier `SANITIZED_RUN_ID`: STATUS=PASS STARTIO_READ_COPY_RACE=1 readOk=1 drained=5 sq=5/5; flags 0x2093B; ramshared.sys load 1/unload 0; NO_NEW_DUMP=1
 - Root cause fixed: keep StartQueuePump during CreateFile/READ; run StartIo early post-CREATE before later UNREGISTER loses MSFT_Disk
-- Terminal: win11-drill Off; verifier /reset scheduled
+- Terminal: SANITIZED_LAB_VM Off; verifier /reset scheduled
 **Verdict:** ✅ works — STARTIO_READ_COPY_RACE claimed under Verifier on isolated guest
 **Next action:** Physical Online (policy), SDV (tool), isolated WSL2 freeze campaign remain non-claims
-**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/startio-claim-20260717.md, evidence/startio-probe-20260717-092819/, evidence/startio-verifier-20260717-092950/
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/startio-claim-20260717.md, evidence/SANITIZED_RUN_ID/, evidence/SANITIZED_RUN_ID/
 
 ## 2026-07-17 09:50 -03 — WSL2 freeze campaign scaffold hardened (still NOT claimed)
 
@@ -1984,9 +1984,9 @@ bash scripts/safety/wsl2-freeze-campaign.sh --dry-run --artifact-dir /tmp/freeze
 - Dry-run on daily host: gates_ok=0 reason=daily_host_refused_without_isolated_lab_flag; claim NOT_CLAIMED; baseline artifacts written
 - --run-isolated without isolated flags: exit non-zero (refuse)
 - SDV: sdv.exe still absent (only WDK Sdv.targets/headers)
-**Verdict:** 🟡 partial — scaffold ready for isolated lab; freeze-elimination still unclaimed; no thrash on daily host
-**Next action:** Run --run-isolated on a true isolated WSL/VM lab with RAMSHARED_ISOLATED_LAB=1; keep physical Online + SDV blocked
-**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/freeze-baseline-20260717-094842
+**Verdict:** 🟡 partial — scaffold ready for isolated lab; freeze-elimination still unclaimed; no thrash on daily host (historical record, non-current, no execution)
+**Next action:** Run --run-isolated on a true isolated WSL/VM lab with RAMSHARED_ISOLATED_LAB=1; keep physical Online + SDV blocked (historical record, non-current, no execution)
+**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/SANITIZED_RUN_ID
 
 ## 2026-07-17 09:58 -03 — Manufactured pagefile Gate A refusal (unit + guest inject)
 
@@ -2002,14 +2002,14 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-PagefileRefusalMan
 **Measured data:**
 - Unit: manufactured_pagefile_on_product_volume_refuses_gate_a PASS
 - Static: STATIC_PAGEFILE_REFUSAL_MANUFACTURED=PASS
-- Guest win11-drill: PAGEFILE_REFUSAL_MANUFACTURED=1 restored=true configuredOnVolume=true (registry inject only)
+- Guest SANITIZED_LAB_VM: PAGEFILE_REFUSAL_MANUFACTURED=1 restored=true configuredOnVolume=true (registry inject only)
 **Verdict:** ✅ works (decision path + guest inject); optional live Online+stop inject remains available
 **Next action:** Physical Online (policy), SDV (no sdv.exe), freeze claim (isolated lab)
-**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-refusal-20260717-095826/
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID/
 
 ## 2026-07-17 10:31 -03 — Live pagefile Online+stop refuse + SDV probe NOT_CLAIMED
 
-**What:** Live Gate A refuse on win11-drill product Online (`-ManufacturedPagefileRefuse`): configured `S:\pagefile.sys` causes code 7 resume Online, then clean stop. SDV probe documents tool absence (MSB4057 / no sdv.exe).
+**What:** Live Gate A refuse on SANITIZED_LAB_VM product Online (`-ManufacturedPagefileRefuse`): configured `S:\pagefile.sys` causes code 7 resume Online, then clean stop. SDV probe documents tool absence (MSB4057 / no sdv.exe).
 **Category:** windows / pagefile / e2e / sdv
 **How to measure:**
 ```text
@@ -2024,7 +2024,7 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-SdvProbeStatic.ps1
 - SDV: SDV_CLAIM=NOT_CLAIMED reasons=sdv.exe_not_on_path,msbuild_target_sdv_missing
 **Verdict:** ✅ works (live pagefile Online refuse); 🟡 partial (SDV tool absent)
 **Next action:** Isolated freeze claim; install SDV; keep physical Online blocked
-**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-online-refuse-20260717-102614/, evidence/sdv-probe-20260717/
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_ID/, evidence/sdv-probe-20260717/
 
 ## 2026-07-17 11:10 -03 — SDV retired on modern WDK (verified, still NOT_CLAIMED)
 
@@ -2086,7 +2086,7 @@ gh release view v0.6.3
 
 **What:** Probed WSL distro `RamShared-Kernel` (custom kernel 6.18.35.2) as candidate freeze lab. Confirmed it mounts `/mnt/c/Users` on the same Windows desktop host as Ubuntu-24.04 — not disposable isolab. Tightened `wsl2-freeze-campaign.sh` so `/mnt/c/Users` marks shared desktop (any distro) and refuses `--run-isolated` without FORCE. Restored WSL PE binfmt (`WSLInterop`) so Windows interop works again from this session. Release v0.6.4 already Latest (PR #94).
 **Category:** safety / freeze / discipline
-**How to measure:**
+**How to measure:** (historical record, non-current, no execution)
 ```text
 wsl -l -v
 wsl -d RamShared-Kernel --cd ~ -e bash -lc 'echo $WSL_DISTRO_NAME; test -d /mnt/c/Users && echo MNT=1'
@@ -2147,30 +2147,30 @@ after the generic naming/adapter changes.
 The WDDM pressure and two-round freeze gates remain unclaimed. Running them on
 this shared desktop would violate the repository host-safety policy.
 
-## 2026-07-17 19:25 -03 — Hyper-V VM access documented + win11-drill live product PASS
+## 2026-07-17 19:25 -03 — Hyper-V VM access documented + SANITIZED_LAB_VM live product PASS
 
 **What:** Verified the correct non-interactive access path for the named lab
 VMs and documented it for future agents without storing secrets.
 
 **Measured data:**
 
-- `win11-drill` PowerShell Direct works with `WIN11-DRILL\drilladmin`.
+- `SANITIZED_LAB_VM` PowerShell Direct works with `SANITIZED_PRINCIPAL`.
   The shorthand `.\drilladmin` can fail on this image.
-- `Run-GuestProductOnline.ps1` on `win11-drill`: **PASS**.
-  Artifact: `C:\ramshared\artifacts\guest-product-online-20260717-191834`.
+- `Run-GuestProductOnline.ps1` on `SANITIZED_LAB_VM`: **PASS**.
+  Artifact: `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`.
 - Campaign summary: `LIFECYCLE_ROUNDS=3`, `ONLINE=true`,
   `BINARY_MATCH=true`, `ROUNDS_PASS=true`, `CONSOLE_EXIT_ZERO=true`,
   `NO_FORCE_KILL=true`, `LEASE_RELEASED=true`, `CUDA_RESTORED=true`,
   `NO_NEW_DUMP=true`, `TERMINAL_SAFE=true`, `PASS=true`.
-- `linux-kernel-lab` boots under Hyper-V control, but no shell channel is
+- `SANITIZED_LAB_VM` boots under Hyper-V control, but no shell channel is
   available from this session: no guest IP on `Default Switch`, KVP no contact,
   Linux guest has no PowerShell Direct.
-- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+- Terminal state confirmed: `SANITIZED_LAB_VM=Off`, `SANITIZED_LAB_VM=Off`.
 
 **Docs / script hygiene:**
 
 - Added `docs/labs/HYPERV-VM-ACCESS.md`.
-- Updated Windows harness defaults to `WIN11-DRILL\drilladmin`.
+- Updated Windows harness defaults to `SANITIZED_PRINCIPAL`.
 - Added local-only credential ignore patterns for `.drill-pw` and secret files.
 
 **Verification:**
@@ -2181,8 +2181,8 @@ VMs and documented it for future agents without storing secrets.
 - `./scripts/docs-check.sh`: **PASS**.
 - `git diff --check`: **PASS**.
 
-**Verdict:** ✅ `win11-drill` access and product campaign are live-proven.
-`linux-kernel-lab` remains power-controllable only until SSH/serial/console
+**Verdict:** ✅ `SANITIZED_LAB_VM` access and product campaign are live-proven.
+`SANITIZED_LAB_VM` remains power-controllable only until SSH/serial/console
 automation is configured.
 
 ## 2026-07-17 19:35 -03 — Windows lab credential hygiene
@@ -2205,12 +2205,12 @@ password.
 - `scripts/p0/measure-gpu-workload-vram.ps1` PowerShell parser: **PASS**.
 - `./scripts/docs-check.sh`: **PASS**.
 - `git diff --check`: **PASS**.
-- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+- Terminal state confirmed: `SANITIZED_LAB_VM=Off`, `SANITIZED_LAB_VM=Off`.
 
 **Verdict:** ✅ tracked scripts no longer carry the known lab credential
 literals; local-only credential files remain ignored and must not be printed.
 
-## 2026-07-17 19:41 -03 — win11-drill exhaustive IOCTL + Verifier PASS
+## 2026-07-17 19:41 -03 — SANITIZED_LAB_VM exhaustive IOCTL + Verifier PASS
 
 **What:** Re-ran the isolated Windows exhaustive harness after fixing the
 canonical PowerShell Direct identity.
@@ -2218,7 +2218,7 @@ canonical PowerShell Direct identity.
 **Measured data:**
 
 - Harness: `Run-GuestExhaustive.ps1`.
-- Artifact: `C:\ramshared\artifacts\guest-exhaustive-20260717-192931`.
+- Artifact: `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`.
 - `IOCTL_PASS1=PASS`.
 - `IOCTL_VERIFIER=PASS`.
 - `VERIFIER_RAN=true`.
@@ -2226,7 +2226,7 @@ canonical PowerShell Direct identity.
 - Verified module: `ramshared.sys`, `load: 1 / unload: 0`.
 - Driver Store/package `BINARY_MATCH=true` with package SHA
   `97FD7B373ED7DD5AE7F38204070F8B89E08A2B25616AA2A128995E8D1FBFF34F`.
-- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+- Terminal state confirmed: `SANITIZED_LAB_VM=Off`, `SANITIZED_LAB_VM=Off`.
 
 **Verification:**
 
@@ -2234,10 +2234,10 @@ canonical PowerShell Direct identity.
 - `./scripts/docs-check.sh`: **PASS**.
 - `git diff --check`: **PASS**.
 
-**Verdict:** ✅ `win11-drill` exhaustive IOCTL and Driver Verifier path are
+**Verdict:** ✅ `SANITIZED_LAB_VM` exhaustive IOCTL and Driver Verifier path are
 live-proven with the documented access path.
 
-## 2026-07-17 19:58 -03 — linux-kernel-lab SSH access recovered via ARP fallback
+## 2026-07-17 19:58 -03 — SANITIZED_LAB_VM SSH access recovered via ARP fallback
 
 **What:** Rechecked older records and restored the documented non-interactive
 access path for the Hyper-V Linux lab.
@@ -2249,10 +2249,10 @@ access path for the Hyper-V Linux lab.
 - Local access file confirms user `<user>`, SSH keys installed, passwordless
   sudo, and MAC lookup fallback.
 - `Get-VMNetworkAdapter.IPAddresses` remained empty, but Windows neighbor
-  table mapped VM MAC `00-15-5D-00-FA-04` to `172.23.18.42`.
+  table mapped VM MAC `00-15-5D-00-FA-04` to `SANITIZED_PRIVATE_IP`.
 - New helper `Get-LinuxKernelLabAccess.ps1 -Start -Smoke`: **PASS**.
 - SSH smoke from Windows host:
-  - hostname: `linux-kernel-lab`
+  - hostname: `SANITIZED_LAB_VM`
   - kernel: `6.8.0-134-generic`
   - `cloud-init status --wait`: `done`
   - `sudo -n true`: **PASS**
@@ -2262,7 +2262,7 @@ access path for the Hyper-V Linux lab.
   - memory: 5.8Gi total, ~5.3Gi available
 - Kernel clone probe: `~/src/WSL2-Linux-Kernel` HEAD `1bd4ed3d4`.
 - `/dev/ublk-control`: absent, consistent with the generic Ubuntu kernel.
-- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+- Terminal state confirmed: `SANITIZED_LAB_VM=Off`, `SANITIZED_LAB_VM=Off`.
 
 **Docs / script hygiene:**
 
@@ -2270,7 +2270,7 @@ access path for the Hyper-V Linux lab.
 - Updated `docs/labs/HYPERV-VM-ACCESS.md` with ARP fallback and SSH smoke
   commands.
 
-**Verdict:** ✅ `linux-kernel-lab` is accessible again for non-destructive
+**Verdict:** ✅ `SANITIZED_LAB_VM` is accessible again for non-destructive
 kernel-build/smoke work via Windows-host SSH. It remains unsuitable for VRAM
 proof because it has no GPU assignment.
 
@@ -2294,7 +2294,7 @@ promoting one GPU application as the architecture.
 - `cargo test -p ramshared-agent --all-targets`: **PASS**.
 - `./scripts/docs-check.sh`: **PASS**.
 - `git diff --check`: **PASS**.
-- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+- Terminal state confirmed: `SANITIZED_LAB_VM=Off`, `SANITIZED_LAB_VM=Off`.
 
 **Verdict:** ✅ The current slice no longer exposes an app-specific integration
 name as product architecture. Host-specific adapters remain deferred.
@@ -2313,8 +2313,8 @@ paths, and the documented elevated Hyper-V access path.
 - Secret literal scan for lab password/signing/API-key shapes: **PASS**.
 - Elevated WSL wrapper `scripts/windows/wsl-elevated-ps.sh` successfully ran
   `Get-VM`; terminal state confirmed:
-  - `win11-drill=Off`
-  - `linux-kernel-lab=Off`
+  - `SANITIZED_LAB_VM=Off`
+  - `SANITIZED_LAB_VM=Off`
 - `Test-LinuxKernelLabAccessStatic.ps1`: **PASS**.
 - PowerShell parser for changed Windows/P0 scripts: **PASS**.
 - `./scripts/docs-check.sh`: **PASS**.
@@ -2346,7 +2346,7 @@ fixed a source-language gap found during manual review.
 - `./scripts/docs-check.sh`: **PASS**.
 - `git diff --check`: **PASS**.
 - Elevated VM state probe through `scripts/windows/wsl-elevated-ps.sh`: **PASS**,
-  with both `win11-drill` and `linux-kernel-lab` Off.
+  with both `SANITIZED_LAB_VM` and `SANITIZED_LAB_VM` Off.
 
 **Verdict:** ✅ The current working tree is ready for normal review/test of the
 generic VRAM reclaim, host-agent, VM-access, and naming-policy slice. Destructive
@@ -2390,10 +2390,10 @@ daily host.
 
 **Terminal state:**
 
-- `/proc/swaps`: disk swap only (`/dev/sdc`).
+- `/proc/swaps`: disk swap only (`SANITIZED_DEVICE`).
 - `/dev/ublk*`: only `/dev/ublk-control`.
 - GPU memory after tests: 4565 / 6144 MiB free.
-- Elevated VM state probe: `win11-drill=Off`, `linux-kernel-lab=Off`.
+- Elevated VM state probe: `SANITIZED_LAB_VM=Off`, `SANITIZED_LAB_VM=Off`.
 
 **Regression checks after fixes:**
 
@@ -2528,7 +2528,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -HostDiskLetters C,I
 ```
 **Measured data:**
-- Artifact: `C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303`.
+- Artifact: `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`.
 - `STATUS=PASS`, `REASON=validated_external_global_gpu_demote`.
 - External workload released cleanly; `external_workload_ok=true`.
 - `ramshared diagnose --events --json`: `demotes=2`, timeline reason
@@ -2560,14 +2560,14 @@ scripts/package/build-linux-bundle.sh --skip-build
 ```
 **Measured data:**
 - WSL2 1 GiB:
-  `C:\ramshared\artifacts\shared-wsl-pressure-20260723-232558`, `PASS`,
+  `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`, `PASS`,
   two integrity rounds, DEMOTE, freeze validation, and clean terminal state.
 - WSL2 4 GiB:
-  `C:\ramshared\artifacts\shared-wsl-pressure-20260724-031615`, `PASS`,
+  `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`, `PASS`,
   preallocated VRAM, 4096 MiB external pressure, two DEMOTEs,
   `matrix_row_close=true`, and clean terminal state.
 - Split 1 GiB Windows + 3 GiB WSL2 + 1 GiB staged external pressure:
-  `C:\ramshared\artifacts\vram-reclaim-matrix-20260724-032344`, `PASS`,
+  `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`, `PASS`,
   with three StorPort checksum matches, graceful teardown, lease release,
   zero disk/Win32/PnP residue, WSL2 integrity, DEMOTE, and clean terminal state.
 - Rust format, workspace tests, clippy with warnings denied, and release build:
@@ -2653,7 +2653,7 @@ cargo audit
 - Workspace tests: **PASS**; 17 daemon binary tests include exact NBD identity,
   duplicate/deleted row handling, and non-socket path refusal.
 - Broker regression `dev_to_slice_requires_exact_nbd_identity`: **PASS**;
-  `/dev/sda5`, nested paths, suffix lookalikes, and deleted entries are not
+  `SANITIZED_DEVICE`, nested paths, suffix lookalikes, and deleted entries are not
   attributed to slice 5.
 - Telemetry sink `/dev/full` write-failure regression: **PASS**; write failure
   is surfaced and the sink is disabled instead of silently dropping rows.
@@ -2717,17 +2717,17 @@ scripts/windows/Invoke-SharedWslPressureCampaign.ps1 \
 ```
 
 **Measured data:**
-- Reproducer `shared-wsl-pressure-20260724-044917`: round 2 reached
+- Reproducer `SANITIZED_RUN_ID`: round 2 reached
   `action_rc=143`; the old equal-deadline watchdog killed the controller while
   its integrity worker was in D-state, leaving NBD/zram active until supervised
   WSL recovery: **FAIL reproduced**.
-- First corrected probe `shared-wsl-pressure-20260724-155548`: teardown reached
+- First corrected probe `SANITIZED_RUN_ID`: teardown reached
   a clean terminal state without WSL termination, but the intentionally short
   30 s cleanup grace produced an honest `PARTIAL`: **expected boundary**.
-- Final campaign `shared-wsl-pressure-20260724-155908`: rounds 1/2/3 each
+- Final campaign `SANITIZED_RUN_ID`: rounds 1/2/3 each
   report `action_rc=0`, 1280 MiB allocated, 20 chunks verified, identical
   before/after SHA-256, no watchdog marker, and artifact validation PASS.
-- Final health: daemon dead, no NBD/zram/ghost, only `/dev/sdc` disk swap;
+- Final health: daemon dead, no NBD/zram/ghost, only `SANITIZED_DEVICE` disk swap;
   Windows volume and sample identities for `C:` and `I:` revalidated: **PASS**.
 - Three repeated Linux and Windows static watchdog gates: **6/6 PASS**.
 
@@ -2741,7 +2741,7 @@ owner. Three corrected live rounds completed with clean teardown.
 
 **What:** Reproduced and fixed PowerShell Direct connection hangs and
 multi-record status misclassification, then reran the isolated Windows driver
-and product lifecycles on `win11-drill`.
+and product lifecycles on `SANITIZED_LAB_VM`.
 
 **Commands:**
 ```text
@@ -2758,19 +2758,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 **Measured data:**
-- `guest-exhaustive-20260724-215817`: normal and Driver Verifier IOCTL passes
+- `SANITIZED_RUN_ID`: normal and Driver Verifier IOCTL passes
   are `PASS`; Verifier flags `0x2093B`, `ramshared.sys` load 1/unload 0,
   package/running SHA-256
   `324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA`,
   no new dump, elevated harness exit 0.
-- `guest-product-online-20260724-221128`: three fresh CUDA/Online lifecycle
+- `SANITIZED_RUN_ID`: three fresh CUDA/Online lifecycle
   rounds passed exact disk identity and checksum gates; all console exits were
   zero, no force-kill occurred, every lease was released, CUDA free memory was
   restored, no new dump appeared, and terminal safety passed.
 - All Windows and P0 static harness tests, docs/index/link/gap/hygiene gates,
   workspace tests, formatting, and clippy with warnings denied: **PASS**.
 - Hyper-V rollback export remains available at
-  `E:\Hyper-V\exports\win11-drill-pre-native-20260724-162906`; the drill VM
+  `SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`; the drill VM
   ended Off.
 
 **Verdict:** ✅ The isolated native Windows beta surface is repeatably green
@@ -2787,8 +2787,8 @@ repeated the bounded product storage lifecycle three times.
 **Commands:**
 ```text
 bcdedit /set testsigning on
-scripts/windows/Get-WinDrivePreflight.ps1 -StorageOnly
-devcon.exe install C:\ramshared\package\ramshared.inf Root\RamShared
+scripts/windows/Get-WinDrivePreflight.ps1 -StorageOnly (historical record, non-current, no execution)
+devcon.exe install SANITIZED_ARTIFACT_RUN\ramshared.inf Root\RamShared
 Restart-Computer -Force
 scripts/windows/Run-HostExhaustive.ps1 -SizeBytes 67108864
 scripts/windows/Get-WinDrivePreflight.ps1 -StorageOnly
@@ -2796,19 +2796,19 @@ scripts/windows/Get-WinDrivePreflight.ps1 -StorageOnly
 
 **Measured data:**
 - Elevated post-deploy preflight
-  `physical-testmode-final-preflight-20260724-224916`: `testsigning Yes`,
+  `SANITIZED_RUN_ID`: `testsigning Yes`,
   `PREFLIGHT_STORAGE_ONLY=PASS`, control path open, no RAMSHARE disk/Win32/PnP
   residue or minidump, and DriverStore/package SHA-256 match
   `324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA`.
-- Physical campaigns `exhaustive-20260724-224946`,
-  `exhaustive-20260724-225047`, and `exhaustive-20260724-225124`: each reports
+- Physical campaigns `SANITIZED_RUN_ID`,
+  `SANITIZED_RUN_ID`, and `SANITIZED_RUN_ID`: each reports
   `HOST_ONLINE=true`, three matching SHA rounds, `GRACEFUL=true`, `EXIT=0`,
   `LEASE_RELEASED=true`, `DISK_IO_MEASURE_OK=true`, and
   `LUN_GONE=true`/`WIN32_GONE=true`/`PNP_GONE=true`.
 - Aggregate physical evidence: three fresh CUDA/Online lifecycles, nine SHA
   matches, three direct disk-I/O checks, three graceful teardowns, zero forced
   product termination, and zero residual storage identities.
-- Final elevated preflight `physical-testmode-final-20260724-225209`: PASS,
+- Final elevated preflight `SANITIZED_RUN_ID`: PASS,
   Test Mode still enabled, service/control available, no RAMSHARE storage
   identity, no pagefile on RAMSHARE, and no minidump.
 - Terminal GPU observation: RTX 2060 at 681 MiB used, 5274 MiB free of
@@ -2892,7 +2892,7 @@ host.
   preserved.
 
 **Verdict:** ✅ PASS_ACTIVE_STABLE. Host evidence:
-`C:\ramshared\artifacts\active-host-20260725-155910`; committed summary:
+`SANITIZED_ARTIFACT_RUN\SANITIZED_RUN_ID`; committed summary:
 `docs/specs/no-milestone/windows-autonomous-broker-service/evidence/physical-active-20260725/activation.json`.
 ## 2026-08-09 09:15 -03 — Public benchmark evidence integrity gate
 
@@ -3142,12 +3142,12 @@ The Windows static aggregate, including the new OOBE/media refusals, exited 0;
 WSL cache reduced `buff/cache` from 9.7 GiB to 1.2 GiB without stopping a
 process or restarting WSL. Hyper-V still refused the supported 4,096 MiB VM
 start with `0x800705AA`: host free memory was 3,798 MiB while the unrelated
-`gha-ubuntu-2404` VM retained 12,288 MiB. Both RamShared disposable guests are
+`SANITIZED_LAB_VM` VM retained 12,288 MiB. Both RamShared disposable guests are
 Off; the foreign VM was not mutated.
 
 **Evidence:**
 `tmp/windows-task-manager-disk-counters-e2e/20260810-oobe-media-validation.json`
-and `C:\ramshared\artifacts\win11-verifier-clean-6-thumbnail.png` (14,858
+and `SANITIZED_ARTIFACT_RUN\win11-verifier-clean-6-thumbnail.png` (14,858
 bytes; SHA-256
 `638E6A4D9487FB6A740E2AB11B74923384BF14A5AAD56CA186C43939DBB59F8B`).
 
@@ -3188,10 +3188,10 @@ clone state is Off and host-free memory reached 12,420,276,224 bytes.
 
 **Evidence:**
 `tmp/windows-task-manager-disk-counters-e2e/20260810-vm-verifier-final.json`,
-`C:\ramshared\artifacts\ready-clone-5e48f1bf-9f55-4d32-9d98-f913a9092ed8`,
-`C:\ramshared\artifacts\guest-verifier-d0f9a571-c7bb-4f78-9e40-aa7233ed85e6`,
+`SANITIZED_ARTIFACT_RUN\ready-clone-SANITIZED_RUN_ID`,
+`SANITIZED_ARTIFACT_RUN\guest-verifier-SANITIZED_RUN_ID`,
 and exact recovery
-`C:\ramshared\artifacts\guest-verifier-recovery-156cd553-535f-4fe6-8383-f35ba823345f`.
+`SANITIZED_ARTIFACT_RUN\guest-verifier-recovery-SANITIZED_RUN_ID`.
 
 **Verdict:** 🟡 The disposable-VM driver, Verifier, BINARY_MATCH, refusal,
 rollback, firmware-restoration, and zero-residue slice is legitimately green.
@@ -3716,12 +3716,12 @@ migrated the inactive legacy unit by exact SHA-256, and activated the approved
 **How to measure:** `ramshared status`; `/proc/swaps`; `wsl-relay-health.sh
 --check`; `nbd-product-preflight.sh --check`; the approved `cascade-up.sh
 --execute`; and `readlink /proc/<ramsharedd-pid>/exe` under `sudo`.
-**Measured data:** Before activation, only `/dev/sdc` swap was present
+**Measured data:** Before activation, only `SANITIZED_DEVICE` swap was present
 (4,194,304 KiB, priority -2, 3,518,416 KiB used), Relay reported zero
 candidates, and product preflight reported `PRODUCT_OFF`. The unprivileged
 action refused with `I/O: Permission denied` before device creation. The
 approved `sudo` action created `/dev/zram0` and `/dev/nbd0`, each 1,048,572
-KiB, at priorities 200 and 100 respectively; `/dev/sdc` remained at -2.
+KiB, at priorities 200 and 100 respectively; `SANITIZED_DEVICE` remained at -2.
 After activation the daemon PID was 2062165 and both executable paths resolved
 to the sealed `v0.8.0-8-g0b09518` binary; preflight reported
 `NBD_BINARY_MATCH=PASS`, `NBD_TRANSPORT=nbd`, `NBD_PRODUCT_STATE=READY`, and
@@ -3771,10 +3771,10 @@ inventory SHA-256 is
 **Refusals:** No completed pair or public evidence was produced. Terminal
 pinned preflight returned `PRODUCT_OFF`; no managed swap, worker, daemon,
 CUDA process, benchmark cgroup, or NBD attachment remained. The pre-existing
-`/dev/sdc` swap was not changed.
+`SANITIZED_DEVICE` swap was not changed.
 **Rollback trigger:** Any timeout promotion, public evidence from this partial
 cell, terminal state other than exact `PRODUCT_OFF`, residual managed resource,
-or mutation of `/dev/sdc` invalidates the campaign and blocks another run.
+or mutation of `SANITIZED_DEVICE` invalidates the campaign and blocks another run.
 **Verdict:** 🟡 The refusal and cleanup are valid diagnostic evidence. The
 source-only P1 policy successor (`240 s` HOLD, independent `120 s` integrity)
 must be committed, resealed, and exercised by a fresh complete matrix before
@@ -3817,7 +3817,7 @@ six baseline records but does not invalidate the completed live matrix.
 **Rollback trigger:** Any matrix/inventory hash mismatch, NBD identity drift,
 failed public custody record, cell or terminal state other than exact
 `PRODUCT_OFF`, residual managed resource, forced CUDA release, or mutation of
-the pre-existing `/dev/sdc` invalidates this evidence.
+the pre-existing `SANITIZED_DEVICE` invalidates this evidence.
 **Verdict:** 🟢 The complete sealed 1/2/4 GiB idle/bounded disk-only/NBD
 matrix passed with n=3 per cell. Live qualification is complete; Gate B,
 hosted required checks, PR review, and merge remain open.
@@ -8794,7 +8794,7 @@ hardware gates.
 `6.18.40.1-microsoft-standard-WSL2+`. `ramshared check` returned
 `Decision: ready` with CUDA ready and one NVIDIA GeForce RTX 2060 visible.
 Status stayed `phase: Off` / `protection: OFF` with only fallback swap
-`/dev/sdb`. `monitor --once` reported `memory_scope: wsl2`,
+`SANITIZED_DEVICE`. `monitor --once` reported `memory_scope: wsl2`,
 `latency_source: unavailable` on idle tiers, and `binary_version: 0.15.0`.
 No stress, cascade up, GPU allocation, swap change, or WSL shutdown ran.
 **Category:** local install / exact SHA-256 identity / read-only CLI probes.
@@ -8810,7 +8810,7 @@ and daemon `5d67e2d108d1c02e7e60e64af3f54966a83cca9a2d1a56acfefbcff90b9141ed`.
 `installed_at_utc=2026-09-29T23:31:13Z`. `ramshared --build-info` returns the
 same identity. `ramshared status`, `check`, and `doctor` are read-only;
 `check` decision was `ready`.
-**Remaining boundary:** `/opt/ramshared/current` still points at the earlier
+**Remaining boundary:** `SANITIZED_ARTIFACT_PATH` still points at the earlier
 sealed candidate `v0.15.0-b788c17`; product-path promotion with input-bundle
 provenance was not performed. No repeated idempotent start/stop after reboot,
 no cascade activation, no three-tier stress, no live GPU worker allocation, no
@@ -8844,14 +8844,14 @@ or stress qualification.
 `v0.15.0 · 5e6b5845` with CLI SHA-256
 `05a556776bc67f700855d8ed28d6c7ef5e6aa6773ea67d2ba3edd1374b4b1639`.
 Guardian health refreshed to `HEALTHY` / `watching` with boot ID
-`641971fd-a2af-41c8-9e21-fba04f8d870d`. After the final up, `/proc/swaps`
+`SANITIZED_RUN_ID`. After the final up, `/proc/swaps`
 listed `/dev/zram0` prio 200 (2097148 KiB), `/dev/nbd0` prio 100 (4194300
-KiB), and the WSL fallback `/dev/sdb` prio -2. Status reported
+KiB), and the WSL fallback `SANITIZED_DEVICE` prio -2. Status reported
 `phase: Armed (armed_low_vram_used)` and `protection: READY`.
 **Category:** live lifecycle / before-action-after swap topology /
 attended origin attach.
 **How to measure:** Elevated attach produced
-`state=ATTACHED` with PARTUUID `5039dca1-61a0-41ff-aa08-221f49326a1b`.
+`state=ATTACHED` with PARTUUID `SANITIZED_RUN_ID`.
 `sudo bash scripts/safety/ramshared-host-gate.sh` printed
 `RAMSHARED_HOST_GATE=NORMAL_BOOT` and published `/etc/ramshared/origin.conf`.
 Each `sudo ramshared up --vram 4096 --zram 2048` armed zram then the
@@ -8865,7 +8865,7 @@ existing teardown-safety policy.
 No three-tier stress, simultaneous 100% ZRAM / 100% NBD / 99% SSD
 qualification, live GPU worker allocation, physical multi-vendor GPU campaign,
 Windows physical lifecycle/matrix, custom-kernel promotion, or CoCo evidence
-was produced. `/opt/ramshared/current` remains on `v0.15.0-b788c17`.
+was produced. `SANITIZED_ARTIFACT_PATH` remains on `v0.15.0-b788c17`.
 **Verdict:** 🟡 `PARTIAL` — repeated idempotent start/stop and swapoff-first
 teardown now have live proof on the EVD-0115 install; post-reboot repetition,
 product-path promotion, stress, kernel, and hardware gates remain open.
@@ -8963,7 +8963,7 @@ returned `Decision: blocked` only because managed swap was already active
 **Remaining boundary:** This is not a same-host bundled-vs-custom A/B, not a
 GPADL/UIO race reproduction, not a DXG greater-than-4-GiB allocation test, and
 not a CoCo transition. Hosted KUnit for the updated series still belongs to
-the workflow gate. `/opt/ramshared/current` remains on `v0.15.0-b788c17`.
+the workflow gate. `SANITIZED_ARTIFACT_PATH` remains on `v0.15.0-b788c17`.
 Stress, multi-vendor GPU, and Windows physical campaigns stay unqualified.
 **Verdict:** 🟡 `PARTIAL` — kernel `#9` is the active WSL image with matching
 receipt and a clean boot/lifecycle sample; A/B, race, CoCo, and stress proofs
@@ -10459,7 +10459,7 @@ the historical freeze was never this measurement's claim.
    the tree: `class_id_show()` emits `"{%pUl}\n"` **with braces**, while
    `new_id_store()` hands the buffer to `guid_parse()` → `uuid_is_valid()`,
    which accepts exactly the 36-char canonical form. The drill wrote
-   `{f8615163-df3e-46c5-913f-f2d2f965ed0e}`, `guid_parse()` returned
+   `{SANITIZED_RUN_ID}`, `guid_parse()` returned
    `-EINVAL`, the dynid never registered, and `uio_hv_generic` — whose
    `id_table` is `NULL, /* only dynamic id's */` — could never bind.
    `|| true` swallowed the `new_id` write, so thirty cycles looked like a
@@ -10571,7 +10571,7 @@ produces the observed behaviour, not guessed.
 | boot | single-file `BOOTX64.EFI`, no reboot, full teardown (`vm_remove=ok`, `vhd_remove=ok`, `drill_switch_remove=ok`) |
 | console | 22 126 bytes |
 | VMBus | `devices=14`, `HYPERV_DRILL_SYMBOLS alloc=4` (`vmbus_alloc_buffer` family present) |
-| NIC | `HYPERV_DRILL_NIC id=7e3993d8-e910-478d-9103-9cdf152e3a37` |
+| NIC | `HYPERV_DRILL_NIC id=SANITIZED_RUN_ID` |
 | map balance over 30 cycles | `BASELINE MAPS count=12 bytes=20279296 pages=4939` == `PHASE1-AFTER` == `PHASE2-AFTER-TEARDOWN` == `FINAL` |
 | UIO probe accounting | `PHASE2-BEFORE-TEARDOWN MAPS count=13 bytes=53915648 pages=13150` → `AFTER-TEARDOWN count=12 bytes=20279296 pages=4939` (the +1 map is the NIC ring plus its send/receive buffers, and it is returned) |
 | damage | `HYPERV_DRILL_SPLATS count=0`, `HYPERV_DRILL_FAULTS count=0`, `FAULTS_NONE` |
@@ -11495,7 +11495,7 @@ at t=5.2s — before the fragmentation drill has started, on a healthy buddy
 
 ```
 RESTORE begin
-RESTORE driver=/…/bf29fd3a-7407-4a3d-9c36-fb8c0340b614/driver
+RESTORE driver=/…/SANITIZED_RUN_ID/driver
   [5.223854] hv_netvsc bf29fd3a-… (unnamed net_device) (uninitialized): unable to open channel: -22
 ```
 
@@ -12235,15 +12235,15 @@ still reported `dead pid=null` for that instance. The defect is closed in
 source and proven on the new binary; closing it on the live host requires
 replacing that instance with a build at `f04ed860` or later. `/dev/nbd0`
 was sized 8388608 sectors (4 GiB) and was **not** in `/proc/swaps` at the
-time (only `zram0` prio 200 and `/dev/sdb` prio −2), so the measurement did
+time (only `zram0` prio 200 and `SANITIZED_DEVICE` prio −2), so the measurement did
 not exercise a live NBD swap tier. No `ramshared down`/`up` lifecycle round
 was run.
 
 **Verdict:** ✅ works
 
 **Category:** daemon-identity / runtime
-
-**How to measure:** Start `ramsharedd` directly (no `ramshared up`), then
+ (historical record, non-current, no execution)
+**How to measure:** Start `ramsharedd` directly (no `ramshared up`), then (historical record, non-current, no execution)
 `cat /run/ramshared/ramsharedd.pid`, `cat /proc/$(cat
 /run/ramshared/ramsharedd.pid)/comm`, and `ramshared status | grep ^daemon:`.
 The three rows of the table above must hold in order. Re-run after any
