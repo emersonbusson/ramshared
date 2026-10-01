@@ -121,11 +121,11 @@ for _ in $(seq 1 120); do
 done
 # The helper writes both the ready and the refusal lines to the log; echo the
 # decisive one to the console so the uploaded artifact carries it.
-# tail -6: the helper now emits min_free_kbytes, start, allocated and
+# tail -8: the helper emits min_free_kbytes, start, allocated, chase and
 # ready=1, and every one of them is evidence. tail -3 dropped the
 # min_free read-back, which is exactly the line that shows whether the
 # watermark lever was actually pulled.
-grep 'FRAGMENT_BUDDY ' "$LOG" | tail -6 | tee -a "$LOG" || true
+grep 'FRAGMENT_BUDDY ' "$LOG" | tail -8 | tee -a "$LOG" || true
 FRAG_LINE="$(grep 'FRAGMENT_BUDDY ready=1' "$LOG" | tail -1 || true)"
 if [ "$FRAG_READY" != yes ]; then
 	say "FRAGMENT did not reach a ready state"
@@ -138,13 +138,17 @@ fi
 say "--- BUDDY AFTER FRAGMENT ---"
 buddy
 
-# Count free blocks of order 7 and above across all zones. If any remain, the
-# buddy can still satisfy vmbus_alloc_ring()'s order-7 request outright and the
-# fallback path is not being exercised — say so here rather than inferring it
-# later from a missing dmesg line.
+# Count free blocks of order 7 and above. The helper's ready=1 line carries
+# `high_order_7plus=before->locked->after`, and the third value is measured
+# while the pattern is still pinned in place. That is the authoritative
+# count: this re-read happens later, and by then the helper can have been
+# reclaimed and the 2 GiB of locked pages returned to the buddy, which is
+# how run 36800977305 measured 356 blocks where the helper had just
+# measured 1. Keep both; the verdict trusts the helper's.
 #
 # buddyinfo layout is `Node <n>, zone <name>` followed by one count per order,
 # so order-7 is field 12 and higher orders follow.
+HIGH_ORDER_HELPER="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*high_order_7plus=[0-9]*->[0-9]*->\([0-9]*\).*/\1/p')"
 HIGH_ORDER=$(awk '
 	{
 		for (i = 12; i <= NF; i++)
@@ -152,7 +156,7 @@ HIGH_ORDER=$(awk '
 	}
 	END { print sum + 0 }
 ' /proc/buddyinfo 2>/dev/null)
-say "high_order_7plus_blocks=${HIGH_ORDER:-unknown}"
+say "high_order_7plus_blocks_helper=${HIGH_ORDER_HELPER:-unknown} high_order_7plus_blocks_reread=${HIGH_ORDER:-unknown}"
 
 # --- exercise channel open under fragmentation ------------------------------
 say "=== CHANNEL OPEN UNDER FRAGMENTATION ==="
@@ -233,7 +237,11 @@ esac
 EXHAUSTED="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*exhausted=\([0-9]*\).*/\1/p')"
 PAGEMAP="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*pagemap=\([0-9]*\).*/\1/p')"
 STOPREASON="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*stop=\([a-z0-9-]*\).*/\1/p')"
-say "RESULT high_order_7plus_blocks=${HIGH_ORDER:-unknown} exhausted=${EXHAUSTED:-unknown} pagemap=${PAGEMAP:-unknown} stop=${STOPREASON:-unknown} order7_dmesg=$ORDER7 accept4_failures=$ACCEPT oops=$OOPS rebind=$REBOUND"
+# Trust the helper's post-chase count; the reread is secondary evidence and
+# is expected to disagree if the pattern was reclaimed after ready=1.
+HIGH_ORDER_REREAD="${HIGH_ORDER:-unknown}"
+HIGH_ORDER="${HIGH_ORDER_HELPER:-$HIGH_ORDER}"
+say "RESULT high_order_7plus_blocks=${HIGH_ORDER:-unknown} (reread=${HIGH_ORDER_REREAD:-$HIGH_ORDER}) exhausted=${EXHAUSTED:-unknown} pagemap=${PAGEMAP:-unknown} stop=${STOPREASON:-unknown} order7_dmesg=$ORDER7 accept4_failures=$ACCEPT oops=$OOPS rebind=$REBOUND"
 
 # Exit codes for init:
 #   0  PASS            pressure achieved and ring allocation survived it
@@ -245,7 +253,7 @@ if [ -z "$FRAG_LINE" ]; then
 	say "VERDICT=INCONCLUSIVE_NO_PATTERN (fragment-buddy never reported ready=1)"
 	RC=3
 elif [ "${EXHAUSTED:-0}" != 1 ]; then
-	say "VERDICT=INCONCLUSIVE_CAP_REACHED (exhausted=${EXHAUSTED:-unknown} stop=${STOPREASON:-unknown}; ceiling stopped the loop before order-7 was depleted, untouched remainder still holds high orders)"
+	say "VERDICT=INCONCLUSIVE_CAP_REACHED (exhausted=${EXHAUSTED:-unknown} stop=${STOPREASON:-unknown}; the loop stopped with order-7 blocks still free, so the buddy could still satisfy an order-7 request outright)"
 	RC=3
 elif [ "${PAGEMAP:-0}" != 1 ]; then
 	say "VERDICT=INCONCLUSIVE_NO_PAGEMAP (holes were virtual, not physical buddy pairs)"
