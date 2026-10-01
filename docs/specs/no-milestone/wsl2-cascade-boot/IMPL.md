@@ -70,11 +70,11 @@ gate_no_deploy_api → load_boot_config_from → identity_gate → resolve_appro
 - `scripts/safety/test-control-plane-units.sh`: **PASS**
 - `scripts/safety/test-nbd-product-preflight.sh`: **47/47 PASS**
 
-### Named matrix tests (14/14 for boot.rs)
+### Named matrix tests (14/14; `boot.rs` except the two CLI-dispatch rows in `main.rs`)
 
 | Test | Type | Status |
 | --- | --- | --- |
-| `boot_refuses_deploy_shaped_invocation` | #13 | PASS |
+| `boot_refuses_deploy_arguments` | #13 | PASS |
 | `boot_refuses_untrusted_approval_token` | #13 | PASS |
 | `scoped_approval_accepts_only_the_running_release_version` | #9 | PASS |
 | `boot_requires_fresh_host_prerequisites` | #13 | PASS |

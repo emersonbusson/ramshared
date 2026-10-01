@@ -143,7 +143,7 @@ native Linux target qualification on a native host.
   request through TOML. `native_linux_origin_request_plan_binds_volume_without_claiming_creation`
   verifies the planner binds the current mount and reserve calculation while
   keeping `writes_performed=false` and `apply_enabled=false`.
-- RED/GREEN: `config_draft_wizard_saves_tier_caps_as_unapplied_ceilings`
+- RED/GREEN: `config_draft_wizard_saves_planned_caps_as_unenforced_draft_policy`
   failed because the wizard treated the first cap input as the final `SAVE`
   confirmation. It now captures optional variable ZRAM and SSD-origin ceilings,
   renders their exact values in the read-only plan, and leaves VRAM unselected
