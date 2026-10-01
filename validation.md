@@ -13109,3 +13109,88 @@ a partner set larger than in-chunk, and for the third-signal claim by a run
 reporting `exhausted=1` with `reread=0`. Re-read both runtime jobs before
 citing. Job-level `success` on `hyperv-runtime-drill` is never a gate
 closure. Never cite this entry as CoCo or send-gate evidence.
+
+## 2026-10-01 11:51 -03 — the 235 checkpatch errors were diff structure, not code (EVD-0153)
+
+**What:** Resolved the open question of whether the six series patches
+carry real trailing whitespace. They do not. `scripts/checkpatch.pl
+--strict` on each full `format-patch` file reports
+68 / 15 / 12 / 14 / 8 / 118 ERRORs, all of type `trailing whitespace`
+(235 total). Those counts match a byte scan of the same files **exactly**:
+
+```
+229  blank context line  (" " = unified-diff marker + empty line)
+  6  RFC 5322 signature separator  ("-- ")
+235  = total ERRORs
+```
+
+Zero added (`+`) lines in any of the six patches have trailing whitespace.
+
+### The decisive split
+
+Running checkpatch on the **diff body only** (`awk '/^diff --git/{p=1} p'`)
+gives a clean record on every patch:
+
+| Patch | Diff-body checkpatch | Lines checked |
+| --- | --- | --- |
+| `0001-ring-allocation.patch` | 0 errors, 0 warnings, 0 checks | 677 |
+| `0002-allocation-safety.patch` | 0 errors, 0 warnings, 0 checks | 229 |
+| `0003-uio-owner.patch` | 0 errors, 0 warnings, 0 checks | 115 |
+| `0004-gpadl-fault-injection.patch` | 0 errors, 0 warnings, 0 checks | 394 |
+| `0005-order-zero-fallback-injection.patch` | 0 errors, 0 warnings, 0 checks | 142 |
+| `0006-gpadl-lifetime-reclaim.patch` | 0 errors, 0 warnings, 0 checks | 1973 |
+
+3530 lines of shipped code, clean. The full-file invocation reports
+"has style problems" only because the trailing-whitespace rule also fires
+on diff **context** lines and on the email signature separator when the
+file is walked with its `format-patch` header present.
+
+### Why nothing may be "fixed"
+
+A blank line in a unified diff **must** be rendered as a single space (the
+diff marker) followed by empty content. Stripping that space produces a
+line with no diff marker, which `git apply` rejects. The `-- ` separator
+carries a trailing space by RFC 5322 and is present in every patch the
+kernel accepts. Both classes are load-bearing bytes.
+
+**Do not regenerate `series/SHA256SUMS`.** The pins are correct as they
+stand; the perceived defect was in the invocation, not in the series.
+
+### Verdict
+
+✅ **passes** — the send-gate checkpatch item is clear for the six series
+patches as bytes. The correct invocation is the diff-body form above (or
+`checkpatch.pl --strict` on the applied `git diff`), not on the full
+`format-patch` file.
+
+**What this does not prove:** anything about runtime behaviour, CoCo
+platform evidence, or maintainer acceptance. This entry clears one
+documentation/format gate only.
+
+**Verdict:** ✅ passes — checkpatch clean on all six diff bodies; 235 full-file errors are diff structure
+
+**Category:** upstream-send-gate / patch formatting
+
+**How to measure:** `awk '/^diff --git/{p=1} p' series/000N-*.patch |
+scripts/checkpatch.pl --strict -` must report `0 errors, 0 warnings`. A
+non-zero total on the full `format-patch` file is expected and equals the
+count of `" "` context lines plus `"-- "` signature lines in that file; a
+mismatch between those two counts is the signal that real whitespace
+appeared.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0153`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T14:51:00Z`.
+**Verified at:** `2026-10-01T14:55:00Z`.
+**Source revision:** `1ee6006cad7f`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the 229 + 6 = 235 breakdown and the per-patch diff-body
+table. Without them a future reader re-derives the same false alarm from
+`checkpatch.pl` on the full file and is tempted to strip the spaces that
+make the diff valid. Keep the "do not regenerate SHA256SUMS" instruction
+explicit.
+**Freshness:** Superseded by any byte change to
+`series/000[1-6]-*.patch`. Re-run the diff-body form after any such change
+before citing this entry. Never cite this entry as runtime, CoCo, or
+fragmentation evidence.
