@@ -3,13 +3,13 @@
 > SSDV3 PASSO 3. Implementa o **`SPEC.md`** (candidato ativo, pós-auditoria 2.5). Branch
 > `feat/p1-hardening`. **Sem PR** até o usuário pedir.
 
-## Status: implementado + verde (no que é validável aqui)
+## Status: implemented + green (for what is validatable here)
 
 `cargo test --workspace` ✓ · `cargo clippy --workspace --all-targets -- -D warnings` ✓ ·
 `cargo fmt --all -- --check` ✓ · **drill qemu broker (NBD-RAM) PASS** (caminho `serve_broker_jobs` +
 `on_tick`/reconciliação roda sem regressão).
 
-## Arquivos (RF/ITEM → mudança)
+## Files (RF/ITEM → change)
 
 | Arquivo | ITEM | O que foi feito |
 | --- | --- | --- |
@@ -21,7 +21,7 @@
 | `crates/ramshared-agent/src/main.rs` | ITEM-6 | `Msg::Psi { …, mem }` (cgroup swap + Σ diskstats dos nbd em `active`, DT-11); `--status` imprime `slice_io` |
 | `crates/ramshared-wsl2d/Cargo.toml` | — | `serde`/`serde_json` (derives + JSONL) |
 
-## Decisões pequenas durante a IMPL (não pediram nova ADR)
+## Small decisions during IMPL (no new ADR needed)
 
 - `page_io_s` na linha de telemetria carrega o **Σ diskstats cumulativo** (bytes) dos tenants que
   reportam `mem`; o consumidor deriva a taxa pela diferença entre amostras (campo `t`) — padrão de
@@ -31,14 +31,14 @@
 - Teste `telemetry_sample_serializes_flat_jsonl` adicionado (prova `#[serde(flatten)]` + snake_case)
   já que o write-no-arquivo via daemon não roda no WSL2 (regra de segurança).
 
-## Validação (números)
+## Validation (numbers)
 
-- `cargo test --workspace`: **todos verdes**; `ramshared-wsl2d` lib 45→**53** (+8 `telemetry`),
-  `ramshared-broker` 32 (roundtrip + 2 defaults), `ramshared-agent` +4 (parsers cgroup/diskstats).
+- `cargo test -p ramshared-wsl2d --lib` → **179 passed, 0 failed** (re-measure 2026-10-01). The
+  earlier citations of `45→53` and `45→58` for this command were wrong and are superseded.
+- `cargo test --workspace`: **todos verdes**; `ramshared-broker` 32 (roundtrip + 2 defaults),
+  `ramshared-agent` +4 (parsers cgroup/diskstats).
 - `clippy --workspace --all-targets -D warnings`: limpo (incl. `#[allow(too_many_arguments)]` em
   `BrokerCore::new`/`broker_setup`/`core_loop`, coesos).
-- `cargo test --workspace`: **201 testes, 0 falhas**; `ramshared-wsl2d` lib 45→**58** (+8 `telemetry`
-  incl. serialização JSONL, +5 wiring `broker_srv` incl. sink), broker +2 defaults, agente +4 parsers.
 - **Testes de wiring do `broker_srv` (in-process, fechados):** `status_reply_includes_slice_io`,
   `on_tick_emits_telemetry`, `eviction_flag_after_demote`, `unaccounted_when_occupied_exceeds_alloc`
   (o test mod é filho do módulo → manipula os campos privados do `BrokerCore`).
@@ -48,7 +48,7 @@
   `--telemetry-jsonl`): `QEMU-BROKER-DRILL: PASS` + `KTEST-TELEMETRY=ok` — **o daemon vivo escreve o
   JSONL** (RF-5 e2e, em VM isolada); swap ativo via NBD; teardown limpo.
 
-## Gaps — fechados na sessão (b) com disciplina + segurança
+## Gaps — closed in session (b) with discipline + safety
 
 - **Números de VRAM reais (RF-3) — FECHADO.** Teste in-process `#[ignore]`
   `vram_gauge_outros_captures_real_graphics_usage` (`backend.rs`): `mem_info` real na **RTX 2060** →
@@ -61,7 +61,7 @@
   (`unaccounted_when_occupied_exceeds_alloc` triggers only above; `reconcile_idle_none` stays at `none`).
   → `tol_frac=0.10` **yields zero false positives**; the exact live distribution remains a refinement in an isolated VM.
 
-## Gap genuinamente env-bound (mesmo trap do ublk+VRAM)
+## Genuinely env-bound gap (same trap as ublk+VRAM)
 
 - **Flag `eviction` e2e under real WDDM load:** the canary only triggers with daemon VRAM being evicted
   by graphics pressure — requires **daemon + GPU + load together**, where GPU is reachable in WSL2 (where
@@ -69,7 +69,7 @@
   composition: canary (P1, latency→`Verdict::Demote`) + `reconcile_eviction_when_demotes` +
   `eviction_flag_after_demote` (DEMOTE→flag). Live observation = host GPU non-WSL2 (RF-G2) or isolated VM.
 
-## Pente-fino (revisão multi-agente Opus 4.8) — bugs achados e corrigidos
+## Fine-toothed review (multi-agent Opus 4.8) — bugs found and fixed
 
 4 agents adversariais (concorrência / lógica-de-reconciliação / protocolo / hot-path-regressão)
 varreram o código. Achados reais + correção:
@@ -90,7 +90,7 @@ varreram o código. Achados reais + correção:
 
 Pós-fix: wsl2d lib **61** testes, clippy/fmt limpos, drill qemu broker **PASS** (sem regressão).
 
-## Rastreabilidade
+## Traceability
 
 RF-1 ✓ (ITEM-1/2/5 + `status_reply_includes_slice_io`) · RF-2 ✓ (ITEM-1/6 + parsers) · RF-3 ✓
 (ITEM-3/7, gauge por composição) · RF-4 ✓ (ITEM-7 + `reconcile`/`eviction`/`unaccounted` tests) ·

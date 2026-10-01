@@ -40,7 +40,7 @@ with `job.export` = slice; `run_broker`/`run_nbd` allocate
 `read_psi`/`read_swaps` (`agent/psi.rs:15,44`), `Msg::Psi` send at 1 Hz
 (`agent/main.rs:277`).
 
-## Matriz de rastreabilidade PRD → SPEC
+## PRD → SPEC traceability matrix
 
 | PRD  | Implementação no SPEC |
 | ---- | ----------------------- |
@@ -50,7 +50,7 @@ with `job.export` = slice; `run_broker`/`run_nbd` allocate
 | RF-4 | ITEM-4 (`telemetry.rs`), ITEM-7 |
 | RF-5 | ITEM-4, ITEM-7, ITEM-8 |
 
-## Decisões técnicas
+## Technical decisions
 
 | #    | Decision | Rationale |
 | ---- | ------- | ------------- |

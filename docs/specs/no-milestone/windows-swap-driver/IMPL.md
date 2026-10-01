@@ -33,7 +33,7 @@
 | ITEM-11 attestation | ✗ R9 org + no `.sys` |
 | Host-real driver load | **proibido** — lab ITEM-8 evidence green; host-real needs CUDA product path + B1 |
 
-## WYSIATI (#1) — o que **não** foi visto
+## WYSIATI (#1) — what was **not** seen
 
 - Build EWDK de `ramshared.sys` / `poolstress.sys` (sem WDK no guest; sem `link.exe` MSVC).
 - `Cuda::load` / `nvcuda.dll` no Windows (guest sem GPU).
@@ -43,7 +43,7 @@
 
 Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 
-## Arquivos (RF/ITEM → mudança)
+## Files (RF/ITEM → change)
 
 | Arquivo | ITEM / RF | O que foi feito |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 | `drivers/windows/tools/poolstress/*` | ITEM-8 | test driver VM-only |
 | `scripts/windows/*` | ITEM-8..11 | harnesses + `wsl-elevated-ps.sh` + `Invoke-DisciplinedCampaign.ps1` |
 
-## Decisões pequenas (sem nova ADR)
+## Small decisions (no new ADR)
 
 - Golden SQE sem `unsafe` no winsvc.
 - `NtCreatePagingFile` FFI fail-closed até host Windows com allow-list 26200.
@@ -63,7 +63,7 @@ Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 - Campanha classifica `link.exe`/WDK ausente como **SKIP** (#15 determinístico), não FAIL de produto.
 - Senha PSD só via env `RAMSHARED_DRILL_PASSWORD` (não no git).
 
-## Validação (números)
+## Validation (numbers)
 
 ### Linux (host WSL2)
 
@@ -96,7 +96,7 @@ Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 
 Artefatos: `C:\ramshared\artifacts\agent-disciplined-results.json`, `artifacts-disciplined\`.
 
-### Como reproduzir (disciplina operacional)
+### How to reproduce (operational discipline)
 
 ```bash
 # 1) Linux gates
@@ -121,7 +121,7 @@ export RAMSHARED_DRILL_PASSWORD='…'  # lab only
 | **Env-bound / open** | Product CUDA `nvcuda` no Windows; MSVC+cargo para `ramshared-winsvc` nativo; ITEM-9 K medido; soak 72h; attestation R9; **host-real load** |
 | **By design fail** | B2 pagefile-hot kill → **0x7A** — mitigação = DT-9, não “PASS inventado” |
 
-## Doc surface (maturidade 2026-07-09)
+## Doc surface (maturity 2026-07-09)
 
 Root docs alinhados ao status acima: `README.md`, `ROADMAP.md`, `ARCHITECTURE.md`, `drivers/windows/README.md`, `PREFLIGHT.md`, `docs/FAQ.md`, `validation.md`.
 | **Abertos de código** | DeviceExtension real no StorPort complete; FFI `NtCreatePagingFile` Windows; SCM `windows-service` main |
@@ -163,7 +163,7 @@ Root docs alinhados ao status acima: `README.md`, `ROADMAP.md`, `ARCHITECTURE.md
 **Still blocked for ITEM-8 PASS:** pagefile-VRAM on product disk + DT-21 `% Usage` > 0 + kill service B1/B2 with residency. StorPort virtual disk still needs INF/PnP path for full SCSI volume (service load proves DriverEntry + control device).
 
 
-## Campanha DT-25 (2026-07-09) — WYSIATI
+## DT-25 campaign (2026-07-09) — WYSIATI
 
 - **Visto:** LUN N=1 `RAMSHARE VRAMDISK` 67108864 bytes apos `devcon install` + CREATE_DISK; adapter `ROOT\SCSIADAPTER\0000` OK.
 - **Visto:** BSOD **0xD1** no format (IRQL 2) — root cause: `Srb->DataBuffer` com `STOR_MAP_NON_READ_WRITE_BUFFERS`.
