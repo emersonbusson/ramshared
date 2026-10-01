@@ -23,6 +23,11 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+/// Pure Linux swap apply/activate/cleanup policy. The privileged helper
+/// `scripts/linux/ramshared-resource-config-helper` executes the mutations;
+/// this module decides whether they may proceed.
+pub(crate) mod linux;
+
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 const LINUX_INVENTORY_OUTPUT_LIMIT: usize = 1024 * 1024;
 const WINDOWS_INVENTORY_OUTPUT_LIMIT: usize = 256 * 1024;
@@ -466,13 +471,22 @@ fn storage_eligibility(device: &BlockDevice, mount: Option<&MountInfo>) -> (bool
             "stable storage-device identity is unavailable".into(),
         );
     }
-    match mount.filesystem.to_ascii_lowercase().as_str() {
-        "ext4" | "xfs" => (
+    if linux::SUPPORTED_SWAP_FILESYSTEMS
+        .iter()
+        .any(|supported| supported.eq_ignore_ascii_case(&mount.filesystem))
+    {
+        return (
             true,
             "verified ext4/XFS mount; recheck identity and free space before use".into(),
-        ),
-        other => (false, format!("filesystem {other} is not qualified")),
+        );
     }
+    (
+        false,
+        format!(
+            "filesystem {} is not qualified",
+            mount.filesystem.to_ascii_lowercase()
+        ),
+    )
 }
 
 fn hardware_identity(value: &Value) -> Option<String> {
