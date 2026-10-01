@@ -2940,6 +2940,37 @@ struct IsolatedWorkerRuntime {
     budget: WorkerRespawnBudget,
 }
 
+/// Whether the isolated GPU worker handle is gone or its process has exited.
+///
+/// `try_wait` both observes and reaps an exited child, so a `true` here means
+/// the process is no longer a zombie. A missing handle counts as exited: the
+/// cache cannot be serving without one.
+fn gpu_worker_has_exited(runtime: &mut IsolatedWorkerRuntime) -> bool {
+    match runtime.supervisor.as_mut().and_then(|s| s.child.as_mut()) {
+        Some(WorkerChildHandle::Process(process)) => matches!(process.try_wait(), Ok(true)),
+        #[cfg(test)]
+        Some(WorkerChildHandle::Thread { handle, .. }) => handle
+            .as_ref()
+            .is_some_and(std::thread::JoinHandle::is_finished),
+        None => true,
+    }
+}
+
+/// Release the supervisor handle for a worker that is no longer running.
+///
+/// A deliberate `release_cache` and a crash both leave the child exited.
+/// Until the handle is dropped its `Drop`/`shutdown` wait has not run, and the
+/// process stays a zombie for the daemon's lifetime. This never spawns a
+/// replacement and never touches the cache mirror.
+fn reap_exited_gpu_worker(runtime: &mut IsolatedWorkerRuntime) {
+    if !gpu_worker_has_exited(runtime) {
+        return;
+    }
+    if let Some(mut previous) = runtime.supervisor.take() {
+        previous.shutdown();
+    }
+}
+
 /// Rebuild the isolated GPU cache worker after it died, or record that the
 /// origin fallback is now permanent until daemon restart.
 ///
@@ -2956,15 +2987,25 @@ fn recover_isolated_gpu_worker_if_failed<S: NbdRuntimeStarter>(
     cache: &mut AuthoritativeOriginBackend<FileOrigin, OriginCache>,
     runtime: &mut IsolatedWorkerRuntime,
 ) {
+    let worker_exited = gpu_worker_has_exited(runtime);
     let state = cache.cache_state();
     runtime.budget.mark_healthy_if_settled(state);
-    match state {
-        OriginCacheState::Unavailable | OriginCacheState::Stuck => {}
-        // Off is a deliberate release, not a death. Restricted is degraded but
-        // still serving. Both stay alone.
-        OriginCacheState::Off | OriginCacheState::Active | OriginCacheState::Restricted => {
-            return;
-        }
+
+    // Death signatures are the daemon's `Unavailable`/`Stuck` verdicts, plus
+    // the observable case of a cache that still claims to be serving while its
+    // worker is gone. `Off` is a deliberate `release_cache` and is never
+    // rebuilt — it only needs its exited child waited out.
+    let dead = matches!(
+        state,
+        OriginCacheState::Unavailable | OriginCacheState::Stuck
+    ) || (worker_exited
+        && matches!(
+            state,
+            OriginCacheState::Active | OriginCacheState::Restricted
+        ));
+    if !dead {
+        reap_exited_gpu_worker(runtime);
+        return;
     }
 
     if let Some(mut previous) = runtime.supervisor.take() {
@@ -2996,8 +3037,7 @@ fn recover_isolated_gpu_worker_if_failed<S: NbdRuntimeStarter>(
             eprintln!(
                 "[ramsharedd] isolated GPU cache worker respawned pid={pid} \
                      (respawn {} of {})",
-                runtime.budget.respawns_since_healthy,
-                WORKER_RESPAWN_MAX_CONSECUTIVE
+                runtime.budget.respawns_since_healthy, WORKER_RESPAWN_MAX_CONSECUTIVE
             );
         }
         Err(error) => {
@@ -3006,8 +3046,7 @@ fn recover_isolated_gpu_worker_if_failed<S: NbdRuntimeStarter>(
             eprintln!(
                 "[ramsharedd] isolated GPU cache worker respawn failed: {error} \
                      (attempt {} of {})",
-                runtime.budget.respawns_since_healthy,
-                WORKER_RESPAWN_MAX_CONSECUTIVE
+                runtime.budget.respawns_since_healthy, WORKER_RESPAWN_MAX_CONSECUTIVE
             );
         }
     }
@@ -13154,7 +13193,8 @@ Filename Type Size Used Priority
             target_bytes: u64,
             _chunk_bytes: u64,
             _reserve_floor: u64,
-        ) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>> {
+        ) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>>
+        {
             self.attempts.fetch_add(1, Ordering::SeqCst);
             assert_eq!(target_bytes, 4 * 1024 * 1024);
             assert!(
@@ -13172,7 +13212,9 @@ Filename Type Size Used Priority
             use std::io::{Read, Write};
 
             let (client_socket, mut worker_socket) = std::os::unix::net::UnixStream::pair()?;
-            worker_socket.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+            worker_socket
+                .set_read_timeout(Some(Duration::from_millis(20)))
+                .unwrap();
             let stop = std::sync::Arc::new(AtomicBool::new(false));
             let worker_stop = std::sync::Arc::clone(&stop);
             let handle = std::thread::spawn(move || {
@@ -13374,6 +13416,80 @@ Filename Type Size Used Priority
             "an intentional Off must not be recovered"
         );
         assert_eq!(backend.cache_state(), OriginCacheState::Off);
+    }
+
+    /// Attach a worker handle whose thread has already finished.
+    ///
+    /// `MSG_DISABLE_REQ` breaks the worker frame loop, so a released cache in
+    /// production is left with an exited child. The mock thread has no such
+    /// exit, so the test drives the same end state directly.
+    fn attach_exited_worker(runtime: &mut IsolatedWorkerRuntime) {
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let handle = std::thread::spawn(|| {});
+        while !handle.is_finished() {
+            std::thread::yield_now();
+        }
+        runtime.supervisor = Some(IsolatedWorkerSupervisor {
+            child: Some(WorkerChildHandle::Thread {
+                stop,
+                handle: Some(handle),
+            }),
+        });
+    }
+
+    #[test]
+    fn released_cache_reaps_its_exited_worker_without_respawning() {
+        let (mut backend, mut runtime, mut starter) = respawn_fixture(true, true);
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+        assert_eq!(backend.cache_state(), OriginCacheState::Active);
+        assert_eq!(starter.attempts.load(Ordering::SeqCst), 1);
+
+        // Control pressure released the cache, then the worker exited on the
+        // disable acknowledgement. That child is a zombie until it is waited.
+        backend.release_cache().unwrap();
+        assert_eq!(backend.cache_state(), OriginCacheState::Off);
+        attach_exited_worker(&mut runtime);
+        assert!(gpu_worker_has_exited(&mut runtime));
+
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+
+        assert_eq!(
+            starter.attempts.load(Ordering::SeqCst),
+            1,
+            "a released cache must not spawn a replacement worker"
+        );
+        assert!(
+            runtime.supervisor.is_none(),
+            "the exited worker must be reaped, not left as a zombie under a live handle"
+        );
+        assert_eq!(backend.cache_state(), OriginCacheState::Off);
+    }
+
+    #[test]
+    fn exited_worker_under_a_serving_cache_is_replaced() {
+        let (mut backend, mut runtime, mut starter) = respawn_fixture(true, true);
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+        assert_eq!(backend.cache_state(), OriginCacheState::Active);
+        assert_eq!(starter.attempts.load(Ordering::SeqCst), 1);
+
+        // The mirror still claims Active but the worker process is gone —
+        // the observable case the status mapping cannot see on its own.
+        attach_exited_worker(&mut runtime);
+        assert!(gpu_worker_has_exited(&mut runtime));
+        assert_eq!(backend.cache_state(), OriginCacheState::Active);
+
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+
+        assert_eq!(
+            starter.attempts.load(Ordering::SeqCst),
+            2,
+            "a serving cache with a dead worker must be rebuilt, not believed"
+        );
+        assert!(
+            runtime.supervisor.is_some(),
+            "the replacement must be supervised"
+        );
+        assert_eq!(backend.cache_state(), OriginCacheState::Active);
     }
 
     #[test]
