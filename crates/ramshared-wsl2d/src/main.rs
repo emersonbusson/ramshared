@@ -2563,6 +2563,7 @@ fn spawn_isolated_gpu_worker(
 
 fn parse_isolated_gpu_worker_args(args: &[String]) -> Result<(i32, GpuWorkerConfig), String> {
     let mut fd_raw = None;
+    let mut reserve_floor_raw = None;
     let mut config = GpuWorkerConfig::default();
     let mut seen = std::collections::HashSet::new();
     let mut values = args.iter();
@@ -2602,14 +2603,22 @@ fn parse_isolated_gpu_worker_args(args: &[String]) -> Result<(i32, GpuWorkerConf
                 }
             }
             "--reserve-floor" => {
-                config.reserve_floor_bytes = value()?
+                // Presence is mandatory even though `0` is a legal value
+                // (DT-9 case 3). A missing flag must fail closed rather than
+                // fall back to `GpuWorkerConfig::default()` and silently
+                // undercut the sealed floor (RF-1, RF-5).
+                let raw = value()?
                     .parse::<u64>()
                     .map_err(|_| "isolated GPU worker reserve floor is invalid".to_string())?;
+                config.reserve_floor_bytes = raw;
+                reserve_floor_raw = Some(raw);
             }
             _ => return Err(format!("unknown isolated GPU worker option {option}")),
         }
     }
     let fd_raw = fd_raw.ok_or_else(|| "missing --fd for isolated gpu worker".to_string())?;
+    reserve_floor_raw
+        .ok_or_else(|| "missing --reserve-floor for isolated gpu worker".to_string())?;
     Ok((fd_raw, config))
 }
 
@@ -11631,18 +11640,48 @@ mod tests {
             "--chunk-bytes",
             "1048576",
             "--reserve-floor",
-            "536870912",
+            "2147483648",
         ]);
         let (fd, config) = parse_isolated_gpu_worker_args(&args).unwrap();
         assert_eq!(fd, 42);
         assert_eq!(config.target_bytes, 2 * 1024 * 1024 * 1024);
         assert_eq!(config.chunk_bytes, 1024 * 1024);
-        assert_eq!(config.reserve_floor_bytes, 512 * 1024 * 1024);
+        assert_eq!(config.reserve_floor_bytes, 2 * 1024 * 1024 * 1024);
 
-        let (default_fd, defaults) =
-            parse_isolated_gpu_worker_args(&daemon_argv(&["--fd", "7"])).unwrap();
-        assert_eq!(default_fd, 7);
-        assert_eq!(defaults, GpuWorkerConfig::default());
+        // `--reserve-floor 0` is a legal explicit value (DT-9 case 3): the
+        // shared helper still applies `capacity.div_ceil(5)`. Presence is what
+        // the parser requires, not a non-zero floor.
+        let (zero_fd, zero) =
+            parse_isolated_gpu_worker_args(&daemon_argv(&["--fd", "7", "--reserve-floor", "0"]))
+                .unwrap();
+        assert_eq!(zero_fd, 7);
+        assert_eq!(zero.reserve_floor_bytes, 0);
+        assert_eq!(zero.target_bytes, GpuWorkerConfig::default().target_bytes);
+        assert_eq!(zero.chunk_bytes, GpuWorkerConfig::default().chunk_bytes);
+    }
+
+    /// RF-1 / RF-5: a missing `--reserve-floor` must fail closed instead of
+    /// falling back to `GpuWorkerConfig::default()` and undercutting the
+    /// sealed floor (Kahneman #13 — the refusal is the evidence).
+    #[test]
+    fn isolated_gpu_worker_arguments_require_reserve_floor() {
+        let missing = parse_isolated_gpu_worker_args(&daemon_argv(&["--fd", "7"]));
+        assert_eq!(
+            missing.unwrap_err(),
+            "missing --reserve-floor for isolated gpu worker"
+        );
+        let missing_after_sizing = parse_isolated_gpu_worker_args(&daemon_argv(&[
+            "--fd",
+            "7",
+            "--target-bytes",
+            "2147483648",
+            "--chunk-bytes",
+            "1048576",
+        ]));
+        assert_eq!(
+            missing_after_sizing.unwrap_err(),
+            "missing --reserve-floor for isolated gpu worker"
+        );
     }
 
     #[test]
@@ -11658,6 +11697,8 @@ mod tests {
             daemon_argv(&["--fd", "7", "--chunk-bytes", "0"]),
             daemon_argv(&["--fd", "7", "--chunk-bytes", "18446744073709551616"]),
             daemon_argv(&["--fd", "7", "--reserve-floor", "bad"]),
+            daemon_argv(&["--fd", "7", "--reserve-floor"]),
+            daemon_argv(&["--fd", "7", "--reserve-floor", "1", "--reserve-floor", "2"]),
             daemon_argv(&["--fd", "7", "--unknown", "1"]),
         ] {
             assert!(

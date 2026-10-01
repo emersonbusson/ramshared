@@ -9,8 +9,11 @@ use ramshared_vram::{
 };
 
 pub const WDDM_BUDGET_MAX_AGE: Duration = Duration::from_secs(5);
+/// Display cushion the **caller** supplies to [`safe_broker_slice_bytes`] and
+/// [`BudgetAdmissionProvider`]. Not a second floor authority (RF-1): the
+/// formula takes the configured reserve as an argument and the sealed policy
+/// (`ReserveFloorPolicy::min_floor_bytes`) is what production passes.
 pub const BROKER_DISPLAY_RESERVE_BYTES: u64 = 1536 * 1024 * 1024;
-pub const BROKER_RUNTIME_HEADROOM_BYTES: u64 = 768 * 1024 * 1024;
 const BROKER_SLICE_ALIGNMENT_BYTES: u64 = 128 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,12 +90,13 @@ fn safe_cache_target_with_runtime(
 }
 
 /// Bounds the legacy direct broker's per-slice allocation against fresh live headroom,
-/// preserving its canary, display reserve, and runtime buffer.
+/// preserving its canary, configured reserve, and the one named runtime buffer.
 pub fn safe_broker_slice_bytes(
     budget: &GpuBudgetSnapshot,
     requested_slice_bytes: u64,
     slices: u16,
     canary_bytes: u64,
+    reserve_floor_bytes: u64,
     now: Instant,
 ) -> Option<u64> {
     if slices == 0 || requested_slice_bytes == 0 {
@@ -103,8 +107,11 @@ pub fn safe_broker_slice_bytes(
     let safe_total = safe_cache_target_with_runtime(
         budget,
         requested_with_canary,
-        BROKER_DISPLAY_RESERVE_BYTES,
-        BROKER_RUNTIME_HEADROOM_BYTES,
+        reserve_floor_bytes,
+        // DT-5: the one named headroom constant. The former
+        // `BROKER_RUNTIME_HEADROOM_BYTES` (768 MiB) was a second source of
+        // this buffer and is deleted.
+        RUNTIME_FREE_BUFFER_BYTES,
         now,
     )?;
     let data_capacity = safe_total.checked_sub(canary_bytes)?;
@@ -511,21 +518,42 @@ mod tests {
         let now = Instant::now();
         let canary = 16 * 1024 * 1024;
         let expected_unaligned =
-            5 * GIB - BROKER_DISPLAY_RESERVE_BYTES - BROKER_RUNTIME_HEADROOM_BYTES - canary;
+            5 * GIB - BROKER_DISPLAY_RESERVE_BYTES - RUNTIME_FREE_BUFFER_BYTES - canary;
         let expected_aligned =
             expected_unaligned / BROKER_SLICE_ALIGNMENT_BYTES * BROKER_SLICE_ALIGNMENT_BYTES;
 
         assert_eq!(
-            safe_broker_slice_bytes(&allocator_budget(now), 4 * GIB, 1, canary, now),
+            safe_broker_slice_bytes(
+                &allocator_budget(now),
+                4 * GIB,
+                1,
+                canary,
+                BROKER_DISPLAY_RESERVE_BYTES,
+                now
+            ),
             Some(expected_aligned)
         );
         assert_eq!(
-            safe_broker_slice_bytes(&allocator_budget(now), u64::MAX, 2, canary, now),
+            safe_broker_slice_bytes(
+                &allocator_budget(now),
+                u64::MAX,
+                2,
+                canary,
+                BROKER_DISPLAY_RESERVE_BYTES,
+                now
+            ),
             None,
             "slice multiplication overflow must refuse allocation"
         );
         assert_eq!(
-            safe_broker_slice_bytes(&allocator_budget(now), 1, 0, canary, now),
+            safe_broker_slice_bytes(
+                &allocator_budget(now),
+                1,
+                0,
+                canary,
+                BROKER_DISPLAY_RESERVE_BYTES,
+                now
+            ),
             None
         );
     }
@@ -1078,7 +1106,7 @@ mod tests {
                 fail_budget: false,
             },
             BROKER_DISPLAY_RESERVE_BYTES,
-            BROKER_RUNTIME_HEADROOM_BYTES,
+            RUNTIME_FREE_BUFFER_BYTES,
         );
         provider
             .alloc(4096)
@@ -1103,7 +1131,7 @@ mod tests {
                 fail_budget: false,
             },
             BROKER_DISPLAY_RESERVE_BYTES,
-            BROKER_RUNTIME_HEADROOM_BYTES,
+            RUNTIME_FREE_BUFFER_BYTES,
         );
         assert!(provider.alloc(4096).is_err());
         assert_eq!(estimated_allocations.get(), 0);

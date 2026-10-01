@@ -121,14 +121,14 @@ The main daemon creates an anonymous Unix domain stream socket pair (`socketpair
 ## 8. Interfaces
 
 - Binary: re-exec via `/proc/self/exe __gpu_worker` (no separate binary artifact).
-- Arguments: `--fd <socket_fd> --target-bytes <bytes> --chunk-bytes <bytes> --reserve-floor <bytes>`
+- Arguments: `--fd <socket_fd> --target-bytes <bytes> --chunk-bytes <bytes> --reserve-floor <bytes>`. `--fd` and `--reserve-floor` are **mandatory** (a missing flag fails closed); `--reserve-floor` is the sealed `ReserveFloorPolicy::min_floor_bytes` and is never a silent default.
 - Telemetry: `/run/ramshared/wsl2-cache-status.json` (atomic write via tempfile rename).
 
 ## 9. Dependencies and risks
 
 - **Prerequisites:** `/dev/dxg` device accessible in WSL2; NVIDIA DirectX user-mode driver (`/usr/lib/wsl/lib/libdxcore.so`).
 - **Risks:** 
-  - Host GPU contention with Windows applications. *Mitigation:* strict reserve floor enforcement (`max(1536 MiB, 20%)`).
+  - Host GPU contention with Windows applications. *Mitigation:* strict reserve floor enforcement through the three-term maximum `max(sealed gpu_reserve_min_mib, floor(capacity * gpu_reserve_percent / 100), ceil(capacity / 5)) + 640 MiB runtime buffer`, resolved once by `ReserveFloorPolicy` (see `gpu-reserve-floor-authority`). The earlier `max(1536 MiB, 20%)` figure is **superseded** and must not be cited as the enforced floor.
   - Worker blocked in a driver call, with exit or VRAM release unconfirmed after bounded stop. *Mitigation:* parent-death signal, bounded stop, socket shutdown, and asynchronous reaper; live driver and reboot evidence remains an open gate.
 - **Rollback trigger:** Any worker crash or disconnect that causes `ramshared-wsl2d` to fail an origin read/write or stall swap for > 100ms.
 

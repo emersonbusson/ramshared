@@ -133,6 +133,14 @@ impl FrameHeader {
 pub struct GpuWorkerConfig {
     pub target_bytes: u64,
     pub chunk_bytes: usize,
+    /// Configured reserve floor, supplied by the sealed policy via
+    /// `--reserve-floor` (`ReserveFloorPolicy::min_floor_bytes`).
+    ///
+    /// `0` means "no configured floor" (DT-9 case 3) and is safe: the shared
+    /// helpers still apply the non-negotiable `capacity.div_ceil(5)` share
+    /// before any allocation. Production always passes the sealed
+    /// `gpu_reserve_min_mib` and the CLI parser requires the flag, so this
+    /// field can never silently undercut the seal (RF-1, RF-5).
     pub reserve_floor_bytes: u64,
     /// DT-9: compression is **off by default**. The raw cache is the product;
     /// the codec is an opt-in accelerator on top of a working raw cache.
@@ -148,7 +156,12 @@ impl Default for GpuWorkerConfig {
         Self {
             target_bytes: 4 * 1024 * 1024 * 1024,
             chunk_bytes: 2 * 1024 * 1024,
-            reserve_floor_bytes: 1536 * 1024 * 1024,
+            // DT-9 case 3, not a silent floor: `0` keeps only the shared
+            // `capacity.div_ceil(5)` share. A `1536 MiB` default here was the
+            // superseded PRD mitigation figure and a competing constant the
+            // seal cannot detect (RF-1). Production supplies the sealed
+            // `min_floor_bytes` through the required `--reserve-floor` flag.
+            reserve_floor_bytes: 0,
             compression_enabled: false,
         }
     }
