@@ -15,7 +15,14 @@ Correct: n7*128 + n8*256 + n9*512 + n10*1024.
 
 Residue is the buddyinfo snapshot taken at ready=1 (the one that produced
 high_order_7plus_blocks_reread), not the start snapshot and not the
-post-lifecycle one.
+post-lifecycle one. It is read only inside the `--- BUDDY AFTER FRAGMENT ---`
+window. When that marker is missing (the echo pipeline died under OOM) the
+scorer reports residue as unavailable and falls back to the ready=1 line's
+own `high_order_7plus=A->B->C`, which is measured while the pattern is still
+pinned. Never treat a buddyinfo that appears after ready=1 but outside that
+window as residue: on 36911059487 the guest log was re-dumped after the OOM
+and the start snapshot (505 blocks) sat after the ready=1 line, which made
+an exhausted=1 run look like a 505-block residue.
 """
 
 import re
@@ -38,21 +45,37 @@ def strip(line):
     return line[m.end():] if m else line
 
 
+BUDDY_MARKER = re.compile(r'--- BUDDY (BEFORE|AFTER FRAGMENT|FINAL) ---')
+
+
 def buddy_at_ready(lines):
-    """First buddyinfo after the first FRAGMENT_BUDDY ready= line."""
-    ready_i = None
+    """Buddyinfo under `--- BUDDY AFTER FRAGMENT ---` only.
+
+    The window closes at `high_order_7plus_blocks_helper=` and at any later
+    `--- BUDDY` marker. On 36911059487 the guest log is re-dumped after the
+    OOM, so a `--- BUDDY BEFORE ---` snapshot (505 blocks) sits far below the
+    ready=1 line; taking "first buddyinfo after ready=1" reported that as
+    residue and made an exhausted=1 run look like 1969 MiB still free.
+    """
+    start_i = None
     for i, raw in enumerate(lines):
-        if 'FRAGMENT_BUDDY ready=' in strip(raw):
-            ready_i = i
+        m = BUDDY_MARKER.search(strip(raw))
+        if m and m.group(1) == 'AFTER FRAGMENT':
+            start_i = i
             break
-    if ready_i is None:
+    if start_i is None:
         return None
-    for raw in lines[ready_i + 1:]:
+    for raw in lines[start_i + 1:]:
         s = strip(raw)
-        m = re.search(r'Node\s+\d+,\s+zone\s+\S+\s+((?:\d+\s+){3,})', s)
-        if not m:
+        if 'high_order_7plus_blocks_helper=' in s:
+            return None
+        m = BUDDY_MARKER.search(s)
+        if m:
+            return None
+        bm = re.search(r'Node\s+\d+,\s+zone\s+\S+\s+((?:\d+\s+){3,})', s)
+        if not bm:
             continue
-        nums = [int(x) for x in m.group(1).split()]
+        nums = [int(x) for x in bm.group(1).split()]
         if len(nums) < 11:
             continue
         return {k: nums[k] for k in ORDER_PAGE}
@@ -115,10 +138,15 @@ def score(path):
     for key, pat in (
             ('chase', r'FRAGMENT_BUDDY chase=([^\n]+)'),
             ('ready', r'FRAGMENT_BUDDY ready=([^\n]+)'),
+            ('o2res', r'FRAGMENT_BUDDY order2_reserve ([^\n]+)'),
             ('result', r'RESULT high_order_7plus_blocks=([^\n]+)'),
             ):
         v = find(pat, body)
         print(f'{key:<12}{v if v else "[none]"}')
+
+    o2g = find(r'FRAGMENT_BUDDY order2_reserve groups=(-?\d+)', body)
+    if o2g is not None and o2g == '0':
+        print('  !! order2_reserve groups=0 (copy_process stacks not returned)')
 
     hv = find(r'high_order_7plus_blocks_helper=(\d+)', body)
     rv = find(r'high_order_7plus_blocks_reread=(\d+)', body)
@@ -143,13 +171,25 @@ def score(path):
         print(f'{"start":<12}' +
               ' '.join(f'o{k}={start[k]}' for k in sorted(start)) +
               f'  -> {blocks(start)} blk / {pages(start)} pg')
+
+    # Authoritative residue when the AFTER-FRAGMENT snapshot is missing:
+    # the ready=1 line's own high_order_7plus=A->B->C third value, measured
+    # while the pattern is still pinned.
+    ready_triple = find(
+        r'FRAGMENT_BUDDY ready=[^\n]*high_order_7plus=(\d+->\d+->\d+)', body)
+    ready_ho = find(
+        r'FRAGMENT_BUDDY ready=[^\n]*high_order_7plus=\d+->\d+->(\d+)', body)
     if ready:
         print(f'{"residue":<12}' +
               ' '.join(f'o{k}={ready[k]}' for k in sorted(ready)) +
               f'  -> {blocks(ready)} blocks / {pages(ready)} pages'
-              f' / {pages(ready) * 4 / 1024:.2f} MiB')
+              f' / {pages(ready) * 4 / 1024:.2f} MiB'
+              f'  [buddyinfo @ AFTER-FRAGMENT]')
+    elif ready_ho is not None:
+        print(f'{"residue":<12}high_order_7plus={ready_triple}'
+              f'  [ready=1 line; no buddyinfo under --- BUDDY AFTER FRAGMENT ---]')
     else:
-        print(f'{"residue":<12}[no buddyinfo at ready=1]')
+        print(f'{"residue":<12}[no buddyinfo and no ready=1 high_order_7plus]')
 
     lc = find(r'LIFECYCLE_VERDICT=(\S+)', body)
     cf = find(r'cycle_fails=(\d+)', body)
