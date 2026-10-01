@@ -14596,3 +14596,189 @@ panic. Superseded for the panic cause only by a run that panics with
 entry. Job-level `success` or `failure` on `hyperv-runtime-drill` is
 never a gate closure. Never cite this entry as CoCo or send-gate
 evidence.
+
+## EVD-0163 — the third signal closes on both guests, with a surviving channel-open and no panic
+
+**Verdict:** 🟢 closed — run 36933034727 reports **`exhausted=1` with
+`high_order_7plus_blocks=0`** on **both** windows-latest and windows-2025,
+together with `REBOUND==yes`, `accept4_failures=0` and `oops=0`. All three
+EVD-0134 signals are measured closed on both guests, and the channel-open
+exercise under the pattern returned
+`PASS_RING_ALLOCATION_UNDER_FRAGMENTATION` on both. EVD-0162's Freshness
+clause is discharged.
+
+**Category:** drill / fragmentation acceptance — EVD-0134 third signal
+closes on both guests; channel-open under fragmentation survives the
+pattern; no panic.
+
+**How to measure:** download both runtime job logs of run 36933034727
+(`gh api repos/emersonbusson/WSL2-Linux-Kernel/actions/jobs/<id>/logs`)
+and run `score-fragmentation-drill.py` on each console. The decisive
+fields are the `ready=1 … exhausted=… high_order_7plus=…->…->…` line, the
+`RESULT` line's `high_order_7plus_blocks=` / `exhausted=` / `rebind=`, and
+the two `MMAP_HOLD` lines. Job-level conclusion is not a gate input.
+
+### Run
+
+| Job | id | outcome |
+| --- | --- | --- |
+| drill-kernel | 110606728517 | success |
+| drill-runtime windows-latest | 110608391627 | **success** |
+| drill-runtime windows-2025 | 110608391542 | **success** |
+
+Source revision `d253c9c885c1`. Workflow conclusion `success`. Created
+2026-10-01T22:06:47Z, updated 2026-10-01T22:14:27Z. `HYPERV_DRILL_FRAGMENT
+status=0`, `HYPERV_DRILL_RESULT status=PASS`, `lifecycle=0 fragment=0
+splats=0 faults=0`, `scope=ordinary-hyperv-gpadl-uio-and-ring-under-fragmentation`
+on both guests.
+
+### The three signals, both guests
+
+windows-latest:
+
+```
+FRAGMENT_BUDDY min_free_kbytes saved=5704 set=512 now=512
+FRAGMENT_BUDDY watermark_boost_factor saved=15000 set=0 now=0
+FRAGMENT_BUDDY start cap_chunks=32064 high_order_7plus=500
+FRAGMENT_BUDDY allocated chunks=29549 high_order_7plus=500->26 locked=29549 stop=memfree-margin
+FRAGMENT_BUDDY chase=1458 locked=1458 holes=0 pairs=0 high_order_7plus=26->0
+FRAGMENT_BUDDY order2_reserve groups=32 pages=128 reserve=8
+FRAGMENT_BUDDY ready=1 chunks=29549 pages=472784 held=4098 freed=4096 locked=29549 pairs=4096 chunk_kib=64 cap_chunks=32064 hole_cap=4096 chase=1458 chase_holes=0 chase_pairs=0 unsplit=563 exhausted=1 pagemap=1 stop=chase-memfree-margin high_order_7plus=500->26->0 floor_kb=1024 wmark_kb=640 free_kb=840
+RESULT high_order_7plus_blocks=0 (reread=0) exhausted=1 pagemap=1 unsplit=563 stop=chase-memfree-margin order7_dmesg=0 accept4_failures=0 oops=0 rebind=yes
+VERDICT=PASS_RING_ALLOCATION_UNDER_FRAGMENTATION
+VERDICT_SCOPE ordinary-x86_64-vzalloc-path; co-co-chunked-fallback-not-exercised
+MMAP_HOLD path=/dev/uio0 bytes=4096 maps=5 hold=8
+MMAP_HOLD path=/sys/devices/LNXSYSTM:00/LNXSYBUS:00/ACPI0004:00/MSFT1000:00/12a9ac35-6119-4c50-88e9-2fb48139a0ce/channels/14/ring bytes=2097152 maps=1 hold=8
+```
+
+windows-2025 is the same shape with `high_order_7plus=497->26->0`,
+`chunks=29558`, `unsplit=533`, `free_kb=852`, and the same
+`order2_reserve groups=32 pages=128 reserve=8`.
+
+| signal | windows-latest | windows-2025 |
+| --- | --- | --- |
+| `high_order_7plus_blocks` | **0** (reread=0) | **0** (reread=0) |
+| `exhausted` | **1** | **1** |
+| `pagemap` | 1 | 1 |
+| `order2_reserve` | groups=32 pages=128 reserve=8 | groups=32 pages=128 reserve=8 |
+| `REBOUND` / `rebind` | yes | yes |
+| `accept4_failures` | 0 | 0 |
+| `oops` | 0 | 0 |
+| `order7_dmesg` | 0 | 0 |
+| channel-open verdict | `PASS_RING_ALLOCATION_UNDER_FRAGMENTATION` | same |
+| `MMAP_HOLD /dev/uio0` | maps=5 hold=8 | maps=5 hold=8 |
+| `MMAP_HOLD ring` | maps=1 hold=8 (2 MiB) | maps=1 hold=8 |
+| `PHASE1` | cycle_fails=0 / 120 steps | same |
+| `LIFECYCLE_VERDICT` | PASS cycles=30 phase2=yes | same |
+| `FAULTS_NONE` / splats | yes / 0 | yes / 0 |
+
+The chase finally did its job: `high_order_7plus=26->0` after the
+allocation phase left 26 blocks. On 36927495556 the same chase reported
+`500->26->26` — zero progress — and that is one of the two defects this
+run fixes.
+
+### Two defects that stood between 36927495556 and this run
+
+1. **`unsplit_free_pages()` measured the wrong budget.** The chase's
+   starvation floor counted buddyinfo order-0 plus the PCP only. It read
+   114 while 88.5 MiB still sat in orders 1..6 and 7+, so the floor fired
+   (`stop=chase-unsplit-floor`, `unsplit=114`) before a single high-order
+   block had been forced to split. Splitting an order-10 raises the true
+   no-split budget by roughly 1024 pages, so the floor could never have
+   been the reason the chase stalled — the measure was. It now sums
+   buddyinfo orders 0..6 as `count * 2^order`, plus the PCP. This run's
+   `unsplit=563` / `533` is that corrected budget; the floor at
+   `FRAG_CHASE_UNSPLIT=128` never bound, and the chase stopped on
+   `chase-memfree-margin` **after** `high_order_7plus` had reached 0.
+   `buddy_order0_pages()` was deleted as superseded.
+
+2. **The wait loop forked while the pattern was draining the buddy.** Run
+   36927495556 windows-2025 lost the shell to
+   `sh: page allocation failure: order:1` while the buddy held only
+   `3025*4kB (UM)` and every order above was 0; `init` then found no
+   killable process (the helper pins itself at `oom_score_adj=-1000`) and
+   panicked on `System is deadlocked on memory`. The `seq`/`grep`/`sleep`
+   poll forked once a second, and every fork needs a compound page from
+   the buddy being drained. The wait is now shell builtins only.
+
+### A harness defect of our own — never file this as a candidate defect
+
+Run 36930819051 (`0851a953feb3`) produced **no `FRAGMENT_BUDDY` line at
+all** and reported `fragment=2 scope=drill-refused`. The edit that
+replaced the fork-prone wait loop had also deleted the line that starts
+the helper (`"$HELPER" fragment-buddy "$HOGB" 600 … & HOGPID=$!`), so the
+script polled a log nobody was writing and then aborted at teardown on
+`HOGPID: parameter not set` under `set -u`. Two facts from that bisection
+are worth keeping:
+
+- `read -t 1` on an EOF fd returns immediately. Measured under busybox
+  ash: 5 iterations complete in 0s on `/dev/null` and 0s when stdin is
+  `/dev/null`, versus 1s each on a tty and on a fifo held `O_RDWR`. A
+  spin would walk the 180-iteration cap in milliseconds and report the
+  pattern missing while the helper is still allocating. `init` only
+  redirects fd 1 and 2, so stdin is already the console; the script
+  reopens `/dev/console` when stdin is not a tty. The `[ -r ]` test is
+  load bearing — under `set -e` a failed `exec` redirection is fatal and
+  `|| true` does **not** catch it in busybox ash.
+- `mkfifo` is **not** among the initramfs applets shipped by
+  `build-hyperv-drill-kernel.sh`. A fifo tick source would have been a
+  silent dependency that only fails after the guest is already booted.
+  Do not reintroduce one without adding the applet.
+
+### Not claimed here
+
+`VERDICT_SCOPE ordinary-x86_64-vzalloc-path; co-co-chunked-fallback-not-exercised`.
+On an ordinary x86_64 Hyper-V guest `vmbus_alloc_buffer()` takes
+`vzalloc()`, because `vmbus_uses_shared_page_chunks()` is only true for
+host-visible buffers in an isolated VM or on ARM64. This entry closes
+**EVD-0134's third signal and the historical "channel open dies under
+buddy fragmentation" failure mode**. It is **not** evidence that the CoCo
+chunked order-7 → order-0 degrade ran; that path stays with COCO-1..5.
+
+The `hv_vmbus: probe failed … (-22)` / `unable to open channel: -22`
+lines in the lifecycle phase are the **BUG-3 hold-in-mmap window**: the
+drill tears the NIC down while the mapping is held. They are identical in
+36927495556 and 36933034727; `PHASE2 hold-in-mmap window OPEN (mapping
+alive across restore_nic)` is printed, with `FAULTS_NONE` and `splats=0`.
+Expected, not a regression.
+
+Map accounting is steady state and not a leak — byte-identical across both
+runs: `PHASE1-BEFORE` 12 → `cycle20` 11 → `PHASE1-AFTER` 12, then
+`PHASE2-BEFORE-TEARDOWN` 13 = `PHASE2-AFTER-TEARDOWN` 13 = `FINAL` 13
+against `BASELINE` 12, `devices_final=14`. The +1 is the phase-2
+`channels/14/ring` subchannel ring that exists because the restore brings
+the NIC back up. `MMAP_HOLD released maps=5` and `released maps=1` show
+the drill's own mappings were dropped.
+
+### Rollback trigger
+
+Either guest regressing to `high_order_7plus_blocks>0` **or**
+`exhausted=0`; or `order2_reserve groups=0` on a clean run; or any
+`accept4_failures>0`, `oops>0`, `order7_dmesg>0`, panic, or `order:7`
+dmesg line during the channel-open exercise. A panic with
+`min:512kB boost:0kB` **and** a non-zero order-2-or-higher buddy line is a
+new mechanism and must not be filed under EVD-0162. A console with no
+`FRAGMENT_BUDDY` line at all is a harness defect first — check that the
+helper launch and the teardown's `HOGPID` handling are intact before
+suspecting the candidate.
+
+### What must not be lost
+
+Keep both full `ready=1` lines and both `RESULT` lines. The `unsplit=`
+values (563 / 533) are the first measurements of the **corrected** no-split
+budget and are the reference for any later change to `FRAG_CHASE_UNSPLIT`.
+Keep `order2_reserve groups=32 pages=128 reserve=8` — proof that the PCP
+soak plus 2 MiB reserve scan from the previous entry still works after the
+chase change. Keep the `sh: page allocation failure: order:1` and
+`System is deadlocked on memory` lines from 36927495556 w25, and the
+`HOGPID: parameter not set` line from 36930819051: they are the only
+records of two harness-side mechanisms that a future wait-loop change
+could silently reintroduce. Job-level `success` or `failure` on
+`hyperv-runtime-drill` is never a gate closure — the gate is the `RESULT`,
+`VERDICT` and `MMAP_HOLD` lines. Never cite this entry as CoCo or
+send-gate evidence.
+
+**Freshness:** Current for the EVD-0134 third signal and for the ordinary
+x86_64 channel-open-under-fragmentation claim. Superseded only by a run
+that exercises the CoCo chunked fallback on SEV-SNP / TDX / arm64 CCA
+hardware (COCO-1..5), or by a regression matching the rollback trigger.
