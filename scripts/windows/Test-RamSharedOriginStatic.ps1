@@ -22,6 +22,7 @@ foreach ($required in @(
     'Purpose "before explicit origin allocation"',
     'source = "manufactured_test"',
     'Get-ConfiguredWslSwapVhdxPath',
+    'Test-SameWindowsPath',
     'OriginVhdxPath',
     'ExistingSwapVhdxPath',
     '25GB',

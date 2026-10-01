@@ -39,6 +39,23 @@ function Resolve-AbsoluteWindowsPath {
     return [IO.Path]::GetFullPath($expanded)
 }
 
+# Manifest policy compares paths, not strings. A sealed `origin_vhdx` and the
+# runtime path can be the same file while differing in separator, case, or
+# `.`/`..` segments; only a resolved ordinal-ignore-case comparison is sound.
+# An unresolvable side is never equal, so this stays fail-closed.
+function Test-SameWindowsPath {
+    param([AllowEmptyString()][string]$Left = "", [AllowEmptyString()][string]$Right = "")
+    if ([string]::IsNullOrWhiteSpace($Left) -and [string]::IsNullOrWhiteSpace($Right)) { return $true }
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $false }
+    try {
+        $leftPath = Resolve-AbsoluteWindowsPath -Path $Left -Name "manifest path"
+        $rightPath = Resolve-AbsoluteWindowsPath -Path $Right -Name "runtime path"
+    } catch {
+        return $false
+    }
+    return [string]::Equals($leftPath, $rightPath, [StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-ConfiguredWslSwapVhdxPath {
     if (-not [string]::IsNullOrWhiteSpace($ExistingSwapVhdxPath)) {
         return Resolve-AbsoluteWindowsPath -Path $ExistingSwapVhdxPath -Name "ExistingSwapVhdxPath"
@@ -335,7 +352,7 @@ function Read-SealedOriginManifest {
     $partUuid = ([string]$manifest.partuuid).ToLowerInvariant()
     $diskGuid = ([string]$manifest.disk_guid).ToLowerInvariant()
     $expectedSwapUuid = ([string]$manifest.expected_swap_uuid).ToLowerInvariant()
-    if ($manifest.schema_version -ne 3 -or $manifest.origin_vhdx -cne $OriginVhdx -or $manifest.existing_wsl_swap_vhdx -cne $ExistingSwapVhdx -or $fixedSize -lt 5GB -or $fixedSize -gt 64GB -or ($fixedSize % 1GB) -ne 0 -or $fixedSize -lt [uint64](($logical + 1024) * 1MB) -or ($PSBoundParameters.ContainsKey("OriginSizeBytes") -and $fixedSize -ne [uint64]$OriginSize) -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
+    if ($manifest.schema_version -ne 3 -or -not (Test-SameWindowsPath -Left ([string]$manifest.origin_vhdx) -Right $OriginVhdx) -or -not (Test-SameWindowsPath -Left ([string]$manifest.existing_wsl_swap_vhdx) -Right $ExistingSwapVhdx) -or $fixedSize -lt 5GB -or $fixedSize -gt 64GB -or ($fixedSize % 1GB) -ne 0 -or $fixedSize -lt [uint64](($logical + 1024) * 1MB) -or ($PSBoundParameters.ContainsKey("OriginSizeBytes") -and $fixedSize -ne [uint64]$OriginSize) -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
         throw "sealed origin manifest policy mismatch"
     }
     $actualHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $logical -ManifestPhysicalCacheCapMiB $physical -ManifestPartUuid $partUuid -ManifestDiskGuid $diskGuid -ManifestExpectedSwapUuid $expectedSwapUuid -ManifestFixedSizeBytes $fixedSize
