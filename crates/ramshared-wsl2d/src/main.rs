@@ -642,6 +642,15 @@ fn signal_owned_command_group_before_reap(
         ));
         return false;
     };
+    // POSIX `kill(0, sig)` signals the caller's own process group and
+    // `kill(-1, sig)` signals every process the caller may signal. Neither is
+    // an owned child group, so both are refused before the syscall.
+    if pid <= 1 {
+        fatal.contain(&format!(
+            "{label}: process-group ID {pid} is not an owned child group before direct-child reap"
+        ));
+        return false;
+    }
     // SAFETY: the group ID is retained from the exact direct child created by
     // this command runner, and that child was configured as the group leader.
     if unsafe { kill_process_group_raw(-pid, SIGKILL) } == 0 {
@@ -2616,8 +2625,13 @@ fn run_isolated_gpu_worker_entry(args: &[String]) -> Result<(), Box<dyn std::err
     use std::os::unix::io::FromRawFd;
     let socket = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd_raw) };
 
+    // Load CUDA (and its fail-closed NVML occupancy source) once. A second
+    // `Cuda::load` after selection would repeat dlopen + cuInit + nvmlInit on
+    // the handshake critical path and push worker startup past the parent's
+    // deadline under load.
+    let cuda = Cuda::load().ok();
     let mut candidates = Vec::new();
-    if let Ok(cuda) = Cuda::load()
+    if let Some(ref cuda) = cuda
         && let Ok(count) = cuda.device_count()
     {
         for ordinal in 0..count.max(0) as u32 {
@@ -2666,24 +2680,23 @@ fn run_isolated_gpu_worker_entry(args: &[String]) -> Result<(), Box<dyn std::err
             selected.backend, selected.ordinal, selected.identity.key, selected.safe_target_bytes
         );
         let result = match selected.backend {
-            GpuBackendKind::Cuda => {
-                Cuda::load()
-                    .map_err(|error| error.to_string())
-                    .and_then(|cuda| {
-                        let device = cuda
-                            .device(selected.ordinal as i32)
-                            .map_err(|error| error.to_string())?;
-                        let provider = cuda
-                            .create_context(&device)
-                            .map_err(|error| error.to_string())?;
-                        run_gpu_worker_with_selected_wddm(
-                            socket,
-                            provider,
-                            selected.identity,
-                            worker_config,
-                        )
-                    })
-            }
+            GpuBackendKind::Cuda => cuda
+                .as_ref()
+                .ok_or_else(|| "CUDA unavailable after adapter selection".to_string())
+                .and_then(|cuda| {
+                    let device = cuda
+                        .device(selected.ordinal as i32)
+                        .map_err(|error| error.to_string())?;
+                    let provider = cuda
+                        .create_context(&device)
+                        .map_err(|error| error.to_string())?;
+                    run_gpu_worker_with_selected_wddm(
+                        socket,
+                        provider,
+                        selected.identity,
+                        worker_config,
+                    )
+                }),
             GpuBackendKind::Vulkan => VulkanProvider::open_exact(selected.ordinal)
                 .map_err(|error| error.to_string())
                 .and_then(|provider| {
