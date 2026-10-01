@@ -12696,3 +12696,268 @@ standing measurement of the post-reorder state and the justification for
 the recycle. Never cite this entry as CoCo chunked-fallback, GPADL/UIO
 lifecycle, sealed-kernel-pair, or production-kernel evidence — it is a
 fragmentation drill run whose third signal is open.
+
+---
+
+## 2026-10-01 10:25 -03 — oomd logged the kill this time, and the largest process was a backgrounded git history walk (EVD-0150)
+
+**What:** Third WSL2 "freeze" of the day, and the first with a **logged**
+kill rather than an inferred one. Boot `-1`
+(`28884ac20e504b42b510facc27569897`) ended at 10:29:04 in a clean
+`systemd-poweroff` — not a kernel panic, not a kernel OOM.
+
+```
+Oct 01 10:25:15 systemd-oomd[1988]: Killed /user.slice/user-1000.slice/
+  user@1000.service/init.scope due to memory pressure for
+  /user.slice/user-1000.slice/user@1000.service being 51.46% > 50.00%
+  for > 20s with reclaim activity
+Oct 01 10:27:01 systemd-journald[67]: Under memory pressure, flushing caches.
+Oct 01 10:27:35 systemd-journald[67]: Under memory pressure, flushing caches.
+Oct 01 10:28:01 systemd-journald[67]: Under memory pressure, flushing caches.
+Oct 01 10:28:28 unknown: Exception:
+Oct 01 10:28:29 unknown: Operation canceled @p9io.cpp:258 (AcceptAsync)
+Oct 01 10:28:39 tailscaled[2269]: monitor: time jump detected (slept 25s)
+Oct 01 10:28:43 systemd[1]: user-runtime-dir@1000.service: Stopping timed out. Terminating.
+Oct 01 10:28:58 unknown: WSL (162) ERROR: No buffer space available @telemetry.cpp:190
+Oct 01 10:29:02 systemd-logind[2027]: The system will power off now!
+```
+
+`p9io.cpp` is the WSL Plan9 (9P) server for `/mnt/c`; its cancellation is
+the Windows-side teardown path. `time jump detected (slept 25s)` means the
+guest was frozen ~25 s while thrashing. The kill at 10:25:15 and the
+teardown at 10:28:28 are two events, three minutes apart: the user
+session died first, then the VM was recreated.
+
+### The state that produced it
+
+ramshared telemetry at 10:24:07, ~40 s before the oomd kill, uptime
+3550 s on a 16 GiB WSL guest:
+
+| Quantity | Value | Reading |
+| --- | --- | --- |
+| `MemTotal` | 16 379 364 KiB | `.wslconfig` `memory=17179869184`, fixed non-elastic |
+| `available_kib` | **230 292** | 225 MiB free of 16 GiB |
+| `swap_total_kib` / `swap_free_kib` | 4 194 304 / **80** | swap **fully exhausted** — 80 KiB free of 4 GiB |
+| `anon_pages_kib` | 12 782 372 | 12.2 GiB anon |
+| `memory_psi_some_avg10` | **94.02 %** | |
+| `memory_psi_full_avg10` | **84.51 %** | |
+| `swap_out_pages` | 3 610 558 | 13.8 GiB written to swap cumulative |
+| `swap_read_bytes` | 128 054 125 568 | 120 GiB read back cumulative |
+| `memory_events` | `high=0 max=0 oom=0 oom_kill=0` | **no kernel OOM** |
+
+Top process at that instant, by RSS:
+
+```
+comm=git  unit=/init.scope  rss_kib=1123224  swap_kib=799032  cpu_ticks=11358
+```
+
+**1.84 GiB for a single `git` process**, in `init.scope` where backgrounded
+shell jobs land. That is a `git log -p --all -S` pickaxe walk started
+against the WSL2-Linux-Kernel fork — a full kernel history scan. It was
+the largest consumer on the machine at the moment the kill fired, in a
+guest already at 225 MiB free with swap pinned.
+
+So this incident is not only standing host pressure. It has a named
+proximate contributor, and that contributor is ours: a history-wide
+`git -S` search on a kernel-sized repository is not a cheap command, and
+it must not be run in a background shell on a guest already thrashing.
+
+### Relation to the earlier two incidents
+
+| | 03:15 | 09:20 | **10:25 (this one)** |
+| --- | --- | --- | --- |
+| Logged killer | none | none | **`systemd-oomd`, named cgroup** |
+| Mechanism | PSI kill, inferred | Plan9 cancel → logind poweroff | **oomd PSI kill, then Plan9 cancel → logind poweroff** |
+| Kernel OOM lines | 0 | 0 | **0** (`memory_events.oom_kill=0`) |
+| Peak of killed unit | 811.7 M (`user@1000`) | n/a | 26.6 M (`user-1000.slice`) — session already drained |
+| Windows host reboot | no | no | no |
+| Guest reboot | no | yes (utility VM recreated) | yes (utility VM recreated) |
+
+The 03:15 inference is upgraded by this run: the same
+`ManagedOOMMemoryPressure=kill` signature, now with the oomd log line that
+was missing before. The 09:20 and 10:25 teardowns share the `p9io.cpp`
+cancellation signature.
+
+### Standing condition
+
+`.wslconfig` sets `memory=17179869184` (16 GiB **fixed, non-elastic**),
+`swap=4294967296` (4 GiB, `C:/wsl/swap.vhdx`), `vmIdleTimeout=-1`,
+`autoMemoryReclaim=gradual`, `kernel=C:\\wsl\\kernel-ramshared-v6`. The
+host is 32 GiB and `vmmemWSL` alone holds ~15.2 GiB of it. `autoMemoryReclaim`
+cannot help against a fixed cap — there is nothing to reclaim *to*. The
+Docker observability stack (clamd, tempo, grafana, minio, prometheus,
+otelcol) plus multiple concurrent Claude processes is the standing load.
+
+**What this does NOT prove:** nothing about the kernel contribution, the
+drill helper, or the VMBus series — this is an environment incident, not
+product evidence. It is recorded here because measurement validity
+depends on it: a run taken while this condition holds is a run on a
+thrashing machine (`full_avg10=84 %`, swap pinned) and its timings and
+allocation outcomes are not comparable to an idle-guest run. Never cite
+this entry as build, KUnit, CoCo, drill or qualification evidence.
+
+**Verdict:** 🔴 fails — environment, not product; measurement window is unsafe while it holds
+
+**Category:** environment / host-safety
+
+**How to measure:** re-read `/proc/pressure/memory` and
+`/proc/meminfo`'s `SwapFree` before any registered run. Do not start a
+registered benchmark or a history-wide `git` walk while
+`memory_psi_full_avg10 > 20` or `SwapFree < 512 MiB`. Confirm the fix on
+the Windows side by checking that `vmmemWSL` working set plus the runner
+VMs fit in host RAM with more than 4 GiB free.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0150`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T13:25:15Z`.
+**Verified at:** `2026-10-01T13:45:00Z`.
+**Source revision:** `7ad4145c`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the oomd log line with `being 51.46% > 50.00% for >
+20s with reclaim activity` — it is the proof that upgrades the 03:15
+inference. Keep `swap_free_kib=80` next to `comm=git rss=1123224
+swap=799032`: the pair is what identifies a self-inflicted contributor
+rather than standing load. Keep `memory_events.oom_kill=0` beside every
+"WSL froze" claim — it is the line that separates a kernel OOM from a
+userspace PSI kill and from a Windows-side teardown.
+**Freshness:** Superseded for the causal claim by any run that records a
+kernel OOM kill (`Out of memory: Killed process`) or a panic, and for the
+environment claim by a measurement showing `SwapFree` healthy with
+`memory_psi_full_avg10 < 20` over a sustained window. Re-read the
+pressure and swap state before citing any timing captured around
+2026-10-01T13:00Z–13:30Z. Never cite this entry as kernel, drill, CoCo or
+qualification evidence — it is a host incident record.
+
+---
+
+## 2026-10-01 10:48 -03 — the recycle cut the residue 43 → 12 MiB, and the hole cap is what truncated it (EVD-0151)
+
+**What:** First score of the chase-chunk recycle
+(`punch_chunk_isolated()`, fork `2e04310eac43`). Drill run **36870289589**,
+branch `vmbus-ring-buffer-upstream-v2`, `headSha=2e04310eac438100fc8a313bc8e8816866f1e6ff`.
+Workflow `conclusion=success` on all three jobs — **job green is not a gate
+closure**: the fragmentation signal is still red.
+
+| Job | Result | Residue at `ready=1` | Verdict |
+| --- | --- | --- | --- |
+| `drill-runtime (windows-latest)` 110398791749 | `high_order_7plus_blocks=5 (reread=4) exhausted=0 stop=chase-memfree-margin` | buddyinfo `1 2 2 1 1 1 0 0 0 2 2` → n7=0 n8=0 n9=2 n10=2 = **4 blocks / 3072 pages / 12.0 MiB** | `INCONCLUSIVE_CAP_REACHED` |
+| `drill-runtime (windows-2025)` 110398791763 | `high_order_7plus_blocks=5 (reread=6) exhausted=0 stop=chase-memfree-margin` | buddyinfo `1 0 2 2 1 1 0 1 2 1 2` → n7=1 n8=2 n9=1 n10=2 = **6 blocks / 3200 pages / 12.5 MiB** | `INCONCLUSIVE_CAP_REACHED` |
+
+Both: `LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes`,
+`HYPERV_DRILL_RESULT lifecycle=0 fragment=3 splats=0 faults=0`,
+`scope=lifecycle-pass-fragment-inconclusive`, `order7_dmesg=0`,
+`accept4_failures=0`, `oops=0`, `rebind=yes`.
+
+### The recycle works; the cap stopped it early
+
+Progress against run 36823337153 (`5df19bb1f70c`, no recycle):
+
+| Quantity | 36823337153 (no recycle) | **36870289589 (recycle)** |
+| --- | --- | --- |
+| residue blocks (reread) | 13 (wl) / 13–14 (w25) | **4 (wl) / 6 (w25)** |
+| residue size | 11 008 pages = **43.0 MiB** | **3 072 / 3 200 pages = 12.0 / 12.5 MiB** |
+| order-10 blocks left | 10 (wl) | **2 (wl) / 2 (w25)** |
+| `high_order_7plus` trail | 496→24→13 | 502→26→**5** (wl) / 494→27→**5** (w25) |
+| `unsplit` | 877 (wl) / 432 (w25) | 416 (wl) / 294 (w25) |
+| chase chunks | 700 / 688 | 1724 / 1689 |
+| chase holes | n/a | **8192 / 8192** |
+
+**The binding constraint is named in the log:** `chase_holes=8192` equals
+`FRAG_CHASE_HOLE_CAP` exactly, on **both** jobs. Average holes per chunk is
+`8192/1724 = 4.75` (wl) and `8192/1689 = 4.85` (w25) — both below the 8 that
+complete in-chunk order-0 buddy pairs would allow (`punch_chunk_isolated`
+frees every even PFN whose partner is also in the chunk and stays mapped;
+every order-0 buddy lies inside the same 64 KiB chunk, so the physics
+permits 8 per chunk). The recycle was therefore **truncated by the constant,
+not by the buddy**.
+
+Hold arithmetic on windows-latest, to show the truncation has a price:
+
+```
+main hold   = 477920 pages - 4096 punched = 473824 pages = 1850.875 MiB
+chase hold  = 1724 * 16 - 8192 holes      =  19392 pages =   75.750 MiB
+total hold                                        493216 pages = 1926.625 MiB
+```
+
+At the intended 8 holes/chunk the same 1724 chunks would have held
+`1724 * 8 = 13792 pages = 53.875 MiB`, i.e. **21.875 MiB less**. That is
+exactly the headroom the chase needed: the stop that fired is
+`chase-memfree-margin` (the 96 MiB `FRAG_HARD_KB` floor), and the residue
+still standing is 12 MiB. Drawing those 3 072 pages costs ~192 further
+chunks at 16 pages faulted each and ~6 MiB of net hold at 8 held/chunk —
+inside the 21.9 MiB the cap denied.
+
+### Where the stop actually fired
+
+Recorded per the re-measure rule, not inferred:
+
+- `stop=chase-memfree-margin` on **both** jobs. Not `order7-depleted`
+  (the pass condition), not `chase-unsplit-floor`, not the chunk cap.
+- `FRAG_CHASE_CAP` (4096) was not reached: 1724 / 1689 chunks used.
+- `FRAG_CHASE_UNSPLIT` (128) was not reached: `unsplit=416 / 294`.
+- `FRAG_CHASE_HOLE_CAP` (8192) **was** reached, identically, twice.
+
+`FRAG_CHASE_HARD_KB` was already corrected to 16 MiB in
+`2e04310eac43` after 36823337153 showed 48 MiB sat at the demotion
+threshold. It is not what bound here.
+
+### Serial console byte loss (same class as EVD-0149)
+
+windows-latest's `RESULT` line arrived as `high_ordr_7plus_blocks` — one
+`e` dropped from `high_order_7plus_blocks`, which is the spelling in
+`vmbus-fragmentation-drill.sh:250`. windows-2025 arrived intact. The
+printed count and the `reread` also disagree (wl 5 vs 4, w25 5 vs 6);
+**`reread` is authoritative** — it is a fresh buddyinfo recount after the
+print. Cite `reread` for the block count and windows-2025 for field
+spelling. Do not "fix" the source for a dropped byte.
+
+### Verdict
+
+🔴 **fails** — EVD-0134 third signal still red (`exhausted=0`).
+
+The recycle is **proven directionally** (43 → 12 MiB residue, 13 → 4/6
+blocks, order-10 count 10 → 2) and **not yet sufficient**. The single
+lever left is `FRAG_CHASE_HOLE_CAP`, which the constant's own comment
+already names as `8 holes per chunk across 4096 chunks would be 32768 of
+them` while asserting "the residue is gone long before this binds" — that
+assertion is falsified by this run. The starvation guard that actually
+applies is the memfree margin; the hole cap is a VMA bound, and
+`raise_max_map_count()` already sets 1 048 576.
+
+**What this does not prove:** ring allocation under a depleted buddy.
+`exhausted=0` means an order-7 request could still be satisfied outright,
+so the fallback path is still unforced. Do not cite this as fragmentation
+PASS.
+
+**Verdict:** 🔴 fails — third signal open; recycle works, hole cap truncated it
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY ready=1 … chase_holes=…` and the
+buddyinfo line that follows it from both `drill-runtime` jobs of the run.
+`chase_holes == FRAG_CHASE_HOLE_CAP` means the recycle was truncated and
+the residue figure is a floor, not the physics. Score the third signal
+only from `RESULT … (reread=…) exhausted=…`, never from the printed
+pre-reread count.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0151`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T13:48:49Z`.
+**Verified at:** `2026-10-01T13:55:00Z`.
+**Source revision:** `2e04310eac43`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep `chase_holes=8192` beside the residue figures and
+beside `stop=chase-memfree-margin` — the triple is what identifies a
+truncated recycle rather than a physics limit. Keep the no-recycle
+comparison (43 MiB / 13 blocks / 10 order-10) from EVD-0149: without it
+the 12 MiB figure cannot be attributed to the recycle. Keep the
+`high_ordr_7plus_blocks` mangling note so a future reader does not re-derive
+a source typo from a dropped byte.
+**Freshness:** Superseded for the hole-cap claim by any run where
+`chase_holes < FRAG_CHASE_HOLE_CAP` (then the cap is not binding and the
+residue figure is the physics), and for the third-signal claim by a run
+reporting `exhausted=1` with `reread=0`. Re-read both runtime jobs before
+citing. Job-level `success` on `hyperv-runtime-drill` is never a gate
+closure. Never cite this entry as CoCo or send-gate evidence.
