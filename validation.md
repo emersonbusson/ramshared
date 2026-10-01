@@ -14782,3 +14782,181 @@ send-gate evidence.
 x86_64 channel-open-under-fragmentation claim. Superseded only by a run
 that exercises the CoCo chunked fallback on SEV-SNP / TDX / arm64 CCA
 hardware (COCO-1..5), or by a regression matching the rollback trigger.
+
+---
+
+## 2026-10-01 20:13 -03 — the daemon said OFF and status said UNAVAILABLE; the dead worker was never waited (EVD-0164)
+
+**What:** Two reproduced defects found while qualifying the cascade restart
+onto sealed release `v0.15.0-de32b421`, both fixed and unit-tested.
+
+1. **`OFF` was swallowed into `UNAVAILABLE`.** `build_cascade_snapshot` in
+   `crates/ramshared-cli/src/cascade/mod.rs` matched `_ if product_active &&
+   !cache_status_ok => CacheState::Unavailable` **first**, so the daemon's
+   explicit `cache_state: "OFF"` never reached the `Some("OFF")` arm whenever
+   `ok` was false. A deliberate control-pressure release and a dead cache
+   became one operator-facing state.
+2. **A dead GPU worker was left a zombie.** `recover_isolated_gpu_worker_if_failed`
+   returned early on `Off | Active | Restricted` without ever calling
+   `IsolatedWorkerSupervisor::shutdown()`, the only `wait()` on that child.
+   `MSG_DISABLE_REQ` breaks the worker frame loop
+   (`crates/ramshared-block/src/gpu_cache_worker.rs:1259`), so both a deliberate
+   `release_cache` and a crash leave an exited child. Observed live: worker
+   pid `195541` sat as `[ramsharedd] <defunct>` for 31+ minutes.
+
+**Classification:** both are **reproduced defects**, not static risks and not
+incorrect conclusions. A third observation from the same session is **not** a
+defect and is recorded below as correct behavior.
+
+**Reproduced defect 1 — status mapping (before → after, same live daemon):**
+
+The daemon's own publication at `/run/ramshared/cache-status.json`
+(daemon instance `195515-624982`, written `1790896396131`) reads:
+
+```json
+{"ok":false,"origin_state":"READY","cache_state":"OFF","logical_capacity_kib":4194304,"vram_cached_kib":0,"cache_target_kib":33792,"cache_releases":141}
+```
+
+| Binary under test | Source | `ramshared status --json` → `cache_state` |
+| --- | --- | --- |
+| installed `/opt/ramshared/current/bin/ramshared` (`v0.15.0-de32b421`, pre-fix) | parent of `a6eb8b5c` | `UNAVAILABLE` ❌ |
+| freshly built `target/debug/ramshared` | `3b78f65b` | `OFF` ✅ |
+
+Same daemon, same `cache-status.json`, same second. The only variable is the
+mapping. After: `cache_state_from_status(Some("OFF"), true, false) == CacheState::Off`,
+and `STUCK` / `UNAVAILABLE` likewise survive a failed `ok` flag. `ok` still
+refuses a lying `ACTIVE` / `RESTRICTED` — that is its purpose.
+
+Named tests: `released_cache_reports_off_not_unavailable`,
+`stuck_verdict_survives_a_failed_ok_flag`,
+`ok_false_stops_a_lying_active_or_restricted`,
+`missing_verdict_fails_closed_when_the_product_is_active`.
+Commit `a6eb8b5c`. `cargo test -p ramshared-cli --bins`: 544 passed, 0 failed.
+
+**Reproduced defect 2 — zombie worker (live evidence, fix committed, fix not
+yet installed in the running daemon):**
+
+`ps -eo pid,stat,comm,args` at `2026-10-01 20:13 -03`:
+
+| pid | stat | comm | role |
+| --- | --- | --- | --- |
+| `195515` | `SLl` | `ramsharedd` | product daemon, `v0.15.0-de32b421`, `--nbd /dev/nbd0 --origin-manifest /etc/ramshared/origin.conf` |
+| `195541` | `Z` | `ramsharedd` | `<defunct>` — the isolated GPU cache worker, **never waited** |
+| `228417` | `Ss` | `ramshared` | `supervise` |
+| `1149` | `Ss` | `ramshared` | `monitor --jsonl` |
+
+The zombie is still present because the **running** daemon is the pre-fix
+binary installed at `19:22`. The fix commits to source only; clearing the
+zombie requires a daemon restart onto a build at `3b78f65b` or later. That
+restart was **not** performed here — see "What this run does NOT prove".
+
+After the fix (`crates/ramshared-wsl2d/src/main.rs`): `gpu_worker_has_exited`
+observes the child via `try_wait` (which also reaps it); `reap_exited_gpu_worker`
+takes the supervisor handle and runs `shutdown()`; an exited worker is now a
+death signature even while the cache still claims `Active` / `Restricted`, and
+under `Off` the child is always waited out **without** spawning a replacement.
+
+Named tests: `released_cache_reaps_its_exited_worker_without_respawning`,
+`exited_worker_under_a_serving_cache_is_replaced`. Commit `3b78f65b`.
+`cargo test -p ramshared-wsl2d --bin ramsharedd`: 133 passed, 0 failed.
+`cargo clippy -p ramshared-wsl2d -p ramshared-cli --bins -- -D warnings` clean.
+`rustfmt --check` clean on both files.
+
+**Cascade restart onto `v0.15.0-de32b421` (before → after, this session):**
+
+| Step | Result |
+| --- | --- |
+| before | daemon `33190` on `v0.15.0-b788c17`; `cache_state=UNAVAILABLE`; `control=GUARDED`/`CRITICAL`; zombie `33220` |
+| `ramshared down` (swapoff-first) | `[down] swapoff ok: /dev/nbd0`, `[down] swapoff ok: /dev/zram0`, cascade unmounted, daemon and zombie gone, only `sdb` prio −2 left |
+| `ramshared up --vram 4096 --zram 2048` | exit 0; daemon `195515` on `v0.15.0-de32b421`; `phase=Armed (armed_low_vram_used)` at bring-up; `protection=READY`; `ok=true`; `topology_ok=true`; `order_ok=true`; tiers `zram(200) > nbd(100) > disk(-2)` |
+| GPU worker spawn | `--target-bytes 4294967296 --chunk-bytes 134217728 --reserve-floor 2147483648` (sealed 4 GiB / 128 MiB / 2 GiB) |
+| later, under real load | `phase=UsingZram (zram_used_ge_threshold)`; `control=GUARDED`; `healthy_samples: 0`; supervisor `close_admission` → `succeeded`; cache held off |
+
+The `up` command needed `--zram 2048` explicitly: `parse_up_args_from` defaults
+zram to `RAMSHARED_ZRAM_MIB` or **1024**, ignoring `cascade.conf`'s `ZRAM_MIB=2048`.
+vram needed no flag (sealed `logical_capacity_mib=4096`).
+
+**Not a defect — `cache_state != ACTIVE` under real pressure.** The GPU is
+healthy and the worker selects `backend=Cuda ordinal=0` with
+`gpu_budget_guard=dxg … correspondence=SoleAdapter`. The cache is released
+because the supervisor is correctly `Guarded`:
+
+| Telemetry | Value | Source |
+| --- | --- | --- |
+| PSI memory `full avg10` | **2.27** (guarded threshold is 2.0) | `/proc/pressure/memory` |
+| PSI memory `some avg10` | 2.30 | same |
+| `healthy_samples` | **0** (recovery needs 60 consecutive) | `/run/ramshared/supervisor-state.json` |
+| `control_state` | `GUARDED`, `close_admission` succeeded | same |
+| cgroup `oom` / `oom_kill` | 514 / 429 | `cgroup_memory.events` |
+| `cache_target_kib` | oscillates `0` ↔ `33792` (33 MiB) | `cache-status.json`, two samples minutes apart |
+
+The 33 MiB figure is arithmetically exact, not a clamp artifact:
+`safe_target_bytes` = `2721 MiB` (WDDM `available_for_reservation` ceiling)
+− `2048 MiB` (sealed `gpu_reserve_min_mib`) − `640 MiB`
+(`RUNTIME_FREE_BUFFER_BYTES`) = `34603008` bytes = `33792` KiB. Forcing
+`ACTIVE` while PSI `full avg10` stays ≥ 2.0 would be a product defect.
+
+**Boot-path gap recorded, not forced (env-bound).** `ramshared boot` cannot
+pass `verify_host_lease`: `/run/ramshared/host-resume-lease.json` is never
+minted because `ramshared-host-gate.service` is `disabled` and the gate only
+mints from a fresh (≤60 s) schema-v2, boot-bound, expected-SID guardian proof.
+This is the likely mechanism of "cascades not active when WSL2 starts".
+**`scripts/safety/ramshared-host-gate.sh` must not be run blind** — it does
+`rm -f` on `/etc/ramshared/origin.conf` and the lease before re-minting, so a
+stale guardian proof would destroy the sealed origin manifest that `up`
+requires. The restart therefore used `up`, which is exactly the
+`host.activate(&up_args)` that `boot` performs after its gates, and does not
+change the boot-enablement policy.
+
+**What this run does NOT prove:**
+- `cache_state=ACTIVE` on the live path. Not achieved, and **not claimable**
+  while PSI `full avg10` ≥ 2.0 with `healthy_samples=0`.
+- That the zombie is gone. pid `195541` is still `Z` at the time of writing;
+  the fix is in source only. A daemon restart onto `3b78f65b`+ is required.
+- The screenshot challenge (VRAM actually returned to a game). Mechanism proof
+  and a now-sample exist; a supervised before→after around a Windows GPU
+  workload is still missing. Not DONE.
+- Boot-round ×3 + `BINARY_MATCH`, live host-guest vsock, multi-vendor GPU,
+  CoCo SEV-SNP / TDX / Arm CCA. All env-bound.
+
+**Verdict:** ✅ works (both defects), ⚠️ partial (live-path `ACTIVE`, zombie
+clearance, screenshot challenge, boot-round)
+
+**Category:** daemon-identity / runtime; cascade status mapping; process lifetime
+**How to measure:** Against a running cascade with the supervisor in `GUARDED`
+(control-pressure release published as `OFF`), run the **installed** and the
+**rebuilt** `ramshared status --json` in the same minute and compare
+`cache_state` to `cache_state` in `/run/ramshared/cache-status.json`. The
+rebuilt binary must match the daemon exactly; the pre-fix binary will report
+`UNAVAILABLE`. Separately, `ps -eo pid,stat,comm | grep defunct` must show no
+`ramsharedd` zombie after a daemon restart onto `3b78f65b`+ once the worker has
+been through a `release_cache` cycle. Re-run after any change to
+`cache_state_from_status`, `recover_isolated_gpu_worker_if_failed`,
+`gpu_worker_has_exited`, or `reap_exited_gpu_worker`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0164`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T23:13:31Z`.
+**Verified at:** `2026-10-01T23:13:31Z`.
+**Source revision:** `3b78f65b`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the two-row binary-comparison table (`UNAVAILABLE` vs `OFF`
+against one `cache-status.json`) beside the exact daemon JSON line — that pair
+is reproduced defect 1. Keep pid `195541` `Z` / `<defunct>` beside the
+`MSG_DISABLE_REQ` → `break` line at `gpu_cache_worker.rs:1259` and the
+31-minute etime — that triple is reproduced defect 2. Keep the
+`safe_target_bytes` arithmetic (2721 − 2048 − 640 = 33792 KiB) next to the
+PSI `full avg10=2.27` and `healthy_samples: 0` rows: together they are the
+proof that `cache_state != ACTIVE` here is correct pressure-reactive behavior
+and not a failure. Keep the `What this run does NOT prove` block with the
+zombie row — a fix in source is not a cleared process. Never cite this entry as
+boot-round, vsock, multi-vendor GPU, or CoCo qualification evidence.
+**Freshness:** Superseded as soon as a daemon at `3b78f65b` or later is running
+on this host and no `ramsharedd` zombie survives a `release_cache` cycle, or by
+a live `cache_state=ACTIVE` proof under measured PSI. Re-run on any change to
+`cache_state_from_status`, `recover_isolated_gpu_worker_if_failed`,
+`gpu_worker_has_exited`, `reap_exited_gpu_worker`, `safe_target_bytes`, or the
+supervisor's `Guarded` / `CloseAdmission` thresholds.
+
+---
