@@ -10775,3 +10775,103 @@ sources, or as soon as either static harness or either Rust source changes.
 Never cite this entry as WDK, Driver Verifier, IOCTL refusal, GPU, or
 three-tier-stress qualification evidence — the static half is source-contract
 assertion only.
+
+## 2026-09-30 21:24 — six local CI gate failures closed with real data (EVD-0136)
+
+**What:** The Node CI suite and `docs-check` were both red on committed state
+for reasons that were documentation grammar, not product defects. Four
+`node --test tools/ci/*.test.mjs` cases failed (4/526) and `docs-check` reported
+`NO-GO (2 independent failure(s))`. All six were reproduced, classified, and
+closed across commits `05f0de82` and `1575bf89`.
+
+**Question:** Do the repository's own trust gates pass on this tree, or is any
+of them a hardcoded failure that will block the branch regardless of product
+health?
+
+**Answer: they pass now.** Three distinct causes, each a reproduced defect in
+committed documentation rather than an incorrect conclusion:
+
+1. `validation.md` EVD-0135 recorded the measurement host as a literal private
+   WSL UNC host path naming this machine's home directory. That tripped both
+   `PRIVATE_PATH` (`check-documentation-governance`) and `PRIVATE_WSL_PATH`
+   (`check-public-hygiene`) and failed `repository_governance_run_passes` and
+   `repository_candidate_is_clean`. Replaced with the established
+   `winroot=$(wslpath -w "$PWD")` convention already used elsewhere in this log.
+   The measured commands and their 22/22 and 5/5 static results are unchanged.
+2. EVD-0134 and EVD-0135 put parentheticals inside the `**Observed at:**` and
+   `**Source revision:**` label blocks, so the evidence-v2 RFC3339 and hex
+   revision checks rejected them (`validation_full_repository_schema_passes`).
+   Provenance moved into `**Retention:**` and `**Measured data:**`; the labels
+   now carry the bare stamp and revision. No measurement value changed.
+3. `docs/reliability/GAP-REGISTER.md` row "VMBus ring fallback upstream series"
+   had an unescaped pipe inside the `__GFP_NORETRY | __GFP_NOWARN` code span,
+   splitting the row into 5 cells instead of 4 (`checkGapRegister`). Separately,
+   `docs-check` found the generated capability-observation map lagging the
+   implementation (recent slices added real `lib.rs`/`nvml.rs`/`inflight.rs`/
+   `state.rs` and three `scripts/windows/*` paths) and two
+   `evidence-manifest.json` files still carrying pre-36ed47ca `spec.sha256`
+   values. Commit `36ed47ca` ticked those two SPECs' validation checklists with
+   2026-09-30 measurements without re-binding the hashes; no requirement,
+   test-matrix or contract row changed in that edit.
+
+**Measured data:**
+Before: `node --test tools/ci/*.test.mjs` → 522 passed / 4 failed
+(`repository_governance_run_passes`, `checkGapRegister: passes on current
+repository`, `repository_candidate_is_clean`,
+`validation_full_repository_schema_passes`); `./scripts/docs-check.sh` →
+`DOCS_CHECK_EXIT=1`, `capability-observations:1`, `spec-evidence:1`.
+After (`05f0de82`, then `1575bf89`):
+`node --test tools/ci/*.test.mjs` → **526 passed, 0 failed**;
+`node tools/ci/check-gap-register.mjs` → `gap register OK`, exit 0;
+`node tools/ci/check-documentation-governance.mjs --all` → `FILES=553
+FINDINGS=0 GOVERNANCE_STATUS=PASS`, exit 0;
+`node tools/ci/check-validation-schema.mjs --all` → `validation.md schema OK
+(all entries)`, exit 0;
+`node tools/ci/check-spec-evidence.mjs --check` → `SPEC evidence manifests OK
+(count=4)`, exit 0;
+`node tools/ci/generate-capability-observations.mjs --check` → `in sync
+(55 observations)`, exit 0;
+`./scripts/docs-check.sh` → `DOCS_CHECK_EXIT=0`, `✓ docs-check OK`, zero
+FAIL/NO-GO lines.
+The two re-bound SPEC hashes are
+`b31559050a31b145cf47c2882d23649edb93e02e6e09df6897a16727ef07e2f6`
+(benchmark-evidence-integrity) and
+`22cce6fa991564c3084d51961efb7226c52f22af4cd8e54cd914930c1c973426`
+(documentation-localization-integrity). The hash re-bind attaches the existing
+evidence set to the current SPEC bytes after a checklist-only edit; it does not
+re-qualify that evidence. `benchmark-evidence-integrity` remains **PARTIAL**
+with `binary_match.passed=false` and one env-bound gap, and
+`documentation-localization-integrity` keeps its recorded DONE status.
+
+**Verdict:** ✅ works — six local trust gates that were red on committed state
+now pass with recorded numbers. This is gate hygiene, not product qualification.
+
+**Category:** ci-gate
+
+**How to measure:**
+```bash
+node --test tools/ci/*.test.mjs
+node tools/ci/check-gap-register.mjs
+node tools/ci/check-documentation-governance.mjs --all
+node tools/ci/check-validation-schema.mjs --all
+node tools/ci/check-spec-evidence.mjs --check
+node tools/ci/generate-capability-observations.mjs --check
+./scripts/docs-check.sh
+```
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0136`.
+**Owner role:** `ci-contract-engineer`.
+**Observed at:** `2026-10-01T00:24:50Z`.
+**Verified at:** `2026-10-01T00:24:50Z`.
+**Source revision:** `1575bf891589`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the before/after counts together — a reader who sees only
+the 526/526 line will not know these gates were red on committed state minutes
+earlier. Keep the two SPEC hashes: a future manifest that resolves a different
+digest for those SPEC bytes is a different binding, not a repeat of this one.
+**Freshness:** Superseded as soon as any of `validation.md`, the two evidence
+manifests, `docs/governance/capability-observations.generated.json`, the
+capability generator, or the six named checkers changes. Never cite this entry
+as product, kernel, GPU, Windows driver, benchmark, or three-tier qualification
+evidence — it records only that the repository's own trust gates are green.
