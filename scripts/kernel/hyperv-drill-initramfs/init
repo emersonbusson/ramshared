@@ -54,6 +54,33 @@ if [ -c /dev/ttyS0 ]; then
 	exec >/dev/ttyS0 2>/dev/ttyS0
 fi
 
+# Power off only after the serial port has drained what we already wrote.
+# echo's write(2) returns when the tty layer accepts the bytes, not when the
+# UART has shifted them out, and printk reaches the same port through a
+# different path. Triggering sysrq while verdict bytes are still in the FIFO
+# lets `sysrq: Power Off` land mid-line and split the one line the host
+# harness matches on: run 36808657969 (windows-latest) reported NO_RESULT
+# from a guest that had printed `HYPERV_DRILL_RESULT ... status=PARTIAL`.
+# Closing the userspace writer first means only printk can emit afterwards,
+# and the verdict is already complete and on the wire.
+drain_and_poweroff() {
+	exec >/dev/null 2>/dev/null
+	sleep 2
+	sync
+	echo o >/proc/sysrq-trigger 2>/dev/null
+	poweroff -f 2>/dev/null
+	reboot -f 2>/dev/null
+	exit 0
+}
+
+# The status line is short and repeated three times so a single printk
+# split cannot take every copy of the token the host greps for.
+emit_status() {
+	printf '%s\n' "HYPERV_DRILL_RESULT status=$1"
+	printf '%s\n' "HYPERV_DRILL_RESULT status=$1"
+	printf '%s\n' "HYPERV_DRILL_RESULT status=$1"
+}
+
 echo "HYPERV_DRILL_BOOT kernel=$(uname -r)"
 echo "HYPERV_DRILL_BOOT cmdline=$(tr -d '\n' </proc/cmdline)"
 
@@ -82,12 +109,10 @@ SYMS=$(grep -cE 'vmbus_(alloc|free|release)_buffer' /proc/kallsyms 2>/dev/null)
 echo "HYPERV_DRILL_SYMBOLS alloc=${SYMS:-0}"
 
 if [ "$VMBUS_PRESENT" != yes ] || [ "${VMBUS_DEVICES:-0}" -eq 0 ]; then
-	echo "HYPERV_DRILL_RESULT status=FAIL reason=no_vmbus"
+	emit_status FAIL
+	echo "HYPERV_DRILL_RESULT reason=no_vmbus"
 	echo "HYPERV_DRILL_DONE"
-	sync
-	echo o >/proc/sysrq-trigger 2>/dev/null
-	poweroff -f 2>/dev/null
-	exit 0
+	drain_and_poweroff
 fi
 
 # --- synthetic NIC discovery -------------------------------------------------
@@ -130,9 +155,41 @@ splat_count() {
 }
 
 # --- drills ------------------------------------------------------------------
+# Fragmentation runs FIRST. The BUG-3 hold-in-mmap in the lifecycle drill
+# leaves the synthetic NIC's channel in CHANNEL_OPENED_STATE: uio_hv_generic
+# disconnects the channel on the last close of /dev/uio0, but its .remove does
+# not, so unbinding the driver while a helper still holds that fd never calls
+# vmbus_disconnect_ring and __vmbus_open() then rejects the rebind with
+# -EINVAL. That is pre-existing upstream behaviour (drivers/uio/uio_hv_generic.c
+# is unchanged from the base at hv_uio_remove), and it is not a fragmentation
+# result -- run 36803317912 reproduced it on a healthy buddy at t=5.2s. Running
+# the channel-open exercise afterwards would therefore be measuring the UIO
+# lifecycle, not the ring allocation, and PASS_RING_ALLOCATION_UNDER_FRAGMENTATION
+# would be unreachable. Give the fragmentation drill a boot-clean NIC and let
+# the lifecycle drill consume the channel afterwards.
 HELPER=/bin/vmbus_drill_helper
 LIFECYCLE_STATUS=skipped
 FRAG_STATUS=skipped
+
+if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
+	export NIC
+	echo "HYPERV_DRILL_PHASE name=fragmentation"
+	# MemTotal, not a share of what looks free: the helper treats this as a
+	# ceiling the allocation loop must never reach, and stops on the
+	# measured condition instead. A 75% share stopped the loop with the
+	# untouched remainder still holding order-10 blocks, so order-7 never
+	# failed and the drill reported INCONCLUSIVE every run. MemTotal is
+	# above what the guest can allocate, so the helper's own margin decides
+	# when to stop and its high-order count is the real one.
+	FRAG_HOG=$(awk '/MemTotal/{print int($2 / 1024)}' /proc/meminfo)
+	echo "HYPERV_DRILL_FRAGMENT hog_mib=${FRAG_HOG:-0}"
+	sh /scripts/vmbus-fragmentation-drill.sh "${FRAG_HOG:-512}" /var/tmp/fragment.log
+	FRAG_STATUS=$?
+	echo "HYPERV_DRILL_FRAGMENT status=$FRAG_STATUS"
+	echo "HYPERV_DRILL_MAPS after_fragment $(vmbus_maps)"
+else
+	echo "HYPERV_DRILL_FRAGMENT status=skipped reason=${NIC:+no_helper}${NIC:-no_nic}"
+fi
 
 if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
 	export NIC
@@ -143,25 +200,6 @@ if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
 	echo "HYPERV_DRILL_MAPS after_lifecycle $(vmbus_maps)"
 else
 	echo "HYPERV_DRILL_LIFECYCLE status=skipped reason=${NIC:+no_helper}${NIC:-no_nic}"
-fi
-
-if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
-	export NIC
-	echo "HYPERV_DRILL_PHASE name=fragmentation"
-	# MemTotal, not a share of MemAvailable: the helper treats this as a
-	# ceiling the allocation loop must never reach, and stops only when the
-	# kernel refuses. A 75% share stopped the loop with the untouched
-	# remainder still holding order-10 blocks, so order-7 never failed and
-	# the drill reported INCONCLUSIVE every run. MemTotal is above what the
-	# guest can allocate, so exhausted=1 and the high-order supply is real.
-	FRAG_HOG=$(awk '/MemTotal/{print int($2 / 1024)}' /proc/meminfo)
-	echo "HYPERV_DRILL_FRAGMENT hog_mib=${FRAG_HOG:-0}"
-	sh /scripts/vmbus-fragmentation-drill.sh "${FRAG_HOG:-512}" /var/tmp/fragment.log
-	FRAG_STATUS=$?
-	echo "HYPERV_DRILL_FRAGMENT status=$FRAG_STATUS"
-	echo "HYPERV_DRILL_MAPS after_fragment $(vmbus_maps)"
-else
-	echo "HYPERV_DRILL_FRAGMENT status=skipped reason=${NIC:+no_helper}${NIC:-no_nic}"
 fi
 
 # --- final scan --------------------------------------------------------------
@@ -211,14 +249,10 @@ if [ "$LIFECYCLE_STATUS" = 1 ] || [ "$FRAG_STATUS" = 1 ]; then
 	SCOPE=drill-failed
 fi
 
-echo "HYPERV_DRILL_RESULT status=$RESULT"
+emit_status "$RESULT"
 echo "HYPERV_DRILL_RESULT lifecycle=$LIFECYCLE_STATUS fragment=$FRAG_STATUS splats=${SPLATS:-0} faults=${FAULTS:-0}"
 echo "HYPERV_DRILL_RESULT scope=$SCOPE"
 echo "HYPERV_DRILL_SCOPE note=no-co-co-hardware; co-co-chunked-fallback-not-exercised"
 echo "HYPERV_DRILL_DONE"
 
-sync
-echo o >/proc/sysrq-trigger 2>/dev/null
-poweroff -f 2>/dev/null
-reboot -f 2>/dev/null
-exit 0
+drain_and_poweroff
