@@ -392,6 +392,36 @@ static int do_mlock_hog(int argc, char **argv)
 #define FRAG_CHASE_UNSPLIT 128L
 #define FRAG_CHASE_HARD_KB 1024L
 #define FRAG_CHASE_WMARK_MARGIN 256L
+/*
+ * Order-2 reserve. Taken before the pattern is built, while the buddy
+ * still hands out contiguous runs, and released as verified order-2
+ * groups just after ready=1 has been printed.
+ *
+ * Run 36911059487 is what a fully starved buddy costs. The pattern
+ * emptied every free block of order 2 and above along with order 7 --
+ * the OOM dump read `1451*4kB (UM) 0*8kB 0*16kB` -- so copy_process()
+ * could not get its order-2 stack, the OOM killer took the drill shell
+ * (this process is pinned at -1000 and unkillable), init then found no
+ * killable process and the guest panicked on "System is deadlocked on
+ * memory". windows-2025 died the same way and lost its FRAGMENT_BUDDY
+ * lines to the panic.
+ *
+ * The measured claim is order-7-and-up, not order-2. Leaving a few
+ * order-2 blocks does not weaken it and does not help the ring path:
+ * on ordinary x86_64 vmbus_alloc_buffer() takes vzalloc() anyway. The
+ * groups are released only after ready=1, so the buddy at the moment
+ * of the claim really had nothing above order-0.
+ *
+ * mmap faults order-0, so held pages are physically scattered and an
+ * order-2 block is found by PFN, not assumed from a virtual run. Each
+ * released group is eight consecutive PFNs on a 4-page alignment: the
+ * first four are unmapped, the last four are kept. The kept half is
+ * the freed half's order-2 buddy, so the freed half stays order-2 and
+ * cannot coalesce past it -- the order-7 depletion just measured is
+ * not undone. Cap the groups like the holes: each munmap splits a VMA.
+ */
+#define FRAG_RESERVE_CHUNKS 16
+#define FRAG_ORDER2_GROUPS 32
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
@@ -801,6 +831,8 @@ static int do_fragment_buddy(int argc, char **argv)
 	long chase_holes = 0, chase_pairs = 0;
 	long unsplit_at_stop = -1;
 	void **maps, **chase_maps;
+	void *reserve[FRAG_RESERVE_CHUNKS];
+	long reserve_got = 0, order2_groups = 0, order2_pages = 0;
 	unsigned long *pfns = NULL, *seen = NULL;
 	unsigned long max_pfn = 0, seen_words = 0;
 	int pmfd;
@@ -915,6 +947,29 @@ static int do_fragment_buddy(int argc, char **argv)
 	printf("FRAGMENT_BUDDY start cap_chunks=%ld high_order_7plus=%ld\n",
 	       want, high_before);
 	fflush(stdout);
+
+	/*
+	 * Take the order-2 reserve first so it is carved out of an
+	 * untouched buddy and comes back as contiguous runs. Held for the
+	 * whole pattern, which keeps it out of the allocation being
+	 * measured; released after ready=1, see below.
+	 */
+	for (i = 0; i < FRAG_RESERVE_CHUNKS; i++) {
+		char *m;
+
+		m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (m == MAP_FAILED)
+			break;
+		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE)
+			m[off] = 1;
+		if (mlock(m, FRAG_CHUNK) != 0) {
+			munmap(m, FRAG_CHUNK);
+			break;
+		}
+		reserve[i] = m;
+		reserve_got++;
+	}
 
 	/*
 	 * Allocate 64 KiB chunks and touch every page. Stop when the buddy
@@ -1226,6 +1281,55 @@ static int do_fragment_buddy(int argc, char **argv)
 	fflush(stdout);
 
 	/*
+	 * Release order-2 groups now that the pattern has been measured
+	 * and printed. The buddy at ready=1 had no free block of order 2
+	 * or above; what the shell gets here is a deliberate handful of
+	 * order-2 stacks, each kept from coalescing by its held buddy
+	 * half. The channel-open below therefore runs against order-7
+	 * depletion and a working allocator, which is what the claim is.
+	 */
+	for (i = 0; i < reserve_got && order2_groups < FRAG_ORDER2_GROUPS; i++) {
+		char *m = reserve[i];
+
+		off = 0;
+		while (off + 8 * FRAG_PAGE <= FRAG_CHUNK &&
+		       order2_groups < FRAG_ORDER2_GROUPS) {
+			unsigned long p0 = 0, p = 0;
+			int run = 1, j;
+
+			if (pagemap_pfn(pmfd, m + off, &p0) != 0) {
+				off += 4 * FRAG_PAGE;
+				continue;
+			}
+			if ((p0 & 3UL) != 0) {
+				off += 4 * FRAG_PAGE;
+				continue;
+			}
+			for (j = 1; j < 8; j++) {
+				if (pagemap_pfn(pmfd, m + off + j * FRAG_PAGE, &p) != 0 ||
+				p != p0 + (unsigned long)j) {
+					run = 0;
+					break;
+				}
+			}
+			if (!run) {
+				off += 4 * FRAG_PAGE;
+				continue;
+			}
+			for (j = 0; j < 4; j++) {
+				if (munmap(m + off + j * FRAG_PAGE,
+					   (size_t)FRAG_PAGE) == 0)
+					order2_pages++;
+			}
+			order2_groups++;
+			off += 8 * FRAG_PAGE;
+		}
+	}
+	printf("FRAGMENT_BUDDY order2_reserve groups=%ld pages=%ld reserve=%ld\n",
+	       order2_groups, order2_pages, reserve_got);
+	fflush(stdout);
+
+	/*
 	 * The watermarks stay where the pattern put them -- min_free_kbytes
 	 * at 512 and watermark_boost_factor at 0 -- for the whole hold,
 	 * including the drill's channel-open exercise. Restoring them here
@@ -1238,25 +1342,32 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * panicked on "System is deadlocked on memory". The variable under
 	 * test is fragmentation, not the reserve; a 20 MB watermark against
 	 * a 9 MB free guest makes the test impossible regardless of the ring
-	 * code. Restore only at teardown, next to dropping the pin.
+	 * code. Restore only after the munmaps have given the memory back.
 	 */
 	if (hold > 0)
 		sleep((unsigned int)hold);
 
 	set_oom_adj("0\n");
-	if (min_free_saved > 0)
-		min_free_kb_write(min_free_saved);
-	if (boost_saved >= 0)
-		boost_factor_write(boost_saved);
 	for (i = 0; i < got; i++)
 		munmap(maps[i], FRAG_CHUNK);
 	for (i = 0; i < chase; i++)
 		munmap(chase_maps[i], FRAG_CHUNK);
+	for (i = 0; i < reserve_got; i++)
+		munmap(reserve[i], FRAG_CHUNK);
 	free(seen);
 	free(maps);
 	free(pfns);
 	free(chase_maps);
 	close(pmfd);
+	/*
+	 * The memory is back before the reserve rises. Restoring earlier --
+	 * even after the pin is dropped -- leaves ~2 GiB locked while min
+	 * and boost climb, which is the window that panicked 36906731699.
+	 */
+	if (min_free_saved > 0)
+		min_free_kb_write(min_free_saved);
+	if (boost_saved >= 0)
+		boost_factor_write(boost_saved);
 	printf("FRAGMENT_BUDDY released held=%ld freed=%ld chase_holes=%ld\n",
 	       held_pages, freed_pages, chase_holes);
 	fflush(stdout);

@@ -14371,3 +14371,228 @@ panic cause only by a run that panics with min=512 and boost=0 still in
 force — that would be a different mechanism and must not be filed under
 this entry. Job-level `success` or `failure` on `hyperv-runtime-drill` is
 never a gate closure. Never cite this entry as CoCo or send-gate evidence.
+
+## EVD-0162 — the third signal closes on windows-latest, then order-2 starvation panics both guests
+
+**Verdict:** 🟡 partial — run 36911059487 is the first in the series to
+report **`exhausted=1` with `high_order_7plus=505->26->0`** on
+windows-latest. The EVD-0134 third signal is measured closed on that
+guest. The run still panicked both guests before the channel-open could
+finish, on a mechanism that is not EVD-0155 and not EVD-0161: the pattern
+emptied every free block of **order 2** and above, so `copy_process()`
+could not get its order-2 stack. windows-2025 printed no
+`FRAGMENT_BUDDY` lines to the console and contributed no residue.
+
+**Category:** drill / fragmentation acceptance — EVD-0134 third signal
+closes on one guest; post-`ready=1` panic on a fourth, distinct cause.
+
+**How to measure:** download both runtime job logs of run 36911059487
+(`gh run view -R emersonbusson/WSL2-Linux-Kernel 36911059487 --job <id>
+--log`) and run `score-fragmentation-drill.py` on them. The decisive
+fields are the `ready=1 … exhausted=… high_order_7plus=…->…->…
+floor_kb=… wmark_kb=… free_kb=…` line and the `DMA32:` **buddy** line in
+each `Mem-Info` block (`1451*4kB (UM) 0*8kB 0*16kB …`). The buddy line,
+not the free/boost/min triple, is what identifies this panic.
+
+### Run
+
+| Job | id | outcome |
+| --- | --- | --- |
+| drill-kernel | 110533525869 | success |
+| drill-runtime windows-latest | 110536385115 | **failure (panic after ready=1)** |
+| drill-runtime windows-2025 | 110536385018 | **failure (panic, no helper lines on console)** |
+
+Source revision `6870976f0756`. Workflow conclusion `failure`. Created
+2026-10-01T19:00:15Z, updated 2026-10-01T19:09:40Z. `HYPERV_DRILL_FRAGMENT
+status=137`, `drill_result=NO_RESULT` on both. No lifecycle evidence.
+
+### The third signal is closed on windows-latest
+
+```
+FRAGMENT_BUDDY min_free_kbytes saved=5694 set=512 now=512
+FRAGMENT_BUDDY watermark_boost_factor saved=15000 set=0 now=0
+FRAGMENT_BUDDY start cap_chunks=32064 high_order_7plus=505
+FRAGMENT_BUDDY allocated chunks=29943 high_order_7plus=505->26 locked=29943 stop=memfree-margin
+FRAGMENT_BUDDY chase=1448 locked=1448 holes=0 pairs=0 high_order_7plus=26->0
+FRAGMENT_BUDDY ready=1 chunks=29943 pages=479088 held=4100 freed=4096
+  locked=29943 pairs=4096 chunk_kib=64 cap_chunks=32064 hole_cap=4096
+  chase=1448 chase_holes=0 chase_pairs=0 unsplit=414 exhausted=1
+  pagemap=1 stop=chase-memfree-margin high_order_7plus=505->26->0
+  floor_kb=1024 wmark_kb=640 free_kb=788
+```
+
+`exhausted=1` and `high_order_7plus=505->26->0`: at the moment of the
+claim the buddy held **no free block of order 7 or above**. The floor
+diagnostics show the chase bound at `free_kb=788` against
+`floor_kb=1024` — the 1024 floor from `6870976f0756` did its job and the
+bound happened **after** the condition held, which is why `stop=
+chase-memfree-margin` still carries `exhausted=1`. `holes=0 pairs=0`:
+nothing recycled, every chunk held.
+
+Residue ladder across the no-recycle series (order-7+ pages at `ready=1`):
+
+| run | floor | boost | residue (wl / w25) | exhausted |
+| --- | --- | --- | --- | --- |
+| 36883261849 | 16 MiB | default | 3584 | 0 |
+| 36892314395 | 16 MiB | default | 2816 / 2944 | 0 |
+| 36894869321 | 8 MiB | default | 1408 / 1280 | 0 |
+| 36906731699 | 4 MiB | 0 | 128 / 2 blocks | 0 |
+| **36911059487** | **1 MiB** | **0** | **0 / no lines** | **1 / —** |
+
+This is the first `exhausted=1` in the series. The scorer's `residue`
+row for this run prints 505 blocks — that is the **start** snapshot, not
+the residue. The `--- BUDDY AFTER FRAGMENT ---` line never reached either
+console; see below. The authoritative residue is the `ready=1` line's
+`high_order_7plus=505->26->0`, and it says zero.
+
+### The panic: order-2 starvation, not a watermark problem
+
+Both sysctls stayed where the pattern put them. Every `Mem-Info` triple
+reads `boost:0kB min:512kB` — the EVD-0161 restore panic did **not**
+recur. What recurs is the deadlock, by a different route.
+
+windows-latest, the buddy line in the same `Mem-Info`:
+
+```
+DMA32: 1451*4kB (UM) 0*8kB 0*16kB 0*32kB 0*64kB 0*128kB 0*256kB
+       0*512kB 0*1024kB 0*2048kB 0*4096kB = 5804kB
+```
+
+Every free page is order-0. **Zero** order-1 and above. windows-2025
+shows the same shape at `2912*4kB (UM) 0*8kB 0*16kB … = 11648kB`.
+
+The sequence, from the task list and the call traces:
+
+1. Helper PID 102 prints `ready=1`, takes `oom_score_adj=-1000`, sleeps
+   in the 600 s hold. RSS 499363 pages ≈ 1.9 GiB mlocked and unevictable.
+2. The drill shell (`sh`, PID 83, `oom_score_adj=0`) continues its
+   post-`ready=1` work. Its first fork is the `grep 'FRAGMENT_BUDDY ' |
+   tail -8 | tee` that echoes the helper's lines to the console.
+3. `copy_process` → `__alloc_pages` `order=2
+   GFP_KERNEL_ACCOUNT|__GFP_ZERO` for the task stack. The buddy has no
+   order-2 block and `COMPACTION is disabled!!!`. Allocation fails.
+4. `out_of_memory()`. The helper is unkillable at `-1000` holding 1.9
+   GiB, so the killer takes `sh`.
+5. `init` clones to recover, finds **"Out of memory and no killable
+   processes..."**, and panics on **"System is deadlocked on memory"**.
+
+windows-latest's first dump is the whole mechanism in one record:
+
+```
+DMA32 free:5828kB boost:0kB min:512kB … unevictable:1992732kB mlocked:1992732kB
+Out of memory: Killed process 83 (sh) …
+sh: page allocation failure: order:2, mode:0x400dc0(GFP_KERNEL_ACCOUNT|__GFP_ZERO)
+```
+
+Free is 5828 kB and the mark is 512 kB — there is memory. There is no
+order-2 **block**. Four panics in the series, four distinct causes:
+
+| entry | cause | distinguishing line |
+| --- | --- | --- |
+| EVD-0155 | un-lowered `min_free_kbytes` + `MemFree` floor blind to `free_pcp` | `min` still at its saved value |
+| EVD-0160 | watermark boost left at default chased the floor upward | `boost:6924kB min:7436kB` |
+| EVD-0161 | watermarks restored before the hold | `boost:14712kB min:20416kB` |
+| **EVD-0162** | **order-2 starvation of `copy_process`** | **`0*8kB 0*16kB` with `min:512kB`** |
+
+Do not collapse them.
+
+### windows-2025: the helper ran, its lines never reached the console
+
+w25's console has no `FRAGMENT_BUDDY` text at all. That is a console-loss
+artifact, not a helper failure. Its `Mem-Info` task list shows
+`[102] … 499515 … -1000 vmbus_drill_hel` — the helper built the pattern
+and pinned itself exactly as on wl. The helper's stdout goes to the log
+file (`>>"$LOG" 2>&1`); the script's `grep | tail | tee` is what copies
+those lines to the serial console, and that pipeline is the fork that
+died. The same bytes that would have carried `--- BUDDY AFTER FRAGMENT
+---` were lost with it, on both guests. Never "fix" the scorer for a
+dropped byte.
+
+### What changed and why
+
+1. **Order-2 pair-reserve** (`56a79492adcb`). Sixteen 64 KiB chunks are
+   taken and mlocked **before** the pattern is built, while the buddy
+   still hands out contiguous runs, and held for the whole pattern. Just
+   **after** `ready=1` is printed, verified order-2 groups are released
+   from it: eight consecutive PFNs on a 4-page alignment, first four
+   unmapped, last four kept. The kept half is the freed half's order-2
+   buddy, so the freed half stays order-2 and cannot coalesce toward the
+   order-7 depletion just measured. Capped at 32 groups like the holes —
+   each munmap splits a VMA. Because the groups are released after the
+   printf, the buddy at the moment of the claim really had nothing above
+   order-0. The measured claim is order-7-and-up, not order-2, so this
+   does not weaken it; on ordinary x86_64 `vmbus_alloc_buffer()` takes
+   `vzalloc()` and cannot use an order-2 block anyway. A
+   `FRAGMENT_BUDDY order2_reserve groups=/pages=/reserve=` line reports
+   what was released.
+2. **Teardown reorder finished.** The munmaps now run **before** the
+   watermark restores, so the memory is back before `min` and `boost`
+   climb. `6870976f0756` moved the restores to teardown but left them
+   ahead of the munmaps; that residual window is what panicked 36906731699
+   and is now closed.
+3. Rollback trigger on `56a79492adcb` reverts to `6870976f0756` on any
+   oops, `out_of_memory()`, probe returning `-12`, an OOM on the hold,
+   `ready=0` with `reason=min-free-not-lowered` or
+   `reason=boost-not-disabled` on both guests, **`order2_reserve groups=0`
+   on both guests**, or a residue page total at or above **0**.
+
+### What must not be lost
+
+- **The third signal is closed on windows-latest.** `exhausted=1` with
+  `high_order_7plus=505->26->0` is the measured condition, printed while
+  the pattern was pinned. EVD-0134's third clause is satisfied on that
+  guest by this run's own `ready=1` line. What is missing is the
+  surviving channel-open and a matching w25 line — not the depletion.
+- EVD-0161's restore finding is confirmed by contrast: this run kept
+  `min=512 boost=0` through the panic and the 20416 kB mark never
+  appeared. The restore-timing fix works. The deadlock it left open is
+  this one.
+- The floor diagnostics earned their place: `floor_kb=1024 wmark_kb=640
+  free_kb=788` is why this stop reason is a measurement and not a guess.
+  The floor bound **after** the condition held, which is the intended
+  order of checks.
+- `high_order_7plus_blocks_reread` is authoritative over the helper count
+  when present. Here it is **absent** on both guests because the console
+  lost the post-`ready=1` bytes; the `ready=1` line's own
+  `high_order_7plus=…->…->0` is the authority for this run. Never take
+  the start snapshot (505 blocks) as a residue.
+- The two EVD-0134 non-third signals are green since 36883261849 and are
+  not disturbed: `cycle*_bind_fail=0`, and `MMAP_HOLD /dev/uio0 maps>0`
+  (the 4 KiB UIO ring alone satisfies the hold criterion).
+- Lifecycle evidence from 36894869321 is untouched and still green:
+  `PHASE1 cycle_fails=0 / 120 steps`, `MMAP_HOLD /dev/uio0 maps=5`, sysfs
+  ring `maps=1`, `LIFECYCLE_VERDICT=PASS cycles=30`, `order7_dmesg=0
+  accept4_failures=0`.
+- Job-level `success`/`failure` on `hyperv-runtime-drill` is never a gate
+  closure. This run is `failure` and still carries the only `exhausted=1`
+  in the series.
+- CoCo remains a hardware boundary (COCO-1..5). Nothing here may be cited
+  as CoCo or send-gate evidence.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0162`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T19:00:15Z`.
+**Verified at:** `2026-10-01T19:48:00Z`.
+**Source revision:** `6870976f0756`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep both `Mem-Info` `DMA32:` buddy lines
+(`1451*4kB (UM) 0*8kB 0*16kB …` on windows-latest and
+`2912*4kB (UM) 0*8kB 0*16kB …` on windows-2025) — they are the only
+record that the free memory was order-0 only while `min:512kB` was in
+force, and that is what separates this panic from EVD-0155, EVD-0160 and
+EVD-0161. Keep the full `ready=1` line with `floor_kb=1024 wmark_kb=640
+free_kb=788`; it is the first `exhausted=1` in the series and the
+authoritative residue for it. Keep the task-list lines showing helper
+PID 102 at `oom_score_adj=-1000` with RSS 499363/499515 pages beside the
+killed `sh` PID 83 — they are the proof that the killer could not take
+the holder. Keep the `sh: page allocation failure: order:2` line and the
+`copy_process` trace.
+**Freshness:** Superseded for the third signal by a run that prints
+`exhausted=1` on **both** guests with a surviving channel-open and no
+panic. Superseded for the panic cause only by a run that panics with
+`min:512kB boost:0kB` **and** a non-zero order-2 (or higher) buddy line
+— that would be a different mechanism and must not be filed under this
+entry. Job-level `success` or `failure` on `hyperv-runtime-drill` is
+never a gate closure. Never cite this entry as CoCo or send-gate
+evidence.
