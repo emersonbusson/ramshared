@@ -121,7 +121,11 @@ for _ in $(seq 1 120); do
 done
 # The helper writes both the ready and the refusal lines to the log; echo the
 # decisive one to the console so the uploaded artifact carries it.
-grep 'FRAGMENT_BUDDY ' "$LOG" | tail -3 | tee -a "$LOG" || true
+# tail -6: the helper now emits min_free_kbytes, start, allocated and
+# ready=1, and every one of them is evidence. tail -3 dropped the
+# min_free read-back, which is exactly the line that shows whether the
+# watermark lever was actually pulled.
+grep 'FRAGMENT_BUDDY ' "$LOG" | tail -6 | tee -a "$LOG" || true
 FRAG_LINE="$(grep 'FRAGMENT_BUDDY ready=1' "$LOG" | tail -1 || true)"
 if [ "$FRAG_READY" != yes ]; then
 	say "FRAGMENT did not reach a ready state"
