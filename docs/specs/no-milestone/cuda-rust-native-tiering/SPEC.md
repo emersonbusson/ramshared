@@ -426,7 +426,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ram
 
 - [x] cargo fmt --all -- --check (2026-10-01: exit 0 after `cargo fmt --all` applied to `bounded_process.rs`.)
 - [x] cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings (2026-10-01: workspace Clippy exit 0, zero warnings.)
-- [ ] cargo test -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli
+- [x] cargo test -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli (2026-10-01: **1156 passed, 0 failed, 22 ignored** (hardware-gated) under `--test-threads=1`.)
 - [x] Coverage for `crates/ramshared-block/src/compressed_cache.rs`
   (2026-09-30: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/compressed_cache.rs --min 80 --report-json tmp/compressed-cache-cov.json`
   — 90.0% lines (224/249), gate PASSED. All five named unit tests in
