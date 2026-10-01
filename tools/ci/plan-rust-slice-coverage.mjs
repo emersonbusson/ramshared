@@ -1757,7 +1757,13 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
     ? selectStaticAllEntries(map, root)
     : selectCoverageEntries(map, changedPaths, root, { baseRevision: options.baseRevision })
   print(`RUST_SLICE_COVERAGE_STATUS=${selection.state}`)
-  for (const item of selection.errors) error(`RUST_SLICE_COVERAGE_ERROR=${item.rule}`)
+  // `RUST_SLICE_COVERAGE_ERROR=<rule>` is a stable token; the owning entry id
+  // is a separate companion line so a BLOCKED gate is triageable without
+  // re-deriving the selection by hand.
+  for (const item of selection.errors) {
+    error(`RUST_SLICE_COVERAGE_ERROR=${item.rule}`)
+    if (item.detail) error(`RUST_SLICE_COVERAGE_DETAIL=${item.detail}`)
+  }
   if (!selection.ok) return 1
   for (const entry of selection.entries) {
     print(`RUST_SLICE_COVERAGE_ENTRY=${entry.id}`)
@@ -1776,7 +1782,10 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
   }
   if (!options.run || selection.entries.length === 0) return 0
   const execution = runCoveragePlan(selection.entries, { root, spawn })
-  for (const item of execution.errors) error(`RUST_SLICE_COVERAGE_ERROR=${item.rule}`)
+  for (const item of execution.errors) {
+    error(`RUST_SLICE_COVERAGE_ERROR=${item.rule}`)
+    if (item.detail) error(`RUST_SLICE_COVERAGE_DETAIL=${item.detail}`)
+  }
   return execution.ok ? 0 : 1
 }
 
