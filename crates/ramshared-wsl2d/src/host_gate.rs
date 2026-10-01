@@ -205,13 +205,170 @@ pub fn mint_lease(
     })
 }
 
-/// Check if a lease is expired.
+/// Check if a lease is expired at the current wall clock.
 pub fn lease_expired(lease: &LeaseToken) -> bool {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis() as u64;
+    lease_expired_at(lease, now_ms)
+}
+
+/// Check if a lease is expired at an explicit instant (testable, no sleep).
+pub fn lease_expired_at(lease: &LeaseToken, now_ms: u64) -> bool {
     now_ms >= lease.deadline_ms
+}
+
+/// Control-plane state, matching the SPEC telemetry enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlPlaneState {
+    Disconnected,
+    Handshaking,
+    VsockLeased,
+    OriginOnly,
+    SafeMode,
+}
+
+impl ControlPlaneState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Disconnected => "disconnected",
+            Self::Handshaking => "handshaking",
+            Self::VsockLeased => "vsock_leased",
+            Self::OriginOnly => "origin_only",
+            Self::SafeMode => "safe_mode",
+        }
+    }
+}
+
+/// Fail-closed authority for cache admission and origin I/O (ITEM-3, RF-3, RF-6).
+///
+/// Cache admission requires a live lease **and** a verified origin identity.
+/// Origin I/O requires only the verified origin identity, so lease loss
+/// revokes the cache without taking the authoritative path down. Losing the
+/// origin identity blocks both paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlPlaneAuthority {
+    state: ControlPlaneState,
+    lease: Option<LeaseToken>,
+    origin: Option<SealedOrigin>,
+}
+
+impl ControlPlaneAuthority {
+    /// Start with no lease and no verified origin.
+    pub fn disconnected() -> Self {
+        Self {
+            state: ControlPlaneState::Disconnected,
+            lease: None,
+            origin: None,
+        }
+    }
+
+    pub fn state(&self) -> ControlPlaneState {
+        self.state
+    }
+
+    pub fn lease(&self) -> Option<&LeaseToken> {
+        self.lease.as_ref()
+    }
+
+    pub fn origin(&self) -> Option<&SealedOrigin> {
+        self.origin.as_ref()
+    }
+
+    /// Begin a handshake attempt. Does not grant any authority.
+    pub fn begin_handshake(&mut self) {
+        self.state = ControlPlaneState::Handshaking;
+    }
+
+    /// Accept a freshly minted lease together with its verified origin.
+    ///
+    /// An already-expired token is refused: accepting it would advertise a
+    /// lease that cannot admit anything.
+    pub fn accept_lease(
+        &mut self,
+        lease: LeaseToken,
+        origin: SealedOrigin,
+        now_ms: u64,
+    ) -> Result<(), GateError> {
+        if lease_expired_at(&lease, now_ms) {
+            return Err(GateError::LeaseDenied("lease already expired".into()));
+        }
+        self.lease = Some(lease);
+        self.origin = Some(origin);
+        self.state = ControlPlaneState::VsockLeased;
+        Ok(())
+    }
+
+    /// Transport disconnect fails closed: enter safe mode and revoke cache
+    /// authority. The verified origin identity is preserved so origin I/O
+    /// can continue (RF-3).
+    pub fn on_vsock_disconnect(&mut self) {
+        self.state = ControlPlaneState::SafeMode;
+        self.lease = None;
+    }
+
+    /// Lease loss revokes cache authority and leaves only the verified origin
+    /// path (ITEM-3).
+    pub fn on_lease_expired(&mut self) {
+        self.lease = None;
+        if self.state == ControlPlaneState::VsockLeased {
+            self.state = ControlPlaneState::OriginOnly;
+        }
+    }
+
+    /// Origin identity loss blocks every I/O path (ITEM-3 companion).
+    pub fn lose_origin_identity(&mut self) {
+        self.origin = None;
+    }
+
+    /// Cache admission: live lease + verified origin. Everything else is
+    /// refused — there is no file fallback and no cached-only path.
+    pub fn admit_cache(&self, now_ms: u64) -> Result<(), GateError> {
+        if self.state == ControlPlaneState::SafeMode {
+            return Err(GateError::LeaseDenied("safe mode after disconnect".into()));
+        }
+        if self.state != ControlPlaneState::VsockLeased {
+            return Err(GateError::LeaseDenied(
+                "cache admission requires a live vsock lease".into(),
+            ));
+        }
+        let lease = self
+            .lease
+            .as_ref()
+            .ok_or_else(|| GateError::LeaseDenied("no live lease".into()))?;
+        if lease_expired_at(lease, now_ms) {
+            return Err(GateError::LeaseDenied("lease expired".into()));
+        }
+        if self.origin.is_none() {
+            return Err(GateError::OriginAuthorityRevoked);
+        }
+        Ok(())
+    }
+
+    /// Origin I/O admission: only the verified origin identity is required.
+    /// Lease state (including expiry and safe mode) does not take the
+    /// authoritative path down.
+    pub fn admit_origin_io(&self) -> Result<(), GateError> {
+        if self.origin.is_none() {
+            return Err(GateError::OriginAuthorityRevoked);
+        }
+        Ok(())
+    }
+}
+
+/// Gate lease minting on a successful control-plane connection.
+///
+/// There is no file fallback (RF-6 / SPEC §MODIFY): a connection failure
+/// must never grant a lease. The mint closure runs only after `connect`
+/// succeeds, so a failed connection cannot produce a token by construction.
+pub fn lease_after_connect<T, E, F>(connect: Result<T, E>, mint: F) -> Result<LeaseToken, GateError>
+where
+    F: FnOnce(T) -> Result<LeaseToken, GateError>,
+{
+    let established =
+        connect.map_err(|_| GateError::LeaseDenied("control-plane connection failed".into()))?;
+    mint(established)
 }
 
 #[cfg(test)]

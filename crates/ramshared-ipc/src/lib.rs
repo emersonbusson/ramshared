@@ -38,7 +38,8 @@ pub const MSG_VHDX_DETACH_ACK: u8 = 18;
 pub const MSG_TELEMETRY: u8 = 19;
 pub const MSG_SHUTDOWN: u8 = 20;
 pub const MSG_SHUTDOWN_ACK: u8 = 21;
-pub const MSG_MAX: u8 = 21;
+pub const MSG_HANDSHAKE_FINISH: u8 = 22;
+pub const MSG_MAX: u8 = MSG_HANDSHAKE_FINISH;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VsockFrameHeader {
@@ -137,21 +138,42 @@ impl std::error::Error for FrameError {}
 
 // --- Message payload types ---
 
+/// Guest `Handshake` (message type 1).
+///
+/// `boot_id` and `distro_id` are claims/metadata only — they are not
+/// authenticated identity by themselves. Identity comes from the
+/// role-separated HMAC transcript (DT-3).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Handshake {
     pub min_version: u32,
     pub max_version: u32,
     pub boot_id: String,
     pub distro_id: String,
-    pub hmac: Vec<u8>,
-    pub nonce: Vec<u8>,
+    pub guest_nonce: [u8; 32],
+    pub guest_proof: [u8; 32],
 }
 
+/// Host `HandshakeAck` (message type 2).
+///
+/// Carries the host challenge: a fresh nonce plus a host proof over both
+/// nonces and the complete transcript. The guest accepts authority only
+/// after this proof validates.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HandshakeAck {
     pub accepted_version: u32,
     pub heartbeat_secs: u64,
     pub lease_timeout_secs: u64,
+    pub host_nonce: [u8; 32],
+    pub host_proof: [u8; 32],
+}
+
+/// Guest `HandshakeFinish` (message type 22).
+///
+/// Proves the same transcript back to the host. No manifest or lease is
+/// sent until the host validates this proof.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HandshakeFinish {
+    pub guest_finish_proof: [u8; 32],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -356,6 +378,242 @@ pub fn verify_hmac(secret: &[u8], data: &[u8], expected: &[u8]) -> bool {
     diff == 0
 }
 
+// --- Role-separated handshake transcript (DT-3) ---
+
+/// Domain-separation label for the guest's opening proof.
+pub const PROOF_LABEL_GUEST: &[u8] = b"ramshared-vsock-guest-proof-v1";
+/// Domain-separation label for the host's challenge proof.
+pub const PROOF_LABEL_HOST: &[u8] = b"ramshared-vsock-host-proof-v1";
+/// Domain-separation label for the guest's finish proof.
+pub const PROOF_LABEL_FINISH: &[u8] = b"ramshared-vsock-finish-proof-v1";
+
+/// Errors from nonce generation and transcript assembly.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HandshakeError {
+    NonceGenerationFailed,
+    NonceNotFresh,
+    EmptyIdentityClaim,
+}
+
+impl std::fmt::Display for HandshakeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonceGenerationFailed => write!(f, "OS CSPRNG nonce generation failed"),
+            Self::NonceNotFresh => write!(f, "handshake nonce is all-zero (not fresh)"),
+            Self::EmptyIdentityClaim => write!(f, "handshake identity claim is empty"),
+        }
+    }
+}
+
+impl std::error::Error for HandshakeError {}
+
+/// Guest claims that enter the authenticated transcript.
+///
+/// `boot_id` and `distro_id` are metadata; the proof binds them but does not
+/// make them an identity oracle on their own (DT-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandshakeTranscript {
+    pub min_version: u32,
+    pub max_version: u32,
+    pub boot_id: String,
+    pub distro_id: String,
+    pub guest_nonce: [u8; 32],
+}
+
+/// Host challenge that enters the authenticated transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostChallenge {
+    pub accepted_version: u32,
+    pub heartbeat_secs: u64,
+    pub lease_timeout_secs: u64,
+    pub host_nonce: [u8; 32],
+}
+
+/// Fill a 32-byte nonce from the OS CSPRNG (`getrandom(2)` on Unix,
+/// `SystemFunction036` on Windows). An all-zero result is refused: it means
+/// the CSPRNG did not produce a fresh value.
+pub fn random_nonce() -> Result<[u8; 32], HandshakeError> {
+    let mut nonce = [0u8; 32];
+    #[cfg(target_os = "linux")]
+    {
+        let mut filled = 0usize;
+        while filled < nonce.len() {
+            // SAFETY: `nonce[filled..]` is a valid mutable byte slice of the
+            // requested length; `getrandom` writes at most that many bytes.
+            let n = unsafe {
+                libc::getrandom(
+                    nonce[filled..].as_mut_ptr().cast::<libc::c_void>(),
+                    nonce.len() - filled,
+                    0,
+                )
+            };
+            if n < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(HandshakeError::NonceGenerationFailed);
+            }
+            if n == 0 {
+                return Err(HandshakeError::NonceGenerationFailed);
+            }
+            filled += n as usize;
+        }
+    }
+    #[cfg(windows)]
+    {
+        // SystemFunction036 (RtlGenRandom) — the OS CSPRNG used by advapi32.
+        #[link(name = "advapi32")]
+        extern "system" {
+            fn SystemFunction036(
+                random_buffer: *mut core::ffi::c_void,
+                random_buffer_length: u32,
+            ) -> u8;
+        }
+        // SAFETY: `nonce` is a valid 32-byte buffer; the API writes exactly
+        // `random_buffer_length` bytes and returns non-zero on success.
+        let ok = unsafe { SystemFunction036(nonce.as_mut_ptr().cast(), nonce.len() as u32) };
+        if ok == 0 {
+            return Err(HandshakeError::NonceGenerationFailed);
+        }
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        return Err(HandshakeError::NonceGenerationFailed);
+    }
+    if nonce == [0u8; 32] {
+        return Err(HandshakeError::NonceNotFresh);
+    }
+    Ok(nonce)
+}
+
+fn proof32(secret: &[u8], data: &[u8]) -> [u8; 32] {
+    let mac = compute_hmac(secret, data);
+    let mut out = [0u8; 32];
+    let n = mac.len().min(32);
+    out[..n].copy_from_slice(&mac[..n]);
+    out
+}
+
+fn append_u32(dst: &mut Vec<u8>, v: u32) {
+    dst.extend_from_slice(&v.to_le_bytes());
+}
+
+fn append_u64(dst: &mut Vec<u8>, v: u64) {
+    dst.extend_from_slice(&v.to_le_bytes());
+}
+
+fn append_str(dst: &mut Vec<u8>, s: &str) {
+    append_u32(dst, s.len() as u32);
+    dst.extend_from_slice(s.as_bytes());
+}
+
+fn guest_transcript_bytes(t: &HandshakeTranscript) -> Result<Vec<u8>, HandshakeError> {
+    if t.boot_id.is_empty() || t.distro_id.is_empty() {
+        return Err(HandshakeError::EmptyIdentityClaim);
+    }
+    if t.guest_nonce == [0u8; 32] {
+        return Err(HandshakeError::NonceNotFresh);
+    }
+    let mut buf = Vec::with_capacity(16 + t.boot_id.len() + t.distro_id.len() + 32);
+    append_u32(&mut buf, t.min_version);
+    append_u32(&mut buf, t.max_version);
+    append_str(&mut buf, &t.boot_id);
+    append_str(&mut buf, &t.distro_id);
+    buf.extend_from_slice(&t.guest_nonce);
+    Ok(buf)
+}
+
+fn host_transcript_bytes(
+    t: &HandshakeTranscript,
+    c: &HostChallenge,
+) -> Result<Vec<u8>, HandshakeError> {
+    if c.host_nonce == [0u8; 32] {
+        return Err(HandshakeError::NonceNotFresh);
+    }
+    let mut buf = guest_transcript_bytes(t)?;
+    buf.extend_from_slice(&c.host_nonce);
+    append_u32(&mut buf, c.accepted_version);
+    append_u64(&mut buf, c.heartbeat_secs);
+    append_u64(&mut buf, c.lease_timeout_secs);
+    Ok(buf)
+}
+
+/// Guest opening proof: HMAC over its claims and its fresh nonce, under the
+/// guest role label. Cannot validate as a host or finish proof.
+pub fn guest_proof(secret: &[u8], t: &HandshakeTranscript) -> Result<[u8; 32], HandshakeError> {
+    let mut data = PROOF_LABEL_GUEST.to_vec();
+    data.extend_from_slice(&guest_transcript_bytes(t)?);
+    Ok(proof32(secret, &data))
+}
+
+/// Host proof: HMAC over both nonces and the complete transcript, under the
+/// host role label. The guest accepts authority only when this validates.
+pub fn host_proof(
+    secret: &[u8],
+    t: &HandshakeTranscript,
+    c: &HostChallenge,
+) -> Result<[u8; 32], HandshakeError> {
+    let mut data = PROOF_LABEL_HOST.to_vec();
+    data.extend_from_slice(&host_transcript_bytes(t, c)?);
+    Ok(proof32(secret, &data))
+}
+
+/// Guest finish proof: proves the same transcript back to the host. Binding
+/// both fresh nonces prevents replay of a previously captured transcript.
+pub fn guest_finish_proof(
+    secret: &[u8],
+    t: &HandshakeTranscript,
+    c: &HostChallenge,
+) -> Result<[u8; 32], HandshakeError> {
+    let mut data = PROOF_LABEL_FINISH.to_vec();
+    data.extend_from_slice(&host_transcript_bytes(t, c)?);
+    Ok(proof32(secret, &data))
+}
+
+/// Constant-time equality over two 32-byte proofs.
+fn ct_eq32(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut diff = 0u8;
+    for i in 0..32 {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
+/// Constant-time validation of the guest opening proof.
+pub fn verify_guest_proof(secret: &[u8], t: &HandshakeTranscript, proof: &[u8; 32]) -> bool {
+    match guest_proof(secret, t) {
+        Ok(expected) => ct_eq32(&expected, proof),
+        Err(_) => false,
+    }
+}
+
+/// Constant-time validation of the host challenge proof.
+pub fn verify_host_proof(
+    secret: &[u8],
+    t: &HandshakeTranscript,
+    c: &HostChallenge,
+    proof: &[u8; 32],
+) -> bool {
+    match host_proof(secret, t, c) {
+        Ok(expected) => ct_eq32(&expected, proof),
+        Err(_) => false,
+    }
+}
+
+/// Constant-time validation of the guest finish proof.
+pub fn verify_guest_finish_proof(
+    secret: &[u8],
+    t: &HandshakeTranscript,
+    c: &HostChallenge,
+    proof: &[u8; 32],
+) -> bool {
+    match guest_finish_proof(secret, t, c) {
+        Ok(expected) => ct_eq32(&expected, proof),
+        Err(_) => false,
+    }
+}
+
 pub fn negotiate_version(guest_min: u32, guest_max: u32) -> Option<u32> {
     let lo = guest_min.max(IPC_MIN_VERSION);
     let hi = guest_max.min(IPC_VERSION_3);
@@ -419,6 +677,29 @@ mod tests {
         ));
     }
 
+    /// DT-2: type 22 (`HandshakeFinish`) is a legal frame; type 23 is not.
+    #[test]
+    fn frame_accepts_handshake_finish_and_rejects_type_above_max() {
+        let finish_hdr = VsockFrameHeader::new(MSG_HANDSHAKE_FINISH, 0, 1);
+        let encoded = finish_hdr.encode();
+        let decoded = VsockFrameHeader::decode(&encoded).expect("finish type decodes");
+        assert_eq!(decoded.msg_type(), MSG_HANDSHAKE_FINISH);
+        assert_eq!(MSG_MAX, MSG_HANDSHAKE_FINISH);
+
+        let over = VsockFrameHeader {
+            magic: IPC_MAGIC,
+            version: IPC_VERSION_3,
+            payload_len: 0,
+            flags: u32::from(MSG_HANDSHAKE_FINISH) + 1,
+            correlation_id: 0,
+        };
+        let encoded = over.encode();
+        assert!(matches!(
+            VsockFrameHeader::decode(&encoded),
+            Err(FrameError::UnknownMessageType(23))
+        ));
+    }
+
     #[test]
     fn version_negotiation_selects_highest_mutual() {
         assert_eq!(negotiate_version(2, 3), Some(3));
@@ -436,6 +717,147 @@ mod tests {
         assert!(verify_hmac(secret, data, &hmac_val));
         assert!(!verify_hmac(b"wrong", data, &hmac_val));
         assert!(!verify_hmac(secret, b"tampered", &hmac_val));
+    }
+
+    fn sample_transcript() -> HandshakeTranscript {
+        HandshakeTranscript {
+            min_version: IPC_MIN_VERSION,
+            max_version: IPC_VERSION_3,
+            boot_id: "boot-abc".into(),
+            distro_id: "Ubuntu-24.04".into(),
+            guest_nonce: [7u8; 32],
+        }
+    }
+
+    fn sample_challenge() -> HostChallenge {
+        HostChallenge {
+            accepted_version: IPC_VERSION_3,
+            heartbeat_secs: 5,
+            lease_timeout_secs: 30,
+            host_nonce: [9u8; 32],
+        }
+    }
+
+    /// Kahneman #13/#17: the three-message flow must require fresh,
+    /// role-separated proofs. A proof from the wrong role, a stale nonce, or
+    /// a zeroed proof must not authenticate anything.
+    #[test]
+    fn mutual_handshake_requires_fresh_role_bound_proofs() {
+        let secret = b"shared-hmac-key";
+        let other = b"attacker-key";
+        let t = sample_transcript();
+        let c = sample_challenge();
+
+        // Legitimate flow: each role's own proof validates under that role.
+        let g = guest_proof(secret, &t).expect("guest proof");
+        let h = host_proof(secret, &t, &c).expect("host proof");
+        let f = guest_finish_proof(secret, &t, &c).expect("finish proof");
+        assert!(verify_guest_proof(secret, &t, &g));
+        assert!(verify_host_proof(secret, &t, &c, &h));
+        assert!(verify_guest_finish_proof(secret, &t, &c, &f));
+
+        // Role separation: a guest proof is not a host proof and not a finish.
+        assert!(!verify_host_proof(secret, &t, &c, &g));
+        assert!(!verify_guest_finish_proof(secret, &t, &c, &g));
+        // A host proof is not a guest proof and not a finish.
+        assert!(!verify_guest_proof(secret, &t, &h));
+        assert!(!verify_guest_finish_proof(secret, &t, &c, &h));
+        // A finish proof is not a guest proof and not a host proof.
+        assert!(!verify_guest_proof(secret, &t, &f));
+        assert!(!verify_host_proof(secret, &t, &c, &f));
+
+        // Wrong shared secret never authenticates.
+        assert!(!verify_guest_proof(other, &t, &g));
+        assert!(!verify_host_proof(other, &t, &c, &h));
+        assert!(!verify_guest_finish_proof(other, &t, &c, &f));
+
+        // Stale/foreign guest nonce: the captured proof no longer matches.
+        let mut stale = t.clone();
+        stale.guest_nonce = [1u8; 32];
+        assert!(!verify_guest_proof(secret, &stale, &g));
+        assert!(!verify_host_proof(secret, &stale, &c, &h));
+        assert!(!verify_guest_finish_proof(secret, &stale, &c, &f));
+
+        // Stale/foreign host nonce: host and finish proofs stop validating.
+        let mut stale_c = c.clone();
+        stale_c.host_nonce = [2u8; 32];
+        assert!(!verify_host_proof(secret, &t, &stale_c, &h));
+        assert!(!verify_guest_finish_proof(secret, &t, &stale_c, &f));
+
+        // Zeroed proof and zeroed nonces are refused.
+        let zero = [0u8; 32];
+        assert!(!verify_guest_proof(secret, &t, &zero));
+        let mut zero_nonce = t.clone();
+        zero_nonce.guest_nonce = [0u8; 32];
+        assert!(guest_proof(secret, &zero_nonce).is_err());
+        let mut zero_host = c.clone();
+        zero_host.host_nonce = [0u8; 32];
+        assert!(host_proof(secret, &t, &zero_host).is_err());
+
+        // Both proofs must be present and fresh before authority moves.
+        assert_ne!(g, h);
+        assert_ne!(h, f);
+        assert_ne!(g, f);
+    }
+
+    /// Kahneman #13/#17: a finish proof bound to one host challenge must not
+    /// authenticate against a replayed or refreshed host nonce. Binding the
+    /// finish to both fresh nonces is what prevents transcript replay.
+    #[test]
+    fn handshake_finish_rejects_replayed_host_challenge() {
+        let secret = b"shared-hmac-key";
+        let t = sample_transcript();
+        let challenge_a = sample_challenge();
+        let mut challenge_b = sample_challenge();
+        challenge_b.host_nonce = [0xA5u8; 32];
+
+        // Finish computed against challenge A.
+        let finish_a = guest_finish_proof(secret, &t, &challenge_a).expect("finish a");
+        assert!(verify_guest_finish_proof(
+            secret,
+            &t,
+            &challenge_a,
+            &finish_a
+        ));
+
+        // Replay of finish A against a different host challenge is rejected.
+        assert!(!verify_guest_finish_proof(
+            secret,
+            &t,
+            &challenge_b,
+            &finish_a
+        ));
+
+        // A finish computed for B does not stand in for A either.
+        let finish_b = guest_finish_proof(secret, &t, &challenge_b).expect("finish b");
+        assert!(!verify_guest_finish_proof(
+            secret,
+            &t,
+            &challenge_a,
+            &finish_b
+        ));
+        assert!(verify_guest_finish_proof(
+            secret,
+            &t,
+            &challenge_b,
+            &finish_b
+        ));
+
+        // Replaying the whole captured host challenge with a new guest nonce
+        // (the common transcript-replay shape) is also rejected.
+        let mut fresh_guest = t.clone();
+        fresh_guest.guest_nonce = [0x5Au8; 32];
+        assert!(!verify_guest_finish_proof(
+            secret,
+            &fresh_guest,
+            &challenge_a,
+            &finish_a
+        ));
+
+        // And a replayed host proof from challenge A does not authorize
+        // challenge B on the guest side.
+        let host_a = host_proof(secret, &t, &challenge_a).expect("host a");
+        assert!(!verify_host_proof(secret, &t, &challenge_b, &host_a));
     }
 
     #[test]
@@ -482,11 +904,181 @@ mod tests {
 
     #[test]
     fn lib_exports_and_constants_are_consistent() {
-        assert_eq!(MSG_MAX, MSG_SHUTDOWN_ACK);
+        assert_eq!(MSG_MAX, MSG_HANDSHAKE_FINISH);
+        assert_eq!(MSG_HANDSHAKE_FINISH, 22);
         assert_eq!(FRAME_HEADER_LEN, 24);
         const {
             assert!(MAX_CONTROL_PAYLOAD < MAX_MANIFEST_PAYLOAD);
             assert!(MAX_MANIFEST_PAYLOAD <= MAX_PAYLOAD_LEN);
         }
+    }
+
+    /// Version negotiation is enforced in the header: anything outside
+    /// `IPC_MIN_VERSION..=IPC_VERSION_3` is refused before the payload is read.
+    #[test]
+    fn frame_rejects_unsupported_version() {
+        for version in [1u32, 4] {
+            let hdr = VsockFrameHeader {
+                magic: IPC_MAGIC,
+                version,
+                payload_len: 0,
+                flags: MSG_HEARTBEAT as u32,
+                correlation_id: 0,
+            };
+            let encoded = hdr.encode();
+            assert!(matches!(
+                VsockFrameHeader::decode(&encoded),
+                Err(FrameError::UnsupportedVersion(v)) if v == version
+            ));
+        }
+    }
+
+    /// Every `FrameError` arm is total and distinguishable — telemetry must
+    /// never fail to describe a protocol refusal.
+    #[test]
+    fn frame_error_display_is_total() {
+        assert!(
+            FrameError::InvalidMagic(0xDEAD_BEEF)
+                .to_string()
+                .contains("invalid magic")
+        );
+        assert!(
+            FrameError::UnsupportedVersion(4)
+                .to_string()
+                .contains("unsupported version")
+        );
+        assert!(
+            FrameError::PayloadTooLarge(9)
+                .to_string()
+                .contains("payload too large")
+        );
+        assert!(
+            FrameError::UnknownMessageType(23)
+                .to_string()
+                .contains("unknown message type")
+        );
+        assert!(
+            FrameError::PayloadDeserialization("boom".into())
+                .to_string()
+                .contains("deserialization")
+        );
+        assert!(
+            FrameError::PayloadExceedsCap(5000)
+                .to_string()
+                .contains("4KB cap")
+        );
+    }
+
+    /// Every `HandshakeError` arm is total and distinguishable.
+    #[test]
+    fn handshake_error_display_is_total() {
+        assert!(
+            HandshakeError::NonceGenerationFailed
+                .to_string()
+                .contains("CSPRNG")
+        );
+        assert!(
+            HandshakeError::NonceNotFresh
+                .to_string()
+                .contains("all-zero")
+        );
+        assert!(
+            HandshakeError::EmptyIdentityClaim
+                .to_string()
+                .contains("empty")
+        );
+    }
+
+    /// Security rule: oversized payloads are refused at the control and
+    /// manifest layers too, not only in the frame header.
+    #[test]
+    fn control_and_manifest_caps_are_enforced() {
+        let oversize_control = vec![0u8; MAX_CONTROL_PAYLOAD as usize + 1];
+        assert!(matches!(
+            decode_control::<Heartbeat>(&oversize_control),
+            Err(FrameError::PayloadExceedsCap(_))
+        ));
+
+        let big_manifest = OriginManifestPayload {
+            sha256_hex: "ab".repeat(64),
+            data: vec![0u8; MAX_MANIFEST_PAYLOAD as usize],
+        };
+        assert!(matches!(
+            encode_manifest(&big_manifest),
+            Err(FrameError::PayloadExceedsCap(_))
+        ));
+
+        // The hex-length field claims more bytes than the payload holds.
+        let mut short = Vec::new();
+        short.extend_from_slice(&100u16.to_le_bytes());
+        short.extend_from_slice(b"ab");
+        assert!(matches!(
+            decode_manifest(&short),
+            Err(FrameError::PayloadDeserialization(_))
+        ));
+    }
+
+    /// HMAC key material longer than the SHA-256 block size is hashed first
+    /// (RFC 2104), and a truncated expected MAC is refused by length alone.
+    #[test]
+    fn hmac_long_secret_and_length_mismatch_are_handled() {
+        let long_secret = [0x5Au8; 100];
+        let data = b"bound-transcript";
+        let mac = compute_hmac(&long_secret, data);
+        assert_eq!(mac.len(), 32);
+        assert!(verify_hmac(&long_secret, data, &mac));
+        assert!(!verify_hmac(&long_secret, data, &mac[..16]));
+    }
+
+    /// DT-3: nonces come from the OS CSPRNG and must be fresh and non-zero.
+    #[test]
+    fn random_nonce_is_fresh_and_nonzero() {
+        let a = random_nonce().expect("OS CSPRNG nonce");
+        let b = random_nonce().expect("OS CSPRNG nonce");
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(b, [0u8; 32]);
+        assert_ne!(a, b, "two nonces must not collide");
+    }
+
+    /// DT-3: empty identity claims and all-zero nonces are refused, and a
+    /// verifier returns `false` (never a panic) when the transcript itself is
+    /// unusable.
+    #[test]
+    fn handshake_refuses_empty_claims_and_bad_nonces() {
+        let secret = b"shared-hmac-key";
+        let mut empty_boot = sample_transcript();
+        empty_boot.boot_id.clear();
+        assert_eq!(
+            guest_proof(secret, &empty_boot),
+            Err(HandshakeError::EmptyIdentityClaim)
+        );
+        assert!(!verify_guest_proof(secret, &empty_boot, &[1u8; 32]));
+
+        let mut empty_distro = sample_transcript();
+        empty_distro.distro_id.clear();
+        assert_eq!(
+            guest_proof(secret, &empty_distro),
+            Err(HandshakeError::EmptyIdentityClaim)
+        );
+
+        let mut zero_guest = sample_transcript();
+        zero_guest.guest_nonce = [0u8; 32];
+        assert_eq!(
+            guest_proof(secret, &zero_guest),
+            Err(HandshakeError::NonceNotFresh)
+        );
+        assert!(!verify_guest_proof(secret, &zero_guest, &[1u8; 32]));
+
+        let t = sample_transcript();
+        let mut zero_host = sample_challenge();
+        zero_host.host_nonce = [0u8; 32];
+        assert_eq!(
+            host_proof(secret, &t, &zero_host),
+            Err(HandshakeError::NonceNotFresh)
+        );
+        assert!(!verify_host_proof(secret, &t, &zero_host, &[1u8; 32]));
+        assert!(!verify_guest_finish_proof(
+            secret, &t, &zero_host, &[1u8; 32]
+        ));
     }
 }

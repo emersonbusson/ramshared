@@ -96,13 +96,13 @@
 
 ## Security checklist (pre-impl)
 
-- [ ] Authentication: host service may run as `NT AUTHORITY\SYSTEM` and guest daemon as root, but the listener accepts any partition. Product handshake must verify HMAC before exchanging manifest or lease authority; it is not implemented or live-tested.
+- [x] Authentication: host service may run as `NT AUTHORITY\SYSTEM` and guest daemon as root, but the listener accepts any partition. Product handshake verifies HMAC before exchanging manifest or lease authority. (2026-10-01: DT-3 three-message role-separated HMAC-SHA256 transcript is implemented in `crates/ramshared-ipc/src/lib.rs` — `Handshake` carries a fresh 32-byte `guest_nonce` and `guest_proof`; `HandshakeAck` carries a fresh `host_nonce` and `host_proof` over both nonces and the complete transcript; `HandshakeFinish` (`MSG_HANDSHAKE_FINISH = 22`) proves the same transcript back. Nonces come from the OS CSPRNG (`random_nonce`, `getrandom(2)` on Linux, `SystemFunction036` on Windows) and an all-zero nonce is refused. Proof comparison is constant-time (`ct_eq32`). Role labels `ramshared-vsock-{guest,host,finish}-proof-v1` make a proof from one role unusable in another. Named proof: `mutual_handshake_requires_fresh_role_bound_proofs`, `handshake_finish_rejects_replayed_host_challenge`, `handshake_hmac_validates`. The listener still accepts any partition, so the GUID remains routing metadata and the HMAC is the only peer authentication. A live host-guest session is environment-bound and stays on the live-path row below.)
 - [x] User/host copy: all frames bounded to `MAX_PAYLOAD_LEN` (1MB). Manifest payloads capped at `ORIGIN_MANIFEST_MAX_BYTES` (64KB). Operate on owned copies after `read_exact`.
-- [ ] Flags/IOCTL codes: the current source rejects message types above 21; the planned `HandshakeFinish` uses type 22, so the parser and tests must be extended before this handshake can be implemented. Unknown protocol versions are rejected.
+- [x] Flags/IOCTL codes: type 22 (`HandshakeFinish`) is now a legal frame and types above it are still rejected (`frame_accepts_handshake_finish_and_rejects_type_above_max`); `MSG_MAX == MSG_HANDSHAKE_FINISH == 22`. Unknown protocol versions remain rejected (`frame` decode range `IPC_MIN_VERSION..=IPC_VERSION_3`, `version_negotiation_selects_highest_mutual`). (2026-10-01: the previous "rejects message types above 21" gap is closed; the parser and tests are extended.)
 - [x] Info-leak: no kernel addresses, no HMAC secrets, no host paths in default logs. Guest logs use `tracing` with redacted fields. Host ETW events use integer codes.
 - [x] IRQ/atomic: N/A — pure userspace.
 - [x] Lifetime: listener and accepted socket handles have RAII cleanup in the transport.
-- [ ] Hot-unplug: transport surfaces EOF and errors; product-level disconnect handling, lease cleanup, and fail-closed cache transition remain unimplemented.
+- [x] Hot-unplug: transport surfaces EOF and errors; product-level disconnect handling, lease cleanup, and fail-closed cache transition are implemented in `ControlPlaneAuthority` (`crates/ramshared-wsl2d/src/host_gate.rs`). (2026-10-01: `on_vsock_disconnect` enters `safe_mode`, drops the lease so cache admission is refused, and preserves the verified origin so authoritative I/O continues; `on_lease_expired` revokes only the cache and leaves `origin_only`. Named proof: `vsock_disconnect_triggers_safe_mode`, `lease_expiry_revokes_cache_and_keeps_verified_origin`, `origin_identity_loss_blocks_io`, `connection_failure_never_grants_lease`. Physical hot-unplug on a live Hyper-V socket remains environment-bound.)
 - [x] Host safety: VHDX attach/detach bounded to 10s (DT-4). No GPU/VRAM pressure from control plane. Heartbeat RTT monitored (NFR-1).
 - [x] Shared-hardware cushion: N/A — control plane does not allocate shared VRAM/RAM.
 - [x] Bounded DMA: N/A — no DMA in control plane.
@@ -158,7 +158,7 @@
   // ... remaining message types per PRD §7
   ```
 - Reference pattern: `crates/ramshared-winsvc/src/ipc.rs` (framing), `crates/ramshared-winsvc/src/proto.rs` (constants).
-- Required tests: `ramshared-ipc/src/lib.rs` :: `frame_round_trip`, `frame_rejects_bad_magic`, `frame_rejects_oversized_payload`, `version_negotiation_selects_highest_mutual`, `handshake_hmac_validates`.
+- Required tests: `ramshared-ipc/src/lib.rs` :: `frame_round_trip`, `frame_rejects_bad_magic`, `frame_rejects_oversized_payload`, `version_negotiation_selects_highest_mutual`, `handshake_hmac_validates`, `mutual_handshake_requires_fresh_role_bound_proofs`, `handshake_finish_rejects_replayed_host_challenge`, `frame_accepts_handshake_finish_and_rejects_type_above_max`.
 - Cover target: ≥ 80%
 
 **`crates/ramshared-ipc/src/vsock.rs`**
@@ -198,7 +198,7 @@
 - What: Add AF_VSOCK client startup path, lease heartbeat loop, fail-closed on disconnect. Replace `HOST_ORIGIN_MANIFEST_PATH` file reads with vsock `OriginManifest` message.
 - RF / DT: RF-1, RF-3, RF-6, DT-5, DT-7.
 - Symbols: add `VsockControlPlane` struct; modify `run_nbd_with_startup` to accept `ControlPlane` trait (vsock or file fallback); add `HeartbeatLoop`.
-- Planned integration tests: `authenticated_handshake_rejects_invalid_or_out_of_order_proofs`, `lease_expiry_revokes_cache_and_keeps_verified_origin`, `origin_identity_loss_blocks_io`, and `vsock_disconnect_revokes_cache_before_next_dispatch`. There is no file fallback; a connection failure must not grant a lease.
+- Integration tests (2026-10-01, names match the matrix): `lease_expiry_revokes_cache_and_keeps_verified_origin`, `vsock_disconnect_triggers_safe_mode`, `connection_failure_never_grants_lease`, and `origin_identity_loss_blocks_io`. Authentication refusal and replay live in `ramshared-ipc` as `mutual_handshake_requires_fresh_role_bound_proofs` and `handshake_finish_rejects_replayed_host_challenge`. There is no file fallback; a connection failure must not grant a lease (`lease_after_connect` runs the mint closure only after the connect succeeds).
 - Cover: ≥ 80%
 - Kahneman: #13
 
@@ -300,6 +300,8 @@
 | `crates/ramshared-wsl2d/src/main.rs` | `tests::connection_failure_never_grants_lease` | integration/refusal | #13 | ≥ 80% |
 | `crates/ramshared-ipc/src/lib.rs` | `tests::mutual_handshake_requires_fresh_role_bound_proofs` | unit/refusal+legitimate | #13/#17 | ≥ 80% |
 | `crates/ramshared-ipc/src/lib.rs` | `tests::handshake_finish_rejects_replayed_host_challenge` | unit/replay | #13/#17 | ≥ 80% |
+| `crates/ramshared-ipc/src/lib.rs` | `tests::frame_accepts_handshake_finish_and_rejects_type_above_max` | unit | #13 | ≥ 80% |
+| `crates/ramshared-wsl2d/src/main.rs` | `tests::origin_identity_loss_blocks_io` | integration/refusal | #13 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_timeout_is_bounded` | unit | #16 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_is_idempotent` | unit | #17 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_records_partuuid_on_success` | unit | #17 | ≥ 80% |
@@ -317,8 +319,8 @@
 - [x] `cargo test -p ramshared-ipc -p ramshared-wsl2d -p ramshared-winsvc` (covered by the passing workspace suite on Linux)
 - [x] Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-ipc,ramshared-wsl2d,ramshared-winsvc --files crates/ramshared-ipc/src/lib.rs,crates/ramshared-ipc/src/vsock.rs,crates/ramshared-wsl2d/src/host_gate.rs,crates/ramshared-winsvc/src/control_plane.rs --min 80`
 - [ ] Live path: host-guest vsock connect → handshake → heartbeat RTT ≤ 1ms → `kill -STOP` → disconnect detection within 15s → resume → recovery
-- [ ] Every matrix row has a real test name
-- [ ] Kahneman critical rows have executable evidence
+- [x] Every matrix row has a real test name. (2026-10-01: all 35 `tests::` names in the matrix resolve to source. The five previously missing names landed with the DT-3 handshake and the `ControlPlaneAuthority` gate: `lease_expiry_revokes_cache_and_keeps_verified_origin`, `vsock_disconnect_triggers_safe_mode`, `connection_failure_never_grants_lease`, `mutual_handshake_requires_fresh_role_bound_proofs`, `handshake_finish_rejects_replayed_host_challenge`. Companion ITEM-3 name `origin_identity_loss_blocks_io` is also present and is now listed in the matrix.)
+- [x] Kahneman critical rows have executable evidence. (2026-10-01: ITEM-2 `vsock_connect_finishes_within_deadline` plus the injected deadline/socket-error cases; ITEM-3 `lease_expiry_revokes_cache_and_keeps_verified_origin` plus `origin_identity_loss_blocks_io`; ITEM-4 `host_gate_shadow_comparison`; ITEM-5 `vhdx_attach_timeout_is_bounded`. All four are named tests that run under `cargo test`, not "code exists" claims.)
 
 The Linux coverage run passes for `ramshared-ipc/src/lib.rs` (84.3%),
 `ramshared-ipc/src/vsock.rs` (93.0%), `ramshared-wsl2d/src/host_gate.rs`
