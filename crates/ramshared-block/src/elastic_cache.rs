@@ -299,7 +299,64 @@ impl<'p, P: VramProvider + 'p> BestEffortCache for ElasticVramCache<'p, P> {
         if self.state != CacheState::Active || self.watchdog_tripped {
             return CacheMutation::Skipped;
         }
-        self.update(offset, data)
+
+        let chunk_bytes = self.config.chunk_bytes;
+        if chunk_bytes == 0 || offset >= self.config.logical_capacity {
+            return CacheMutation::Failed;
+        }
+
+        let chunk_idx = (offset / chunk_bytes) as usize;
+        let chunk_off = offset % chunk_bytes;
+
+        if chunk_idx >= self.table.slots.len() {
+            return CacheMutation::Failed;
+        }
+
+        // RF-5: re-admit an SSD-spilled chunk back into VRAM once headroom
+        // has settled. Unlike `update`, promotion is exactly the path that
+        // clears the spill marker and re-allocates the chunk.
+        if self.table.slots[chunk_idx].mem.is_none() {
+            let current_vram = self.active_vram_bytes();
+            if current_vram.saturating_add(chunk_bytes) > self.config.max_vram_bytes {
+                return CacheMutation::Skipped;
+            }
+            match self.provider.alloc(chunk_bytes as usize) {
+                Ok(mut mem) => {
+                    let _ = mem.zero();
+                    self.table.slots[chunk_idx].mem = Some(mem);
+                }
+                Err(_) => {
+                    return CacheMutation::Skipped;
+                }
+            }
+        }
+        self.table.slots[chunk_idx].spilled_to_ssd = false;
+
+        let (result, timeout, failed) = if let Some(ref mut mem) = self.table.slots[chunk_idx].mem {
+            let start = Instant::now();
+            match mem.write_at(chunk_off, data) {
+                Ok(()) => {
+                    if start.elapsed() > self.config.dma_timeout {
+                        (CacheMutation::Failed, true, false)
+                    } else {
+                        (CacheMutation::Accepted, false, false)
+                    }
+                }
+                Err(_) => (CacheMutation::Failed, false, true),
+            }
+        } else {
+            (CacheMutation::Skipped, false, false)
+        };
+
+        if timeout || failed {
+            self.watchdog_tripped = true;
+            self.table.slots[chunk_idx].spilled_to_ssd = true;
+        } else if result == CacheMutation::Accepted {
+            self.table.slots[chunk_idx].written = true;
+            self.table.slots[chunk_idx].last_accessed = Instant::now();
+        }
+
+        result
     }
 
     fn disable(&mut self) -> CacheMutation {
@@ -640,5 +697,64 @@ pub mod tests {
         // Allocation failure -> cleanly marks spilled_to_ssd and returns Skipped (to let SSD handle write)
         assert_eq!(cache.update(0, &data), CacheMutation::Skipped);
         assert_eq!(cache.cached_bytes(), 0);
+    }
+
+    /// RF-5 elastic recovery: once the governor settles back to Green, a
+    /// previously evicted (SSD-spilled) chunk is promoted back into VRAM
+    /// without service interruption. The settle timing itself is covered by
+    /// `governor::tests::test_governor_three_zone_hysteresis`; this test
+    /// proves the cache-side re-admission that `promote` must perform.
+    #[test]
+    fn test_elastic_recovery_promotes_on_green_settle() {
+        let provider = TestProvider::new();
+        let chunk_size = 64 * 1024 * 1024; // 64 MiB
+        let config = ElasticCacheConfig {
+            chunk_bytes: chunk_size,
+            logical_capacity: 128 * 1024 * 1024, // 2 chunks
+            max_vram_bytes: 128 * 1024 * 1024,
+            dma_timeout: Duration::from_millis(50),
+        };
+        let mut cache = ElasticVramCache::new(&provider, config);
+
+        let data0 = vec![0xA0; 4096];
+        let data1 = vec![0xB1; 4096];
+        let mut buf = vec![0u8; 4096];
+
+        // Both chunks resident.
+        assert_eq!(cache.update(0, &data0), CacheMutation::Accepted);
+        assert_eq!(cache.update(chunk_size, &data1), CacheMutation::Accepted);
+        assert_eq!(cache.cached_bytes(), 2 * chunk_size);
+
+        // Red-zone pressure evicts both chunks to SSD.
+        let evicted = cache.evict_coldest_chunks(2 * chunk_size);
+        assert_eq!(evicted, 2);
+        assert_eq!(cache.cached_bytes(), 0);
+        assert_eq!(cache.read(0, &mut buf), CacheRead::Miss);
+        assert_eq!(cache.read(chunk_size, &mut buf), CacheRead::Miss);
+
+        // `update` still refuses a spilled chunk (spill is authoritative
+        // until an explicit promotion), so RF-5 is the only path back.
+        assert_eq!(cache.update(0, &data0), CacheMutation::Skipped);
+
+        // Green settle: promote chunk 0 back into VRAM.
+        let recovered = vec![0xC2; 4096];
+        assert_eq!(cache.promote(0, &recovered), CacheMutation::Accepted);
+        assert_eq!(cache.cached_bytes(), chunk_size);
+        assert_eq!(cache.read(0, &mut buf), CacheRead::Hit);
+        assert_eq!(buf, recovered);
+
+        // Chunk 1 is still on SSD until its own promotion.
+        assert_eq!(cache.read(chunk_size, &mut buf), CacheRead::Miss);
+        assert_eq!(cache.promote(chunk_size, &data1), CacheMutation::Accepted);
+        assert_eq!(cache.cached_bytes(), 2 * chunk_size);
+        assert_eq!(cache.read(chunk_size, &mut buf), CacheRead::Hit);
+        assert_eq!(buf, data1);
+
+        // Promotion is idempotent: re-promoting a resident chunk re-writes
+        // it and does not allocate a second chunk.
+        let allocs_before = provider.alloc_count.get();
+        assert_eq!(cache.promote(0, &recovered), CacheMutation::Accepted);
+        assert_eq!(provider.alloc_count.get(), allocs_before);
+        assert_eq!(cache.cached_bytes(), 2 * chunk_size);
     }
 }
