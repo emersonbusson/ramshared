@@ -10656,11 +10656,12 @@ what turns this red into a measurement.
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0134`.
 **Owner role:** `kernel-runtime-engineer`.
-**Observed at:** `2026-09-30T22:15:37Z` (guest start, from `drill-vm-report.txt`).
+**Observed at:** `2026-09-30T22:15:37Z`.
 **Verified at:** `2026-09-30T23:11:27Z`.
 **Source revision:** `0d2844870beb`
 **Lifecycle:** `reviewable`.
-**Retention:** Keep until the series is sent or withdrawn. Keep the
+**Retention:** Keep until the series is sent or withdrawn. The Observed-at
+stamp is the guest start from `drill-vm-report.txt`. Keep the
 `esp_bootx64_sha256` recorded above: a future build that resolves a
 different digest is a new measurement, not a repeat of this one. Keep the
 candidate-health positives next to the FAIL — a reader who sees only
@@ -10689,14 +10690,13 @@ drill, and the static half was executed on this host.
 
 **Category:** `invariant`
 
-**How to measure:**
+**How to measure:** From WSL, set `winroot=$(wslpath -w "$PWD")`, then run:
 ```bash
 node tools/ci/plan-rust-slice-coverage.mjs --changed-files tmp/win-two.txt
-REPO_WIN='\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared'
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-  -File "$REPO_WIN\scripts\windows\Test-AutonomousBrokerStatic.ps1" -RepoRoot "$REPO_WIN"
+  -File "$winroot\scripts\windows\Test-AutonomousBrokerStatic.ps1" -RepoRoot "$winroot"
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-  -File "$REPO_WIN\scripts\windows\Test-ProductOnlineStatic.ps1" -RepoRoot "$REPO_WIN"
+  -File "$winroot\scripts\windows\Test-ProductOnlineStatic.ps1" -RepoRoot "$winroot"
 ```
 
 **Measured data:**
@@ -10713,13 +10713,19 @@ Selecting every `crates/**/src/**/*.rs` reports exactly two
 test-only path module and produces no finding.
 
 Windows PowerShell 5.1.26100.9444 static runs (host is WSL2; scripts reached over
-the `\\wsl.localhost\Ubuntu-24.04` UNC path):
+the repo root exposed as a Windows UNC path):
 `Test-AutonomousBrokerStatic.ps1` exit 0, 22/22 named checks PASS including the five
 new `loader_win_*` checks and the roll-up `PASS loader_win_adapter_contract`;
 `Test-ProductOnlineStatic.ps1` exit 0, 5/5 PASS including
 `PASS windows_driver_mapped_queue_contract`. Combined 28 PASS lines, 0 FAIL.
 Both harnesses remain registered in `scripts/windows/Test-WindowsCiStatic.ps1`
 (`Name = "Test-AutonomousBrokerStatic.ps1"`, `Name = "Test-ProductOnlineStatic.ps1"`).
+Measurement revision `b7e9f0082852` carried these five paths in the working tree:
+`scripts/windows/Test-AutonomousBrokerStatic.ps1`,
+`scripts/windows/Test-ProductOnlineStatic.ps1`,
+`docs/governance/rust-slice-coverage.json`,
+`docs/specs/no-milestone/windows-swap-driver/SPEC.md`,
+`docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md`.
 
 Static contract asserted on `loader_win.rs`: Win32 `LoadLibraryW`/`GetProcAddress`/
 `FreeLibrary` triad with no POSIX `dlopen(`/`dlsym(`/`dlclose(` call, `sym`/`close`
@@ -10754,14 +10760,9 @@ physical lifecycle qualification" gate stays the honest owner of the gap.
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0135`.
 **Owner role:** `ci-contract-engineer`.
-**Observed at:** `2026-09-30T23:51:00-03:00` (static harness runs on this host).
+**Observed at:** `2026-09-30T23:51:00-03:00`.
 **Verified at:** `2026-09-30T23:51:00-03:00`.
-**Source revision:** `b7e9f0082852` (working tree also carries these five paths:
-`scripts/windows/Test-AutonomousBrokerStatic.ps1`,
-`scripts/windows/Test-ProductOnlineStatic.ps1`,
-`docs/governance/rust-slice-coverage.json`,
-`docs/specs/no-milestone/windows-swap-driver/SPEC.md`,
-`docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md`).
+**Source revision:** `b7e9f0082852`.
 **Lifecycle:** `reviewable`.
 **Retention:** Keep until a supervised Windows lab run records the two named live
 drills, at which point the live half of this entry is superseded rather than
