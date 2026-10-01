@@ -14960,3 +14960,122 @@ a live `cache_state=ACTIVE` proof under measured PSI. Re-run on any change to
 supervisor's `Guarded` / `CloseAdmission` thresholds.
 
 ---
+
+## 2026-10-01 20:43 -03 — bare `up` ignored the host zram policy and the usage text lied about it (EVD-0165)
+
+**What:** Two reproduced defects in the attended `up` sizing surface, both
+fixed and unit-tested.
+
+1. **Usage text claimed `"defaults: 1024 MiB each"`** for `up`. Bare `up`
+   actually sets `vram_mb = sealed.logical_capacity_mib` (4096 MiB on this
+   host), not 1024. The text was factually wrong about the most visible
+   lifecycle command.
+2. **Bare `up` never read `/etc/ramshared/cascade.conf`.**
+   `parse_up_args_from` resolved `zram_mb: default_mb_from_env("RAMSHARED_ZRAM_MIB", 1024)`
+   while `boot` resolved the documented DT-3 chain
+   (`cascade.conf` → env → 1024). Two entry points, one machine, two answers.
+
+**Classification:** both are **reproduced defects**, not static risks. The
+second is an observed operational gap, not a reading of the code: this session
+had to pass `--zram 2048` by hand to match host policy, because a bare `up`
+started 1024 MiB. The helper doc comment that called
+`default_mb_from_env` "Attended `up` sizing fallback only" was describing the
+gap, not justifying it — DT-3 names `cascade.conf` the sizing authority and
+`boot` already honoured it.
+
+**Live policy input (the value that was being ignored):**
+
+```
+$ grep -E '^(VRAM_MIB|ZRAM_MIB|MIN_VRAM_HEADROOM_MIB)=' /etc/ramshared/cascade.conf
+VRAM_MIB=4096
+ZRAM_MIB=2048
+MIN_VRAM_HEADROOM_MIB=2048
+```
+
+**Before → after:**
+
+| Surface | Source | Bare-`up` zram default | Against `ZRAM_MIB=2048` |
+| --- | --- | --- | --- |
+| `parse_up_args_from` | parent of `4f88e421` | `env \|\| 1024` → **1024 MiB** | ❌ half the policy cushion |
+| `parse_up_args_from` | `4f88e421` | DT-3 chain → **2048 MiB** | ✅ matches `boot` and host policy |
+
+The chain is `cascade.conf` → `RAMSHARED_ZRAM_MIB` → 1024 MiB, resolved by
+`boot::resolve_boot_config_text`, which was extracted from
+`resolve_boot_config_from` so `up` and `boot` share one parser and cannot
+drift. `vram_mb` is deliberately **not** taken from `cascade.conf`: it stays
+bound to `sealed.logical_capacity_mib`, which is the size the NBD actually
+exposes over the origin file. That half of DT-3 is recorded under
+"What this run does NOT prove" rather than silently changed.
+
+**Named tests** (`crates/ramshared-cli/src/cascade/mod.rs`):
+`bare_up_zram_follows_cascade_conf_before_env`,
+`bare_up_zram_falls_back_to_env_then_builtin`,
+`bare_up_zram_explicit_flag_still_outranks_the_policy_file`,
+`malformed_cascade_conf_refuses_a_bare_up`. The last is the Kahneman #13
+negative case: a policy file the chain cannot parse is a refusal, not a silent
+fall back to 1024 — the same fail-closed posture `boot` takes.
+
+**Validation:**
+- `cargo test -p ramshared-cli --bins` → **547 passed, 0 failed** (544 before
+  + 4 new − 1 retired helper test).
+- `cargo test -p ramshared-cli --bins -- boot::` → **51 passed, 0 failed**
+  after the `resolve_boot_config_text` extraction.
+- `cargo clippy -p ramshared-cli --bins -- -D warnings` → clean.
+- `rustfmt --edition 2024 --check` on `cascade/mod.rs`, `cascade/boot.rs`,
+  `main.rs` → clean.
+- Commit `4f88e421`, body carries `Rollback trigger:`, no attribution trailers.
+
+**What this run does NOT prove:**
+
+- **No live bare `up` was executed.** A bare `up` on this host would parse
+  against the running cascade and then take the activation path; the after
+  state is proven by named tests fed the exact live key (`ZRAM_MIB=2048`), not
+  by a live activation. Do not cite this entry as a live-`up` qualification.
+- **`vram_mb` still does not follow `cascade.conf`.** If an operator sets
+  `VRAM_MIB` away from `sealed.logical_capacity_mib`, `boot` will honour it and
+  a bare `up` will not. That is a remaining, deliberate divergence and is
+  **not** closed here. It needs its own decision about whether the NBD size may
+  ever leave the sealed origin capacity.
+- **`boot` remains blocked on `verify_host_lease`.** The lease is still never
+  minted and `ramshared-host-gate.service` is still disabled, so this does not
+  change the "cascades not active on WSL2 start" gap.
+- Not boot-round, vsock, multi-vendor GPU, CoCo, or screenshot-challenge
+  evidence.
+
+**Verdict:** ✅ works (both defects), ⚠️ partial (no live bare `up`;
+`vram_mb` still not DT-3; boot lease gate untouched)
+
+**Category:** cascade lifecycle; host sizing policy (DT-3); CLI documentation
+**How to measure:** On a host whose `/etc/ramshared/cascade.conf` carries a
+`ZRAM_MIB` distinct from 1024 and with `RAMSHARED_ZRAM_MIB` unset, a bare
+`up` must start that many MiB of zram — the same number `boot` prints in
+`[boot] cascade active (… zram=N MiB …)`. Prove the chain without activating
+by feeding the file's exact body through `boot::resolve_boot_config_text`
+under `UpEnv` and comparing `config.zram_mib` to the policy value. The
+negative case is mandatory: a `cascade.conf` with a non-integer known key
+must refuse `up`, not fall back. Re-run after any change to `default_zram_mb`,
+`UpEnv`, `boot::resolve_boot_config_text`, or `parse_up_args_from`'s sizing
+defaults.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0165`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T23:43:32Z`.
+**Verified at:** `2026-10-01T23:43:32Z`.
+**Source revision:** `4f88e421`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the two-row before/after table beside the live
+`grep -E '^(VRAM_MIB|ZRAM_MIB|MIN_VRAM_HEADROOM_MIB)=' /etc/ramshared/cascade.conf`
+output — that pair is the reproduced gap. Keep the `malformed_cascade_conf_
+refuses_a_bare_up` name with the fail-closed sentence: the negative case is
+what separates this from a happy-path guess. Keep the `What this run does NOT
+prove` `vram_mb` row visible; it is the remaining half of DT-3 on this surface
+and must not be read as closed. Never cite this entry as live-`up`,
+boot-round, or lease-gate qualification evidence.
+**Freshness:** Superseded on any change to `default_zram_mb`, `UpEnv`,
+`boot::resolve_boot_config_text`, `parse_up_args_from`'s sizing defaults, or
+the DT-3 chain in `resolve_boot_config_from`. Re-run if `vram_mb` is ever
+gained from `cascade.conf`, or if a live bare `up` is executed on a host with a
+sealed origin and a written `cascade.conf`.
+
+---
