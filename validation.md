@@ -14020,3 +14020,145 @@ Superseded for the panic-root-cause claim only by evidence that
 the clean runs. Re-read both runtime jobs before citing. Job-level
 `success` on `hyperv-runtime-drill` is never a gate closure. Never cite
 this entry as CoCo or send-gate evidence.
+
+---
+
+## EVD-0160 — watermark boost, not the floor constant, is what stops the chase
+
+**Verdict:** 🔴 fails — run 36899458556 OOMed its own helper on
+windows-latest and panicked windows-2025. The rollback trigger fires. The
+change under test (chase floor driven off the live `min+boost` watermark,
+`FRAG_CHASE_HARD_KB=2048`) is withdrawn and the lever that actually binds
+is identified and measured.
+
+**Category:** drill / fragmentation acceptance — EVD-0134 third signal,
+negative result with a quantified root cause.
+
+**How to measure:** download both runtime job logs of run 36899458556
+(`gh run view -R emersonbusson/WSL2-Linux-Kernel 36899458556 --job <id>
+--log`), then read `score-fragmentation-drill.py` output against the OOM
+dumps. The decisive fields are the `DMA32 free: … boost: … min: …` line of
+each `Mem-Info` block and the position of `FRAGMENT_BUDDY` relative to
+them. Do not score this run on `RESULT` — neither guest reached
+`ready=1`.
+
+### Run
+
+| Job | id | outcome |
+| --- | --- | --- |
+| drill-kernel | 110494684516 | success |
+| drill-runtime windows-latest | 110497391742 | success (fragment=3) |
+| drill-runtime windows-2025 | 110497391703 | **failure (panic)** |
+
+Source revision `2ce7fbc1796f`. Workflow conclusion `failure`. No
+`FRAGMENT_BUDDY chase=` and no `ready=1` on either guest, so there is no
+residue to report — `RESULT` fell back to `INCONCLUSIVE_NO_PATTERN` with
+`high_order_7plus_blocks=506 (reread=506)`, which is a pre-chase count and
+must not be read as a residue.
+
+### The measured limiter: boost
+
+windows-latest OOM dump (first OOM, `order=0`, the helper itself):
+
+```
+DMA32 free:7024kB boost:6924kB min:7436kB low:9488kB high:11540kB …
+unevictable:1994160kB
+Out of memory: Killed process 101 (vmbus_drill_hel) total-vm:1999316kB,
+anon-rss:1998152kB
+```
+
+`min_free_kbytes` **had** taken: printed `min` already includes boost, and
+`7436 = 512 + 6924`. So this is not a repeat of EVD-0155's un-lowered
+write. The fail-closed check added in `2ce7fbc1796f` worked exactly as
+designed — it did not fire, because the write was real.
+
+What fired instead is `boost_watermark()`. Every free that cannot coalesce
+raises `zone->_watermark_boost`, and fragmenting is precisely the pattern
+this drill builds. With `watermark_boost_factor` left at its default, the
+effective watermark climbed from 512 kB to 7436 kB while the chase drove
+`MemFree` to 7024 kB. The floor formula
+`max(2048, live_min_watermark + 2048)` then resolved to
+`max(2048, 7436+2048) = 9484 kB` — **higher** than the 8192 kB floor of
+the clean run 36894869321. The change that was meant to go deeper bound
+earlier, and the helper still OOMed, because the floor is checked after a
+successful hold and boost can move between the check and the next fault.
+
+windows-2025 is the same physics taken further. Its first OOM is `sh`,
+`order=1`, at `free:12588kB boost:0kB min:5692kB` — 12588 kB free and an
+order-1 allocation still fails, because the free memory is all order-0.
+`unevictable:1990632kB` shows the 2004 MiB already locked. `sh` is the
+fork that would exec the helper, so the helper never printed; the
+watermark was never lowered on that guest. Then `init` needed a page,
+found `Out of memory and no killable processes...`, and
+`Kernel panic - not syncing: System is deadlocked on memory`.
+
+### What is withdrawn and what stays
+
+Withdrawn: driving the chase floor off the live `min+boost` watermark as
+the *binding* constraint. It chases a rising target and cannot go below
+the thing that is rising.
+
+Kept, because it worked on this run: the `min_free_kbytes` read-back and
+the `ready=0 … reason=min-free-not-lowered` fail-closed branch. windows-latest
+printed `saved=5704 set=512 now=512`, which is the first run in this
+series where the write is proven rather than assumed.
+
+Added in its place: `watermark_boost_factor=0` before the chase, with the
+same read-back and fail-closed discipline
+(`ready=0 … reason=boost-not-disabled`), restored after `ready=1` next to
+`min_free_kbytes`. With boost suppressed the effective watermark stays at
+the value we wrote, so `FRAG_CHASE_HARD_KB` becomes meaningful again and
+is set to **4096 kB** — half the 8 MiB that was clean, and 3584 kB above
+a 512 kB watermark. The live-watermark term is kept as a safety net only:
+if boost ever returns the floor rises and the chase stops rather than
+OOMs.
+
+### Rollback trigger
+
+`2ce7fbc1796f`'s trigger named `c94d10f44538` as the revert target. That
+target is wrong and is corrected here: `c94d10f44538` is the
+chase-held-partner run with a **3584**-page residue, so reverting to it
+would discard the validated 1408/1280 result of `5e864e7d9a08` without
+buying safety. The correct last-known-good is **`5e864e7d9a08`**. The
+trigger itself (`out_of_memory()` occurred) fires on `2ce7fbc1796f`; the
+corrective change on top is the boost suppression above, and its trigger
+reverts to `5e864e7d9a08`.
+
+### What must not be lost
+
+- EVD-0155's corrected root cause stands: that panic was an un-lowered
+  `min_free_kbytes` plus a `MemFree` floor blind to `free_pcp`, not a
+  fatal 4 MiB constant. This run is a **different** failure and does not
+  undo it.
+- `min_free_kbytes` lowering is now proven (`now=512`) once. Any future
+  run that prints `now` ≠ `set` is invalid for any floor below ~6 MiB.
+- The residue model stands: recycle is anti-correlated with splitting,
+  hold is what splits, and clearing one order-10 to order-6-and-below
+  costs 15 held pages. 36894869321 remains the best residue in the
+  series (1408/1280) and the 100% ceiling this change must beat.
+- Lifecycle evidence from 36894869321 is untouched and still green:
+  `PHASE1 cycle_fails=0 / 120 steps`, `MMAP_HOLD /dev/uio0 maps=5`,
+  sysfs ring `maps=1`, `LIFECYCLE_VERDICT=PASS cycles=30`. This run's
+  lifecycle is also PASS on windows-latest; only the fragmentation phase
+  regressed.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0160`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T17:55:00Z`.
+**Verified at:** `2026-10-01T18:10:00Z`.
+**Source revision:** `2ce7fbc1796f`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the OOM `DMA32 free/boost/min` lines for both guests —
+they are the measurement that identifies boost as the limiter and they are
+the reason `watermark_boost_factor=0` exists. Keep the record that
+`2ce7fbc1796f`'s rollback target was mis-specified as `c94d10f44538` and
+corrected to `5e864e7d9a08`. Keep EVD-0155's correction intact beside
+this one; the two panics have different causes and collapsing them would
+re-lose the first.
+**Freshness:** Superseded for the boost claim only by a run that shows a
+low chase floor closing `high_order_7plus=0` while `watermark_boost_factor`
+is left at its default. Superseded for the residue ceiling by any clean
+run below 1280 pages. Job-level `success` or `failure` on
+`hyperv-runtime-drill` is never a gate closure. Never cite this entry as
+CoCo or send-gate evidence.
