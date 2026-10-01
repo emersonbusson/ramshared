@@ -825,20 +825,22 @@ repeated run does not modify fixture bytes or repository files.
   `mutable_files=4 mutable_lines=19 protected_files=5 protected_lines=38
   finding_count=57`. Historical findings are the expected `--all` snapshot,
   not the CI gate.)
-- [ ] Fixture `--ratchet <base>` tests prove that a working record matches the
+- [x] Fixture `--ratchet <base>` tests prove that a working record matches the
   current scan and either equals or makes one bounded strict decrease from its
   committed base record; a repository invocation remains fail-closed until
-  baseline stabilization materializes that base record.
-- [ ] No diagnostic echoes source, marker, secret, absolute path, or diff text.
-- [ ] No protected evidence/history/IMPL file is translated, rewritten, or
+  baseline stabilization materializes that base record. (2026-10-01: 6 ratchet tests green — `ratchet_rejects_growth_and_accepts_strict_decrease`, `ratchet_uses_base_record_not_pr_record`, `ratchet_refuses_protected_inventory_drift`, `ratchet_schema_rejects_suppression_capability`, `ratchet_schema_file_is_strict_and_suppression_free`, `ratchet_requires_anchored_base_record_before_activation`.)
+- [x] No diagnostic echoes source, marker, secret, absolute path, or diff text. (2026-10-01: `--all` output shows only `file:line — rule — type` tuples; zero source/secret/path content.)
+- [x] No protected evidence/history/IMPL file is translated, rewritten, or
   counted as a mutable exception. The named migration batches have no protected
   path; the first repository digest comparison is deferred to stabilization.
-- [ ] The workflow invokes the exact implemented diff command only. Ratchet
+  (2026-10-01: scanner `isProtected` covers CHANGELOG.md, validation.md, docs/**/evidence/, docs/postmortems/, docs/reliability/, docs/specs/**/IMPL.md; zero protected paths in mutable batches.)
+- [x] The workflow invokes the exact implemented diff command only. Ratchet
   activation is deferred until its baseline is present in the PR base. Full
   docs/index/claims gates remain out of scope and are not claimed here.
-- [ ] DT-9 design is closed: the fixed future record path, strict schema,
+  (2026-10-01: `comment-language.yml` runs `check-comment-language.mjs --diff origin/$base_ref`; no `--ratchet` flag present.)
+- [x] DT-9 design is closed: the fixed future record path, strict schema,
   maintainer-review protocol, base comparison, batch limits, fixture bootstrap,
-  and missing-base refusal are tested. Material baseline and workflow activation
+  and missing-base refusal are tested. (2026-10-01: `ratchet_schema_rejects_suppression_capability`, `ratchet_schema_file_is_strict_and_suppression_free`, `bootstrap_requires_the_reviewed_snapshot_and_protocol`, `ratchet_uses_base_record_not_pr_record`, `batch_limit_rejects_more_than_ten_files_or_hundred_lines`, `ratchet_requires_anchored_base_record_before_activation` all green.) Material baseline and workflow activation
   remain pending stabilization.
 - [x] DT-11's exact canonical command passes with every named production file
   at ≥80% line coverage, and planner tests prove every former lower-coverage
