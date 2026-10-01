@@ -1311,6 +1311,7 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/boot.rs",
           "crates/ramshared-cli/src/cascade/cascade_io.rs",
           "crates/ramshared-cli/src/cascade/lifecycle.rs",
           "crates/ramshared-cli/src/cascade/mod.rs",
@@ -1320,15 +1321,14 @@
           "crates/ramshared-wsl2d/src/host_gate.rs",
           "scripts/docs-check.sh",
           "scripts/safety/cascade-controller.sh",
-          "scripts/safety/cascade-preflight.sh",
           "scripts/safety/cascade-up.sh",
           "scripts/safety/cascade.conf.example",
           "scripts/safety/install-cascade-boot.sh",
           "scripts/safety/nbd-product-preflight.sh",
+          "scripts/safety/preflight.sh",
           "scripts/safety/systemd/ramshared-cascade.service",
           "scripts/safety/test-control-plane-units.sh",
           "scripts/safety/test-nbd-product-preflight.sh",
-          "scripts/safety/test-preflight-reserve-floor.sh",
           "scripts/safety/uninstall-cascade-boot.sh"
         ],
         "test_paths": [
