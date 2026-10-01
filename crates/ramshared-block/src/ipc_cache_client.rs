@@ -17,12 +17,69 @@ use ramshared_vram::{
 };
 
 pub const DEFAULT_READ_TIMEOUT: Duration = Duration::from_millis(50);
-/// Handshake allows extra time for the worker to initialize CUDA/Vulkan
-/// contexts before the first frame is served (SPEC: DT-2, NFR-1).
-pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Handshake covers worker **process startup**, not the IPC round-trip: the
+/// child must dlopen CUDA/NVML, create a context, and complete WDDM budget
+/// revalidation before it can answer. Measured 2.86 s at load 12 and past the
+/// old 5 s bound by load ~42, so the startup budget is separate from the 5 s
+/// teardown bound (SPEC: DT-2). Reads/heartbeats keep NFR-1's 50 ms.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Disable/teardown uses a longer timeout to accommodate GPU context cleanup.
 /// SPEC: DT-5 (5s bounded supervisor teardown).
 pub const DISABLE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Minimum spacing between heartbeat round-trips. The serve loop ticks once
+/// per NBD request; without this, telemetry would issue one IPC round-trip per
+/// request and compete with data frames on the shared ordered stream (DT-1).
+pub const MIN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
+/// Quiet time after a write-mirror frame before a cache read is issued again.
+///
+/// SPEC DT-1 puts mutations and reads on one ordered socket with no control
+/// lane. Write mirrors are split into 64 KiB nonblocking frames that the
+/// worker must drain sequentially; a read queued behind a burst waits for the
+/// whole backlog and can miss NFR-1's 50 ms bound, which fail-closes the
+/// cache. Promotes from the read path itself are exempt so a cold read stream
+/// can populate the cache without suppressing its own future hits.
+pub const READ_DRAIN_GRACE: Duration = Duration::from_millis(50);
+/// Quiet time after any mutation frame before a heartbeat is issued.
+///
+/// Heartbeats are telemetry and may wait out a longer drain than a data read:
+/// a heartbeat that collides with a mutation burst is the exact failure that
+/// permanently revoked the cache under write load (worker EPIPE after the
+/// parent's fail-closed shutdown).
+pub const HEARTBEAT_DRAIN_GRACE: Duration = Duration::from_millis(200);
+
+/// Parent-side scheduling for round-trip requests on the shared ordered
+/// stream (DT-1). Production uses [`PacingPolicy::default`] so telemetry and
+/// cache reads never queue behind a mutation burst. Protocol cycle tests use
+/// [`PacingPolicy::immediate`] to drive the wire without waiting out the
+/// drain graces.
+#[derive(Clone, Copy, Debug)]
+pub struct PacingPolicy {
+    pub read_drain_grace: Duration,
+    pub heartbeat_drain_grace: Duration,
+    pub min_heartbeat_interval: Duration,
+}
+
+impl Default for PacingPolicy {
+    fn default() -> Self {
+        Self {
+            read_drain_grace: READ_DRAIN_GRACE,
+            heartbeat_drain_grace: HEARTBEAT_DRAIN_GRACE,
+            min_heartbeat_interval: MIN_HEARTBEAT_INTERVAL,
+        }
+    }
+}
+
+impl PacingPolicy {
+    /// Issue every round-trip immediately. Used by protocol cycle tests that
+    /// drive a worker already drained of mutations.
+    pub const fn immediate() -> Self {
+        Self {
+            read_drain_grace: Duration::ZERO,
+            heartbeat_drain_grace: Duration::ZERO,
+            min_heartbeat_interval: Duration::ZERO,
+        }
+    }
+}
 /// Heartbeat payload ceiling (DT-8). An envelope larger than this is rejected
 /// whole — never truncated into a plausible-looking sample.
 const MAX_GPU_BUDGET_PAYLOAD_BYTES: u32 = MAX_WORKER_TELEMETRY_PAYLOAD_BYTES as u32;
@@ -32,6 +89,13 @@ const MAX_GPU_BUDGET_PAYLOAD_BYTES: u32 = MAX_WORKER_TELEMETRY_PAYLOAD_BYTES as 
 /// logical mutation larger than this is split by the caller into one frame per
 /// slice (see `AuthoritativeOriginBackend::update_cache`).
 pub const MAX_MUTATION_FRAME_DATA_BYTES: usize = MAX_CACHE_MUTATION_BYTES;
+
+/// Ceiling on parent-side unwritten mutation bytes (DT-10). The socket can be
+/// backpressured while the worker drains `handle_update`; the queue absorbs the
+/// burst without stalling origin I/O and without abandoning a mid-frame write.
+/// An `Update` that cannot enter the queue revokes the cache; a `Promote` is
+/// simply not cached.
+pub const MAX_PENDING_MUTATION_BYTES: usize = 4 * 1024 * 1024;
 
 fn deadline_after(timeout: Duration) -> io::Result<Instant> {
     Instant::now()
@@ -92,18 +156,122 @@ fn write_all_until(
     Ok(())
 }
 
-fn try_write_frame(socket: &mut UnixStream, frame: &[u8]) -> io::Result<()> {
+/// Outcome of offering a complete mutation frame to the pending queue.
+enum MutationQueue {
+    /// The frame is committed to delivery: fully on the wire, or whole in the
+    /// pending queue behind earlier frames.
+    Queued,
+    /// The queue is full and the frame was not stored. The caller must not
+    /// pretend the mutation will reach the worker.
+    Dropped,
+    /// The peer is gone. Only a deterministic write error produces this;
+    /// backpressure is [`MutationQueue::Queued`] or [`MutationQueue::Dropped`].
+    PeerGone(io::Error),
+}
+
+/// Drains as much of `pending` as the socket accepts without blocking.
+/// Returns `Ok(())` only when `pending` is empty.
+fn drain_pending(socket: &mut UnixStream, pending: &mut Vec<u8>) -> io::Result<()> {
+    while !pending.is_empty() {
+        match socket.write(pending) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    ErrorKind::WriteZero,
+                    "IPC stream made no progress",
+                ));
+            }
+            Ok(written) => {
+                pending.drain(..written);
+            }
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => return Ok(()),
+            Err(error) if error.kind() == ErrorKind::TimedOut => return Ok(()),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+/// Offers `frame` to the stream, storing any unwritten tail in `pending`.
+///
+/// The socket is nonblocking for the duration so origin I/O can never stall
+/// behind a full socket buffer (DT-2/DT-10). A short write is not an error: the
+/// remainder waits in `pending` and is completed by a later drain, which keeps
+/// the byte stream framed. Only a deterministic peer error is fatal.
+fn queue_frame(socket: &mut UnixStream, pending: &mut Vec<u8>, frame: &[u8]) -> MutationQueue {
+    if let Err(error) = socket.set_nonblocking(true) {
+        return MutationQueue::PeerGone(error);
+    }
+    let result = queue_frame_nonblocking(socket, pending, frame);
+    if let Err(error) = socket.set_nonblocking(false)
+        && matches!(result, MutationQueue::Queued)
+    {
+        return MutationQueue::PeerGone(error);
+    }
+    result
+}
+
+fn queue_frame_nonblocking(
+    socket: &mut UnixStream,
+    pending: &mut Vec<u8>,
+    frame: &[u8],
+) -> MutationQueue {
+    match drain_pending(socket, pending) {
+        Ok(()) => {}
+        Err(error) => return MutationQueue::PeerGone(error),
+    }
+    if !pending.is_empty() {
+        // An earlier frame is still draining. The stream is mid-frame, so a new
+        // frame can only join the queue; it must not be interleaved on the wire.
+        return if pending.len().saturating_add(frame.len()) > MAX_PENDING_MUTATION_BYTES {
+            MutationQueue::Dropped
+        } else {
+            pending.extend_from_slice(frame);
+            MutationQueue::Queued
+        };
+    }
+    let mut rest = frame;
+    while !rest.is_empty() {
+        match socket.write(rest) {
+            Ok(0) => {
+                return MutationQueue::PeerGone(io::Error::new(
+                    ErrorKind::WriteZero,
+                    "IPC stream made no progress",
+                ));
+            }
+            Ok(written) => rest = &rest[written..],
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error)
+                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(error) => return MutationQueue::PeerGone(error),
+        }
+    }
+    if !rest.is_empty() {
+        if rest.len() > MAX_PENDING_MUTATION_BYTES {
+            return MutationQueue::Dropped;
+        }
+        pending.extend_from_slice(rest);
+    }
+    MutationQueue::Queued
+}
+
+/// Completes any unwritten mutation bytes without blocking.
+///
+/// `Ok(true)` means the stream is framed again (nothing pending) and a request
+/// may be written. `Ok(false)` means the queue still holds a mid-frame tail: a
+/// cache read must degrade to a miss rather than corrupt the stream (DT-10).
+fn try_drain_pending(socket: &mut UnixStream, pending: &mut Vec<u8>) -> io::Result<bool> {
+    if pending.is_empty() {
+        return Ok(true);
+    }
     socket.set_nonblocking(true)?;
-    let write_result = match socket.write(frame) {
-        Ok(written) if written == frame.len() => Ok(()),
-        Ok(written) => Err(io::Error::new(
-            ErrorKind::WriteZero,
-            format!("IPC mutation frame was only partially queued ({written} bytes)"),
-        )),
-        Err(error) => Err(error),
-    };
+    let drain_result = drain_pending(socket, pending);
     let restore_result = socket.set_nonblocking(false);
-    write_result.and(restore_result)
+    drain_result.and(restore_result)?;
+    Ok(pending.is_empty())
 }
 
 pub struct IpcCacheClient {
@@ -116,10 +284,32 @@ pub struct IpcCacheClient {
     gpu_budget: Option<GpuBudgetTelemetry>,
     cache_telemetry: Option<WorkerCacheTelemetry>,
     seq: u64,
+    /// Last write-mirror (`MSG_UPDATE`) queue stamp, used to defer cache reads
+    /// while the worker drains a write burst.
+    last_update_at: Option<Instant>,
+    /// Last mutation stamp of any kind (update or promote), used to defer
+    /// heartbeats while the worker drains.
+    last_mutation_at: Option<Instant>,
+    /// Last successful heartbeat, used to space telemetry round-trips.
+    last_heartbeat_at: Option<Instant>,
+    /// Unwritten mutation-frame bytes (DT-10). Non-empty means the byte stream
+    /// is mid-frame: a request would corrupt it, so reads degrade to a miss
+    /// until the queue drains.
+    pending_frame: Vec<u8>,
+    pacing: PacingPolicy,
 }
 
 impl IpcCacheClient {
     pub fn new(socket: UnixStream, read_timeout: Duration, target_bytes: u64) -> Self {
+        Self::with_pacing(socket, read_timeout, target_bytes, PacingPolicy::default())
+    }
+
+    pub fn with_pacing(
+        socket: UnixStream,
+        read_timeout: Duration,
+        target_bytes: u64,
+        pacing: PacingPolicy,
+    ) -> Self {
         let timeouts_configured = !read_timeout.is_zero()
             && socket.set_read_timeout(Some(read_timeout)).is_ok()
             && socket.set_write_timeout(Some(read_timeout)).is_ok();
@@ -140,6 +330,11 @@ impl IpcCacheClient {
             gpu_budget: None,
             cache_telemetry: None,
             seq: 0,
+            last_update_at: None,
+            last_mutation_at: None,
+            last_heartbeat_at: None,
+            pending_frame: Vec::new(),
+            pacing,
         }
     }
 
@@ -210,12 +405,49 @@ impl IpcCacheClient {
         self.cached_bytes = 0;
         self.gpu_budget = None;
         self.cache_telemetry = None;
+        self.pending_frame.clear();
         let _ = self.socket.shutdown(std::net::Shutdown::Both);
+    }
+
+    /// True while the worker is likely still draining a mutation burst, so a
+    /// round-trip request would queue behind it and miss NFR-1's bound.
+    fn write_mirrors_are_draining(&self) -> bool {
+        self.last_update_at
+            .is_some_and(|at| at.elapsed() < self.pacing.read_drain_grace)
+    }
+
+    fn mutations_are_draining(&self) -> bool {
+        self.last_mutation_at
+            .is_some_and(|at| at.elapsed() < self.pacing.heartbeat_drain_grace)
+    }
+
+    fn heartbeat_is_due(&self) -> bool {
+        self.last_heartbeat_at
+            .is_none_or(|at| at.elapsed() >= self.pacing.min_heartbeat_interval)
     }
 
     pub fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
         if self.state != CacheState::Active {
             return Err("GPU cache worker is unavailable");
+        }
+        // A heartbeat request written mid-frame would corrupt the stream
+        // (DT-10), and telemetry is optional: skip the round-trip and report
+        // the last confirmed sample while the queue drains.
+        match try_drain_pending(&mut self.socket, &mut self.pending_frame) {
+            Ok(true) => {}
+            Ok(false) => return Ok(self.cached_bytes),
+            Err(_) => {
+                self.fail("mutation frame drain failed");
+                return Err("GPU cache worker mutation backlog could not drain");
+            }
+        }
+        // Telemetry is optional and must never sit in a mutation backlog
+        // (DT-1). Skip the round-trip and report the last confirmed sample:
+        // occupancy only moves when the worker answers, and a skipped beat is
+        // cheaper than the fail-closed revocation a 50 ms timeout used to
+        // trigger under write load.
+        if !self.heartbeat_is_due() || self.mutations_are_draining() {
+            return Ok(self.cached_bytes);
         }
         let deadline = match deadline_after(self.read_timeout) {
             Ok(deadline) => deadline,
@@ -286,6 +518,7 @@ impl IpcCacheClient {
                 }
             }
         }
+        self.last_heartbeat_at = Some(Instant::now());
         Ok(self.cached_bytes)
     }
 
@@ -310,20 +543,42 @@ impl IpcCacheClient {
             self.fail("cache mutation exceeds nonblocking frame limit");
             return CacheMutation::Failed;
         }
-        // Assemble the complete frame before the single nonblocking send.
+        // Assemble the complete frame before offering it to the queue.
         let mut frame = Vec::with_capacity(FRAME_HEADER_LEN + payload.len());
         frame.extend_from_slice(&header.encode());
         frame.extend_from_slice(payload);
 
-        // Mutations are optional. If the complete frame cannot be queued in a
-        // nonblocking attempt, fail closed and discard the stream.
-        if try_write_frame(&mut self.socket, &frame).is_err() {
-            self.fail("nonblocking mutation frame write failed");
-            return CacheMutation::Failed;
+        match queue_frame(&mut self.socket, &mut self.pending_frame, &frame) {
+            MutationQueue::Queued => {}
+            MutationQueue::Dropped => {
+                // DT-10: a dropped `Promote` only means "not cached", so a later
+                // read is a miss — the correct answer. A dropped `Update` would
+                // leave pre-write bytes in the worker that a later Hit could
+                // serve, so the cache must stop serving instead.
+                if header.msg_type == MSG_UPDATE {
+                    self.fail("mutation backlog overflowed");
+                    return CacheMutation::Failed;
+                }
+                return CacheMutation::Skipped;
+            }
+            MutationQueue::PeerGone(error) => {
+                // Surface the errno: a deterministic peer error is the only
+                // remaining reason a mutation send fails closed (DT-10), and
+                // operators need to tell EPIPE from a bad descriptor.
+                eprintln!("[ramsharedd] mutation frame write error: {error}");
+                self.fail("nonblocking mutation frame write failed");
+                return CacheMutation::Failed;
+            }
         }
 
-        // Accepted bytes are queued, not evidence of GPU allocation.
-        self.cached_bytes = 0;
+        // Accepted bytes are queued, not evidence of GPU allocation: keep the
+        // last confirmed occupancy sample and let the next heartbeat replace
+        // it. Zeroing here would make every mutation report an empty cache.
+        let now = Instant::now();
+        self.last_mutation_at = Some(now);
+        if header.msg_type == MSG_UPDATE {
+            self.last_update_at = Some(now);
+        }
         self.gpu_budget = None;
         self.cache_telemetry = None;
         CacheMutation::Accepted
@@ -336,6 +591,26 @@ impl BestEffortCache for IpcCacheClient {
             return CacheRead::Miss;
         }
         if destination.len() > MAX_IPC_PAYLOAD_BYTES {
+            return CacheRead::Miss;
+        }
+        // A read issued while a mutation frame is still draining would be
+        // concatenated into that incomplete frame and corrupt both (DT-10).
+        // Origin is authoritative, so a miss is the correct answer and the
+        // cache stays alive for the next quiet window.
+        match try_drain_pending(&mut self.socket, &mut self.pending_frame) {
+            Ok(true) => {}
+            Ok(false) => return CacheRead::Miss,
+            Err(_) => {
+                self.fail("mutation frame drain failed");
+                return CacheRead::Failed;
+            }
+        }
+        // A read queued behind a write-mirror burst waits for the whole
+        // backlog and would miss NFR-1's 50 ms bound, which fail-closes the
+        // cache. Origin is authoritative, so a deferred read is a miss — the
+        // correct answer — and the cache stays alive for the next quiet
+        // window. Promotes from the read path itself never set this gate.
+        if self.write_mirrors_are_draining() {
             return CacheRead::Miss;
         }
         self.seq = self.seq.saturating_add(1);
@@ -444,10 +719,14 @@ impl BestEffortCache for IpcCacheClient {
                 return CacheMutation::Failed;
             }
         };
-        if write_all_until(&mut self.socket, &req.encode(), deadline).is_err() {
+        // Teardown must observe mutation order: append the disable frame behind
+        // anything still queued and flush the whole backlog (DT-10).
+        self.pending_frame.extend_from_slice(&req.encode());
+        if write_all_until(&mut self.socket, &self.pending_frame, deadline).is_err() {
             self.state = CacheState::Stuck;
             return CacheMutation::Failed;
         }
+        self.pending_frame.clear();
 
         let mut hdr_buf = [0u8; FRAME_HEADER_LEN];
         if read_exact_until(&mut self.socket, &mut hdr_buf, deadline).is_err() {
@@ -504,6 +783,41 @@ mod tests {
 
     use super::*;
     use std::time::Instant;
+
+    /// Pushes real `MSG_UPDATE` frames until the socket cannot accept a whole
+    /// one, so the client lands in the DT-10 backpressured state. Saturation is
+    /// the frames themselves — never filler — so every byte the peer can read
+    /// is frame data and the wire is never contaminated.
+    fn saturate_with_updates(client: &mut IpcCacheClient) -> usize {
+        let payload = vec![0x5A; MAX_MUTATION_FRAME_DATA_BYTES];
+        let mut sent = 0;
+        while client.pending_frame.is_empty() {
+            assert_eq!(
+                client.update(sent as u64, &payload),
+                CacheMutation::Accepted
+            );
+            sent += 1;
+            assert!(sent < 512, "socket never backpressured after {sent} frames");
+        }
+        sent
+    }
+
+    /// Queues further updates while the backlog has room for one more frame.
+    /// Leaves the client exactly one frame below [`MAX_PENDING_MUTATION_BYTES`].
+    fn queue_updates_until_one_frame_from_full(client: &mut IpcCacheClient) -> usize {
+        let payload = vec![0x5A; MAX_MUTATION_FRAME_DATA_BYTES];
+        let frame_len = FRAME_HEADER_LEN + MAX_MUTATION_FRAME_DATA_BYTES;
+        let mut queued = 0;
+        while client.pending_frame.len() + frame_len <= MAX_PENDING_MUTATION_BYTES {
+            assert_eq!(
+                client.update(queued as u64, &payload),
+                CacheMutation::Accepted
+            );
+            queued += 1;
+            assert!(queued < 512, "backlog never approached the cap");
+        }
+        queued
+    }
 
     #[test]
     fn read_timeout_falls_back_cleanly() {
@@ -598,21 +912,202 @@ mod tests {
         );
     }
 
+    /// A saturated socket must not consume the origin thread and must not
+    /// revoke the cache: backpressure queues frames (DT-10), it is not a
+    /// broken peer.
     #[test]
     fn saturated_mutation_socket_does_not_block_origin_thread() {
         let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
         let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(250), 1024 * 1024);
-        let payload = vec![0xCD; 1024 * 1024];
+        saturate_with_updates(&mut client);
+        let payload = vec![0xCD; MAX_MUTATION_FRAME_DATA_BYTES];
 
         let start = Instant::now();
-        let outcome = client.update(0, &payload);
+        for round in 0..8 {
+            assert_eq!(
+                client.update(round as u64, &payload),
+                CacheMutation::Accepted
+            );
+        }
         let elapsed = start.elapsed();
 
-        assert_eq!(outcome, CacheMutation::Failed);
-        assert_eq!(client.state(), CacheState::Unavailable);
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "backpressure must not revoke the cache"
+        );
         assert!(
             elapsed < Duration::from_millis(100),
             "a blocked mutation consumed the origin thread for {elapsed:?}"
+        );
+    }
+
+    /// A short write is not a fatal error. The unwritten tail waits in the
+    /// pending queue and is completed by a later drain, so the byte stream
+    /// stays framed and the cache stays alive (DT-10).
+    #[test]
+    fn partial_mutation_write_completes_the_frame_and_keeps_the_cache_active() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        let whole_frames = saturate_with_updates(&mut client);
+        assert!(
+            !client.pending_frame.is_empty(),
+            "saturation must leave an unwritten tail, not an abandoned frame"
+        );
+        assert!(
+            client.pending_frame.len() < FRAME_HEADER_LEN + MAX_MUTATION_FRAME_DATA_BYTES,
+            "the tail must be a fragment of one frame"
+        );
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "a partial write must not revoke the cache"
+        );
+
+        // Interleave peer reads with client drains until the tail completes.
+        worker_sock.set_nonblocking(true).unwrap();
+        let frame_len = FRAME_HEADER_LEN + MAX_MUTATION_FRAME_DATA_BYTES;
+        // Every accepted update is one whole frame: the last is split across
+        // the wire and the pending tail, so the drained stream is exactly
+        // `whole_frames` frames long.
+        let expected = whole_frames * frame_len;
+        let mut collected = Vec::with_capacity(expected);
+        let mut buffer = [0u8; 8192];
+        while collected.len() < expected {
+            match worker_sock.read(&mut buffer) {
+                Ok(0) => panic!("peer closed before the mutation frame completed"),
+                Ok(read) => collected.extend_from_slice(&buffer[..read]),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    try_drain_pending(&mut client.socket, &mut client.pending_frame)
+                        .expect("drain must not hit a hard error");
+                }
+                Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                Err(error) => panic!("peer read failed: {error}"),
+            }
+        }
+
+        assert_eq!(
+            client.pending_frame.len(),
+            0,
+            "the pending tail must drain to nothing"
+        );
+        assert_eq!(client.state(), CacheState::Active);
+        // Saturation used only `MSG_UPDATE` frames of one fixed payload length,
+        // so the stream must be a clean run of whole frames with no holes.
+        assert_eq!(collected.len() % frame_len, 0);
+        for (index, frame) in collected.chunks_exact(frame_len).enumerate() {
+            let mut header_bytes = [0u8; FRAME_HEADER_LEN];
+            header_bytes.copy_from_slice(&frame[..FRAME_HEADER_LEN]);
+            let header = FrameHeader::decode(&header_bytes).expect("valid header");
+            assert_eq!(header.msg_type, MSG_UPDATE);
+            assert_eq!(header.correlation_id as usize, index + 1);
+            assert_eq!(header.payload_len as usize, MAX_MUTATION_FRAME_DATA_BYTES);
+            assert_eq!(
+                &frame[FRAME_HEADER_LEN..],
+                &[0x5A; MAX_MUTATION_FRAME_DATA_BYTES]
+            );
+        }
+    }
+
+    /// A write-mirror that cannot reach the worker must never be silently
+    /// dropped: the worker would keep pre-write bytes and a later Hit would
+    /// serve them. While the queue has room the update is queued (DT-10).
+    #[test]
+    fn backpressured_update_is_queued_never_dropped() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        saturate_with_updates(&mut client);
+        let payload = vec![0x11; MAX_MUTATION_FRAME_DATA_BYTES];
+        let frame_len = FRAME_HEADER_LEN + MAX_MUTATION_FRAME_DATA_BYTES;
+        let before = client.pending_frame.len();
+
+        for round in 0..3 {
+            assert_eq!(
+                client.update(round as u64, &payload),
+                CacheMutation::Accepted,
+                "update {round} must be queued while the backlog has room"
+            );
+        }
+        assert_eq!(client.state(), CacheState::Active);
+        assert_eq!(
+            client.pending_frame.len(),
+            before + 3 * frame_len,
+            "every accepted update must sit whole in the pending queue"
+        );
+    }
+
+    /// A dropped `Promote` is not stale data: the range is simply not cached
+    /// and a later read is a miss. It must not revoke the cache (DT-10).
+    #[test]
+    fn backpressured_promote_degrades_to_not_cached() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        saturate_with_updates(&mut client);
+        let payload = vec![0x22; MAX_MUTATION_FRAME_DATA_BYTES];
+        queue_updates_until_one_frame_from_full(&mut client);
+
+        assert_eq!(
+            client.promote(0, &payload),
+            CacheMutation::Skipped,
+            "a promote that cannot be queued is simply not cached"
+        );
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "a dropped promote must not revoke the cache"
+        );
+    }
+
+    /// A request written while a mutation frame is mid-stream would corrupt
+    /// both frames. The read degrades to a miss — origin is authoritative, so
+    /// a miss is the correct answer — and the cache stays alive (DT-10).
+    #[test]
+    fn cache_read_is_a_miss_while_a_mutation_frame_drains() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        saturate_with_updates(&mut client);
+        let pending_before = client.pending_frame.len();
+        assert!(pending_before > 0);
+
+        let start = Instant::now();
+        assert_eq!(client.read(0, &mut [0u8; 16]), CacheRead::Miss);
+        assert!(
+            start.elapsed() < Duration::from_millis(10),
+            "a draining read must not wait on IPC"
+        );
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "degrading to a miss must keep the cache alive"
+        );
+        assert_eq!(
+            client.pending_frame.len(),
+            pending_before,
+            "a deferred read must leave the mutation backlog untouched"
+        );
+    }
+
+    /// The pending backlog is bounded. An `Update` that cannot enter it is
+    /// refused and revokes the cache rather than silently losing a
+    /// write-mirror (DT-10).
+    #[test]
+    fn pending_mutation_backlog_is_bounded() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        saturate_with_updates(&mut client);
+        let payload = vec![0x44; MAX_MUTATION_FRAME_DATA_BYTES];
+        queue_updates_until_one_frame_from_full(&mut client);
+        assert!(client.pending_frame.len() <= MAX_PENDING_MUTATION_BYTES);
+
+        assert_eq!(
+            client.update(0, &payload),
+            CacheMutation::Failed,
+            "an update that cannot be queued must be refused, not dropped"
+        );
+        assert_eq!(
+            client.state(),
+            CacheState::Unavailable,
+            "a refused write-mirror must revoke the cache so no Hit can serve stale bytes"
         );
     }
 
@@ -660,6 +1155,153 @@ mod tests {
         assert_eq!(client.state(), CacheState::Unavailable);
         assert!(client.perform_handshake().is_err());
         assert_eq!(client.read(0, &mut [0u8; 16]), CacheRead::Miss);
+    }
+
+    /// A mutation must not zero the last confirmed occupancy sample.
+    #[test]
+    fn mutation_preserves_last_confirmed_occupancy() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        // Handshake response reports 64 KiB already cached.
+        client.cached_bytes = 64 << 10;
+
+        assert_eq!(client.update(0, &[1, 2, 3]), CacheMutation::Accepted);
+        assert_eq!(
+            client.cached_bytes(),
+            64 << 10,
+            "a queued mutation is not evidence of allocation and must not clear the sample"
+        );
+    }
+
+    /// A heartbeat issued into a write-mirror backlog would queue behind the
+    /// frames and miss NFR-1's 50 ms bound, which fail-closes the cache. The
+    /// client skips the round-trip and reports the last confirmed sample.
+    #[test]
+    fn heartbeat_is_deferred_while_write_mirrors_drain() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        worker_sock.set_nonblocking(true).unwrap();
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        client.cached_bytes = 64 << 10;
+
+        assert_eq!(client.update(0, &[1, 2, 3]), CacheMutation::Accepted);
+        let start = Instant::now();
+        assert_eq!(client.refresh_cached_bytes(), Ok(64 << 10));
+        assert!(start.elapsed() < Duration::from_millis(10));
+        assert_eq!(client.state(), CacheState::Active);
+        // Only the mutation frame reached the worker; no heartbeat followed.
+        let drained = drain_available(&mut worker_sock);
+        assert!(!drained.is_empty(), "the mutation frame must be queued");
+        assert_eq!(
+            worker_sock.read(&mut [0u8; 1]).unwrap_err().kind(),
+            ErrorKind::WouldBlock,
+            "a heartbeat must not be queued into a write-mirror backlog"
+        );
+    }
+
+    /// Telemetry round-trips are spaced so the serve loop cannot issue one
+    /// heartbeat per NBD request.
+    #[test]
+    fn heartbeat_is_spaced_to_one_per_interval() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let worker = std::thread::spawn(move || {
+            let served = std::cell::Cell::new(0u32);
+            while served.get() < 2 {
+                let mut request = [0u8; FRAME_HEADER_LEN];
+                match worker_sock.read_exact(&mut request) {
+                    Ok(()) => {}
+                    Err(_) => break,
+                }
+                let request = FrameHeader::decode(&request).expect("valid request header");
+                let response = FrameHeader {
+                    msg_type: MSG_HEARTBEAT_RESP,
+                    status: STATUS_OK,
+                    correlation_id: request.correlation_id,
+                    offset: 1024 * 1024,
+                    payload_len: 0,
+                    aux: 64,
+                };
+                if worker_sock.write_all(&response.encode()).is_err() {
+                    break;
+                }
+                served.set(served.get() + 1);
+            }
+            served.get()
+        });
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+
+        assert_eq!(client.refresh_cached_bytes(), Ok(64 << 10));
+        // Second call inside the interval is a no-op returning the last sample.
+        assert_eq!(client.refresh_cached_bytes(), Ok(64 << 10));
+        assert_eq!(client.state(), CacheState::Active);
+        // Dropping the client closes the socket so the stub worker unblocks
+        // even though the spaced heartbeat never sent a second request.
+        drop(client);
+        assert_eq!(
+            worker.join().unwrap(),
+            1,
+            "only one heartbeat round-trip may reach the worker per interval"
+        );
+    }
+
+    /// A cache read queued behind a write-mirror burst would miss NFR-1's
+    /// bound and revoke the cache. It is deferred as a miss instead.
+    #[test]
+    fn cache_read_is_deferred_while_write_mirrors_drain() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        worker_sock.set_nonblocking(true).unwrap();
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+
+        assert_eq!(client.update(0, &[1, 2, 3]), CacheMutation::Accepted);
+        let mut destination = [0u8; 16];
+        let start = Instant::now();
+        assert_eq!(client.read(0, &mut destination), CacheRead::Miss);
+        assert!(start.elapsed() < Duration::from_millis(10));
+        assert_eq!(client.state(), CacheState::Active);
+        // Drain the mutation frame; no read request may follow it.
+        let drained = drain_available(&mut worker_sock);
+        assert!(!drained.is_empty());
+        assert_eq!(
+            worker_sock.read(&mut [0u8; 1]).unwrap_err().kind(),
+            ErrorKind::WouldBlock,
+            "a cache read must not be queued into a write-mirror backlog"
+        );
+    }
+
+    /// Promotes come from the read path itself and must not suppress the very
+    /// reads that produce them, or a cold read stream would never hit.
+    #[test]
+    fn promote_does_not_defer_subsequent_reads() {
+        let (client_sock, mut worker_sock) = UnixStream::pair().expect("socketpair failed");
+        worker_sock.set_nonblocking(true).unwrap();
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+
+        assert_eq!(client.promote(0, &[1, 2, 3]), CacheMutation::Accepted);
+        // The read is still issued: promotes never gate the read path. The
+        // stub worker never answers, so the read hits the 50 ms deadline and
+        // fail-closes — proving the request left the client (a deferred read
+        // returns Miss without any I/O).
+        let mut destination = [0u8; 16];
+        assert_eq!(client.read(0, &mut destination), CacheRead::Failed);
+        assert_eq!(client.state(), CacheState::Unavailable);
+        let drained = drain_available(&mut worker_sock);
+        assert!(
+            drained.len() > FRAME_HEADER_LEN,
+            "both the promote frame and the read request must reach the worker"
+        );
+    }
+
+    /// Reads whatever a nonblocking peer socket has already buffered.
+    fn drain_available(socket: &mut UnixStream) -> Vec<u8> {
+        let mut collected = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            match socket.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => collected.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+        collected
     }
 
     #[test]

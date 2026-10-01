@@ -1243,7 +1243,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
-    use crate::ipc_cache_client::IpcCacheClient;
+    use crate::ipc_cache_client::{IpcCacheClient, PacingPolicy};
     use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead};
     use ramshared_vram::{GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetSource, VramError};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -1638,8 +1638,12 @@ mod tests {
             )
             .expect("worker loop failed");
         });
-        let mut client =
-            IpcCacheClient::new(client_socket, Duration::from_secs(1), 4 * chunk_bytes);
+        let mut client = IpcCacheClient::with_pacing(
+            client_socket,
+            Duration::from_secs(1),
+            4 * chunk_bytes,
+            PacingPolicy::immediate(),
+        );
         client.perform_handshake().expect("handshake failed");
         assert_eq!(client.update(0, &[1]), CacheMutation::Accepted);
         assert_eq!(client.update(chunk_bytes, &[2]), CacheMutation::Accepted);
@@ -1695,8 +1699,12 @@ mod tests {
             run_gpu_worker_loop(worker_sock, provider, config).expect("worker loop failed");
         });
 
-        let mut client =
-            IpcCacheClient::new(client_sock, Duration::from_millis(100), 64 * 1024 * 1024);
+        let mut client = IpcCacheClient::with_pacing(
+            client_sock,
+            Duration::from_millis(100),
+            64 * 1024 * 1024,
+            PacingPolicy::immediate(),
+        );
         client.perform_handshake().expect("handshake failed");
         assert_eq!(client.target_bytes(), 64 * 1024 * 1024);
 
@@ -1759,8 +1767,12 @@ mod tests {
             )
             .expect("worker loop failed");
         });
-        let mut client =
-            IpcCacheClient::new(client_sock, Duration::from_millis(100), 2 * 1024 * 1024);
+        let mut client = IpcCacheClient::with_pacing(
+            client_sock,
+            Duration::from_millis(100),
+            2 * 1024 * 1024,
+            PacingPolicy::immediate(),
+        );
         client.perform_handshake().expect("handshake failed");
         assert_eq!(client.update(0, &[1, 2, 3, 4]), CacheMutation::Accepted);
         assert_eq!(
@@ -1789,8 +1801,12 @@ mod tests {
             )
             .expect("worker loop failed");
         });
-        let mut client =
-            IpcCacheClient::new(client_sock, Duration::from_millis(100), 2 * 1024 * 1024);
+        let mut client = IpcCacheClient::with_pacing(
+            client_sock,
+            Duration::from_millis(100),
+            2 * 1024 * 1024,
+            PacingPolicy::immediate(),
+        );
         client.perform_handshake().expect("handshake failed");
         let payload = vec![0x5a; 512 * 1024];
         assert_eq!(client.update(0, &payload), CacheMutation::Failed);
@@ -1913,8 +1929,12 @@ mod tests {
             run_gpu_worker_loop(worker_sock, provider, config).expect("worker loop failed");
         });
 
-        let mut client =
-            IpcCacheClient::new(client_sock, Duration::from_millis(100), 64 * 1024 * 1024);
+        let mut client = IpcCacheClient::with_pacing(
+            client_sock,
+            Duration::from_millis(100),
+            64 * 1024 * 1024,
+            PacingPolicy::immediate(),
+        );
         client.perform_handshake().expect("handshake failed");
 
         // Promote frame
