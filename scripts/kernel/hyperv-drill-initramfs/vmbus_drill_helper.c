@@ -288,22 +288,29 @@ static int do_mlock_hog(int argc, char **argv)
  * those holes cannot form high orders, further faults must come out of the
  * remaining order-7-and-up blocks. That is the split we want.
  *
- * The floor is counted in free order-0 pages, not in MemFree. While any
- * high-order block is still free it is most of MemFree -- run 36803317912
- * stopped at MemFree 7.5 MiB with 7.0 of that sitting in six order-7-and-up
- * blocks and only 384 kB of order-0 -- so a MemFree floor fires exactly when
- * the split it is supposed to allow has not happened yet. Order-0 is the
- * quantity the rest of the run actually spends, and it is the one that rises
- * whenever the allocator splits a high-order block to satisfy a fault. So
- * the chase walks high orders down to zero and stops with this much order-0
- * left over.
+ * The floor is counted in unsplit free pages, not in MemFree and not in
+ * buddyinfo's own order-0 count. MemFree is most of a still-free high-order
+ * block (run 36803317912 stopped at 7.5 MiB with 7.0 of that inside six
+ * order-7-and-up blocks), so a MemFree floor fires exactly when the split it
+ * is supposed to allow has not happened yet. buddyinfo's order-0 count is the
+ * opposite failure: it omits the per-cpu page cache, and a freshly punched
+ * isolated page lands there. Run 36806229800 punched 4096 such pages and
+ * buddyinfo still read 1, so a floor on it fired before the chase ran once
+ * (chase=0, high_order_7plus=10->9). Unsplit free pages -- MemFree minus
+ * every page sitting in an order-1-or-higher block -- is the quantity a fault
+ * can actually take without splitting something, and it is the one that rises
+ * whenever the allocator splits a high-order block to satisfy a fault. So the
+ * chase walks high orders down to zero and stops with this much left over.
+ *
+ * FRAG_CHASE_UNSPLIT is one 2 MiB subchannel ring, so stopping on the floor
+ * still leaves enough for the channel-open exercise that follows.
  *
  * FRAG_CHASE_CAP is the backstop, not the guard. The chase stops on the
- * measured condition first, then on the order-0 floor, and only then on the
+ * measured condition first, then on the unsplit floor, and only then on the
  * cap.
  */
 #define FRAG_CHASE_CAP 2048L
-#define FRAG_CHASE_ORDER0 256L
+#define FRAG_CHASE_UNSPLIT 512L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
@@ -405,49 +412,15 @@ static long high_order_blocks(void)
 }
 
 /*
- * Free pages at order 0, across all zones. This is the floor the chase is
- * allowed to leave behind, and the only free-memory figure that means what a
- * later allocation will actually be able to take. MemFree is not it: while a
- * single order-9 block is free it alone reports 2 MiB of MemFree and not one
- * page a fault can use without splitting something first.
- *
- * buddyinfo field 5 is order 0; see high_order_blocks() for the layout.
- */
-static long order0_free_pages(void)
-{
-	FILE *f = fopen("/proc/buddyinfo", "r");
-	char line[512];
-	long sum = 0;
-
-	if (!f)
-		return -1;
-	while (fgets(line, sizeof(line), f)) {
-		char *save = NULL;
-		char *tok = strtok_r(line, " \t\n", &save);
-		int field = 0;
-
-		while (tok) {
-			field++;
-			if (field == 5) {
-				char *end = NULL;
-				long v = strtol(tok, &end, 10);
-
-				if (end != tok)
-					sum += v;
-			}
-			tok = strtok_r(NULL, " \t\n", &save);
-		}
-	}
-	fclose(f);
-	return sum;
-}
-
-/*
  * Free memory as the kernel counts it, not as MemAvailable estimates it.
  * MemAvailable subtracts the watermark and unreclaimable state and so reads
  * near zero while buddyinfo still holds allocatable high-order blocks; a
- * floor on it stops the loop with the test condition unmet. MemFree is the
- * same quantity buddyinfo reports, which is the one the test is about.
+ * floor on it stops the loop with the test condition unmet.
+ *
+ * MemFree is not buddyinfo's total either: it also counts the per-cpu page
+ * cache, which buddyinfo never reports. That difference is the reason the
+ * chase floor is computed in unsplit_free_pages() rather than read straight
+ * off either file.
  */
 static long mem_free_kb(void)
 {
@@ -465,6 +438,56 @@ static long mem_free_kb(void)
 	}
 	fclose(f);
 	return kb;
+}
+
+/*
+ * Free pages a fault can take without splitting a higher-order block: order-0
+ * buddy plus the per-cpu page cache. This is the floor the chase is allowed
+ * to leave behind.
+ *
+ * Neither MemFree nor buddyinfo's own order-0 count is this quantity on its
+ * own. MemFree counts high-order blocks whole, so it stays high while nothing
+ * can be allocated without splitting. buddyinfo's order-0 count omits the
+ * pcp, which is where a freshly freed page actually lands: run 36806229800
+ * punched 4096 isolated order-0 pages and buddyinfo still read 1, and a floor
+ * on it stopped the chase before it ran once. Computed here as MemFree (which
+ * does count the pcp) minus every page sitting in an order-1-or-higher block,
+ * so what is left is order-0 buddy + pcp + slack.
+ *
+ * buddyinfo field 5+k is order k; see high_order_blocks() for the layout.
+ */
+static long unsplit_free_pages(void)
+{
+	FILE *f = fopen("/proc/buddyinfo", "r");
+	char line[512];
+	long split = 0;
+	long memfree_pages;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		char *save = NULL;
+		char *tok = strtok_r(line, " \t\n", &save);
+		int field = 0;
+
+		while (tok) {
+			field++;
+			if (field >= 6) {
+				char *end = NULL;
+				long v = strtol(tok, &end, 10);
+
+				if (end != tok && v > 0)
+					split += v * (1L << (field - 5));
+			}
+			tok = strtok_r(NULL, " \t\n", &save);
+		}
+	}
+	fclose(f);
+
+	memfree_pages = mem_free_kb() / 4;
+	if (memfree_pages <= 0)
+		return -1;
+	return memfree_pages - split;
 }
 
 /*
@@ -779,14 +802,14 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * free. Each one we take is one more block split.
 	 *
 	 * Checked every chunk, against the same measured condition as the main
-	 * loop. Stops on that condition, then on the order-0 floor, then on
+	 * loop. Stops on that condition, then on the unsplit floor, then on
 	 * the cap. Still unpinned: if this is where the guest runs out, the
 	 * OOM killer takes us and the drill reports INCONCLUSIVE_NO_PATTERN
 	 * instead of panicking.
 	 */
 	for (i = 0; i < FRAG_CHASE_CAP; i++) {
 		char *m;
-		long high, order0;
+		long high, unsplit;
 
 		high = high_order_blocks();
 		if (high == 0) {
@@ -795,10 +818,10 @@ static int do_fragment_buddy(int argc, char **argv)
 			break;
 		}
 
-		order0 = order0_free_pages();
-		if (order0 >= 0 && order0 < FRAG_CHASE_ORDER0) {
+		unsplit = unsplit_free_pages();
+		if (unsplit >= 0 && unsplit < FRAG_CHASE_UNSPLIT) {
 			stopped = 1;
-			stop_reason = "chase-order0-floor";
+			stop_reason = "chase-unsplit-floor";
 			break;
 		}
 
