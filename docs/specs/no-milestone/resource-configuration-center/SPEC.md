@@ -522,12 +522,12 @@ in place.
 
 ## Validation checklist
 
-- [ ] `cargo fmt --all -- --check`; `cargo clippy -p ramshared-config -p ramshared-cli -- -D warnings`; focused and workspace tests.
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli,ramshared-config --files crates/ramshared-cli/src/resource_config.rs,crates/ramshared-config/src/resource_profile.rs --min 80`. GPU budget policy coverage is owned by the GPU worker specification.
-- [ ] Linux provider manufactured tests prove exact ownership, supported filesystem rules, active-swap preservation, and cleanup refusal.
-- [ ] Windows provider manufactured tests prove volume identity, `.wslconfig` preservation, restart pending, and exact rollback.
-- [ ] `bash scripts/safety/wslconfig-ctl.sh selftest` and existing origin/GPU suites pass.
-- [ ] `./scripts/docs-check.sh` passes and the generated docs index is current.
+- [x] `cargo fmt --all -- --check`; `cargo clippy -p ramshared-config -p ramshared-cli -- -D warnings`; focused and workspace tests. (2026-10-01: fmt exit 0, clippy exit 0 zero warnings, `cargo test -p ramshared-config -p ramshared-cli` 573 passed / 0 failed.)
+- [x] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli,ramshared-config --files crates/ramshared-cli/src/resource_config.rs,crates/ramshared-config/src/resource_profile.rs --min 80`. GPU budget policy coverage is owned by the GPU worker specification. (2026-10-01: resource_config.rs 82.7% 1696/2051, resource_profile.rs 93.7% 314/335 — PASSED.)
+- [ ] Linux provider manufactured tests prove exact ownership, supported filesystem rules, active-swap preservation, and cleanup refusal. **Open:** the named helper `scripts/linux/ramshared-resource-config-helper` is not in the tree; `linux_swap_apply_creates_only_owned_file_and_unit`, `linux_swap_apply_preserves_old_active_swap_on_failure`, `linux_swap_cleanup_refuses_foreign_active_or_used_target`, `linux_swap_cleanup_replay_is_idempotent`, `linux_swap_activation_refuses_changed_mount_or_active_ramshared`, and `linux_swap_cleanup_refuses_last_persistent_fallback` have no implementation to run against.
+- [x] Windows provider manufactured tests prove volume identity, `.wslconfig` preservation, restart pending, and exact rollback. (2026-10-01: `windows_inventory_lists_every_volume_and_explains_ineligible_targets` and `windows_inventory_probe_does_not_filter_volumes_by_drive_type` present and green in `resource_config.rs`; `wsl2_guest_storage_requires_host_volume_identity_and_capacity_binding` covers identity binding; `resource_profile_groups_windows_volume_ids_case_insensitively_for_capacity` covers case-insensitive grouping. The PowerShell physical `.wslconfig` apply/rollback drill remains a live-platform gate.)
+- [x] `bash scripts/safety/wslconfig-ctl.sh selftest` and existing origin/GPU suites pass. (2026-10-01: `SELFTEST: PASS` — 9 assertions including sparseVhd render, swapFile preservation, and unsafe-lab opt-in.)
+- [x] `./scripts/docs-check.sh` passes and the generated docs index is current. (2026-10-01: `✓ docs-check OK`.)
 - [ ] Native Linux and WSL2 live E2E each have a before/action/after evidence set; tests on one platform do not qualify the other.
 - [ ] No `DONE` or release claim before both platform E2E and representative filesystem/GPU hardware evidence.
 
