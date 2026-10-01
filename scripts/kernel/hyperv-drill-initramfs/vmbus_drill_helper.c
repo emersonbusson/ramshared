@@ -1190,6 +1190,10 @@ static int do_fragment_buddy(int argc, char **argv)
 		chase_maps[chase + tail] = m;
 		tail++;
 	}
+	if (tail >= FRAG_TAIL_CAP && high_order_blocks() > 0) {
+		stopped = 1;
+		stop_reason = "tail-cap";
+	}
 
 	/*
 	 * Pass 2: unmap every page whose PFN is even and whose buddy (pfn+1)
