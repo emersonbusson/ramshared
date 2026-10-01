@@ -13575,3 +13575,151 @@ third-signal claim only by `exhausted=1` with `reread=0`. Re-read both
 runtime jobs before citing. Job-level `success` on `hyperv-runtime-drill`
 is never a gate closure. Never cite this entry as CoCo or send-gate
 evidence.
+
+
+---
+
+**What:** Run 36887735012 (fork `e3a260080057`) scored. The tail ran to
+`FRAG_TAIL_CAP`, the chase ran to `FRAG_CHASE_CAP`, holes/chunk hit
+15.68/15.75, and the order-7-and-up residue **grew** from 3584 pages to
+16896/17152 pages — a 4.7x regression. Rollback trigger fired.
+
+**Verdict:** 🔴 fails — third signal open and materially worse; the recycle at
+its true rate shields the high-order blocks it exists to destroy
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY chase=… tail=… holes=…` and the
+buddyinfo line after `ready=1` from both `drill-runtime` jobs. The residue
+is the order-7-and-up **page** total from that buddyinfo line (field 5+k
+for order k, k ≥ 7, times 2^k), not the block count. Score the third
+signal only from `RESULT … (reread=…) exhausted=…`. Compare the residue
+page total and the holes/chunk rate against the same pair from the run
+before a lever landed: a rate that moves while the residue page total
+moves the wrong way is a regression, not progress.
+
+**Measured, both guests, run 36887735012 vs 36883261849:**
+
+| | 36883261849 wl | 36887735012 wl | 36883261849 w25 | 36887735012 w25 |
+| --- | --- | --- | --- | --- |
+| `chase=` | 3227 | **4096** (cap) | 3215 | **4096** (cap) |
+| `chase_holes=` | 32768 (cap `* 8`) | **64237** (free of `* 16`) | 32768 (cap) | **64516** (free) |
+| holes/chunk | 10.15 | **15.68** | 10.19 | **15.75** |
+| chase pages held | 18864 | **1299** | 18672 | **1020** |
+| `tail=` | — | **256** (cap) | — | **256** (cap) |
+| tail pages held | — | **4096** | — | **4096** |
+| `unsplit=` at stop | 697 | **1062** | 853 | **927** |
+| `high_order_7plus=` | 25→7 | 25→**18** | 26→5 | 26→**19** |
+| blocks ≥7 at ready | 7 | **18** | 5 | **19** |
+| pages ≥7 at ready | **3584** | **16896** | **3584** | **17152** |
+| MiB ≥7 at ready | 14.0 | **66.0** | 14.0 | **67.0** |
+| order-10 blocks left | 2 | **16** | 3 | **16** |
+| `stop=` | `chase-memfree-margin` | `memfree-margin` (main) | `chase-memfree-margin` | `memfree-margin` (main) |
+| `exhausted=` | 0 | 0 | 0 | 0 |
+
+Buddyinfo after `ready=1`:
+`wl  2 1 2 0 1 2 1 0 2 0 16` — n7=0 n8=2 n9=0 n10=16 → 18 blocks / 16896 pages.
+`w25 0 0 0 1 1 0 2 2 0 1 16` — n7=2 n8=0 n9=1 n10=16 → 19 blocks / 17152 pages.
+
+Both guests again land on nearly the same page total (16896 vs 17152)
+despite different block shapes. The residue remains a function of the
+constants, not a sample.
+
+**Why the residue grew (the model, now with a rate to point at).** The
+`* 8` hole cap was not just a truncation of the count — it was
+truncating the *rate*. `punch_chunk_isolated()` stops when its remaining
+budget is spent (`freed < hole_cap`), so as `chase_holes` approached
+32768 the later chunks freed fewer pages and dragged the average down to
+10.15. With the cap at `FRAG_CHASE_CAP * 16` the budget never binds and
+the true rate is **15.68 of 16 pages per chunk**: the chase held 1299
+pages across 4096 chunks (5.07 MiB) on wl and 1020 pages (3.98 MiB) on
+w25. `FRAG_CHASE_CAP * 16` is therefore the correct structural ceiling
+(15.68 < 16.00, so the cap did not bind) **and** it unlocked the worst
+possible configuration for this goal.
+
+`__rmqueue_smallest` serves order-0 before it splits. A chase that
+returns 15.68 of 16 pages as isolated order-0 floods the order-0 list,
+so every subsequent fault is served from that list and **no high-order
+block is ever touched**. The order-10 count went from 2/3 left to
+**16/16 left** — the previous run split ~14 of them, this run split
+**zero**. The small high-order blocks (order-7/8) were still consumed
+(25→18) because they sit ahead of order-10 in smallest-sufficient-order
+preference; the 16 order-10 blocks were the last to be reached and were
+never reached.
+
+`unsplit` rose from 697/853 to 1062/927 — the recycle was filling the
+pool faster than the tail could drain it. The tail's 4096 pages of pure
+hold then had to clear that inflated pool plus orders 1–6 before
+order-10 would be considered, and `FRAG_TAIL_CAP=256` was spent first.
+`tail=256 tail_locked=256` on both guests: the phase hit its cap, it did
+not stop on a floor.
+
+**The recycle is anti-correlated with the goal.** Hold is what splits,
+because holding is the only thing that removes a page from every list
+the allocator can serve. Six runs now agree: 36823337153 (no recycle,
+43.75 MiB held, 43 MiB residue) → 36883261849 (10.15/chunk, 73.7 MiB
+held, 14 MiB residue) → 36887735012 (15.68/chunk, 21 MiB held, 66 MiB
+residue). More recycle, less hold, bigger residue, every time. The
+recycle's premise — that a residue can be split without holding it — is
+false: every page recycled is a page the next fault takes instead of
+splitting.
+
+**`stop=memfree-margin` here is the main loop's reason, not the chase's
+or the tail's.** Both phases ran to their caps without hitting a floor
+(chase 4096/4096, tail 256/256). The `tail-cap` stop string is in fork
+`8d85316fbe16`, which is **not** in this run's bytes — it was committed
+after `e3a260080057` and held to avoid `cancel-in-progress`. That is
+why a full-cap stop still reads as the main loop's margin.
+
+**No damage.** `order7_dmesg=0 accept4_failures=0 oops=0 rebind=yes`,
+`PHASE1 cycle_fails=0 / 120 steps`, `MMAP_HOLD path=/dev/uio0 … maps=5`
+and `…/channels/14/ring … maps=1`, `LIFECYCLE_VERDICT=PASS cycles=30
+phase2=yes` on both guests. The `hv_vmbus`/`hv_netvsc` probe failures
+(`-22` / `-EINVAL`) are **pre-existing** on the drill VMs — identical
+lines on run 36883261849 at the same 11 s / 17 s marks. The rollback
+trigger names probe `-12` (`-ENOMEM`, the ring allocation failure); that
+did not occur.
+
+**Rollback trigger FIRES.** `e3a260080057`'s trigger named, among other
+conditions, "a tail that does not reduce the order-7-and-up residue page
+total below 3584". The residue is 16896/17152. The trigger is executed:
+the helper returns to `c94d10f44538`, the last state that produced a
+3584-page residue. The `* 16` hole cap is measurement-correct and is
+**not** carried forward as an operational setting; it is what let the
+recycle reach its true 15.68 rate.
+
+**The next experiment is a model change, not a constant bump.** Remove
+the recycle from the chase entirely and let it hold every chunk down to
+the existing 16 MiB floor. Prediction: holes/chunk → 0, chase pages held
+→ the full budget (~80 MiB vs 21 MiB here), order-10 blocks left → 0,
+residue page total → the low-order trail the splits leave behind rather
+than standing high-order. Pass 2 still punches the main pattern into
+16 MiB of isolated order-0 for the ring, so the channel-open does not
+pay for the hold. If that leaves `exhausted=0` with the residue still
+dominated by order-10, the wall is the floor itself and the lever is a
+pcp drain after the punch (EVD-0155's 15 MiB stranded in pcp), not a
+lower margin.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0157`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T16:02:00Z`.
+**Verified at:** `2026-10-01T16:18:00Z`.
+**Source revision:** `e3a260080057`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the four-run hold-vs-residue ladder in view
+(36823337153 / 36883261849 / 36887735012, no-recycle / 10.15 / 15.68).
+Without the 10.15 row the 15.68 rate cannot be shown to be the
+de-truncated rate rather than a new behavior. Keep both `tail=256
+tail_locked=256` lines beside the 16896/17152 page totals: the phase
+hit its cap and must not be read as a floor stop. Keep the pre-existing
+probe `-22` lines so the next run does not re-attribute them.
+**Freshness:** Superseded for the rate claim by any run whose
+holes/chunk moves off 15.68 with the `* 16` cap free, and for the
+residue claim by any run whose order-7-and-up page total moves off
+16896/17152. Superseded for the third-signal claim only by `exhausted=1`
+with `reread=0`. Superseded for the recycle-is-anti-correlated claim only
+by a run where raising the recycle rate reduces the residue page total.
+Re-read both runtime jobs before citing. Job-level `success` on
+`hyperv-runtime-drill` is never a gate closure. Never cite this entry as
+CoCo or send-gate evidence.
