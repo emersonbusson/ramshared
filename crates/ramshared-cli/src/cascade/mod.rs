@@ -769,6 +769,7 @@ fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
 
 fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, CascadeError> {
     let sealed = read_sealed_origin_config()?;
+    let sealed_capacity_mib = sealed.logical_capacity_mib;
     let mut a = UpArgs {
         vram_mb: sealed.logical_capacity_mib,
         zram_mb: default_zram_mb()?,
@@ -884,6 +885,19 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
         return Err(CascadeError::Precondition(
             "physical cache cap must be between 1024 MiB and logical capacity".into(),
         ));
+    }
+    // The daemon already refuses a `--size` that leaves the sealed origin
+    // capacity (`validate_origin_manifest_identity`). Refusing here instead
+    // keeps `up`/`boot` from mutating devices first and only then watching the
+    // daemon die — the anti-hang contract is about half-states, and a late
+    // refusal leaves one.
+    if a.vram_mb != sealed_capacity_mib {
+        return Err(CascadeError::Precondition(format!(
+            "--vram {} MiB differs from the sealed origin capacity {} MiB; \
+             the daemon refuses a logical capacity that leaves the seal, \
+             so this is refused before any device is touched",
+            a.vram_mb, sealed_capacity_mib
+        )));
     }
     if !canonical_origin_uuid(&a.expected_swap_uuid) {
         return Err(CascadeError::Precondition(
@@ -2439,9 +2453,9 @@ Filename Type Size Used Priority
 
     #[test]
     fn zram_zero_is_parsed() {
-        let a = parse(&["--zram", "0", "--vram", "2048"]).unwrap();
+        let a = parse(&["--zram", "0", "--vram", "4096"]).unwrap();
         assert_eq!(a.zram_mb, 0);
-        assert_eq!(a.vram_mb, 2048);
+        assert_eq!(a.vram_mb, 4096);
     }
 
     #[test]
@@ -2566,7 +2580,7 @@ Filename Type Size Used Priority
         assert!(parse(&["--unknown"]).is_err());
         let a = parse(&[
             "--vram",
-            "1024",
+            "4096",
             "--zram",
             "256",
             "--daemon",
@@ -2576,11 +2590,28 @@ Filename Type Size Used Priority
             "nbd",
         ])
         .unwrap();
-        assert_eq!(a.vram_mb, 1024);
+        assert_eq!(a.vram_mb, 4096);
         assert_eq!(a.zram_mb, 256);
         assert_eq!(a.daemon, "/tmp/d");
         assert!(a.force);
         assert_eq!(a.transport, Transport::Nbd);
+    }
+
+    #[test]
+    fn vram_leaving_the_sealed_capacity_is_refused_before_any_mutation() {
+        // The daemon already refuses this (`validate_origin_manifest_identity`).
+        // Doing it at parse time keeps `up`/`boot` from touching devices first
+        // and only then watching the daemon die on a capacity the seal forbids.
+        let err = parse(&["--vram", "2048"]).unwrap_err();
+        assert!(
+            err.to_string().contains("sealed origin capacity"),
+            "got: {err}"
+        );
+        let err = parse(&["--vram", "8192"]).unwrap_err();
+        assert!(
+            err.to_string().contains("sealed origin capacity"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -2597,9 +2628,15 @@ Filename Type Size Used Priority
             .unwrap_or_else(|error| panic!("default origin-cache arguments: {error}"));
         assert_eq!(default_capacity.cache_cap_mib, 1024);
 
+        // At the floor the cap must stay 1024, not equal the logical capacity.
+        TEST_ORIGIN_CONFIG.with(|cell| {
+            *cell.borrow_mut() = Some(Ok(sealed_origin_test_fixture()
+                .replace("logical_capacity_mib=4096", "logical_capacity_mib=1024")))
+        });
         let minimum_capacity = parse(&["--vram", "1024"])
             .unwrap_or_else(|error| panic!("minimum origin-cache arguments: {error}"));
         assert_eq!(minimum_capacity.cache_cap_mib, 1024);
+        TEST_ORIGIN_CONFIG.with(|cell| *cell.borrow_mut() = None);
     }
 
     #[test]
