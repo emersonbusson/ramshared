@@ -13194,3 +13194,131 @@ explicit.
 `series/000[1-6]-*.patch`. Re-run the diff-body form after any such change
 before citing this entry. Never cite this entry as runtime, CoCo, or
 fragmentation evidence.
+
+## 2026-10-01 12:06 -03 — the main-held buddy partner measured neutral; the memfree margin is the wall (EVD-0154)
+
+**What:** Score of the main-held-buddy widening of `punch_chunk_isolated()`
+(fork `92cb19862c72`, `held` = the Pass-1 `seen` bitmap of every
+main-pattern PFN). Drill run **36877160708**. Both runtime jobs
+`VERDICT=INCONCLUSIVE_CAP_REACHED`. **The change produced zero additional
+holes.** The hypothesis behind EVD-0152's named lever is falsified.
+
+| Job | `chase_holes / chase` | Residue at `ready=1` | `high_order` trail | `reread` |
+| --- | --- | --- | --- | --- |
+| windows-latest 110422344740 | `8388 / 1676 = 5.005` | buddyinfo `2 1 2 2 1 2 0 2 1 1 2` → n7=2 n8=1 n9=1 n10=2 = **3072 pages / 12.0 MiB** | 498→27→6 | 6 |
+| windows-2025 110422344702 | `8355 / 1670 = 5.003` | buddyinfo `1 0 2 1 1 0 0 2 0 2 2` → n7=2 n8=0 n9=2 n10=2 = **3328 pages / 13.0 MiB** | 503→26→6 | 6 |
+
+Both: `exhausted=0`, `stop=chase-memfree-margin`, `LIFECYCLE_VERDICT=PASS
+cycles=30 phase2=yes`, `HYPERV_DRILL_RESULT lifecycle=0 fragment=3
+splats=0 faults=0`, `scope=lifecycle-pass-fragment-inconclusive`,
+`order7_dmesg=0`, `accept4_failures=0`, `oops=0`, `rebind=yes`.
+`after_fragment MAPS count=12 bytes=20279296 pages=4939` — exact baseline
+on both guests.
+
+### Holes per chunk across four runs
+
+| Run | Partner set | cap | holes/chunk (wl / w25) |
+| --- | --- | --- | --- |
+| 36870289589 | in-chunk only | 8192 (binding) | 4.75 / 4.85 |
+| 36873015167 | in-chunk only | 32768 (free) | 4.996 / 5.004 |
+| **36877160708** | **in-chunk + main-held** | 32768 (free) | **5.005 / 5.003** |
+
+Widening the partner set to the main pattern added **0.009 / −0.001**
+holes per chunk. That is noise around the same 5.0, not a rate change.
+
+### Why the partner is empty
+
+`seen` is built correctly and before the chase (`pfn_setbit(seen, …)` at
+Pass 1, chase after), so the bitmap is not the defect. The defect is the
+assumption about physical layout: the main pattern is a **clustered**
+~1856 MiB region faulted first, and the chase takes its pages out of the
+**leftover** region. They are not interleaved at page granularity, so the
+order-0 buddy of a chase page is another chase page or free memory — almost
+never a main page. `pfn_getbit(seen, pfn + 1)` is therefore almost always
+false when the in-chunk search fails.
+
+The in-chunk rate of ~5 is the same physics EVD-0152 measured: a 64 KiB
+`mmap` is virtually contiguous but its 16 pages arrive from different
+splits, so only about 5 of the 8 even PFNs find `pfn+1` inside the same
+chunk.
+
+### Where the stop actually fired — again the margin
+
+`stop=chase-memfree-margin` on both jobs, `FRAG_CHASE_HARD_KB = 16384`
+(16 MiB). The residue is **inside** that margin:
+
+```
+at stop          MemFree just under 16 MiB
+residue          12.0 MiB (wl) / 13.0 MiB (w25) of order-7-and-up free
+other free       ~3--4 MiB
+```
+
+The chase cannot fault the pages that would split the residue without
+dropping below the margin, because the residue **is** most of the free
+memory the margin protects. At the measured 5 holes/chunk the net cost of
+draining it is:
+
+```
+3072 pages / 16 per chunk = 192 chunks
+192 * (16 - 5) pages = 2112 pages = 8.25 MiB of net hold
+MemFree 16 MiB -> 7.75 MiB
+total hold 1927.9 MiB -> 1936.2 MiB against the ~1950 MiB ceiling
+```
+
+A margin of **4 MiB** lets that complete with slack; 8 MiB would stop at
+7.75 MiB with the residue still partly standing. VMA count is unchanged by
+a margin change (~18k holes), so this is not the EVD-0137 slab failure
+mode.
+
+### The lever this names
+
+Lower `FRAG_CHASE_HARD_KB` from 16384 (16 MiB) to 4096 (4 MiB). The ring
+that follows needs ~2 MiB and the recycled holes are already free order-0,
+so 4 MiB is the backstop that still fits the ring. This is a margin change
+on measured arithmetic, not a blind constant: two independent guests put
+their residue inside the old margin and stopped there twice.
+
+Not yet implemented. Not yet scored.
+
+### Verdict
+
+🔴 **fails** — EVD-0134 third signal still red (`exhausted=0`).
+
+The EVD-0152 lever is **tried and does not work**. Do not re-derive it: the
+main pattern and the chase do not share page-level neighbourhoods, so a
+main-held buddy is not an isolation partner for a chase page. The binding
+constraint is `FRAG_CHASE_HARD_KB`, and the residue has been 12--13 MiB
+inside a 16 MiB margin on every free-of-the-cap run.
+
+**What this does not prove:** ring allocation under a depleted buddy, or
+that a 4 MiB margin is safe from OOM. The next run measures both.
+
+**Verdict:** 🔴 fails — third signal open; main-held partner neutral, margin is the wall
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY ready=1 … chase=… chase_holes=…`
+and the buddyinfo line that follows from both `drill-runtime` jobs.
+`chase_holes / chase` is the recycle rate: ~5 is the in-chunk physics, ~8
+would mean a partner set that actually works. Compare it against the
+previous run's rate before concluding a partner change did anything. Score
+the third signal only from `RESULT … (reread=…) exhausted=…`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0154`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T15:06:00Z`.
+**Verified at:** `2026-10-01T15:12:00Z`.
+**Source revision:** `92cb19862c72`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the four-run holes-per-chunk table. It is the whole
+argument: two cap values and two partner sets, one invariant rate of 5.0.
+Without it the main-held partner looks like an untested idea rather than a
+measured null. Keep the clustered-vs-leftover layout reasoning so the
+partner set is not re-proposed. Keep the 192-chunk / 8.25 MiB net-hold
+arithmetic — it is the justification for 4 MiB rather than any other value.
+**Freshness:** Superseded by a run reporting a holes-per-chunk rate
+materially above 5.0, or by a run whose `stop` is no longer
+`chase-memfree-margin` while high-order blocks remain. Re-read both runtime
+jobs before citing. Job-level `success` on `hyperv-runtime-drill` is never
+a gate closure. Never cite this entry as CoCo or send-gate evidence.
