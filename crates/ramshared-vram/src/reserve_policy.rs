@@ -35,9 +35,11 @@ pub struct ReserveFloorEnv {
     /// `RAMSHARED_MIN_VRAM_FREE_MIB` — an environment override.
     pub env_mib: Option<u64>,
     /// `MIN_VRAM_HEADROOM_MIB` — a name documented as a
-    /// `/etc/ramshared/cascade.conf` key (`wsl2-cascade-boot` PRD §7) that the
-    /// cascade boot path exports into the environment. This type does not parse
-    /// that file and must not claim to.
+    /// `/etc/ramshared/cascade.conf` key (`wsl2-cascade-boot` PRD §7).
+    /// The boot config resolver reads it from conf/env for the identity gate;
+    /// this type reads it from the process environment only and must not claim
+    /// to parse that file. The operator or systemd unit sets it in the
+    /// environment when the conf key should affect runtime reserve policy.
     pub alias_mib: Option<u64>,
 }
 
