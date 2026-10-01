@@ -302,6 +302,16 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
         self.cache.state()
     }
 
+    /// Swap in a fresh best-effort cache after the backing worker was replaced.
+    ///
+    /// The origin stays authoritative and its telemetry is untouched: the new
+    /// cache starts empty and warms from origin reads, so a respawn can never
+    /// serve pre-death bytes and never loses the `fallback_reads` /
+    /// `invalidations` accounting that documents the fall back.
+    pub fn replace_cache(&mut self, cache: C) {
+        self.cache = cache;
+    }
+
     pub fn cached_bytes(&self) -> u64 {
         self.cache.cached_bytes()
     }
@@ -660,6 +670,42 @@ mod tests {
         assert_eq!(&bytes.borrow()[..4], b"safe");
         assert_eq!(backend.telemetry().origin_syncs, 1);
         assert_eq!(backend.cache_state(), CacheState::Unavailable);
+    }
+
+    #[test]
+    fn replace_cache_swaps_the_mirror_without_touching_origin_telemetry() {
+        let bytes = Rc::new(RefCell::new(vec![b'o'; 8]));
+        let counters = Rc::new(CacheCounters::default());
+        let mut dead = ScriptedCache::active(Rc::clone(&counters));
+        dead.state = CacheState::Unavailable;
+        dead.read = CacheRead::Failed;
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(Rc::clone(&bytes)), dead, 8, 4).unwrap();
+
+        // A failed mirror already forced a fall back. That counter documents
+        // origin service, so it must survive the swap — a respawn is a mirror
+        // replacement, not a new origin lifetime.
+        let mut scratch = [0; 8];
+        backend.read_at(0, &mut scratch).unwrap();
+        assert_eq!(&scratch, b"oooooooo");
+        let fallback_reads_before = backend.telemetry().fallback_reads;
+        assert_eq!(fallback_reads_before, 1);
+
+        let mut fresh = ScriptedCache::active(Rc::clone(&counters));
+        fresh.read = CacheRead::Hit;
+        fresh.hit = b"cache!!!".to_vec();
+        backend.replace_cache(fresh);
+        assert_eq!(backend.cache_state(), CacheState::Active);
+
+        let mut hit = [0; 8];
+        backend.read_at(0, &mut hit).unwrap();
+        assert_eq!(&hit, b"cache!!!");
+        assert_eq!(
+            backend.telemetry().fallback_reads,
+            fallback_reads_before,
+            "replace_cache must not reset origin fall-back accounting"
+        );
+        assert_eq!(bytes.borrow().as_slice(), b"oooooooo");
     }
 
     #[derive(Default)]

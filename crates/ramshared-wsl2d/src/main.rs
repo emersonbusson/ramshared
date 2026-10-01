@@ -2862,6 +2862,157 @@ fn revalidate_selected_adapter(
     Ok(())
 }
 
+/// Spawn inputs for the isolated GPU cache worker.
+///
+/// Kept beside the supervisor so a respawn rebuilds the exact worker the
+/// origin was composed with, rather than re-deriving policy mid-flight
+/// (Kahneman #17: a replayed spawn is the same spawn).
+#[derive(Clone, Copy, Debug)]
+struct WorkerSpawnParams {
+    target_bytes: u64,
+    chunk_bytes: u64,
+    reserve_floor: u64,
+}
+
+/// Bounds how often a dead GPU worker may be rebuilt.
+///
+/// A crash-loop must not keep the supervisor busy forever (#15: retry only
+/// while the failure is plausibly transient), so consecutive respawns are
+/// capped and reset only after a worker stays up long enough to be healthy.
+#[derive(Debug)]
+struct WorkerRespawnBudget {
+    respawns_since_healthy: u32,
+    spawned_at: Option<Instant>,
+}
+
+/// At most this many respawns between healthy periods.
+const WORKER_RESPAWN_MAX_CONSECUTIVE: u32 = 3;
+/// A worker that survives this long earns the next burst of respawns.
+const WORKER_RESPAWN_HEALTHY_AFTER: Duration = Duration::from_secs(60);
+
+impl WorkerRespawnBudget {
+    fn new() -> Self {
+        Self {
+            respawns_since_healthy: 0,
+            spawned_at: None,
+        }
+    }
+
+    fn allows_respawn(&self) -> bool {
+        self.respawns_since_healthy < WORKER_RESPAWN_MAX_CONSECUTIVE
+    }
+
+    fn note_spawned(&mut self) {
+        self.respawns_since_healthy = self.respawns_since_healthy.saturating_add(1);
+        self.spawned_at = Some(Instant::now());
+    }
+
+    fn note_spawn_failed(&mut self) {
+        self.respawns_since_healthy = self.respawns_since_healthy.saturating_add(1);
+        self.spawned_at = None;
+    }
+
+    /// A worker that has stayed up `WORKER_RESPAWN_HEALTHY_AFTER` is healthy
+    /// and earns the next burst of respawns. `now` is explicit so the 60s
+    /// window is testable without sleeping through it.
+    fn mark_healthy_if_settled_at(&mut self, state: OriginCacheState, now: Instant) {
+        let settled = matches!(
+            state,
+            OriginCacheState::Active | OriginCacheState::Restricted
+        ) && self
+            .spawned_at
+            .is_some_and(|at| now.saturating_duration_since(at) >= WORKER_RESPAWN_HEALTHY_AFTER);
+        if settled {
+            self.respawns_since_healthy = 0;
+            self.spawned_at = None;
+        }
+    }
+
+    fn mark_healthy_if_settled(&mut self, state: OriginCacheState) {
+        self.mark_healthy_if_settled_at(state, Instant::now());
+    }
+}
+
+/// The live isolated GPU worker and everything needed to rebuild it.
+struct IsolatedWorkerRuntime {
+    supervisor: Option<IsolatedWorkerSupervisor>,
+    params: WorkerSpawnParams,
+    budget: WorkerRespawnBudget,
+}
+
+/// Rebuild the isolated GPU cache worker after it died, or record that the
+/// origin fallback is now permanent until daemon restart.
+///
+/// The origin is always authoritative, so a dead worker costs cache hits and
+/// never correctness. What this must never do is leave a zombie child or run
+/// two workers at once: the previous supervisor is always taken and shut down
+/// before any respawn attempt (#17: a replayed recovery yields one live
+/// worker, not two).
+///
+/// `CacheState::Off` is a deliberate `release_cache` and is never recovered.
+/// Only `Unavailable` and `Stuck` are death signatures.
+fn recover_isolated_gpu_worker_if_failed<S: NbdRuntimeStarter>(
+    starter: &mut S,
+    cache: &mut AuthoritativeOriginBackend<FileOrigin, OriginCache>,
+    runtime: &mut IsolatedWorkerRuntime,
+) {
+    let state = cache.cache_state();
+    runtime.budget.mark_healthy_if_settled(state);
+    match state {
+        OriginCacheState::Unavailable | OriginCacheState::Stuck => {}
+        // Off is a deliberate release, not a death. Restricted is degraded but
+        // still serving. Both stay alone.
+        OriginCacheState::Off | OriginCacheState::Active | OriginCacheState::Restricted => {
+            return;
+        }
+    }
+
+    if let Some(mut previous) = runtime.supervisor.take() {
+        previous.shutdown();
+    }
+
+    if !runtime.budget.allows_respawn() {
+        eprintln!(
+            "[ramsharedd] isolated GPU cache worker left {} after {} respawns; \
+                 origin fallback is permanent until daemon restart",
+            state.as_str(),
+            runtime.budget.respawns_since_healthy
+        );
+        cache.replace_cache(OriginCache::Disabled(DisabledCache));
+        return;
+    }
+
+    let params = runtime.params;
+    match starter.spawn_isolated_gpu_worker(
+        params.target_bytes,
+        params.chunk_bytes,
+        params.reserve_floor,
+    ) {
+        Ok((client, supervisor)) => {
+            let pid = supervisor.pid();
+            runtime.budget.note_spawned();
+            runtime.supervisor = Some(supervisor);
+            cache.replace_cache(OriginCache::Ipc(Box::new(client)));
+            eprintln!(
+                "[ramsharedd] isolated GPU cache worker respawned pid={pid} \
+                     (respawn {} of {})",
+                runtime.budget.respawns_since_healthy,
+                WORKER_RESPAWN_MAX_CONSECUTIVE
+            );
+        }
+        Err(error) => {
+            runtime.budget.note_spawn_failed();
+            cache.replace_cache(OriginCache::Disabled(DisabledCache));
+            eprintln!(
+                "[ramsharedd] isolated GPU cache worker respawn failed: {error} \
+                     (attempt {} of {})",
+                runtime.budget.respawns_since_healthy,
+                WORKER_RESPAWN_MAX_CONSECUTIVE
+            );
+        }
+    }
+}
+
 fn publish_origin_cache_status<S: NbdRuntimeStarter>(
     starter: &mut S,
     cache: &mut AuthoritativeOriginBackend<FileOrigin, OriginCache>,
@@ -3426,11 +3577,16 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         }
     }
 
-    let (mut backend, worker_supervisor): (Be<'_, P>, Option<IsolatedWorkerSupervisor>) =
+    let (mut backend, mut worker_runtime): (Be<'_, P>, Option<IsolatedWorkerRuntime>) =
         if let Some(origin) = origin {
             let chunk = chunk_bytes_from_env();
             let reserve = reserve_floor;
             let cache_target = starter.origin_cache_target_bytes(size)?;
+            let params = WorkerSpawnParams {
+                target_bytes: cache_target,
+                chunk_bytes: chunk,
+                reserve_floor: reserve,
+            };
             let (origin_cache, supervisor) = match starter.spawn_isolated_gpu_worker(
                 cache_target,
                 chunk,
@@ -3456,7 +3612,17 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             };
             let cache = AuthoritativeOriginBackend::new(origin, origin_cache, size, BLOCK_SIZE)
                 .map_err(|error| error.0)?;
-            (Be::Origin(Box::new(cache)), supervisor)
+            // The runtime is kept even when the first spawn failed: recovery
+            // owns the retry budget and must see the same params a later
+            // respawn would have used.
+            (
+                Be::Origin(Box::new(cache)),
+                Some(IsolatedWorkerRuntime {
+                    supervisor,
+                    params,
+                    budget: WorkerRespawnBudget::new(),
+                }),
+            )
         } else {
             let chunk = chunk_bytes_from_env();
             let reserve = reserve_floor;
@@ -3820,10 +3986,13 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             }
         }
 
-        if let Be::Origin(ref mut cache) = backend
-            && let Some(daemon_instance_id) = origin_daemon_instance_id.as_deref()
-        {
-            publish_origin_cache_status(starter, cache, daemon_instance_id);
+        if let Be::Origin(ref mut cache) = backend {
+            if let Some(runtime) = worker_runtime.as_mut() {
+                recover_isolated_gpu_worker_if_failed(starter, cache, runtime);
+            }
+            if let Some(daemon_instance_id) = origin_daemon_instance_id.as_deref() {
+                publish_origin_cache_status(starter, cache, daemon_instance_id);
+            }
         }
 
         if !demoted
@@ -4007,7 +4176,9 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
             );
         }
     }
-    if let Some(mut sup) = worker_supervisor {
+    if let Some(runtime) = worker_runtime.as_mut()
+        && let Some(mut sup) = runtime.supervisor.take()
+    {
         sup.shutdown();
     }
     if let Some(probe) = probe.as_mut() {
@@ -12925,6 +13096,318 @@ Filename Type Size Used Priority
         assert_eq!(second_buf, next_data);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Starter that only ever exercises `spawn_isolated_gpu_worker`. Every
+    /// other trait method is a tripwire: recovery must not touch them.
+    struct RespawnTestStarter {
+        attempts: std::sync::Arc<std::sync::atomic::AtomicU32>,
+        succeed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        predecessor_was_stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl NbdRuntimeStarter for RespawnTestStarter {
+        fn lock_memory(
+            &mut self,
+            _force: bool,
+            _lock_future: bool,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            panic!("worker recovery must not touch memory locking")
+        }
+        fn start_acceptor(
+            &mut self,
+            _listener: std::os::unix::net::UnixListener,
+            _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+            _tx_flags: u16,
+            _jobs_tx: std::sync::mpsc::SyncSender<super::WMsg>,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            panic!("worker recovery must not restart the acceptor")
+        }
+        fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+            panic!("worker recovery must not probe swap")
+        }
+        fn publish_demote(&mut self, _total: u64, _reason: &Option<String>, _in_progress: bool) {
+            panic!("worker recovery must not publish demotes")
+        }
+        fn elapsed_us(&mut self, _started: Instant) -> u64 {
+            0
+        }
+        fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+            panic!("worker recovery must not swapoff")
+        }
+        fn spawn_recovery_activation(
+            &mut self,
+            _nbd_dev: &str,
+            _priority: i16,
+        ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
+            panic!("worker recovery must not run recovery activation")
+        }
+        fn startup_budget(
+            &mut self,
+            _requested: bool,
+        ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>> {
+            panic!("worker recovery must not initialize DXG")
+        }
+
+        fn spawn_isolated_gpu_worker(
+            &mut self,
+            target_bytes: u64,
+            _chunk_bytes: u64,
+            _reserve_floor: u64,
+        ) -> Result<(IpcCacheClient, IsolatedWorkerSupervisor), Box<dyn std::error::Error>> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(target_bytes, 4 * 1024 * 1024);
+            assert!(
+                self.predecessor_was_stopped.load(Ordering::SeqCst),
+                "the previous worker must be shut down before a replacement is spawned"
+            );
+            if !self.succeed.load(Ordering::SeqCst) {
+                return Err("manufactured spawn failure".into());
+            }
+            use ramshared_block::gpu_cache_worker::{
+                FRAME_HEADER_LEN, FrameHeader, MSG_DISABLE_REQ, MSG_DISABLE_RESP,
+                MSG_HANDSHAKE_REQ, MSG_HANDSHAKE_RESP, MSG_HEARTBEAT_REQ, MSG_HEARTBEAT_RESP,
+                STATUS_OK,
+            };
+            use std::io::{Read, Write};
+
+            let (client_socket, mut worker_socket) = std::os::unix::net::UnixStream::pair()?;
+            worker_socket.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let worker_stop = std::sync::Arc::clone(&stop);
+            let handle = std::thread::spawn(move || {
+                while !worker_stop.load(Ordering::SeqCst) {
+                    let mut bytes = [0u8; FRAME_HEADER_LEN];
+                    match worker_socket.read_exact(&mut bytes) {
+                        Ok(()) => {
+                            let Some(request) = FrameHeader::decode(&bytes) else {
+                                break;
+                            };
+                            let response_type = match request.msg_type {
+                                MSG_HANDSHAKE_REQ => MSG_HANDSHAKE_RESP,
+                                MSG_HEARTBEAT_REQ => MSG_HEARTBEAT_RESP,
+                                MSG_DISABLE_REQ => MSG_DISABLE_RESP,
+                                _ => break,
+                            };
+                            let response = FrameHeader {
+                                msg_type: response_type,
+                                status: STATUS_OK,
+                                correlation_id: request.correlation_id,
+                                offset: 4 * 1024 * 1024,
+                                payload_len: 0,
+                                aux: 0,
+                            };
+                            if worker_socket.write_all(&response.encode()).is_err() {
+                                break;
+                            }
+                        }
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) => {}
+                        Err(_) => break,
+                    }
+                }
+            });
+            let mut client =
+                IpcCacheClient::new(client_socket, Duration::from_millis(50), 4 * 1024 * 1024);
+            client.perform_handshake().map_err(std::io::Error::other)?;
+            Ok((
+                client,
+                IsolatedWorkerSupervisor {
+                    child: Some(WorkerChildHandle::Thread {
+                        stop,
+                        handle: Some(handle),
+                    }),
+                },
+            ))
+        }
+    }
+
+    fn respawn_fixture(
+        succeed: bool,
+        predecessor_was_stopped: bool,
+    ) -> (
+        AuthoritativeOriginBackend<FileOrigin, OriginCache>,
+        IsolatedWorkerRuntime,
+        RespawnTestStarter,
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-worker-respawn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let origin_file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(root.join("origin.bin"))
+            .unwrap();
+        origin_file.set_len(16 * 1024 * 1024).unwrap();
+        let backend = AuthoritativeOriginBackend::new(
+            FileOrigin::from_file(origin_file),
+            OriginCache::Disabled(DisabledCache),
+            16 * 1024 * 1024,
+            BLOCK_SIZE,
+        )
+        .unwrap();
+        let runtime = IsolatedWorkerRuntime {
+            supervisor: None,
+            params: WorkerSpawnParams {
+                target_bytes: 4 * 1024 * 1024,
+                chunk_bytes: 1024 * 1024,
+                reserve_floor: 2 * 1024 * 1024,
+            },
+            budget: WorkerRespawnBudget::new(),
+        };
+        let starter = RespawnTestStarter {
+            attempts: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            succeed: std::sync::Arc::new(AtomicBool::new(succeed)),
+            predecessor_was_stopped: std::sync::Arc::new(AtomicBool::new(predecessor_was_stopped)),
+        };
+        (backend, runtime, starter)
+    }
+
+    #[test]
+    fn dead_gpu_worker_is_replaced_and_origin_keeps_serving() {
+        let (mut backend, mut runtime, mut starter) = respawn_fixture(true, true);
+        assert_eq!(backend.cache_state(), OriginCacheState::Unavailable);
+
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+
+        assert_eq!(
+            backend.cache_state(),
+            OriginCacheState::Active,
+            "a successful respawn must restore the cache to Active"
+        );
+        assert!(
+            runtime.supervisor.is_some(),
+            "the replacement worker must be supervised"
+        );
+        assert_eq!(starter.attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            runtime.budget.respawns_since_healthy, 1,
+            "a successful spawn spends one unit of the respawn budget"
+        );
+        assert_eq!(backend.origin_state(), DurableOriginState::Ready);
+    }
+
+    #[test]
+    fn previous_worker_is_stopped_before_the_replacement_is_spawned() {
+        let (mut backend, mut runtime, mut starter) = respawn_fixture(true, false);
+        // The mock starter asserts, at spawn time, that this exact flag is
+        // already set — so it is wired as the predecessor's own stop flag and
+        // the assertion observes the real teardown, not a stand-in.
+        let predecessor_stop = std::sync::Arc::clone(&starter.predecessor_was_stopped);
+        let peer_stop = std::sync::Arc::clone(&predecessor_stop);
+        let handle = std::thread::spawn(move || {
+            while !peer_stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        runtime.supervisor = Some(IsolatedWorkerSupervisor {
+            child: Some(WorkerChildHandle::Thread {
+                stop: predecessor_stop,
+                handle: Some(handle),
+            }),
+        });
+
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+
+        assert_eq!(starter.attempts.load(Ordering::SeqCst), 1);
+        assert!(
+            runtime.supervisor.is_some(),
+            "the replacement must own the supervisor slot"
+        );
+        assert!(
+            starter.predecessor_was_stopped.load(Ordering::SeqCst),
+            "the predecessor must be stopped and joined before the replacement runs"
+        );
+    }
+
+    #[test]
+    fn respawn_budget_exhausts_and_origin_fallback_becomes_permanent() {
+        let (mut backend, mut runtime, mut starter) = respawn_fixture(false, true);
+
+        for attempt in 1..=WORKER_RESPAWN_MAX_CONSECUTIVE {
+            recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+            assert_eq!(starter.attempts.load(Ordering::SeqCst), attempt);
+            assert_eq!(backend.cache_state(), OriginCacheState::Unavailable);
+            assert!(runtime.supervisor.is_none());
+        }
+
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+        assert_eq!(
+            starter.attempts.load(Ordering::SeqCst),
+            WORKER_RESPAWN_MAX_CONSECUTIVE,
+            "a crash-loop must stop after the consecutive-respawn cap"
+        );
+        assert_eq!(backend.cache_state(), OriginCacheState::Unavailable);
+        assert!(
+            !runtime.budget.allows_respawn(),
+            "the budget must stay closed until a worker proves healthy"
+        );
+    }
+
+    #[test]
+    fn deliberate_cache_release_is_never_treated_as_worker_death() {
+        let (mut backend, mut runtime, mut starter) = respawn_fixture(true, true);
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+        assert_eq!(backend.cache_state(), OriginCacheState::Active);
+        assert_eq!(starter.attempts.load(Ordering::SeqCst), 1);
+
+        // Control-pressure `release_cache` is deliberate: state becomes Off.
+        backend.release_cache().unwrap();
+        assert_eq!(backend.cache_state(), OriginCacheState::Off);
+
+        recover_isolated_gpu_worker_if_failed(&mut starter, &mut backend, &mut runtime);
+        assert_eq!(
+            starter.attempts.load(Ordering::SeqCst),
+            1,
+            "an intentional Off must not be recovered"
+        );
+        assert_eq!(backend.cache_state(), OriginCacheState::Off);
+    }
+
+    #[test]
+    fn healthy_worker_resets_the_respawn_budget() {
+        let mut budget = WorkerRespawnBudget::new();
+        for _ in 0..WORKER_RESPAWN_MAX_CONSECUTIVE {
+            budget.note_spawned();
+        }
+        assert!(!budget.allows_respawn());
+
+        // Still inside the healthy window: the budget stays closed.
+        let soon = Instant::now();
+        budget.mark_healthy_if_settled_at(OriginCacheState::Active, soon);
+        assert!(
+            !budget.allows_respawn(),
+            "a worker that has not settled must not earn a new burst"
+        );
+
+        let settled = Instant::now() + WORKER_RESPAWN_HEALTHY_AFTER + Duration::from_secs(1);
+        budget.mark_healthy_if_settled_at(OriginCacheState::Active, settled);
+        assert!(
+            budget.allows_respawn(),
+            "a worker that survived the healthy window earns the next burst"
+        );
+        assert_eq!(budget.respawns_since_healthy, 0);
+
+        // A dead worker that has not settled must not reset the counter.
+        let mut stalled = WorkerRespawnBudget::new();
+        stalled.note_spawned();
+        stalled.mark_healthy_if_settled_at(OriginCacheState::Unavailable, settled);
+        assert_eq!(
+            stalled.respawns_since_healthy, 1,
+            "an Unavailable cache is never healthy, so it cannot clear the budget"
+        );
     }
 
     struct UnresponsiveWorkerProcess {
