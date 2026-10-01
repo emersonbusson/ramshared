@@ -341,48 +341,48 @@ static int do_mlock_hog(int argc, char **argv)
  *
  * FRAG_CHASE_CAP is the backstop, not the guard. The chase stops on the
  * measured condition first, then on the unsplit floor, then on the memfree
- * safety stop below, and only then on the cap. With the recycle in place
- * the chase frees about 5 pages per 16-page chunk and holds the other 11,
- * so splitting a 12 MiB residue needs on the order of 192 chunks and costs
- * about 8.25 MiB of net RSS instead of 12. 4096 is the headroom for that,
- * not a guess.
+ * safety stop below, and only then on the cap. With recycle in place the
+ * chase holds only the pages it cannot prove a held buddy for -- about 11
+ * of 16 with the in-chunk partner set alone -- and the rest go back out as
+ * isolated order-0 that the next chunk re-takes. Splitting a 12 MiB
+ * residue that way is on the order of 200--300 chunks and costs under
+ * 10 MiB of net RSS. 4096 is the headroom for that and for the endgame
+ * the chase-held partner opens up, not a guess.
  *
  * FRAG_CHASE_HOLE_CAP is the recycle's own structural maximum, not a
  * separate budget. Every unmapped page is one more vm_area_struct, and a
- * complete set of order-0 buddy pairs would cap the recycle at 8 holes per
+ * complete set of order-0 buddy pairs caps the recycle at 8 holes per
  * chunk, so FRAG_CHASE_CAP chunks cannot produce more than FRAG_CHASE_CAP *
  * 8 of them. Bounding it any tighter is what run 36870289589 measured: both
  * guests stopped at chase_holes=8192 exactly and averaged 4.75--4.85 holes
- * per chunk. Raising it to this value bought holes but no residue, because
- * the rate is physical and sits at ~5, not 8: a 64 KiB chunk is not
- * physically contiguous, so only about 5 of its 8 even PFNs find pfn+1
- * inside the same chunk. Widening the partner set to the main pattern did
- * not move it either (run 36877160708: 5.005 / 5.003) -- the main pattern
- * is clustered and the chase takes its pages from the leftover region, so
- * a chase page's buddy is another chase page or free memory, not a main
- * page. The guard that actually protects Unmovable is the memfree margin
- * below; this constant must never bind before high==0.
+ * per chunk. Raising it to this value in run 36873015167 bought +477/+235
+ * holes and zero residue reduction, because the 4.75--4.85 was the physics
+ * of the partner set, not the cap: a 64 KiB chunk is not physically
+ * contiguous, so only ~5 of the 8 even PFNs find their buddy inside it.
+ * Adding the main pattern as a held partner did not move the rate either
+ * (5.005/5.003 in run 36877160708 against 4.996/5.004 before it). The
+ * remaining lever is the chase's own earlier chunks; see
+ * punch_chunk_isolated(). The guard that actually protects Unmovable is
+ * the memfree margin below; this constant must never bind before high==0.
  *
- * FRAG_CHASE_HARD_KB is the OOM backstop. The chase is unpinned until
- * ready=1 by design, so a runaway hold is supposed to die as the honest
- * INCONCLUSIVE_NO_PATTERN; this stop is the cheaper version of the same
- * thing, and it must not bind before high==0.
- *
- * It is also the one place the residue is decided, because the residue IS
- * the free memory this margin protects. Runs 36873015167 and 36877160708
- * both stopped here with 12--13 MiB of order-7-and-up free standing inside
- * a 16 MiB margin: the chase could not fault the pages that would split it
- * without dropping below the line. At the measured recycle rate of 5 holes
- * per chunk, draining 3072 pages costs 192 chunks and 8.25 MiB of net
- * hold, which lands at 7.75 MiB free. 16 MiB forbids that. 8 MiB still
- * stops at 7.75 with residue standing. 4 MiB completes it with slack and
- * still leaves room for the ~2 MiB ring that follows -- the recycled holes
- * are already free order-0 -- while a margin change adds no VMAs, so this
- * is not the EVD-0137 slab mode.
+ * FRAG_CHASE_HARD_KB is the OOM backstop and a safety floor, not a lever
+ * on the residue. The chase is unpinned until the hold, so a runaway hold
+ * dies as the honest INCONCLUSIVE_NO_PATTERN; this stop is the cheaper
+ * version of the same thing. Run 36823337153 showed that at 48 MiB it
+ * binds *exactly* at the demotion threshold, and 16 MiB leaves 12--13 MiB
+ * of order-7-and-up standing (runs 36873015167, 36877160708). Dropping it
+ * to 4 MiB to split that residue is what run 36879744347 measured: the
+ * chase reached the hold with the helper pinned at 1.9 GiB, then the punch
+ * and the channel-open needed memory the residue had been protecting and
+ * the guests OOM-killed sh (probe -12) and panicked on clone(). The residue
+ * is the post-chase working set. 16 MiB sits above the unsplit floor
+ * (128 pages) and above the ~9 MiB the punch, the ~2 MiB ring and init
+ * need after ready=1. Splitting the residue has to happen by recycling it,
+ * not by holding it.
  */
 #define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
-#define FRAG_CHASE_HARD_KB 4096L
+#define FRAG_CHASE_HARD_KB 16384L
 #define FRAG_CHASE_HOLE_CAP (FRAG_CHASE_CAP * 8L)
 
 /*
@@ -511,6 +511,31 @@ static long mem_free_kb(void)
 	}
 	fclose(f);
 	return kb;
+}
+
+/*
+ * Physical page count as MemTotal describes it. Used only to size the
+ * held-page bitmap: the chase takes its pages from the leftover region,
+ * above the main pattern's max_pfn, and a bitmap sized from max_pfn alone
+ * would be overrun the first time a chase page sat higher. PFNs are never
+ * printed.
+ */
+static long mem_total_pages(void)
+{
+	FILE *f = fopen("/proc/meminfo", "r");
+	char line[256];
+	long kb = -1;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		if (strncmp(line, "MemTotal:", 9) == 0) {
+			kb = strtol(line + 9, NULL, 10);
+			break;
+		}
+	}
+	fclose(f);
+	return kb < 0 ? -1 : kb / 4;
 }
 
 /*
@@ -682,35 +707,42 @@ static int pfn_getbit(const unsigned long *bits, unsigned long pfn)
  * A freed page's buddy is then always held, so nothing above order-0 can
  * coalesce and the survivors still serve order-0 requests.
  *
- * The buddy is accepted from two places, in order:
+ * The buddy is accepted from three places, in order:
  *
  *   1. another page of this same chunk that stays mapped, or
- *   2. any page the held bitmap proves held -- the main pattern's Pass-1
- *      set, or a later chase chunk's pages if one is ever passed.
+ *   2. the main pattern, via the held bitmap built in Pass 1, or
+ *   3. an earlier chase chunk's survivors, recorded into the same bitmap
+ *      as each chunk is punched.
  *
- * Only the first contributes in practice. The chunk's 16 pages are
+ * Only the first contributes in practice today. The chunk's 16 pages are
  * virtually contiguous but not physically: as high-order blocks split they
  * land in the chunk from different blocks, so only about 5 of the 8 even
- * PFNs find pfn+1 inside the same chunk. Measured holes/chunk sit at 5.0
- * across four runs spanning two hole caps and two partner sets (4.75/4.85
- * truncating at 8192, 4.996/5.004 free of it, 5.005/5.003 with the main
- * pattern as an extra partner). The main pattern is clustered and the
- * chase takes its pages from the leftover region, so a chase page's buddy
- * is another chase page or free memory, not a main page -- which is why the
- * held fall-through measures neutral rather than negative. It is kept
- * because it is the correct rule and costs nothing; do not expect it to
- * raise the rate.
+ * PFNs find their buddy in-chunk. Measured holes/chunk sit at 5.0 across
+ * two hole caps (4.75/4.85 truncating at 8192 in run 36870289589,
+ * 4.996/5.004 free of it in run 36873015167) and two partner sets
+ * (5.005/5.003 with the main pattern added, run 36877160708). The
+ * main-held partner is neutral: the main pattern is a clustered ~1856 MiB
+ * region faulted first, the chase takes its pages from the leftover
+ * region, and a chase page's buddy is another chase page or free memory,
+ * almost never a main page.
+ *
+ * The third is the remaining lever. Consecutive chase chunks draw from the
+ * same leftover region, so an even PFN's odd buddy is often a page an
+ * earlier chunk already kept. Those partners are the same 11 pages per
+ * chunk the net hold is made of, and they are held for the whole chase.
  *
  * This is what lets the chase split a high-order block without holding all
- * of it. Returning the punchable half at each step means net hold grows by
- * 11 pages per chunk while the split still proceeds: the recycled pages
- * come back as isolated order-0, the next chunk re-takes them, and the
- * order-10 is still demoted.
+ * of it. Returning the even half at each step keeps net hold well under 16
+ * pages per chunk while the split still proceeds: the recycled pages come
+ * back as isolated order-0, the next chunk re-takes them, and the order-10
+ * is still demoted.
  *
- * A held buddy is a permanently safe partner. Both punches free only even
- * PFNs whose buddy is odd (pfn+1) and held, so odd PFNs are never freed by
- * either; a held odd page can never become free and pair with the page
- * released here.
+ * A held buddy is a permanently safe partner. Both punches free only
+ * even PFNs whose buddy is odd (pfn+1) and held, so odd PFNs are never
+ * freed by either; a held odd page can never become free and pair with
+ * the page released here. The bitmap only ever gains survivors, never a
+ * page that was freed, so a later lookup cannot mistake a free page for a
+ * held one and release its buddy into a coalescible pair.
  *
  * PFNs whose buddy is neither in this chunk nor in held are left mapped:
  * freeing them could pair with free memory elsewhere and rebuild the high
@@ -943,7 +975,22 @@ static int do_fragment_buddy(int argc, char **argv)
 		return 2;
 	}
 
-	seen_words = max_pfn / (8 * sizeof(long)) + 2;
+	/*
+	 * Size the held bitmap for the whole guest, not for the main
+	 * pattern. The chase takes its pages from the leftover region and
+	 * their PFNs sit above the main pattern's max_pfn; a bitmap sized
+	 * from max_pfn alone is overrun the first time a chase survivor is
+	 * recorded. mem_total_pages() is the physical page count, which is
+	 * the upper bound on any PFN this guest will hand out.
+	 */
+	{
+		long total = mem_total_pages();
+		unsigned long bound = max_pfn;
+
+		if (total > 0 && (unsigned long)total > bound)
+			bound = (unsigned long)total;
+		seen_words = bound / (8 * sizeof(long)) + 2;
+	}
 	seen = calloc(seen_words, sizeof(*seen));
 	if (!seen) {
 		printf("HELPER calloc pfn-set: %s\n", strerror(errno));
@@ -1020,17 +1067,33 @@ static int do_fragment_buddy(int argc, char **argv)
 		if (mlock(m, FRAG_CHUNK) == 0)
 			chase_locked++;
 		/*
-		 * Recycle the punchable half before the next chunk faults in.
-		 * The recycled pages go back as isolated order-0 (their buddy
-		 * is the half we kept), so the next chunk re-takes them plus
-		 * ~11 new and the order-10 is still demoted. Net hold grows by
-		 * 11 pages per chunk instead of 16 -- the 8.25 MiB that pays
-		 * for a 12 MiB residue. pmfd is open across this loop.
+		 * Recycle the punchable pages before the next chunk faults
+		 * in. The recycled pages go back as isolated order-0 (their
+		 * buddy is the half we kept), so the next chunk re-takes them
+		 * and the order-10 is still demoted. Net hold grows by the
+		 * kept half only, which is what pays for splitting a residue
+		 * the memfree margin will not let the chase hold outright.
+		 * pmfd is open across this loop.
 		 */
 		if (pmfd >= 0 && chase_holes < FRAG_CHASE_HOLE_CAP)
 			chase_holes += punch_chunk_isolated(pmfd, m,
 				FRAG_CHASE_HOLE_CAP - chase_holes, seen,
 				&chase_pairs);
+		/*
+		 * Survivors become held partners for the chunks after this
+		 * one. Only survivors are recorded: a page that was just
+		 * freed must not sit in the bitmap as if it were held, or a
+		 * later lookup would release its buddy into a pair that can
+		 * coalesce and rebuild the high orders just drained.
+		 */
+		if (pmfd >= 0) {
+			for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE) {
+				unsigned long spfn = 0;
+
+				if (pagemap_pfn(pmfd, m + off, &spfn) == 0)
+					pfn_setbit(seen, spfn);
+			}
+		}
 		chase_maps[chase++] = m;
 	}
 
