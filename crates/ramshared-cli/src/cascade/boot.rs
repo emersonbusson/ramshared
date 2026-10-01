@@ -256,9 +256,9 @@ pub fn resolve_boot_config_from(
     path: &Path,
     env: &dyn Env,
 ) -> Result<ResolvedBootConfig, BootError> {
-    let conf = match fs::read_to_string(path) {
-        Ok(text) => parse_cascade_conf(&text)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CascadeConf::default(),
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => {
             return Err(BootError::ConfigInvalid(format!(
                 "cannot read {}: {error}",
@@ -266,6 +266,19 @@ pub fn resolve_boot_config_from(
             )));
         }
     };
+    resolve_boot_config_text(&text, env)
+}
+
+/// Resolve sizing from an already-read `cascade.conf` body (DT-3).
+///
+/// Split out of `resolve_boot_config_from` so the attended `up` path and the
+/// tests share one chain: `/etc/ramshared/cascade.conf` → env → built-in
+/// defaults. An empty body is the same as a missing file.
+pub fn resolve_boot_config_text(
+    text: &str,
+    env: &dyn Env,
+) -> Result<ResolvedBootConfig, BootError> {
+    let conf = parse_cascade_conf(text)?;
 
     let env_vram = env_u64(env, "RAMSHARED_VRAM_MIB");
     let env_zram = env_u64(env, "RAMSHARED_ZRAM_MIB");

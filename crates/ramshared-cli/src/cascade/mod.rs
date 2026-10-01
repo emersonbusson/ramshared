@@ -34,6 +34,7 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
     static TEST_SWAPS_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     static TEST_ORIGIN_CONFIG: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
+    static TEST_CASCADE_CONF: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
     static TEST_MEM_AVAILABLE: RefCell<Option<u64>> = const { RefCell::new(None) };
     static TEST_ENV_MB: RefCell<Option<(String, u64)>> = const { RefCell::new(None) };
 }
@@ -47,6 +48,10 @@ const PID_FILE: &str = "/run/ramshared/ramsharedd.pid";
 const DEMOTE_STATUS_FILE: &str = "/run/ramshared/demote-status.json";
 const CAPACITY_STATUS_FILE: &str = "/run/ramshared/capacity-guaranteed";
 const ORIGIN_CONFIG_FILE: &str = "/etc/ramshared/origin.conf";
+/// Host cascade sizing policy (DT-3), shared with `boot`.
+/// Test builds resolve the seam instead of reading this path.
+#[cfg_attr(test, allow(dead_code))]
+const CASCADE_CONF_FILE: &str = "/etc/ramshared/cascade.conf";
 const DEFAULT_PHYSICAL_CACHE_CAP_MIB: u64 = 1024;
 const CACHE_STATUS_FILE: &str = "/run/ramshared/cache-status.json";
 const SUPERVISOR_STATUS_FILE: &str = "/run/ramshared/supervisor-state.json";
@@ -644,22 +649,53 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
     }
 }
 
-/// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`).
+/// Env reader for attended-`up` sizing.
 ///
-/// Attended `up` sizing fallback only. The boot path resolves sizing through
-/// `boot::load_boot_config_from` (`/etc/ramshared/cascade.conf` → env →
-/// built-in), so this helper is not the sizing authority.
-fn default_mb_from_env(var: &str, fallback: u64) -> u64 {
-    #[cfg(test)]
-    if let Some((ref k, n)) = TEST_ENV_MB.with(|c| c.borrow().clone())
-        && k == var
-    {
-        return n;
+/// Production is `std::env`. The test build routes `TEST_ENV_MB` through the
+/// same [`boot::Env`] trait the boot path uses, so one DT-3 chain serves both
+/// and the test seam cannot drift from the operator-facing resolver.
+struct UpEnv;
+
+impl boot::Env for UpEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        #[cfg(test)]
+        if let Some((ref k, n)) = TEST_ENV_MB.with(|c| c.borrow().clone())
+            && k == key
+        {
+            return Some(n.to_string());
+        }
+        std::env::var(key).ok()
     }
-    std::env::var(var)
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(fallback)
+}
+
+/// Attended-`up` zram default, resolved through the DT-3 chain.
+///
+/// `/etc/ramshared/cascade.conf` → `RAMSHARED_ZRAM_MIB` → 1024 MiB. This is the
+/// same authority `boot` resolves, so a bare `up` no longer starts half the
+/// configured cushion on a host whose policy says otherwise. Explicit `--zram`
+/// still wins. `vram_mb` is deliberately *not* taken from here: it stays bound
+/// to the sealed origin capacity, which is the size the NBD actually exposes.
+fn default_zram_mb() -> Result<u64, CascadeError> {
+    #[cfg(test)]
+    let text = match TEST_CASCADE_CONF.with(|cell| cell.borrow().clone()) {
+        Some(Ok(text)) => text,
+        Some(Err(message)) => return Err(CascadeError::Io(message)),
+        // Test mode never reads the host policy file.
+        None => String::new(),
+    };
+    #[cfg(not(test))]
+    let text = match fs::read_to_string(CASCADE_CONF_FILE) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(CascadeError::Io(format!(
+                "read {CASCADE_CONF_FILE}: {error}"
+            )));
+        }
+    };
+    let resolved = boot::resolve_boot_config_text(&text, &UpEnv)
+        .map_err(|error| CascadeError::Arg(error.to_string()))?;
+    Ok(resolved.config.zram_mib)
 }
 
 /// True when a healthy Day-1 cascade is already mounted (idempotent `up`).
@@ -735,7 +771,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
     let sealed = read_sealed_origin_config()?;
     let mut a = UpArgs {
         vram_mb: sealed.logical_capacity_mib,
-        zram_mb: default_mb_from_env("RAMSHARED_ZRAM_MIB", 1024),
+        zram_mb: default_zram_mb()?,
         daemon,
         force: false,
         connections: 1,
@@ -2463,11 +2499,16 @@ Filename Type Size Used Priority
         TEST_ENV_MB.with(|c| *c.borrow_mut() = v.map(|(k, n)| (k.to_string(), n)));
     }
 
+    fn set_test_cascade_conf(v: Option<Result<String, String>>) {
+        TEST_CASCADE_CONF.with(|c| *c.borrow_mut() = v);
+    }
+
     fn clear_test_seams() {
         clear_sh_script();
         set_test_swaps(None);
         TEST_SWAPS_SEQUENCE.with(|queue| queue.borrow_mut().clear());
         TEST_SWAPS_ERROR.with(|cell| *cell.borrow_mut() = None);
+        set_test_cascade_conf(None);
         set_test_mem(None);
         set_test_mb(None);
     }
@@ -2851,11 +2892,50 @@ Filename Type Size Used Priority
     }
 
     #[test]
-    fn default_mb_from_env_uses_injected_value_or_fallback() {
-        set_test_mb(Some(("RAMSHARED_TEST_MB", 333)));
-        assert_eq!(default_mb_from_env("RAMSHARED_TEST_MB", 1), 333);
+    fn bare_up_zram_follows_cascade_conf_before_env() {
+        // DT-3: the host policy file outranks the environment. A bare `up` on
+        // a host whose `cascade.conf` says 2048 must not silently start 1024.
+        clear_test_seams();
+        set_test_mb(Some(("RAMSHARED_ZRAM_MIB", 512)));
+        set_test_cascade_conf(Some(Ok("ZRAM_MIB=2048\n".to_string())));
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.zram_mb, 2048);
+        clear_test_seams();
+    }
+
+    #[test]
+    fn bare_up_zram_falls_back_to_env_then_builtin() {
+        clear_test_seams();
+        set_test_mb(Some(("RAMSHARED_ZRAM_MIB", 1536)));
+        set_test_cascade_conf(Some(Ok("# no sizing keys\n".to_string())));
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.zram_mb, 1536);
+
         set_test_mb(None);
-        assert_eq!(default_mb_from_env("RAMSHARED_TEST_MB_MISSING", 9), 9);
+        set_test_cascade_conf(Some(Ok(String::new())));
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.zram_mb, 1024);
+        clear_test_seams();
+    }
+
+    #[test]
+    fn bare_up_zram_explicit_flag_still_outranks_the_policy_file() {
+        clear_test_seams();
+        set_test_cascade_conf(Some(Ok("ZRAM_MIB=2048\n".to_string())));
+        let a = parse(&["--zram", "0"]).unwrap();
+        assert_eq!(a.zram_mb, 0);
+        clear_test_seams();
+    }
+
+    #[test]
+    fn malformed_cascade_conf_refuses_a_bare_up() {
+        // Fail closed, same as `boot`: a policy file the chain cannot parse is
+        // a refusal, not a silent fall back to 1024.
+        clear_test_seams();
+        set_test_cascade_conf(Some(Ok("ZRAM_MIB=not-a-number\n".to_string())));
+        let err = parse(&[]).unwrap_err();
+        assert!(err.to_string().contains("ZRAM_MIB"), "got: {err}");
+        clear_test_seams();
     }
 
     #[test]

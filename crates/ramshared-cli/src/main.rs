@@ -824,9 +824,14 @@ fn print_usage(stderr: &mut dyn Write) {
         stderr,
         "  ramshared boot   # native fail-closed bootstrap (systemd unit entrypoint)"
     );
+    let _ = writeln!(stderr, "      up defaults: vram = sealed origin capacity");
     let _ = writeln!(
         stderr,
-        "      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB"
+        "      zram sizing: /etc/ramshared/cascade.conf, then RAMSHARED_ZRAM_MIB, then 1024 MiB"
+    );
+    let _ = writeln!(
+        stderr,
+        "      boot sizing: /etc/ramshared/cascade.conf, then those env vars, then 1024 MiB each"
     );
     let _ = writeln!(stderr, "      --zram 0  skip zram (VRAM/NBD only)");
     let _ = writeln!(
