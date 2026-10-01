@@ -42,6 +42,7 @@ Source filenames use `snake_case`; CLI and package identifiers may use hyphens.
 ## Commits & Patches
 
 - **English** is mandatory across the entire project: source code, comments, commits, PRs, issues, and root/`/docs/` documents.
+- **No authorship trailers** (`Co-Authored-By`, `Generated-with`, `Assisted-by`, …) in commits or PRs — ever. Strip any that appear; never append one.
 - Structural commits or those affecting the MMU/DRM require a `Rollback trigger:` in the body. Explicit Tier 3 (SSD) qualification metrics are mandatory in performance PR descriptions before merge.
 
 ## Tech Stack Overview

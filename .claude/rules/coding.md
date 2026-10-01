@@ -21,6 +21,13 @@ Rules:
 
 ## Commit Conventions
 
+**No authorship trailers.** Commit messages and PR descriptions never contain
+`Co-Authored-By`, `Generated-with`, `Assisted-by`, or any other attribution
+line — harness-generated or hand-written. Never append one "to be safe";
+strip any such trailer before committing. Enforced in `.claude/settings.json`
+(`attribution.commitTrailers: false`), but the rule stands on its own even when
+a session is launched with a settings override.
+
 Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
