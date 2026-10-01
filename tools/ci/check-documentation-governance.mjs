@@ -214,10 +214,10 @@ const forbiddenProductPatterns = [
 export function scanProvenance(files, allowlist = { entries: [] }, baseline = { entries: [] }) {
   const findings = [...validateAllowlist(allowlist), ...validateBaseline(baseline)]
   const patterns = [
-    ['SECRET', /(?:(?:password|api[-_ ]?key|token|credential)\s*(?:=|:)\s*["']?(?!(?:<REDACTED>|…|\.\.\.))[^\s"',}]+|--(?:password|api[-_]?key|token|credential)\s+(?!\$|<REDACTED>|…|\.\.\.)[^\s]+)/i],
+    ['SECRET', /(?:(?:\b(?:password|api[-_ ]?key|token|credential)\b)\s*(?:=|:)\s*["']?(?!(?:<REDACTED>|…|\.\.\.))[A-Za-z0-9][^\s"',}]*|--(?:password|api[-_]?key|token|credential)\s+(?!\$|<REDACTED>|…|\.\.\.)[^\s]+)/i],
     ['PRIVATE_KEY', /-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/i],
     ['PRIVATE_PATH', /(?:\/home\/[A-Za-z0-9._-]+\/|C:\\Users\\[^\\\s"']+|\\\\wsl(?:\.localhost|\$)\\[^\\]+\\home\\[^\\]+)/i],
-    ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i],
+    ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?!service\b|socket\b|target\b|timer\b|mount\b|swap\b|path\b|device\b|slice\b|scope\b)[A-Z]{2,}\b/i],
     ['KERNEL_ADDRESS', /\bffff[0-9a-f]{12,16}\b/i],
   ]
   for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
