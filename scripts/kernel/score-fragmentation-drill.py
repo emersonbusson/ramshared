@@ -131,6 +131,14 @@ def score(path):
           f'unsplit={un} stop={st}')
     print(f'{"verdict":<12}{vd}')
 
+    # floor / watermark / free at the moment the chase stopped. Present on
+    # runs from 6870976f0756 onward; earlier consoles leave these blank.
+    fk = find(r'floor_kb=(-?\d+)', body)
+    wk = find(r'wmark_kb=(-?\d+)', body)
+    mk = find(r'free_kb=(-?\d+)', body)
+    if fk or wk or mk:
+        print(f'{"floor":<12}floor_kb={fk} wmark_kb={wk} free_kb={mk}')
+
     if start:
         print(f'{"start":<12}' +
               ' '.join(f'o{k}={start[k]}' for k in sorted(start)) +
