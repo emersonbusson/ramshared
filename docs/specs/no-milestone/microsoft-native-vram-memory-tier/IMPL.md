@@ -9,13 +9,13 @@ No host E2E or restart run exists.
 
 | Local gate | Exact result |
 | --- | --- |
-| `cargo test -p ramshared-tier --all-targets` | 52 passed (shared package suite) |
-| `cargo test -p ramshared-tier --test n3_state` | 26 passed |
-| Named restart gate | `N3_RUST_DURABLE_RESTART_GENERATION_REFUSAL` passed |
+| `cargo test -p ramshared-tier --all-targets` | 96 passed, 0 failed (63 lib + 26 `n3_state` + 7 `nbd_product_readiness`) |
+| `cargo test -p ramshared-tier --test n3_state` | 26 passed, 0 failed |
+| Six named protocol gates | `n3_rust_grant_revoke_state_machine`, `n3_rust_stale_generation_refusal`, `n3_rust_duplicate_event_idempotence`, `n3_rust_revoke_with_inflight_refusal`, `n3_rust_guest_crash_failsafe`, `n3_rust_durable_restart_generation_refusal` — 6 passed, 0 failed |
 | Refusal/atomic restore gate | `restart_record_rejects_non_host_or_truncated_input_without_partial_history` passed |
-| `cargo clippy -p ramshared-tier --all-targets -- -D warnings` | pass |
-| `cargo fmt --all -- --check` | pass |
-| `n3_state.rs` line coverage | 86.2% (922/1069), minimum 80% pass |
+| `cargo clippy -p ramshared-tier --all-targets -- -D warnings` | pass (zero warnings) |
+| `cargo fmt --all -- --check` | pass (exit 0) |
+| `n3_state.rs` line coverage | 83.6% (960/1149), minimum 80% pass (2026-10-01) |
 
 ## Implemented local ownership
 
