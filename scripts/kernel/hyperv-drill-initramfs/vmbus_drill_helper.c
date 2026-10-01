@@ -359,31 +359,35 @@ static int do_mlock_hog(int argc, char **argv)
  * The recycle's proper place is phase 2, where it makes room for the ring,
  * not phase 1, where it exists to force splits.
  *
- * FRAG_CHASE_HARD_KB is the OOM backstop and, now that the recycle is
- * gone, the only thing standing between the chase and a depleted buddy.
- * It is a safety floor first and a residue lever second. Run 36879744347
- * is the reason it cannot be set casually: at 4 MiB the chase reached the
- * hold with the helper pinned at 1.9 GiB, then the punch and the
- * channel-open needed memory the residue had been protecting, the guests
- * OOM-killed sh (probe -12) and panicked on clone(). The restored
- * watermark is min_free_kbytes ~5694 kB and the ring needs ~2 MiB, so
- * 8 MiB is the arithmetic floor and anything below it is the EVD-0155
- * failure mode again.
+ * FRAG_CHASE_HARD_KB is the absolute backstop. The binding constraint is
+ * the live watermark: the chase stops at
+ *     mem_free_kb() < max(FRAG_CHASE_HARD_KB,
+ *                         live_min_watermark_kb() + FRAG_CHASE_WMARK_MARGIN)
+ * because a constant below the watermark is how run 36879744347 killed two
+ * guests. That run's first OOM reads `boost:0kB min:5692kB` -- min is the
+ * *saved* min_free_kbytes, so the write to 512 never took -- while
+ * `free_pcp:15356kB` sat where a MemFree floor cannot see it. An order-1
+ * GFP_KERNEL from sh then hit the un-lowered watermark and OOMed; a second
+ * OOM on each guest raised the watermark further via boost (+4 MiB wl,
+ * +12 MiB w25) and windows-2025 panicked on clone(). min_free_kb_write()
+ * is silent on failure, so fragment-buddy now fails closed if the read-back
+ * is not the requested value. Without that check no floor is safe.
  *
- * 16 MiB was the conservative choice after that panic and it is what run
- * 36892314395 measured the cost of: the no-recycle chase held 75.75 MiB,
- * split 21 high-order blocks, and still stopped at this floor with 5
- * blocks standing -- 2816 pages on windows-latest and 2944 on
- * windows-2025, 2048 of which are two untouched order-10 blocks. Dropping
- * the floor by X MiB reduces that residue by roughly X MiB, because the
- * only free memory left to take at the floor is the standing high-order.
- * 8 MiB should split the two order-10 blocks; if it leaves
- * exhausted=0 again the wall is not the floor and the next move is finer
- * granularity in the hold, not another cut.
+ * The residue does not have to be held. __rmqueue_smallest serves order-0
+ * first, so the chase must empty the no-split budget (unsplit) before it
+ * will touch an order-10; once order-0 is empty, clearing one order-10
+ * down to order-6-and-below costs 15 held pages (1+2+4+8) and the rest of
+ * the block stays free as order-6 and below -- exactly the state
+ * high_order_7plus=0 asks for. Runs 36892314395 (16 MiB floor) and
+ * 36894869321 (8 MiB floor) left 2816 and 1408/1280 pages standing
+ * because the MemFree floor fired while unsplit was still the allocator's
+ * preferred source. Estimated further hold to finish is unsplit plus ~25
+ * pages of forced splits, about 3 MiB.
  */
 #define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
-#define FRAG_CHASE_HARD_KB 8192L
+#define FRAG_CHASE_HARD_KB 2048L
+#define FRAG_CHASE_WMARK_MARGIN 2048L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
@@ -511,6 +515,45 @@ static long mem_free_kb(void)
 	}
 	fclose(f);
 	return kb;
+}
+
+/*
+ * The watermark the allocator will actually refuse below, in kB: every
+ * zone's `min` plus its `boost`, from /proc/zoneinfo. Both are in pages.
+ *
+ * `boost` is the number to watch. boost_watermark() raises it under
+ * fragmentation -- which is the whole point of this drill -- so the
+ * watermark is not a fixed multiple of min_free_kbytes. Run 36879744347
+ * saw it go 0 -> 4096 kB (windows-latest) and 0 -> 12288 kB
+ * (windows-2025) after the first OOM. A floor that ignores boost is the
+ * same class of mistake as a floor below min_free_kbytes.
+ */
+static long live_min_watermark_kb(void)
+{
+	FILE *f = fopen("/proc/zoneinfo", "r");
+	char line[256];
+	long min_pages = 0, boost_pages = 0, saw = 0;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		char *p = line;
+
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (strncmp(p, "min", 3) == 0 &&
+		    (p[3] == ' ' || p[3] == '\t')) {
+			min_pages += strtol(p + 3, NULL, 10);
+			saw++;
+		} else if (strncmp(p, "boost", 5) == 0 &&
+			   (p[5] == ' ' || p[5] == '\t')) {
+			boost_pages += strtol(p + 5, NULL, 10);
+		}
+	}
+	fclose(f);
+	if (!saw)
+		return -1;
+	return (min_pages + boost_pages) * 4;
 }
 
 /*
@@ -707,6 +750,7 @@ static int do_fragment_buddy(int argc, char **argv)
 	long mib, hold, want, got = 0, locked = 0, i, off, stopped = 0;
 	long freed_pages = 0, held_pages = 0, no_pfn = 0, pairs = 0;
 	long high_before, high_locked, high_after, free_kb;
+	long wmark_kb, floor_kb;
 	long min_free_saved, min_free_set, min_free_now;
 	long chase = 0, chase_locked = 0;
 	long chase_holes = 0, chase_pairs = 0;
@@ -763,6 +807,20 @@ static int do_fragment_buddy(int argc, char **argv)
 	printf("FRAGMENT_BUDDY min_free_kbytes saved=%ld set=%ld now=%ld\n",
 	       min_free_saved, min_free_set, min_free_now);
 	fflush(stdout);
+	if (min_free_now != min_free_set) {
+		/*
+		 * Fail closed. Run 36879744347 is what an unverified write
+		 * costs: min_free_kbytes stayed at its saved ~5694 kB, the
+		 * MemFree floor never bound (buddy free 5376 kB > the 4 MiB
+		 * floor, with 15 MiB stranded in pcp), an order-1 GFP_KERNEL
+		 * from sh hit the un-lowered watermark, and both guests died.
+		 * No floor below ~6 MiB is meaningful unless the watermark
+		 * is actually the one this run asked for.
+		 */
+		printf("FRAGMENT_BUDDY ready=0 pagemap=0 reason=min-free-not-lowered\n");
+		fflush(stdout);
+		return 3;
+	}
 
 	/*
 	 * Deliberately not pinned here. Allocation, punch and chase all run
@@ -970,7 +1028,11 @@ static int do_fragment_buddy(int argc, char **argv)
 		}
 
 		free_kb = mem_free_kb();
-		if (free_kb >= 0 && free_kb < FRAG_CHASE_HARD_KB) {
+		wmark_kb = live_min_watermark_kb();
+		floor_kb = FRAG_CHASE_HARD_KB;
+		if (wmark_kb >= 0 && wmark_kb + FRAG_CHASE_WMARK_MARGIN > floor_kb)
+			floor_kb = wmark_kb + FRAG_CHASE_WMARK_MARGIN;
+		if (free_kb >= 0 && free_kb < floor_kb) {
 			stopped = 1;
 			stop_reason = "chase-memfree-margin";
 			break;
