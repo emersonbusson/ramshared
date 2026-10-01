@@ -220,6 +220,15 @@ Empirical performance measurements and latency distributions are recorded under 
 
 For raw sample bundles, hardware execution traces, latency histograms, and exact reproduction steps for EVD-0037 and EVD-0038, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
+New measurements run through the registered harness [`scripts/p0/bench.sh`](scripts/p0/bench.sh), which captures context, runs a wrapped `scripts/p0/measure-*.sh` for at least three rounds, and writes both machine (`docs/benchmarks/results.jsonl`) and human (`docs/BENCHMARKS.md`) records:
+
+```bash
+scripts/p0/bench.sh --tool scripts/p0/measure-<name>.sh --run-id <id> \
+  --condition idle|loaded --title '<human title>' -- [tool args...]
+```
+
+Records without a current public evidence envelope are `legacy-unqualified` and cannot serve as a release baseline or a regression claim.
+
 ## Architecture
 
 | Component | Responsibility |

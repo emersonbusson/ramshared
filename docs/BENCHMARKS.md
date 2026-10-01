@@ -29,6 +29,26 @@
 **Honest reading** (what the number supports, caveats, and missing proof)
 ```
 
+## Registered harness
+
+New runs go through [`scripts/p0/bench.sh`](../scripts/p0/bench.sh), which captures the
+automatic context, runs the wrapped `measure-*.sh` for ≥3 rounds with fixed parameters,
+aggregates median + p99 + deviation, appends one machine row to
+[`benchmarks/results.jsonl`](benchmarks/results.jsonl), and prints a paste-ready block for
+this log including the `<!-- ramshared-benchmark-id: ... -->` marker and the two registry
+snippets:
+
+```bash
+scripts/p0/bench.sh --tool scripts/p0/measure-<name>.sh --run-id <id> \
+  --condition idle|loaded --title '<human title>' -- [tool args...]
+```
+
+Options: `--rounds N` (default 3, minimum 3), `--benchmark-id X`, `--raw-dir DIR`,
+`--results PATH`, `--dry-run`. A bare `measure-*.sh` run has no `ramshared-evidence/v1`
+envelope, so `bench.sh` writes it as `legacy-unqualified` and it cannot be a baseline, a
+regression PASS, or a promotion claim. The harness never allocates and never sets
+`RAMSHARED_ALLOW_PRESSURE`; a wrapped tool that wants pressure owns its own gate.
+
 ---
 
 <!-- ramshared-benchmark-id: 2026-06-15-vram-headroom-nvme4k -->

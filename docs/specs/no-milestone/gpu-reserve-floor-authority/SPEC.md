@@ -227,6 +227,14 @@ computing a reserve inline.
 - Purpose: capacity-boundary campaign harness. Runs the fixed three-run comparison of the old sparse floor versus the sealed shared floor on an isolated canary origin with a predeclared foreground GPU workload, captures the automatic context (timestamp, branch+commit, kernel, `nvidia-smi`, RAM/swap, disk util/latency, what was open), aggregates median + p99 + deviation, and writes both `docs/benchmarks/results.jsonl` and `docs/BENCHMARKS.md` per [`.claude/rules/benchmarks.md`](../../../../.claude/rules/benchmarks.md).
 - RF / DT: NFR-2, NFR-5; DT-4.
 - Reference pattern: existing `scripts/p0/measure-*.sh` harnesses and `scripts/p0/bench.sh`.
+- Owning command (the `--drill` value is the exact test name below, so the matrix row is executable as written):
+  ```bash
+  scripts/p0/measure-gpu-reserve-floor.sh --drill measure_gpu_reserve_floor::capacity_boundary_campaign \
+    --rounds 3 --condition loaded --allocating --workload-cmd '<predeclared foreground GPU workload>'
+  scripts/p0/measure-gpu-reserve-floor.sh --drill measure_gpu_reserve_floor::live_adapter_before_action_after \
+    --allocating --workload-cmd '<predeclared foreground GPU workload>'
+  ```
+  Both invocations require `RAMSHARED_ALLOW_PRESSURE=1`; without it the harness exits 77 and refuses. A bare `--drill snapshot` is read-only and is **not** either campaign.
 - Required tests: `measure_gpu_reserve_floor::capacity_boundary_campaign`; `measure_gpu_reserve_floor::live_adapter_before_action_after` (drills, not unit tests). Enforced floor, usable cache bytes, and the four-category table with Tier 3 origin metrics and `PASS_ZERO_PANIC`; live before → action → after on an isolated canary origin with `BINARY_MATCH` when `ramsharedd` is exercised.
 - Cover target: N/A — shell harness; E2E evidence is the campaign record.
 - Kahneman: #5.

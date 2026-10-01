@@ -261,9 +261,14 @@ code fix.
 | --- | --- |
 | ITEM-1..ITEM-5 code + named tests | ✅ done, 0 failures |
 | Cover gate ≥80% on business-logic files | ✅ 5/5 passed |
-| ITEM-6 capacity-boundary campaign (`scripts/p0/measure-gpu-reserve-floor.sh`) | ⏳ **not run** |
-| ITEM-6 live-adapter before→action→after | ⏳ **not run** |
+| ITEM-6 capacity-boundary campaign (`scripts/p0/measure-gpu-reserve-floor.sh --drill measure_gpu_reserve_floor::capacity_boundary_campaign`) | ⏳ **not run** |
+| ITEM-6 live-adapter before→action→after (`scripts/p0/measure-gpu-reserve-floor.sh --drill measure_gpu_reserve_floor::live_adapter_before_action_after`) | ⏳ **not run** |
 | Four-category table + Tier 3 metrics + `PASS_ZERO_PANIC` | ⏳ **pending** |
+
+Both ITEM-6 rows are drills owned by `scripts/p0/measure-gpu-reserve-floor.sh`. They allocate,
+so each needs `--allocating`, `RAMSHARED_ALLOW_PRESSURE=1`, and a predeclared `--workload-cmd`;
+the harness exits 77 and refuses otherwise. The read-only `--drill snapshot` mode is not either
+campaign and cannot close these rows.
 
 Per SSDV3 step 3, an env-bound gap yields **partial**, never a false DONE. ITEM-6 is not
 claimed as closed.
