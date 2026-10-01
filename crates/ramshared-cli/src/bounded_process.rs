@@ -13,6 +13,8 @@
 
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
+#[cfg(test)]
+use rustix::process::{getpgid, test_kill_process_group};
 use std::fmt;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
@@ -450,6 +452,17 @@ fn signal_owned_process_group(
             format!("{label}: process-group ID overflow before direct-child reap"),
         )
     })?;
+    // POSIX `kill(-1, sig)` signals every process the caller may signal. That
+    // is not process group 1, so group ID 1 must never reach the negation in
+    // `kill_process_group`. Refuse it before any syscall.
+    if raw == 1 {
+        return Err(fatal_error(
+            fatal,
+            format!(
+                "{label}: process-group ID 1 is the POSIX kill broadcast, not an owned child group"
+            ),
+        ));
+    }
     let group = Pid::from_raw(raw).ok_or_else(|| {
         fatal_error(
             fatal,
@@ -572,6 +585,20 @@ pub(crate) fn run_capture_command<F>(
 where
     F: FnOnce(u32),
 {
+    run_capture_command_with_fatal(command, label, timeout, output_limit, on_spawn, &ExitController)
+}
+
+fn run_capture_command_with_fatal<F>(
+    command: &mut Command,
+    label: &str,
+    timeout: Duration,
+    output_limit: usize,
+    on_spawn: F,
+    fatal: &dyn FatalContainment,
+) -> Result<BoundedOutput, ProcessSpawnError>
+where
+    F: FnOnce(u32),
+{
     let program = command.get_program();
     if program.is_empty() {
         return Err(ProcessSpawnError::spawn(
@@ -645,11 +672,11 @@ where
     let mut stderr = match CaptureWorker::spawn("stderr", stderr, output_limit) {
         Ok(worker) => worker,
         Err(error) => {
-            let proof = force_exit_observed(child.child_mut(), label, REAP_GRACE, &ExitController)?;
-            account_single_capture_before_reap(group_id, label, &mut stdout, &ExitController)?;
-            let _ = reap_observed_target(child.child_mut(), label, REAP_GRACE, &ExitController)?;
+            let proof = force_exit_observed(child.child_mut(), label, REAP_GRACE, fatal)?;
+            account_single_capture_before_reap(group_id, label, &mut stdout, fatal)?;
+            let _ = reap_observed_target(child.child_mut(), label, REAP_GRACE, fatal)?;
             child.disarm();
-            contain_group_errors(proof, &ExitController)?;
+            contain_group_errors(proof, fatal)?;
             return Err(ProcessSpawnError::new(format!(
                 "{label}: start stderr capture worker: {error}"
             )));
@@ -676,7 +703,7 @@ where
             Ok(false) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
             Ok(false) => {
                 let proof =
-                    force_exit_observed(child.child_mut(), label, REAP_GRACE, &ExitController)?;
+                    force_exit_observed(child.child_mut(), label, REAP_GRACE, fatal)?;
                 break (
                     Some(ProcessSpawnError::ExecutionTimeout {
                         command: label.to_string(),
@@ -688,7 +715,7 @@ where
             }
             Err(error) => {
                 return Err(fatal_error(
-                    &ExitController,
+                    fatal,
                     format!("observe {label} without reaping: {error}"),
                 ));
             }
@@ -699,12 +726,12 @@ where
         label,
         &mut stdout,
         &mut stderr,
-        &ExitController,
+        fatal,
         initial_capture,
     );
-    let status = reap_observed_target(child.child_mut(), label, REAP_GRACE, &ExitController)?;
+    let status = reap_observed_target(child.child_mut(), label, REAP_GRACE, fatal)?;
     child.disarm();
-    contain_group_errors(proof, &ExitController)?;
+    contain_group_errors(proof, fatal)?;
     if let Some(error) = completion_error {
         return match capture {
             Err(capture_error) if capture_error.is_fatal() => Err(capture_error),
@@ -1313,5 +1340,511 @@ mod tests {
             "the injected panic must resume after cleanup"
         );
         assert!(!stranded, "on_spawn panic stranded its exact fixture child");
+    }
+
+    /// Reader that returns EOF only after `delay`, so a capture worker stays
+    /// blocked across one or two close-grace windows.
+    struct DelayedEofReader {
+        delay: Duration,
+    }
+
+    impl Read for DelayedEofReader {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            std::thread::sleep(self.delay);
+            Ok(0)
+        }
+    }
+
+    /// A private process group the capture tests may SIGKILL without touching
+    /// any other session's processes.
+    struct OwnedGroupFixture {
+        child: Child,
+    }
+
+    impl OwnedGroupFixture {
+        fn spawn() -> Self {
+            let mut command = Command::new("/bin/sleep");
+            command.args(["30"]);
+            configure_process_group(&mut command)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let child = command
+                .spawn()
+                .expect("fixture group leader must start for capture tests");
+            Self { child }
+        }
+
+        fn group_id(&self) -> u32 {
+            self.child.id()
+        }
+    }
+
+    impl Drop for OwnedGroupFixture {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    #[test]
+    fn capture_runner_never_executes_a_nul_bearing_program_name() {
+        use std::os::unix::ffi::OsStrExt;
+        let program = std::ffi::OsStr::from_bytes(b"bad\0program");
+        let mut command = Command::new(program);
+        // `std::process::Command` replaces an interior NUL in its accessors
+        // (`get_program`/`get_args`) with the placeholder `<string-with-nul>`,
+        // so the explicit guard inside `run_capture_command` cannot observe the
+        // NUL through this API. The safety property that still holds is the one
+        // that matters: the NUL never reaches `exec`, and the failure is typed
+        // rather than a successful run of a renamed binary.
+        assert!(
+            !command.get_program().as_bytes().contains(&0),
+            "std must not hand a raw NUL back through get_program"
+        );
+        let error = run_capture_command(
+            &mut command,
+            "nul program fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        )
+        .expect_err("a program name with an interior NUL must be refused");
+        assert!(
+            !matches!(error, ProcessSpawnError::GenericError { .. }) && !error.is_fatal(),
+            "a NUL program name must stay a typed spawn failure: {error}"
+        );
+    }
+
+    #[test]
+    fn wait_grouped_child_reaps_a_short_child_after_exit() {
+        let mut command = Command::new("/bin/true");
+        configure_process_group(&mut command)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().expect("short fixture child starts");
+        let status = wait_grouped_child(&mut child, "short grouped child", Duration::from_secs(5))
+            .expect("a child that already exited must be reaped and returned");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn wait_grouped_child_terminates_its_group_on_timeout() {
+        let mut command = Command::new("/bin/sleep");
+        command.args(["30"]);
+        configure_process_group(&mut command)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn().expect("hung fixture child starts");
+        let pid = child.id();
+        let error = wait_grouped_child(&mut child, "hung grouped child", Duration::from_millis(50))
+            .expect_err("a child past its deadline must be terminated, not awaited forever");
+        assert!(
+            matches!(error, ProcessSpawnError::ExecutionTimeout { .. }),
+            "{error}"
+        );
+        assert!(
+            wait_for_fixture_process_exit(pid),
+            "the timed-out fixture must not outlive its process group"
+        );
+    }
+
+    #[test]
+    fn account_single_capture_resolves_after_owned_group_kill() {
+        let fixture = OwnedGroupFixture::spawn();
+        let mut capture = CaptureWorker::spawn(
+            "stdout",
+            DelayedEofReader {
+                delay: Duration::from_millis(800),
+            },
+            1024,
+        )
+        .expect("worker");
+        account_single_capture_before_reap(
+            fixture.group_id(),
+            "delayed capture",
+            &mut capture,
+            &ExitController,
+        )
+        .expect("a worker that answers within the second close-grace is accounted, not fatal");
+    }
+
+    #[test]
+    fn account_single_capture_fails_closed_when_worker_stays_blocked() {
+        let fixture = OwnedGroupFixture::spawn();
+        let mut capture = CaptureWorker::spawn(
+            "stdout",
+            DelayedEofReader {
+                delay: Duration::from_secs(2),
+            },
+            1024,
+        )
+        .expect("worker");
+        let fatal = RecordingFatal::default();
+        let error = account_single_capture_before_reap(
+            fixture.group_id(),
+            "stuck capture",
+            &mut capture,
+            &fatal,
+        )
+        .expect_err("a worker still blocked after exact group SIGKILL must remain fatal");
+        assert!(
+            error
+                .to_string()
+                .contains("remained blocked after exact process-group SIGKILL"),
+            "{error}"
+        );
+        assert_eq!(fatal.0.borrow().len(), 1);
+    }
+
+    #[test]
+    fn collect_captures_accounts_a_natural_close_without_group_kill() {
+        let mut stdout =
+            CaptureWorker::spawn("stdout", Cursor::new(b"out".to_vec()), 1024).expect("stdout");
+        let mut stderr =
+            CaptureWorker::spawn("stderr", Cursor::new(b"err".to_vec()), 1024).expect("stderr");
+        let (out, err) = collect_captures_before_reap(
+            0,
+            "natural close",
+            &mut stdout,
+            &mut stderr,
+            &ExitController,
+            None,
+        )
+        .expect("pipes that closed before the leader was reaped yield trusted output");
+        assert_eq!(out, b"out");
+        assert_eq!(err, b"err");
+    }
+
+    #[test]
+    fn collect_captures_kills_the_owned_group_when_a_pipe_stays_open() {
+        let fixture = OwnedGroupFixture::spawn();
+        let mut stdout = CaptureWorker::spawn(
+            "stdout",
+            DelayedEofReader {
+                delay: Duration::from_millis(800),
+            },
+            1024,
+        )
+        .expect("stdout");
+        let mut stderr = CaptureWorker::spawn(
+            "stderr",
+            DelayedEofReader {
+                delay: Duration::from_millis(800),
+            },
+            1024,
+        )
+        .expect("stderr");
+        let error = collect_captures_before_reap(
+            fixture.group_id(),
+            "open pipe fixture",
+            &mut stdout,
+            &mut stderr,
+            &ExitController,
+            None,
+        )
+        .expect_err("output captured after an inherited pipe stayed open is not trusted");
+        assert!(
+            error
+                .to_string()
+                .contains("output pipe remained open after direct-child exit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn collect_captures_remains_fatal_when_both_workers_stay_blocked() {
+        let fixture = OwnedGroupFixture::spawn();
+        let mut stdout = CaptureWorker::spawn(
+            "stdout",
+            DelayedEofReader {
+                delay: Duration::from_secs(2),
+            },
+            1024,
+        )
+        .expect("stdout");
+        let mut stderr = CaptureWorker::spawn(
+            "stderr",
+            DelayedEofReader {
+                delay: Duration::from_secs(2),
+            },
+            1024,
+        )
+        .expect("stderr");
+        let fatal = RecordingFatal::default();
+        let error = collect_captures_before_reap(
+            fixture.group_id(),
+            "both stuck",
+            &mut stdout,
+            &mut stderr,
+            &fatal,
+            None,
+        )
+        .expect_err("workers still blocked after exact group SIGKILL must remain fatal");
+        assert!(error.is_fatal(), "{error}");
+        assert!(error.to_string().contains("remained blocked"), "{error}");
+    }
+
+    #[test]
+    fn collect_captures_propagates_a_capture_failure_as_a_typed_error() {
+        let mut stdout = CaptureWorker::spawn("stdout", FailingReader, 1024).expect("stdout");
+        let mut stderr =
+            CaptureWorker::spawn("stderr", Cursor::new(b"err".to_vec()), 1024).expect("stderr");
+        let error = collect_captures_before_reap(
+            0,
+            "capture failure",
+            &mut stdout,
+            &mut stderr,
+            &ExitController,
+            None,
+        )
+        .expect_err("a capture worker read failure is reported, never swallowed");
+        assert!(
+            error.to_string().contains("stdout capture failed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn signal_owned_process_group_rejects_unusable_group_ids() {
+        let fatal = RecordingFatal::default();
+        let overflow = signal_owned_process_group(
+            u32::try_from(i32::MAX).expect("i32::MAX") + 1,
+            "overflow",
+            &fatal,
+        )
+        .expect_err("a group ID beyond pid_t must be rejected before any syscall");
+        assert!(
+            overflow.to_string().contains("process-group ID overflow"),
+            "{overflow}"
+        );
+        let zero = signal_owned_process_group(0, "zero", &fatal)
+            .expect_err("group 0 is not an owned process group");
+        assert!(zero.to_string().contains("zero process-group ID"), "{zero}");
+        assert_eq!(fatal.0.borrow().len(), 2);
+    }
+
+    #[test]
+    fn capture_runner_times_out_and_reports_typed_execution_timeout() {
+        let mut command = Command::new("/bin/sleep");
+        command.args(["30"]);
+        let error = run_capture_command(
+            &mut command,
+            "timeout fixture",
+            Duration::from_millis(50),
+            DEFAULT_OUTPUT_LIMIT,
+            |_| {},
+        )
+        .expect_err("a helper that never exits must be terminated, not awaited forever");
+        assert!(
+            matches!(error, ProcessSpawnError::ExecutionTimeout { .. }),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn capture_runner_reports_signal_termination_without_an_exit_code() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "kill -KILL $$"]);
+        let error = run_capture_command(
+            &mut command,
+            "signal fixture",
+            Duration::from_secs(2),
+            DEFAULT_OUTPUT_LIMIT,
+            |_| {},
+        )
+        .expect_err("a helper killed by a signal has no exit code to report");
+        assert!(
+            error.to_string().contains("terminated by signal"),
+            "{error}"
+        );
+        assert!(
+            !matches!(error, ProcessSpawnError::NonZeroExit { .. }),
+            "a signal death must not be mis-typed as a nonzero exit"
+        );
+    }
+
+    #[test]
+    fn reap_observed_target_names_the_exact_live_child_it_cannot_reap() {
+        // `ReapTarget::id` for `Child` is only reached through a `dyn`
+        // dispatch; the inherent `Child::id` used inside the impl shadows it
+        // everywhere else. Calling the trait method through the object is
+        // what proves the unreaped-error path names the exact process.
+        let mut command = Command::new("/bin/sleep");
+        command.args(["30"]);
+        let mut child = command.spawn().expect("live fixture child starts");
+        let pid = child.id();
+        let fatal = RecordingFatal::default();
+        let error = reap_observed_target(&mut child, "live unreaped child", Duration::ZERO, &fatal)
+            .expect_err("a still-running child has no reap proof within a zero grace");
+        assert!(error.to_string().contains("was not reaped"), "{error}");
+        assert!(
+            error.to_string().contains(&pid.to_string()),
+            "the fatal path must name the exact child: {error}"
+        );
+        assert_eq!(fatal.0.borrow().len(), 1);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn signal_owned_process_group_refuses_the_posix_kill_broadcast_group() {
+        // POSIX `kill(-1, sig)` signals every process the caller may signal.
+        // Group ID 1 is that broadcast, not an owned process group, so
+        // production must refuse it before the syscall rather than negating it
+        // into `kill_process_group(Pid::INIT, ..)`.
+        let fatal = RecordingFatal::default();
+        let error = signal_owned_process_group(1, "broadcast guard", &fatal)
+            .expect_err("group ID 1 is not an owned process group");
+        assert!(
+            error.to_string().contains("POSIX kill broadcast"),
+            "{error}"
+        );
+        assert_eq!(fatal.0.borrow().len(), 1);
+    }
+
+    /// Reads `pgrp` (field 3 after the comm) from `/proc/<pid>/stat`.
+    ///
+    /// Parsing the file directly avoids `rustix::process::getpgid`, which
+    /// `debug_assert!(pgid > 0)` and therefore panics on kernel threads — they
+    /// report `pgrp = 0`, which is not a signalable process group at all.
+    fn proc_stat_pgrp(pid: u32) -> Option<i32> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let after_comm = stat.get(stat.rfind(')')? + 2..)?;
+        // after_comm starts at `state ppid pgrp ...`.
+        let mut fields = after_comm.split_whitespace();
+        fields.next()?; // state
+        fields.next()?; // ppid
+        fields.next()?.parse::<i32>().ok()
+    }
+
+    /// Returns a live process group this process may not signal, or `None`.
+    ///
+    /// Candidates must satisfy every safety property at once: owned by another
+    /// uid, `pgid` a real process group (never 0 — kernel threads — and never
+    /// `1`, the POSIX broadcast, nor our own group), and a `sig == 0` permission
+    /// probe must return `EPERM`. Signal 0 delivers nothing, so an `EPERM`
+    /// answer proves the later `SIGKILL` cannot land on any process in that
+    /// group.
+    fn foreign_unsignable_process_group() -> Option<Pid> {
+        use std::os::unix::fs::MetadataExt;
+        let me = rustix::process::geteuid().as_raw();
+        let my_group = getpgid(None).ok()?.as_raw_nonzero().get();
+        for entry in std::fs::read_dir("/proc").ok()? {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Ok(pid) = name.parse::<u32>() else {
+                continue;
+            };
+            let Ok(raw) = i32::try_from(pid) else {
+                continue;
+            };
+            if raw == 1 {
+                continue;
+            }
+            let Ok(meta) = std::fs::metadata(entry.path()) else {
+                continue;
+            };
+            if meta.uid() == me {
+                continue;
+            }
+            // pgrp 0 is a kernel thread, not an owned group. Reading it from
+            // the stat file keeps that value away from `getpgid`, whose
+            // debug assertion would fire on it.
+            let Some(group_raw) = proc_stat_pgrp(pid) else {
+                continue;
+            };
+            if group_raw <= 1 || group_raw == my_group {
+                continue;
+            }
+            let Some(group) = Pid::from_raw(group_raw) else {
+                continue;
+            };
+            // Signal 0 is a permission probe only; it never delivers.
+            if test_kill_process_group(group).err() == Some(Errno::PERM) {
+                return Some(group);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn signal_owned_process_group_reports_a_foreign_group_as_fatal() {
+        // `ESRCH` means the group is already gone and nothing leaked, so it is
+        // not a containment failure. `EPERM` on a foreign group is: production
+        // cannot resume if a group it does not own cannot be killed.
+        let Some(group) = foreign_unsignable_process_group() else {
+            // No foreign group is observable on this host (private PID
+            // namespace, or we are root). The broadcast refusal above still
+            // covers the dangerous identifier on every host.
+            return;
+        };
+        let fatal = RecordingFatal::default();
+        let error = signal_owned_process_group(
+            group.as_raw_nonzero().get() as u32,
+            "foreign group fixture",
+            &fatal,
+        )
+        .expect_err("a process group outside our custody must stay fatal, not be ignored");
+        assert!(
+            error
+                .to_string()
+                .contains("exact process-group SIGKILL failed"),
+            "{error}"
+        );
+        assert_eq!(fatal.0.borrow().len(), 1);
+    }
+
+    #[test]
+    fn capture_runner_timeout_keeps_a_fatal_capture_containment() {
+        // The leader is group-killed at its deadline, but a `setsid` grandchild
+        // outside that group keeps the capture pipes open. The capture then
+        // fails closed as fatal, and that containment must win over the
+        // ordinary timeout error: resuming on the timeout alone would leave a
+        // leaked grandchild holding the output pipes.
+        let pid_path = std::env::temp_dir().join(format!(
+            "ramshared-bounded-process-leaked-pipe-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pid_path);
+        let pid_arg = pid_path.to_string_lossy().into_owned();
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            // `setsid sleep 3 &` inherits the capture pipes and moves into its
+            // own session, so the group SIGKILL cannot close them.
+            "setsid sleep 3 & printf '%s\\n' \"$!\" > \"$1\"; exec sleep 30",
+            "sh",
+            pid_arg.as_str(),
+        ]);
+        let fatal = RecordingFatal::default();
+        let error = run_capture_command_with_fatal(
+            &mut command,
+            "leaked pipe fixture",
+            Duration::from_millis(50),
+            DEFAULT_OUTPUT_LIMIT,
+            |_| {},
+            &fatal,
+        )
+        .expect_err("a timeout with a fatally blocked capture must stay fatal");
+        assert!(error.is_fatal(), "capture containment must win: {error}");
+        assert!(
+            error
+                .to_string()
+                .contains("remained blocked after exact process-group SIGKILL"),
+            "{error}"
+        );
+
+        let leaked = std::fs::read_to_string(&pid_path)
+            .expect("fixture records its exact setsid grandchild PID")
+            .trim()
+            .parse::<u32>()
+            .expect("fixture prints a decimal PID");
+        let _ = std::fs::remove_file(&pid_path);
+        kill_exact_fixture_process(leaked);
+        let _ = wait_for_fixture_process_exit(leaked);
     }
 }
