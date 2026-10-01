@@ -34,8 +34,8 @@
 | PRD | SPEC |
 | --- | --- |
 | RF-1 (Process Isolation) | ITEM-1, ITEM-3, DT-1 |
-| RF-2 (Bounded IPC Protocol) | ITEM-2, DT-2 |
-| RF-3 (Fail-Closed Fallback) | ITEM-2, ITEM-4, DT-2 |
+| RF-2 (Bounded IPC Protocol) | ITEM-2, DT-2, DT-10, DT-11 |
+| RF-3 (Fail-Closed Fallback) | ITEM-2, ITEM-4, DT-2, DT-11 |
 | RF-4 (Telemetry Publication) | ITEM-4, ITEM-5, DT-4 |
 | RF-5 (Supervised Teardown) | ITEM-3, ITEM-5, DT-5 |
 | RF-6 (Cross-API Budget Correlation) | ITEM-7, DT-6, DT-7 |
@@ -62,7 +62,8 @@
 | DT-7 | For a correlated adapter, admission headroom is `min(allocator.budget - allocator.used, WDDM.budget - WDDM.current_usage, WDDM.available_for_reservation)`; all subtractions saturate and both monotonic samples must be <=5 seconds old. Once attached, a DXG query/identity/freshness failure returns a provider error and prevents allocation. | The lower reported headroom is the conservative cross-API constraint; silently dropping an established guard after a driver error could over-allocate shared host VRAM. |
 | DT-8 | Enumerate all CUDA and exact-index Vulkan devices, compute `min(request, capacity - reserve, live_available - reserve - 640 MiB)` against the allocator/WDDM intersection, choose the largest positive target with deterministic CUDA/ordinal/key tie-breaks, then reopen and revalidate identity and budget before serving. | Avoids hardcoded ordinal-zero selection and never ranks on advertised capacity that the reserve or current external use makes unavailable. A failed revalidation leaves the cache unavailable. |
 | DT-9 | Parent-side pacing of round-trip requests on the shared ordered stream. A cache read is deferred (reported as a miss, origin fallback) for 50ms after a write-mirror (`Update`) frame. A heartbeat is deferred for 200ms after any mutation frame and spaced to at most one round-trip per second. Promotes from the read path never defer subsequent reads. Occupancy is no longer zeroed on a queued mutation: the last confirmed worker sample is retained until the next heartbeat replaces it. | DT-1 gives mutations and round-trips one FIFO socket with no control lane. A round-trip issued into a mutation backlog waits behind every queued 64 KiB frame and misses NFR-1's 50ms bound, which fail-closed the cache permanently — observed as `isolated GPU cache unavailable: heartbeat I/O failed` followed by worker `Broken pipe` under a 64 MiB write. Origin is authoritative, so a deferred read is the correct answer; telemetry may wait out a longer drain. Promotes must not gate reads or a cold read stream would never hit. |
-| DT-10 | Parent-side bounded pending-frame queue for mutation sends. A mutation write stays nonblocking; a partial or would-block write stores the unwritten tail instead of abandoning it, so the stream never ends mid-frame. The queue is capped at 4 MiB. A `Promote` that cannot enter the queue is `Skipped` (the range is simply not cached and a later read misses). An `Update` that cannot enter the queue revokes the cache: a dropped write-mirror would leave pre-write bytes in the worker that a later Hit could serve. While the queue is non-empty a cache read returns `Miss` and a heartbeat is skipped, because a request written mid-frame would corrupt both frames. Deterministic write errors (peer gone) still revoke. | DT-2's original "one nonblocking send, partial kills the cache" conflated backpressure with a broken peer. Under a write burst the socket fills while the worker drains `handle_update`; the first partial write abandoned a mid-frame stream and revoked the cache permanently (`isolated GPU cache unavailable: nonblocking mutation frame write failed`, worker then exits on EOF and is left unreaped). Origin I/O must stay nonblocking, so completion happens from a bounded userspace queue rather than by blocking the NBD thread. Degrading to a read miss is sound only when nothing stale can be served: `Promote` adds nothing so dropping it is free, while `Update` must either be delivered or stop the cache from serving. |
+| DT-10 | Parent-side bounded pending-frame queue for mutation sends. A mutation write stays nonblocking; a partial or would-block write stores the unwritten tail instead of abandoning it, so the stream never ends mid-frame. The queue is capped at 4 MiB. A `Promote` that cannot enter the queue is `Skipped` (the range is simply not cached and a later read misses). An `Update` that cannot enter the queue is converted to `MSG_INVALIDATE` for exactly its range (DT-11) so the worker drops any coverage there and a later read is a miss; the cache session stays `Active`. While the queue is non-empty a cache read returns `Miss` and a heartbeat is skipped, because a request written mid-frame would corrupt both frames. Deterministic write errors (peer gone) still revoke. | DT-2's original "one nonblocking send, partial kills the cache" conflated backpressure with a broken peer. Under a write burst the socket fills while the worker drains `handle_update`; the first partial write abandoned a mid-frame stream and revoked the cache permanently (`isolated GPU cache unavailable: nonblocking mutation frame write failed`, worker then exits on EOF and is left unreaped). Origin I/O must stay nonblocking, so completion happens from a bounded userspace queue rather than by blocking the NBD thread. Degrading to a read miss is sound only when nothing stale can be served: `Promote` adds nothing so dropping it is free, while `Update` must either be delivered or have its range dropped in the worker (DT-11). |
+| DT-11 | `MSG_INVALIDATE` (type 11, no payload, `offset` = range start, `aux` = range length) tells the worker to drop every cached entry overlapping `[offset, offset+aux)`. The parent emits it when an `Update` cannot enter the pending queue: the write-mirror never reached the worker, so any coverage the worker still holds for that range is pre-write bytes. Invalidation is appended to the same pending queue so it is ordered after frames already in flight. If the invalidate itself cannot be queued, or the peer is gone, the cache revokes — at that point nothing can stop a stale Hit. A `Promote` never needs one. | A live 192 MiB O_DIRECT burst filled the 4 MiB pending queue and produced `isolated GPU cache unavailable: mutation backlog overflowed`, ending the cache session for a defect that is only "that range is not current". Revoking the whole cache for one dropped write-mirror throws away every unrelated hot range and leaves the tier dead until a daemon restart. The worker already invalidates overlapping extents before publishing (`handle_update`, DT-6); this message exposes that primitive to the parent so a dropped mutation degrades to a miss instead of killing the cache. |
 
 ---
 
@@ -84,7 +85,7 @@
 
 | ITEM / stage | # | Question | Min evidence | Abort |
 | --- | --- | --- | --- | --- |
-| ITEM-2 (Parent IPC Deadline) | #16 | Can a stalled/trickled response or saturated mutation extend parent work beyond its bound? | `cargo test -p ramshared-block ipc_cache_client::tests::read_timeout_falls_back_cleanly`; `...::trickled_response_cannot_extend_the_absolute_read_deadline`; `...::saturated_mutation_socket_does_not_block_origin_thread`; `...::partial_mutation_write_completes_the_frame_and_keeps_the_cache_active`; `...::backpressured_update_is_queued_never_dropped`; `...::backpressured_promote_degrades_to_not_cached`; `...::cache_read_is_a_miss_while_a_mutation_frame_drains`; `...::pending_mutation_backlog_is_bounded`; `...::oversize_mutation_disables_cache_without_touching_ipc` | Parent does not fall back/disable at the bound; physical driver cancellation is not established by these source tests |
+| ITEM-2 (Parent IPC Deadline) | #16 | Can a stalled/trickled response or saturated mutation extend parent work beyond its bound? | `cargo test -p ramshared-block ipc_cache_client::tests::read_timeout_falls_back_cleanly`; `...::trickled_response_cannot_extend_the_absolute_read_deadline`; `...::saturated_mutation_socket_does_not_block_origin_thread`; `...::partial_mutation_write_completes_the_frame_and_keeps_the_cache_active`; `...::backpressured_update_is_queued_never_dropped`; `...::backpressured_promote_degrades_to_not_cached`; `...::cache_read_is_a_miss_while_a_mutation_frame_drains`; `...::pending_mutation_backlog_is_bounded`; `...::backpressured_update_invalidates_its_range_and_stays_active`; `...::invalidate_that_cannot_queue_revokes_the_cache`; `...::oversize_mutation_disables_cache_without_touching_ipc` | Parent does not fall back/disable at the bound; physical driver cancellation is not established by these source tests |
 | ITEM-3 (Worker Crash) | #13 | In the source harness, does worker exit leave the origin backend usable? | `cargo test -p ramshared-wsl2d daemon_survives_abrupt_gpu_worker_kill` | Test harness loses origin service; this does not qualify live NBD or driver behavior |
 | ITEM-4 (Teardown) | #17 | Does repeated teardown preserve origin service and avoid an unbounded parent wait when worker exit is unconfirmed? | `cargo test -p ramshared-wsl2d isolated_worker_shutdown_stays_bounded_when_kill_is_not_observed` and `cargo test -p ramshared-block worker_teardown_is_idempotent_and_bounded` | Origin path blocks after the 5s graceful window plus 500ms exit observation, or child ownership is dropped without reaper handoff |
 
@@ -130,11 +131,12 @@
   - `gpu_cache_worker::tests::worker_handshake_and_read_hit_cycle`
   - `gpu_cache_worker::tests::worker_respects_headroom_floor`
   - `gpu_cache_worker::tests::worker_disable_frees_allocations`
+  - `gpu_cache_worker::tests::invalidate_drops_overlapping_coverage`
 - Cover target: >= 80%
 
 **`crates/ramshared-block/src/ipc_cache_client.rs`**
 - Purpose: Socket-based implementation of `BestEffortCache` backed by the isolated worker process.
-- RF / DT: RF-2, RF-3, DT-2, DT-9, DT-10.
+- RF / DT: RF-2, RF-3, DT-2, DT-9, DT-10, DT-11.
 - Types / fns:
   ```rust
   pub struct IpcCacheClient {
@@ -159,6 +161,8 @@
   - `ipc_cache_client::tests::backpressured_promote_degrades_to_not_cached`
   - `ipc_cache_client::tests::cache_read_is_a_miss_while_a_mutation_frame_drains`
   - `ipc_cache_client::tests::pending_mutation_backlog_is_bounded`
+  - `ipc_cache_client::tests::backpressured_update_invalidates_its_range_and_stays_active`
+  - `ipc_cache_client::tests::invalidate_that_cannot_queue_revokes_the_cache`
   - `ipc_cache_client::tests::oversize_mutation_disables_cache_without_touching_ipc`
   - `ipc_cache_client::tests::mutation_preserves_last_confirmed_occupancy`
   - `ipc_cache_client::tests::heartbeat_is_deferred_while_write_mirrors_drain`
@@ -205,7 +209,7 @@
 ## Implementation order
 
 1. **ITEM-1:** Implement IPC protocol frames and serialization in `crates/ramshared-block/src/gpu_cache_worker.rs`.
-2. **ITEM-2:** Implement `IpcCacheClient` with an absolute read/heartbeat deadline and a bounded nonblocking pending-frame queue for mutation sends; revoke cache after timeout, a deterministic peer error, or an `Update` that cannot enter the queue, degrade a backpressured `Promote` to not-cached and a read issued while the queue drains to a miss (DT-10); pace round-trips so none is issued into a mutation backlog (DT-9).
+2. **ITEM-2:** Implement `IpcCacheClient` with an absolute read/heartbeat deadline and a bounded nonblocking pending-frame queue for mutation sends; revoke cache after timeout or a deterministic peer error, degrade a backpressured `Promote` to not-cached, convert a backpressured `Update` into `MSG_INVALIDATE` for its range (DT-11) and a read issued while the queue drains to a miss (DT-10); pace round-trips so none is issued into a mutation backlog (DT-9).
 3. **ITEM-3:** Implement `GpuCacheWorker` memory manager with chunk LRU and host reserve floor.
 4. **ITEM-4:** Implement child process spawning and supervision in `ramshared-wsl2d`.
 5. **ITEM-5:** Wire real-time telemetry output to `/run/ramshared/wsl2-cache-status.json`.
@@ -229,6 +233,9 @@
 | `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::backpressured_promote_degrades_to_not_cached` | unit | #13 | >= 80% |
 | `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::cache_read_is_a_miss_while_a_mutation_frame_drains` | unit | #16 | >= 80% |
 | `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::pending_mutation_backlog_is_bounded` | unit | #16 | >= 80% |
+| `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::backpressured_update_invalidates_its_range_and_stays_active` | unit | #13 | >= 80% |
+| `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::invalidate_that_cannot_queue_revokes_the_cache` | unit | #13 | >= 80% |
+| `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::invalidate_drops_overlapping_coverage` | unit | #13 | >= 80% |
 | `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::oversize_mutation_disables_cache_without_touching_ipc` | unit | #13 | >= 80% |
 | `crates/ramshared-block/src/ipc_cache_client.rs` | `tests::oversize_read_is_a_cache_miss_without_waiting_for_ipc` | unit | #16 | >= 80% |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | `tests::oversized_mutation_disables_cache_before_worker_frame_is_sent` | unit | #13 | origin remains authoritative |

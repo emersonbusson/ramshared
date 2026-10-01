@@ -4,14 +4,14 @@
 
 ## Status
 
-**PARTIAL (hermetic source, fault-injection, lint, and Linux coverage gates passed)** · GPU worker runtime, Windows host installation, and physical qualification remain open. The September 23 audit reproduced and locally corrected partial-chunk cache hits, estimated allocation telemetry, and missing live free-VRAM admission. The source ranks CUDA/Vulkan adapters by fresh reserve-adjusted, exact-LUID-constrained safe target, then reopens and revalidates the selected adapter. Parent response paths use one absolute monotonic deadline across partial socket reads and writes; cache mutations use one nonblocking send capped at 64 KiB and revoke the cache if the frame is oversized, backpressured, or partially queued. Worker shutdown is bounded to a 5-second graceful window plus 500ms exit observation after SIGKILL; an unconfirmed child is handed to a background reaper. This keeps the daemon from waiting indefinitely but cannot prove that an uninterruptible driver call exits or frees GPU memory. Physical host evidence remains required before qualification.
+**PARTIAL (hermetic source, fault-injection, lint, and Linux coverage gates passed)** · GPU worker runtime, Windows host installation, and physical qualification remain open. The September 23 audit reproduced and locally corrected partial-chunk cache hits, estimated allocation telemetry, and missing live free-VRAM admission. The source ranks CUDA/Vulkan adapters by fresh reserve-adjusted, exact-LUID-constrained safe target, then reopens and revalidates the selected adapter. Parent response paths use one absolute monotonic deadline across partial socket reads and writes; cache mutations use one nonblocking send capped at 64 KiB through a bounded 4 MiB pending queue. An `Update` that cannot enter that queue is converted to `MSG_INVALIDATE` for exactly its range (DT-11), so the worker drops pre-write coverage and a later read misses while the session stays `Active`; only an unqueueable invalidate or a deterministic peer error revokes. Worker shutdown is bounded to a 5-second graceful window plus 500ms exit observation after SIGKILL; an unconfirmed child is handed to a background reaper. This keeps the daemon from waiting indefinitely but cannot prove that an uninterruptible driver call exits or frees GPU memory. Physical host evidence remains required before qualification.
 
 ## Files
 
 | Path | ITEM/RF | Change |
 | --- | --- | --- |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | ITEM-1, ITEM-3 / RF-1, RF-2 | Implemented 32-byte framing IPC protocol, `GpuCacheWorker` with LRU eviction and `max(configured floor, 20% of capacity)` headroom enforcement, allocation cleanup on worker disable, and the socket loop. The generic config default is 1536 MiB; the production origin-cache caller passes `reserve_floor_bytes_from_env()` (512 MiB by default, clamped to 128–4096 MiB), which conflicts with the active PRD's 1536 MiB mitigation and remains an open qualification gap. Cleanup is not confirmed if a driver call prevents worker progress or exit. |
-| `crates/ramshared-block/src/ipc_cache_client.rs` | ITEM-2 / RF-2, RF-3 | Implemented socket-backed `BestEffortCache` client with absolute monotonic deadlines across response reads and request/heartbeat writes. Cache mutations use one nonblocking frame send capped at 64 KiB; oversized, partial, or backpressured sends fail closed and shut down the socket. |
+| `crates/ramshared-block/src/ipc_cache_client.rs` | ITEM-2 / RF-2, RF-3 | Implemented socket-backed `BestEffortCache` client with absolute monotonic deadlines across response reads and request/heartbeat writes. Cache mutations use one nonblocking frame send capped at 64 KiB through a bounded 4 MiB pending queue. A dropped `Promote` degrades to not-cached; a dropped `Update` is converted to `MSG_INVALIDATE` for exactly its range (DT-11) and the session stays `Active`. Only an oversized frame, an unqueueable invalidate, or a deterministic peer error revokes the cache. |
 | `crates/ramshared-block/src/lib.rs` | ITEM-1, ITEM-2 | Exported `gpu_cache_worker` and `ipc_cache_client` modules and core types. |
 | `crates/ramshared-wsl2d/src/main.rs` | ITEM-4, ITEM-5 / RF-1, RF-4, RF-5 | Integrated `__gpu_worker` re-exec via `socketpair(AF_UNIX, SOCK_STREAM, 0)` with manual 32-byte framing and `PR_SET_PDEATHSIG`; startup handshake failures shut down the child. Worker stop waits at most 5s gracefully and 500ms after SIGKILL before handing an unconfirmed child handle to a background reaper. The authoritative origin uses supervised `OriginCache::Ipc`; status publication is atomic at `/run/ramshared/wsl2-cache-status.json`. |
 | `crates/ramshared-dxg/src/lib.rs`, `crates/ramshared-wsl2d/src/main.rs` | ITEM-7 / RF-6, RF-7 | Added canonical Windows LUID parsing and an optional WDDM budget guard for the selected CUDA/Vulkan allocator. When the same LUID is available, worker headroom is the minimum of allocator and WDDM headroom; stale samples, identity mismatch, and errors after guard activation block new allocation. Missing DXG/LUID keeps the selected provider's existing admission path. |
@@ -113,3 +113,32 @@
 **Verdict:** 🟡 `PARTIAL` — current source and Linux gates pass; Windows-specific
 coverage, live worker parity, GPU hardware, and three-tier qualification remain
 open.
+
+## 2026-10-01 — DT-11 `MSG_INVALIDATE` implemented
+
+The SPEC already declared DT-11 and three named tests while the code carried
+only `MSG_INVALIDATE_REQ = 11`. That gap is closed: the worker and the parent
+now implement the contract the SPEC states.
+
+- Worker (`gpu_cache_worker.rs`): `handle_invalidate(offset, len)` drops every
+  compressed extent overlapping the range via `invalidate_overlaps` (releasing
+  its span) and punches `CacheChunk::valid_ranges` so raw remnants outside the
+  hole stay readable. An emptied chunk is reclaimed. The frame loop dispatches
+  `MSG_INVALIDATE_REQ` one-way, with no response.
+- Parent (`ipc_cache_client.rs`): a dropped `Update` no longer revokes the
+  cache. It is converted into `MSG_INVALIDATE` for `[offset, offset+len)` and
+  appended to the same pending queue, so it is ordered after frames already in
+  flight. The mutation reports `Skipped` (the write-mirror did not land) and
+  the session stays `Active`. Only when the invalidate itself cannot be queued,
+  or the peer is gone, does the cache revoke.
+- `cargo test -p ramshared-block --lib` → **177 passed, 0 failed** (2026-10-01).
+  The three SPEC-named tests are green:
+  `gpu_cache_worker::tests::invalidate_drops_overlapping_coverage`,
+  `ipc_cache_client::tests::backpressured_update_invalidates_its_range_and_stays_active`,
+  `ipc_cache_client::tests::invalidate_that_cannot_queue_revokes_the_cache`.
+  `pending_mutation_backlog_is_bounded` now asserts the DT-11 conversion and
+  that the 4 MiB cap still holds, instead of the old revoke-on-overflow.
+- `cargo clippy -p ramshared-block --all-targets -- -D warnings` and
+  `cargo fmt -p ramshared-block -- --check` — **PASS**.
+- Not claimed: live GPU worker parity, Windows host install, three-tier
+  qualification, and any physical before/after of a returned VRAM range.

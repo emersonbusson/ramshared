@@ -32,6 +32,9 @@ pub const MSG_HEARTBEAT_REQ: u8 = 7;
 pub const MSG_HEARTBEAT_RESP: u8 = 8;
 pub const MSG_HANDSHAKE_REQ: u8 = 9;
 pub const MSG_HANDSHAKE_RESP: u8 = 10;
+/// DT-11: parent → worker, no payload. `offset` is the range start and `aux`
+/// its length. The worker drops every cached entry overlapping that range.
+pub const MSG_INVALIDATE_REQ: u8 = 11;
 
 pub const STATUS_OK: u8 = 0;
 pub const STATUS_MISS: u8 = 1;
@@ -178,6 +181,31 @@ impl<P: VramProvider> CacheChunk<'_, P> {
             merged.push((start, end));
         }
         self.valid_ranges = merged;
+    }
+
+    /// Drops every valid sub-range overlapping `[start, end)` (DT-11).
+    ///
+    /// Remnants outside the hole stay valid, so a partial invalidate keeps the
+    /// bytes it did not cover readable and a later read never sees the punched
+    /// span.
+    fn invalidate_range(&mut self, start: u64, end: u64) {
+        if start >= end {
+            return;
+        }
+        let mut kept: Vec<(u64, u64)> = Vec::with_capacity(self.valid_ranges.len() + 1);
+        for &(valid_start, valid_end) in &self.valid_ranges {
+            if valid_end <= start || end <= valid_start {
+                kept.push((valid_start, valid_end));
+                continue;
+            }
+            if valid_start < start {
+                kept.push((valid_start, start));
+            }
+            if end < valid_end {
+                kept.push((end, valid_end));
+            }
+        }
+        self.valid_ranges = kept;
     }
 }
 
@@ -730,6 +758,45 @@ impl<'p, P: VramProvider + 'p> GpuCacheWorker<'p, P> {
         self.allocate_and_write(chunk_base, chunk_off, data);
     }
 
+    /// Drops every cached entry overlapping `[offset, offset+len)` (DT-11).
+    ///
+    /// The parent emits `MSG_INVALIDATE` when a write-mirror could not be
+    /// delivered: the bytes still held for that range are pre-write, so a
+    /// later Hit would serve them. One-way — no response is produced. A `len`
+    /// of zero touches nothing.
+    pub fn handle_invalidate(&mut self, offset: u64, len: u64) {
+        if self.disabled || len == 0 {
+            return;
+        }
+        let end = offset.saturating_add(len);
+        // DT-6/DT-11: drop the compressed index first so no extent can cover
+        // the hole, then punch the raw chunks' valid ranges.
+        let removed = invalidate_overlaps(&mut self.compressed.entries, offset, end);
+        for entry in removed {
+            self.release_entry_storage(entry);
+        }
+        let chunk_bytes = self.config.chunk_bytes as u64;
+        if chunk_bytes == 0 {
+            return;
+        }
+        let first = (offset / chunk_bytes).saturating_mul(chunk_bytes);
+        let last = (end.saturating_sub(1) / chunk_bytes).saturating_mul(chunk_bytes);
+        let mut chunk_base = first;
+        loop {
+            if let Some(chunk) = self.chunks.get_mut(&chunk_base) {
+                chunk.invalidate_range(offset, end);
+                if chunk.valid_ranges.is_empty() {
+                    // Nothing readable remains: give the VRAM back.
+                    self.chunks.remove(&chunk_base);
+                }
+            }
+            if chunk_base >= last {
+                break;
+            }
+            chunk_base = chunk_base.saturating_add(chunk_bytes);
+        }
+    }
+
     /// Attempts to publish `data` as compressed extents (DT-9, DT-10).
     ///
     /// Returns `true` when every extent was published compressed. Returns
@@ -1170,6 +1237,11 @@ pub fn run_gpu_worker_loop_with_frame_read_timeout<P: VramProvider>(
             }
             MSG_PROMOTE => {
                 worker.handle_promote(hdr.offset, &payload);
+            }
+            // DT-11: one-way, no response. Drop every cached entry
+            // overlapping `[offset, offset+aux)`.
+            MSG_INVALIDATE_REQ => {
+                worker.handle_invalidate(hdr.offset, u64::from(hdr.aux));
             }
             MSG_DISABLE_REQ => {
                 worker.handle_disable();
@@ -1748,6 +1820,108 @@ mod tests {
         assert_eq!(worker.handle_read(2, 4), None);
         worker.handle_update(4, &[5, 6, 7, 8]);
         assert_eq!(worker.handle_read(0, 8), Some(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+    }
+
+    /// `invalidate_drops_overlapping_coverage` — DT-11.
+    ///
+    /// An `MSG_INVALIDATE` for `[offset, offset+len)` must drop every cached
+    /// entry overlapping that range — compressed extents and raw chunk ranges
+    /// — while leaving unrelated coverage readable. A punched hole is a miss,
+    /// never a stale Hit.
+    #[test]
+    fn invalidate_drops_overlapping_coverage() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+
+        // Compressed extents are dropped whole: they are the unit of coverage.
+        let provider = CodecProvider::new(8 * GIB, 8 * GIB);
+        let mut worker = GpuCacheWorker::new(
+            &provider,
+            GpuWorkerConfig {
+                target_bytes: 64 * 1024 * 1024,
+                chunk_bytes: 2 * 1024 * 1024,
+                reserve_floor_bytes: GIB,
+                compression_enabled: true,
+            },
+        );
+        let first = vec![0xA1u8; 4096];
+        let second = vec![0xB2u8; 4096];
+        worker.handle_update(0, &first);
+        worker.handle_update(8192, &second);
+        assert!(
+            worker.compressed_entries_count() >= 2,
+            "the codec must have published both extents"
+        );
+        assert_eq!(worker.handle_read(0, 4096).as_deref(), Some(&first[..]));
+        assert_eq!(worker.handle_read(8192, 4096).as_deref(), Some(&second[..]));
+
+        // A hole overlapping only the first extent drops that extent alone.
+        worker.handle_invalidate(1024, 1024);
+        assert_eq!(
+            worker.compressed_entries_count(),
+            1,
+            "the overlapping compressed extent must be dropped whole"
+        );
+        assert!(
+            worker.handle_read(0, 4096).is_none(),
+            "the overlapping extent must miss, never serve pre-write bytes"
+        );
+        assert_eq!(
+            worker.handle_read(8192, 4096).as_deref(),
+            Some(&second[..]),
+            "unrelated coverage survives an invalidate"
+        );
+        worker.handle_invalidate(8192, 4096);
+        assert_eq!(worker.compressed_entries_count(), 0);
+
+        // Raw chunks punch `valid_ranges` precisely, so remnants stay readable.
+        let provider = FakeProvider::new(4 * GIB, 3 * GIB);
+        let mut worker = GpuCacheWorker::new(
+            &provider,
+            GpuWorkerConfig {
+                target_bytes: 2 * 1024 * 1024,
+                chunk_bytes: 2 * 1024 * 1024,
+                reserve_floor_bytes: 1536 * 1024 * 1024,
+                compression_enabled: false,
+            },
+        );
+        let first = [0xC3u8; 8];
+        let second = [0xD4u8; 8];
+        worker.handle_update(0, &first);
+        worker.handle_update(64, &second);
+        assert_eq!(worker.handle_read(0, 8), Some(first.to_vec()));
+        assert_eq!(worker.handle_read(64, 8), Some(second.to_vec()));
+
+        // Punch `[2, 5)`: only those three bytes drop.
+        worker.handle_invalidate(2, 3);
+        assert!(
+            worker.handle_read(0, 8).is_none(),
+            "the split extent must no longer cover eight bytes"
+        );
+        assert_eq!(
+            worker.handle_read(0, 2),
+            Some(first[..2].to_vec()),
+            "the left remnant stays readable"
+        );
+        assert_eq!(
+            worker.handle_read(5, 3),
+            Some(first[5..8].to_vec()),
+            "the right remnant stays readable"
+        );
+        assert_eq!(
+            worker.handle_read(64, 8),
+            Some(second.to_vec()),
+            "an unrelated range in the same chunk survives"
+        );
+
+        // Covering the whole chunk reclaims it: nothing readable remains.
+        worker.handle_invalidate(0, 128);
+        assert_eq!(
+            worker.active_chunks_count(),
+            0,
+            "an empty chunk is given back to the provider"
+        );
+        assert!(worker.handle_read(0, 2).is_none());
+        assert!(worker.handle_read(64, 8).is_none());
     }
 
     #[test]

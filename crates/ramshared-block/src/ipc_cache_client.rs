@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 
 use crate::gpu_cache_worker::{
     FRAME_HEADER_LEN, FrameHeader, MAX_IPC_PAYLOAD_BYTES, MSG_DISABLE_REQ, MSG_DISABLE_RESP,
-    MSG_HANDSHAKE_REQ, MSG_HANDSHAKE_RESP, MSG_HEARTBEAT_REQ, MSG_HEARTBEAT_RESP, MSG_PROMOTE,
-    MSG_READ_REQ, MSG_READ_RESP, MSG_UPDATE, STATUS_MISS, STATUS_OK,
+    MSG_HANDSHAKE_REQ, MSG_HANDSHAKE_RESP, MSG_HEARTBEAT_REQ, MSG_HEARTBEAT_RESP,
+    MSG_INVALIDATE_REQ, MSG_PROMOTE, MSG_READ_REQ, MSG_READ_RESP, MSG_UPDATE, STATUS_MISS,
+    STATUS_OK,
 };
 use crate::isolated_origin::{BestEffortCache, CacheMutation, CacheRead, MAX_CACHE_MUTATION_BYTES};
 use crate::origin_cache::CacheState;
@@ -551,13 +552,14 @@ impl IpcCacheClient {
         match queue_frame(&mut self.socket, &mut self.pending_frame, &frame) {
             MutationQueue::Queued => {}
             MutationQueue::Dropped => {
-                // DT-10: a dropped `Promote` only means "not cached", so a later
-                // read is a miss — the correct answer. A dropped `Update` would
-                // leave pre-write bytes in the worker that a later Hit could
-                // serve, so the cache must stop serving instead.
+                // DT-10/DT-11: a dropped `Promote` only means "not cached",
+                // so a later read is a miss — the correct answer. A dropped
+                // `Update` would leave pre-write bytes in the worker that a
+                // later Hit could serve, so it is converted into
+                // `MSG_INVALIDATE` for exactly that range instead of
+                // revoking the whole cache.
                 if header.msg_type == MSG_UPDATE {
-                    self.fail("mutation backlog overflowed");
-                    return CacheMutation::Failed;
+                    return self.convert_dropped_update_to_invalidate(header.offset, payload.len());
                 }
                 return CacheMutation::Skipped;
             }
@@ -582,6 +584,52 @@ impl IpcCacheClient {
         self.gpu_budget = None;
         self.cache_telemetry = None;
         CacheMutation::Accepted
+    }
+
+    /// DT-11: replace a write-mirror that could not be queued with an
+    /// `MSG_INVALIDATE` for exactly its range.
+    ///
+    /// The invalidate joins the same pending queue, so it is ordered after
+    /// the frames already in flight and the worker drops only pre-write
+    /// coverage. If even the invalidate cannot be queued, or the peer is
+    /// gone, nothing can stop a stale Hit and the cache revokes.
+    fn convert_dropped_update_to_invalidate(
+        &mut self,
+        offset: u64,
+        range_len: usize,
+    ) -> CacheMutation {
+        self.seq = self.seq.saturating_add(1);
+        let invalidate = FrameHeader {
+            msg_type: MSG_INVALIDATE_REQ,
+            status: STATUS_OK,
+            correlation_id: self.seq,
+            offset,
+            payload_len: 0,
+            aux: range_len as u32,
+        };
+        match queue_frame(
+            &mut self.socket,
+            &mut self.pending_frame,
+            &invalidate.encode(),
+        ) {
+            MutationQueue::Queued => {
+                self.last_mutation_at = Some(Instant::now());
+                self.gpu_budget = None;
+                self.cache_telemetry = None;
+                // The write-mirror did not land: the honest outcome is "not
+                // cached", with the stale range already invalidated.
+                CacheMutation::Skipped
+            }
+            MutationQueue::Dropped => {
+                self.fail("mutation backlog overflowed and invalidate could not be queued");
+                CacheMutation::Failed
+            }
+            MutationQueue::PeerGone(error) => {
+                eprintln!("[ramsharedd] invalidate frame write error: {error}");
+                self.fail("nonblocking invalidate frame write failed");
+                CacheMutation::Failed
+            }
+        }
     }
 }
 
@@ -817,6 +865,28 @@ mod tests {
             assert!(queued < 512, "backlog never approached the cap");
         }
         queued
+    }
+
+    /// Tops the pending backlog up to exactly `target` bytes using real
+    /// `MSG_UPDATE` frames — never filler — so a test can choose how much
+    /// headroom is left for a DT-11 invalidate.
+    fn fill_pending_to(client: &mut IpcCacheClient, target: usize) {
+        assert!(target <= MAX_PENDING_MUTATION_BYTES);
+        while client.pending_frame.len() < target {
+            let room = target - client.pending_frame.len();
+            assert!(
+                room >= FRAME_HEADER_LEN,
+                "cannot land on target with {room} bytes left"
+            );
+            let frame_len = room.min(FRAME_HEADER_LEN + MAX_MUTATION_FRAME_DATA_BYTES);
+            let payload = vec![0x5A; frame_len - FRAME_HEADER_LEN];
+            assert_eq!(
+                client.update(0, &payload),
+                CacheMutation::Accepted,
+                "a fill step must queue while under the cap"
+            );
+        }
+        assert_eq!(client.pending_frame.len(), target);
     }
 
     #[test]
@@ -1088,26 +1158,100 @@ mod tests {
     }
 
     /// The pending backlog is bounded. An `Update` that cannot enter it is
-    /// refused and revokes the cache rather than silently losing a
-    /// write-mirror (DT-10).
+    /// converted to `MSG_INVALIDATE` (DT-11) and the queue never exceeds the
+    /// cap — the conversion is not a licence to grow past it.
     #[test]
     fn pending_mutation_backlog_is_bounded() {
         let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
         let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
         saturate_with_updates(&mut client);
+        fill_pending_to(&mut client, MAX_PENDING_MUTATION_BYTES - FRAME_HEADER_LEN);
         let payload = vec![0x44; MAX_MUTATION_FRAME_DATA_BYTES];
-        queue_updates_until_one_frame_from_full(&mut client);
-        assert!(client.pending_frame.len() <= MAX_PENDING_MUTATION_BYTES);
 
         assert_eq!(
             client.update(0, &payload),
+            CacheMutation::Skipped,
+            "a write-mirror that cannot be queued is not silently accepted"
+        );
+        assert_eq!(
+            client.pending_frame.len(),
+            MAX_PENDING_MUTATION_BYTES,
+            "the invalidate fits exactly in the remaining headroom and never grows the cap"
+        );
+        assert!(client.pending_frame.len() <= MAX_PENDING_MUTATION_BYTES);
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "the converted invalidate keeps the session alive (DT-11)"
+        );
+    }
+
+    /// A backpressured `Update` is converted into `MSG_INVALIDATE` for exactly
+    /// its range and the cache session stays `Active` (DT-11). The worker
+    /// therefore drops pre-write coverage there and a later read is a miss,
+    /// without throwing away every unrelated hot range.
+    #[test]
+    fn backpressured_update_invalidates_its_range_and_stays_active() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        saturate_with_updates(&mut client);
+        // Leave exactly one header of headroom: the dropped 64 KiB write-mirror
+        // cannot fit, but its 32-byte invalidate can.
+        fill_pending_to(&mut client, MAX_PENDING_MUTATION_BYTES - FRAME_HEADER_LEN);
+        let payload = vec![0x44; MAX_MUTATION_FRAME_DATA_BYTES];
+        let before = client.pending_frame.len();
+
+        assert_eq!(
+            client.update(0x2000, &payload),
+            CacheMutation::Skipped,
+            "a write-mirror that cannot be queued is not cached"
+        );
+        assert_eq!(
+            client.state(),
+            CacheState::Active,
+            "the invalidate keeps the cache session alive (DT-11)"
+        );
+        assert_eq!(
+            client.pending_frame.len(),
+            before + FRAME_HEADER_LEN,
+            "only the 32-byte invalidate may join the queue"
+        );
+
+        let mut header_bytes = [0u8; FRAME_HEADER_LEN];
+        header_bytes.copy_from_slice(&client.pending_frame[before..before + FRAME_HEADER_LEN]);
+        let header = FrameHeader::decode(&header_bytes).expect("valid invalidate header");
+        assert_eq!(header.msg_type, MSG_INVALIDATE_REQ);
+        assert_eq!(
+            header.offset, 0x2000,
+            "the invalidate covers the dropped range start"
+        );
+        assert_eq!(
+            header.aux as usize, MAX_MUTATION_FRAME_DATA_BYTES,
+            "the invalidate covers the dropped range length"
+        );
+        assert_eq!(header.payload_len, 0, "an invalidate carries no payload");
+    }
+
+    /// When even the `MSG_INVALIDATE` cannot be queued, nothing can stop a
+    /// stale Hit — the cache must revoke (DT-11).
+    #[test]
+    fn invalidate_that_cannot_queue_revokes_the_cache() {
+        let (client_sock, _worker_sock) = UnixStream::pair().expect("socketpair failed");
+        let mut client = IpcCacheClient::new(client_sock, Duration::from_millis(50), 1024 * 1024);
+        saturate_with_updates(&mut client);
+        // Exactly full: neither the write-mirror nor its invalidate fits.
+        fill_pending_to(&mut client, MAX_PENDING_MUTATION_BYTES);
+        let payload = vec![0x44; MAX_MUTATION_FRAME_DATA_BYTES];
+
+        assert_eq!(
+            client.update(0x2000, &payload),
             CacheMutation::Failed,
-            "an update that cannot be queued must be refused, not dropped"
+            "an unqueueable invalidate must be refused, not dropped"
         );
         assert_eq!(
             client.state(),
             CacheState::Unavailable,
-            "a refused write-mirror must revoke the cache so no Hit can serve stale bytes"
+            "when nothing can stop a stale Hit the cache revokes (DT-11)"
         );
     }
 
