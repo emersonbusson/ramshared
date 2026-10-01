@@ -1958,6 +1958,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let args = AppArgs::parse_from(&raw_args)?;
     let mut runner = ProductionDaemonRunner;
+    // Own the pid record before the plan runs so `ramshared status` reports
+    // this process even when it was started outside `ramshared up`/`boot`.
+    // A record already held by a live `ramsharedd` refuses the claim instead
+    // of stealing the identity the CLI uses to stop the exact process.
+    let _pid_guard = ramshared_wsl2d::pid_file::PidFileGuard::claim()?;
     run_with(args, &mut runner)
 }
 
