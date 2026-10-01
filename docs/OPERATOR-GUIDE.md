@@ -67,11 +67,16 @@ RamShared provides declarative commands to control the tiered memory cascade:
 ### Starting the Cascade (`up`)
 
 ```bash
-# Start dual-tier cascade with automatic hardware detection
+# Start the 3-tier cascade with automatic hardware detection
 $ ramshared up
 
-# Start with a specific maximum cache limit (e.g., 4 GiB)
-$ ramshared up --max-cache 4G
+# Start with explicit tier sizes (MiB). This host's working example:
+$ ramshared up --vram 4096 --zram 2048
+
+# Flags: --vram <MiB>  VRAM/NBD logical capacity (prio 100)
+#        --zram <MiB>  zram tier (prio 200); `--zram 0` skips zram
+#        --daemon PATH daemon binary (default `ramsharedd`)
+# Defaults are 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB.
 ```
 
 What happens on `ramshared up`:
@@ -79,7 +84,15 @@ What happens on `ramshared up`:
 2. Formats or maps the authoritative SSD origin backing store.
 3. Initializes NBD on standard WSL2, or `ublk` only on a qualified compatible-kernel surface, with block integrity checks.
 4. Mounts the RamShared block device as intermediate priority swap in `/proc/swaps`.
-5. Establishes the 3-tier cascade: Hot (ZRAM, pri 100) ➔ Accelerated (RamShared VRAM/SSD, pri 50) ➔ Fallback (Disk, pri -2).
+5. Establishes the 3-tier cascade: **zram (prio 200) ➔ RamShared VRAM/SSD (prio 100) ➔ WSL fallback disk (prio −2)**. Higher priority is used first; the SSD origin remains the correctness boundary.
+
+> **Windows Administrator token:** attaching the origin VHDX (`wsl.exe --mount --vhd`)
+> requires a Windows Administrator token. Linux `sudo` does **not** elevate a
+> Windows process. From WSL2, elevate with `Start-Process -Verb RunAs`, and take
+> the origin approval token from the script's `PLAN` output (it is size-derived).
+> Full recipe: [`runbooks/windows-elevation.md`](runbooks/windows-elevation.md).
+> Normal `ramshared up` never runs `mkswap`; the sealed swap header is provisioned
+> once by `scripts/safety/provision-origin-swap.sh`.
 
 ### Checking Operational Status (`status`)
 
@@ -126,7 +139,8 @@ $ ramshared down
 
 > [!IMPORTANT]
 > **Swapoff-First Ordering:** `ramshared down` executes a strict, ordered teardown:
-> 1. Removes `/dev/ramshared0` from the active kernel swap table (`swapoff`).
+> 1. Removes the managed tier devices (`/dev/nbd0` on WSL2, `/dev/ublkN` on a
+>    qualified kernel, `/dev/zram0`) from the active kernel swap table (`swapoff`).
 > 2. Synchronizes pending disk blocks to the authoritative origin SSD.
 > 3. Detaches the userspace block device and stops daemon threads.
 > 4. Frees allocated GPU VRAM buffers cleanly.
@@ -240,7 +254,8 @@ If the workstation experienced a power failure or sudden reboot while the cascad
    ```bash
    $ cat /proc/swaps
    ```
-2. If `/dev/ramshared0` or an orphaned NBD device is listed with `(deleted)` status, deactivate it immediately:
+2. If a managed tier device (`/dev/nbd0`, `/dev/ublkN`, `/dev/zram0`) is listed
+   with `(deleted)` status, deactivate it immediately:
    ```bash
    $ sudo swapoff -a
    ```
@@ -253,9 +268,9 @@ If the workstation experienced a power failure or sudden reboot while the cascad
 
 If the cascade start reports `INSUFFICIENT_HEADROOM`:
 - An external 3D game, AI model, or compute task is consuming the GPU budget.
-- For broker/NBD, RamShared applies the capacity reserve plus runtime buffer described above. Close heavy GPU tasks or run with a smaller cache:
+- For broker/NBD, RamShared applies the capacity reserve plus runtime buffer described above. Close heavy GPU tasks or run with smaller tiers:
   ```bash
-  $ ramshared up --max-cache 1G
+  $ ramshared up --vram 1024 --zram 1024
   ```
 
 ### Issue: Generating Support Diagnostics
