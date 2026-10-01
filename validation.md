@@ -11257,3 +11257,129 @@ to `.github/workflows/hyperv-runtime-drill.yml` or anything under
 this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
 GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
 drops the Hyper-V role from them, this claim is void until re-measured.
+
+## 2026-10-01 01:54 -03 — the pin in both wrong windows: panic on one guest, destroyed pattern on the other (EVD-0140)
+
+**What:** Run
+[36800977305](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36800977305)
+(`Hyper-V runtime drill`, contribution-fork SHA `42ee9237b6bd`,
+created `2026-10-01T01:24:53Z`) re-ran the drills after the punch-phase
+ordering fix that kept `oom_score_adj=-1000` and the lowered
+`vm.min_free_kbytes` through the punch and the `ready=1` measurement.
+`drill-kernel` is green. The two runtime jobs split, and both halves are the
+OOM pin sitting in the wrong window.
+
+**Question:** With the pin held through the punch and a 256 kB hard floor
+replacing the 2 MiB soft floor, does the drill reach
+`high_order_7plus_blocks=0` with `exhausted=1` and keep the ring opening?
+
+**Answer: no. The pin must not be on while this process allocates, and it
+must not come off when `ready=1` prints. Both failures are the same lever
+moved to the wrong side of the measurement.**
+
+**`windows-latest` — job `failure`, guest panic.** Lifecycle is green
+(`LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes`, `MMAP_HOLD path=/dev/uio0
+maps=5 hold=8`, sysfs ring `maps=1`, `PHASE2 hold-in-mmap window OPEN`,
+`FAULTS_NONE`), then the fragmentation drill dies the guest:
+
+```
+=== BEGIN vmbus-fragmentation-drill hog_mib=2004 ===
+vmbus_drill_hel invoked oom-killer: gfp_mask=0x140dca(GFP_HIGHUSER_MOVABLE|__GFP_ZERO|__GFP_COMP), order=0, oom_score_adj=-1000
+Out of memory: Killed process 286 (sh) total-vm:2404kB, anon-rss:68kB, ... oom_score_adj:0
+vmbus_drill_hel invoked oom-killer: gfp_mask=0x140dca(...), order=0, oom_score_adj=-1000
+Out of memory and no killable processes...
+Kernel panic - not syncing: System is deadlocked on memory
+```
+
+`reader_status=TIMEOUT drill_result=NO_RESULT`. The helper is faulting into
+an exhausted guest while pinned at `-1000`. `out_of_memory()` takes the drill
+shell — the only remaining killable task — and the fault retries. The second
+pass finds nothing killable at all and panics. The 256 kB `MemAvailable`
+floor is what drove the allocation into that state: it is a conservative
+estimate that reads near zero while buddyinfo still holds allocatable
+blocks, so pushing past it is how a drill reaches
+`pagefault_out_of_memory()` with an unkillable process. **A pinned fault in
+an exhausted guest is not a recoverable outcome; it is a guest panic.**
+
+**`windows-2025` — job `success`, drill verdict `PARTIAL`.** Lifecycle green
+on the same three signals. The watermark lever is proven again and the
+pattern is the deepest any run has produced:
+
+```
+FRAGMENT_BUDDY min_free_kbytes saved=5704 set=512 now=512
+FRAGMENT_BUDDY start cap_chunks=32064 high_order_7plus=506
+FRAGMENT_BUDDY allocated chunks=31581 high_order_7plus=506->4 locked=31581 stop=memavailable-hard-floor
+FRAGMENT_BUDDY ready=1 chunks=31581 pages=505296 held=4143 freed=4096 locked=31581 pairs=4096 chunk_kib=64 cap_chunks=32064 hole_cap=4096 exhausted=1 pagemap=1 stop=memavailable-hard-floor high_order_7plus=506->4->1
+```
+
+`saved=5704 set=512 now=512` is the read-back. `506->4->1` is
+before-allocation → after-lock → after-punch: **one** free block of order 7
+or above remained when the pattern was measured. Then the pin was dropped,
+because the code dropped it the moment `ready=1` printed:
+
+```
+sh invoked oom-killer: gfp_mask=0x400dc0(GFP_KERNEL_ACCOUNT|__GFP_ZERO), order=2, oom_score_adj=0
+Out of memory: Killed process 303 (vmbus_drill_hel) total-vm:2010088kB, anon-rss:2009112kB, file-rss:4kB, shmem-rss:680kB, UID:0 pgtables:4004kB oom_score_adj:0
+--- BUDDY AFTER FRAGMENT ---
+Node 0, zone    DMA32   4130     35     33     33     33     37     30     28     30     28    178
+high_order_7plus_blocks=356
+rebind_fail
+hv_netvsc ... (unnamed net_device) (uninitialized): unable to open channel: -22
+RESULT high_order_7plus_blocks=356 exhausted=1 pagemap=1 stop=memavailable-hard-floor order7_dmesg=0 accept4_failures=0 oops=0 rebind=no
+VERDICT=INCONCLUSIVE_ORDER7_STILL_AVAILABLE (high_order_7plus_blocks=356; pattern did not break contiguity)
+```
+
+The drill shell's next `fork`/`clone` (`copy_process`, order-2) triggered
+`out_of_memory()`, which reclaimed the helper — now at `oom_score_adj:0` —
+and the ~2 GiB of locked pages went back to the buddy. The post-pattern
+buddyinfo is a reassembled allocator, not the pattern: order-10 alone holds
+178 blocks. The script then measured 356 against a pattern that had already
+been destroyed, and the rebind ran against that same reassembled buddy, so
+`unable to open channel: -22` is **not** evidence about ring allocation under
+fragmentation.
+
+**Three measurement defects ride with the ordering bug:**
+
+1. `exhausted` printed `stopped`, which is 1 for every deliberate break
+   (`order7-depleted`, the floor, `mmap-refused`), not for the measured
+   condition. The script's verdict was still right because it checks
+   `high_order` separately — but the number it checked was the post-destruction
+   re-read.
+2. The script's `high_order_7plus_blocks` came from re-reading `/proc/buddyinfo`
+   after `ready=1`. That is exactly the window in which the destroyed pattern
+   looks like 356 blocks. The helper's own `high_order_7plus=…->…->1` is the
+   measurement taken while the pattern was pinned in place and is the one that
+   must be trusted.
+3. The `MemAvailable` floor is the wrong quantity. It subtracts the watermark
+   and unreclaimable state, so it reads ~0 while buddyinfo still holds
+   allocatable high-order blocks — which is how both this run and EVD-0139
+   stopped with the test condition unmet. `MemFree` is the counter that
+   matches what the test is about.
+
+**What this run does not prove:** `high_order_7plus_blocks=0` with
+`exhausted=1` is still open — the helper measured **1**, and the measurement
+was then destroyed. `PASS_RING_ALLOCATION_UNDER_FRAGMENTATION` was not
+reached. The CoCo chunked order-N → order-0 fallback remains unreachable on
+ordinary x86_64, because `vmbus_uses_shared_page_chunks()` is false there
+and every ring is `vzalloc()`. This is still not platform evidence for
+SEV-SNP, TDX or Arm CCA.
+
+**Fix shipped** (contribution-fork `bac075bbf292`): the OOM pin now covers
+exactly the hold — the window in which a finished pattern must survive the
+script's measurement and the channel-open rebind. Allocation, punch and
+chase run **unpinned**, so a kill there is an honest
+`INCONCLUSIVE_NO_PATTERN` and the guest survives. `ready=1` pins, the
+watermark is restored so the ring allocation has its reserve, and the pin
+drops when the hold ends. The floor is `MemFree` at 32 MiB — a margin the
+rest of the run needs, not a measure of exhaustion. After the punch a chase
+phase splits whatever that margin left: the holes just freed cannot form
+high orders, so those faults have to come out of the order-7-and-up blocks
+still free. `exhausted=1` now means the measured condition holds. The drill
+script takes the helper's `high_order_7plus` third value as authoritative.
+
+Source revision: `42ee9237b6bd`. `10000`-line note: this entry does not
+qualify the candidate for upstream submission. It records two harness
+failures and the fix that addresses them; the third EVD-0134 acceptance
+signal remains open until a run reports `high_order_7plus_blocks=0` with
+`exhausted=1` on the pattern that was measured, not on a re-read after the
+pattern was lost.
