@@ -348,10 +348,16 @@ static int do_mlock_hog(int argc, char **argv)
  * costs about 21 MiB of net RSS instead of 43. 4096 is the headroom for
  * that, not a guess.
  *
- * FRAG_CHASE_HOLE_CAP bounds the recycle the same way FRAG_HOLE_CAP bounds
- * the punch: every unmapped page is one more vm_area_struct, and 8 holes per
- * chunk across 4096 chunks would be 32768 of them. The residue is gone long
- * before this binds; it is here so a pathological run cannot starve Unmovable.
+ * FRAG_CHASE_HOLE_CAP is the recycle's own structural maximum, not a
+ * separate budget. Every unmapped page is one more vm_area_struct, and a
+ * complete set of in-chunk order-0 buddy pairs caps the recycle at 8 holes
+ * per chunk, so FRAG_CHASE_CAP chunks cannot produce more than
+ * FRAG_CHASE_CAP * 8 of them. Bounding it any tighter is what run
+ * 36870289589 measured: both guests stopped at chase_holes=8192 exactly,
+ * averaged 4.75--4.85 holes per chunk instead of 8, and hit the memfree
+ * margin with 12 MiB of order-9/10 residue still standing. The guard that
+ * actually protects Unmovable is the memfree margin below; this constant
+ * must never bind before high==0.
  *
  * FRAG_CHASE_HARD_KB is the OOM backstop. The chase is unpinned until
  * ready=1 by design, so a runaway hold is supposed to die as the honest
@@ -366,7 +372,7 @@ static int do_mlock_hog(int argc, char **argv)
 #define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
 #define FRAG_CHASE_HARD_KB 16384L
-#define FRAG_CHASE_HOLE_CAP 8192L
+#define FRAG_CHASE_HOLE_CAP (FRAG_CHASE_CAP * 8L)
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
