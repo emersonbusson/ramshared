@@ -13851,3 +13851,172 @@ reduces the residue below 2816 without reducing the floor. Re-read both
 runtime jobs before citing. Job-level `success` on `hyperv-runtime-drill`
 is never a gate closure. Never cite this entry as CoCo or send-gate
 evidence.
+## 2026-10-01 14:05 -03 — the 8 MiB floor halves the residue; the panic root cause was the watermark, not the constant (EVD-0159)
+
+**What:** Score of the `FRAG_CHASE_HARD_KB` 16384 → 8192 change (fork
+`5e864e7d9a08`, the lever EVD-0158 named). Drill run **36894869321**. Both
+runtime jobs green on every lifecycle gate, `holes=0 pairs=0` on both
+guests, no OOM, no panic. Residue **halved**: 2816 → **1408** pages
+(windows-latest) and 2944 → **1280** pages (windows-2025). The rollback
+trigger (residue ≥ 2816) does **not** fire.
+
+| Job | id | outcome |
+| --- | --- | --- |
+| drill-kernel | — | success |
+| drill-runtime windows-latest | 110481727042 | success |
+| drill-runtime windows-2025 | 110481727237 | success |
+
+### Measured
+
+| quantity | windows-latest | windows-2025 |
+| --- | --- | --- |
+| `high_order_7plus` | 500 → 26 → **2** | 499 → 26 → **4** |
+| `RESULT … (reread=)` | 2 (**reread=3**) | 4 (**reread=4**) |
+| `exhausted` | 0 | 0 |
+| `stop=` | `chase-memfree-margin` | `chase-memfree-margin` |
+| `chase=` | 1334 (83.38 MiB) | 1331 (83.19 MiB) |
+| `chase_holes` / `chase_pairs` | **0 / 0** | **0 / 0** |
+| `unsplit` | 749 | 354 |
+| buddyinfo at ready | `879 2 2 1 1 1 2 1 1 0 1` | `1065 0 4 2 3 0 1 2 0 2 0` |
+| **residue pages (≥7)** | **1408 (5.50 MiB)** | **1280 (5.00 MiB)** |
+| of which order-10 | 1024 pages (one block) | 0 |
+| of which order-9 | 0 | 1024 pages (two blocks) |
+| low-order pages | 1075 | 1209 |
+
+w25 `helper=4 reread=4` agree. wl `helper=2 reread=3` — the serial dropped
+a digit; **`reread` is authoritative** and buddyinfo independently shows 3
+blocks (`n7=1 n8=1 n9=0 n10=1` → 128+256+1024 = 1408 pages).
+
+Lifecycle stayed green and must not be disturbed: `PHASE1 cycle_fails=0 /
+120 steps`, `MMAP_HOLD /dev/uio0 bytes=4096 maps=5 hold=8`, `MMAP_HOLD
+…/channels/14/ring bytes=2097152 maps=1 hold=8`, `LIFECYCLE_VERDICT=PASS
+cycles=30 phase2=yes`, `order7_dmesg=0 accept4_failures=0 oops=0
+rebind=yes`. The pre-existing `hv_vmbus: probe failed … (-22)` lines are
+present as on every run of this series; `-22` is `-EINVAL` and is not the
+rollback trigger's `-12`.
+
+### What the residue is, now that it is 5.5 MiB
+
+Residue tracks the margin, and this run is the cleanest confirmation:
+dropping the margin by 8 MiB dropped the residue by 1408 pages (5.5 MiB) on
+wl and 1664 pages (6.5 MiB) on w25. One order-10 block is 73% of the wl
+residue; two order-9 blocks are 80% of the w25 residue.
+
+The chase is **not** capped (`1334` of `FRAG_CHASE_CAP=4096`) and the
+recycle is gone (`holes=0 pairs=0`). Nothing but the floor is binding.
+
+### EVD-0155 root cause, corrected
+
+EVD-0155 recorded the 4 MiB panic as *"the restore already happened"* —
+`min_free_kbytes` restored to ~5694 kB before the hold. **That reading is
+wrong.** The restore is at line 1102, *after* the `ready=1` printf at line
+1090, in both `7aafed374df6` and the current tree, and run 36879744347
+never printed `ready=1`.
+
+Re-read of that console (jobs 110431364347 / 110431364336):
+
+- `FRAGMENT_BUDDY` matches **0** times. The helper's stdout was lost with
+  `sh` (OOM-killed at 1.51 s, its pipe gone), so `now=512` was never
+  observed on that run.
+- First OOM: `DMA32 free:5376kB boost:0kB min:5692kB … free_pcp:15356kB`,
+  `gfp_mask=GFP_KERNEL order=1`. **`boost:0kB`** — this was not a boost
+  event. `min:5692kB` is the **saved** `min_free_kbytes` (5694/5703/5704
+  across runs), i.e. the write to 512 had **not** taken effect.
+- Second OOM: `boost:4096kB min:9788kB` (5692+4096). w25 later reached
+  `boost:12288kB min:17992kB` and panicked on `clone()`.
+
+So the panic is **`min_free_kbytes` never lowered + a `MemFree`-based floor
+that cannot see the buddy watermark**, not "a 4 MiB constant is fatal".
+With the watermark still at 5692 kB the chase drove buddy free to 5376 kB
+— below min — while 15 MiB sat in pcp; an `order=1` `GFP_KERNEL` from
+`sh` cannot use pcp and OOMs. The 4 MiB `MemFree` floor never bound,
+because `MemFree` (buddy lists only) was 5376 kB > 4096.
+
+Two independent facts support this:
+
+1. `min_free_kb_write()` is best-effort and **silent** on failure
+   (`/* best effort */` at both the `open` and the `write`), and the
+   `FRAGMENT_BUDDY min_free_kbytes saved=… set=… now=…` line is the only
+   record of whether it took.
+2. On this host `/proc/meminfo` `MemFree` equals the `/proc/buddyinfo` sum
+   **exactly** (1084976 kB both, diff 0) — confirming the helper's
+   `mem_free_kb()` comment that `MemFree` is buddy-only and omits the pcp,
+   and therefore that a `MemFree` floor is blind to `free_pcp`.
+
+Watermark boost is real and separate: `/proc/zoneinfo` carries `boost`
+next to `min`, and `boost_watermark()` under fragmentation raised the
+effective min by 4 MiB (wl) and 12 MiB (w25) *after* the first OOM. Any
+future floor must sit above the **live** `min + boost`, not above a bare
+constant.
+
+### Why the next lever is not another constant
+
+`unsplit_free_pages()` is a starvation guard and **cannot** stop the chase
+while high orders remain: splitting an order-10 *raises* unsplit by ~1008
+pages. `high==0` is what ends the chase. The only thing stopping it is the
+`MemFree` floor.
+
+And the residue is **not** what has to be held. `__rmqueue_smallest` serves
+order-0 first, so the chase must empty the no-split budget
+(`unsplit`, 749 pages on wl at the stop) before it will touch an order-10.
+Once order-0 is empty, clearing one order-10 down to order-6-and-below
+costs **15 held pages** (1+2+4+8), not 1024 — the rest of the block stays
+free as order-6 and below, which is exactly the state `high_order_7plus=0`
+asks for. Estimated further hold to finish: `unsplit` (~749) + ~25 pages
+of forced splits ≈ 774 pages ≈ 3.0 MiB. The 8 MiB floor left 1408 pages
+of high-order standing precisely because it fired while `unsplit=749` was
+still the allocator's preferred source.
+
+Dropping the constant again without fixing its **signal** re-runs the
+EVD-0155 failure mode. The change this names is: verify the watermark
+actually lowered (fail closed if it did not), and make the floor sit above
+the **live** `min + boost` instead of a bare constant.
+
+### Verdict
+
+🔴 **fails** — third signal still red (`exhausted=0`, `reread=3` / `4`).
+Progress is real and monotone: 3584 → 2816 → **1408 / 1280** pages. All
+lifecycle gates green. No OOM, no panic, no oops. Rollback trigger does
+not fire.
+
+**What this does not prove:** that `high_order_7plus_blocks=0` is
+reachable on a 2 GiB guest; that `min_free_kbytes` lowering is reliable
+(the write is silent on failure and run 36879744347 never proved it
+took); that watermark boost can be survived at a low floor.
+
+**Verdict:** 🔴 fails — third signal open; residue halved to 1408/1280, floor signal is the next fix
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY ready=1 …` and the buddyinfo line
+that follows from both `drill-runtime` jobs. The residue is the
+order-7-and-up **page** total from that buddyinfo line
+(`n7*128 + n8*256 + n9*512 + n10*1024`), not the block count. Score the
+third signal only from `RESULT … (reread=…) exhausted=…`. To judge whether
+`min_free_kbytes` actually lowered, look for the
+`FRAGMENT_BUDDY min_free_kbytes saved=… set=… now=…` line: if `now` is not
+the `set` value the run is invalid for any floor below ~6 MiB.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0159`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T16:55:00Z`.
+**Verified at:** `2026-10-01T17:20:00Z`.
+**Source revision:** `5e864e7d9a08`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the residue table across 36883261849 → 36892314395 →
+36894869321 (3584 → 2816 → 1408/1280). Keep the EVD-0155 root-cause
+correction: the panic was an un-lowered `min_free_kbytes` plus a
+`MemFree` floor blind to `free_pcp`, not a fatal 4 MiB constant. That
+correction is what authorises the next floor change and must not be
+re-lost. Keep the 15-page split arithmetic (1+2+4+8) — it is why the
+residue does not have to be held. Keep wl `helper=2 reread=3` visible so
+the reread rule stays visible.
+**Freshness:** Superseded for the residue claim by any run whose
+order-7-and-up page total moves off 1408 (wl) / 1280 (w25). Superseded
+for the third-signal claim only by `exhausted=1` with `reread=0`.
+Superseded for the panic-root-cause claim only by evidence that
+`min_free_kbytes` lowering is not what differed between 36879744347 and
+the clean runs. Re-read both runtime jobs before citing. Job-level
+`success` on `hyperv-runtime-drill` is never a gate closure. Never cite
+this entry as CoCo or send-gate evidence.
