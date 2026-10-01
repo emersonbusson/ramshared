@@ -350,14 +350,18 @@ static int do_mlock_hog(int argc, char **argv)
  *
  * FRAG_CHASE_HOLE_CAP is the recycle's own structural maximum, not a
  * separate budget. Every unmapped page is one more vm_area_struct, and a
- * complete set of in-chunk order-0 buddy pairs caps the recycle at 8 holes
- * per chunk, so FRAG_CHASE_CAP chunks cannot produce more than
- * FRAG_CHASE_CAP * 8 of them. Bounding it any tighter is what run
- * 36870289589 measured: both guests stopped at chase_holes=8192 exactly,
- * averaged 4.75--4.85 holes per chunk instead of 8, and hit the memfree
- * margin with 12 MiB of order-9/10 residue still standing. The guard that
- * actually protects Unmovable is the memfree margin below; this constant
- * must never bind before high==0.
+ * complete set of order-0 buddy pairs caps the recycle at 8 holes per
+ * chunk, so FRAG_CHASE_CAP chunks cannot produce more than FRAG_CHASE_CAP *
+ * 8 of them. Bounding it any tighter is what run 36870289589 measured: both
+ * guests stopped at chase_holes=8192 exactly and averaged 4.75--4.85 holes
+ * per chunk. Raising it to this value in run 36873015167 bought +477/+235
+ * holes and zero residue reduction, because the 4.75--4.85 was the physics
+ * of an in-chunk-only partner set, not the cap: a 64 KiB chunk is not
+ * physically contiguous, so only ~5 of the 8 even PFNs find their buddy
+ * inside it. punch_chunk_isolated() now also accepts a main-held buddy,
+ * which is what makes 8 reachable. The guard that actually protects
+ * Unmovable is the memfree margin below; this constant must never bind
+ * before high==0.
  *
  * FRAG_CHASE_HARD_KB is the OOM backstop. The chase is unpinned until
  * ready=1 by design, so a runaway hold is supposed to die as the honest
@@ -667,24 +671,43 @@ static int pfn_getbit(const unsigned long *bits, unsigned long pfn)
 }
 
 /*
- * Recycle the even PFNs of one chunk whose buddy is also in this chunk and
- * stays mapped. A freed page's buddy is then always held, so nothing above
- * order-0 can coalesce and the survivors still serve order-0 requests.
+ * Recycle the even PFNs of one chunk whose order-0 buddy is proven held.
+ * A freed page's buddy is then always held, so nothing above order-0 can
+ * coalesce and the survivors still serve order-0 requests.
+ *
+ * The buddy is accepted from two places, in order:
+ *
+ *   1. another page of this same chunk that stays mapped, or
+ *   2. the main pattern, via the held bitmap built in Pass 1.
+ *
+ * The second is what makes the recycle reach its structural rate. The
+ * chunk's 16 pages are virtually contiguous but not physically: as
+ * high-order blocks split they land in the chunk from different blocks, so
+ * only about 5 of the 8 even PFNs find their buddy in-chunk. Measured
+ * holes/chunk converge on 5.0 from both sides of the hole cap (4.75/4.85
+ * truncating at 8192 in run 36870289589, 4.996/5.004 free of it in run
+ * 36873015167), and no constant can raise that. The main pattern holds
+ * ~1856 MiB of a ~2004 MiB guest, so nearly every leftover page's buddy is
+ * already a main page and the partner set widens to the intended 8.
  *
  * This is what lets the chase split a high-order block without holding all
- * of it. Faulting 16 pages out of an order-10 draws the whole 4 MiB region
- * into the caller eventually, but returning the even half at each step
- * means net hold grows by 8 pages per chunk while the split still proceeds:
- * the recycled pages come back as isolated order-0, the next chunk re-takes
- * them, and the order-10 is still demoted. For the 43 MiB residue that is
- * ~21 MiB of net RSS instead of 43 -- the difference between fitting under
- * the 1950 MiB ceiling and not.
+ * of it. Returning the even half at each step means net hold grows by 8
+ * pages per chunk while the split still proceeds: the recycled pages come
+ * back as isolated order-0, the next chunk re-takes them, and the order-10
+ * is still demoted.
  *
- * PFNs whose buddy is not in this chunk are left mapped: freeing them could
- * pair with free memory elsewhere and rebuild the high orders just drained.
- * PFNs are used only to choose which pages to unmap and are never printed.
+ * A main-held buddy is a permanently safe partner. Both punches free only
+ * even PFNs whose buddy is odd (pfn+1) and held, so odd PFNs are never
+ * freed by either; a main-held odd page can never become free and pair with
+ * the page released here.
+ *
+ * PFNs whose buddy is neither in this chunk nor in held are left mapped:
+ * freeing them could pair with free memory elsewhere and rebuild the high
+ * orders just drained. PFNs are used only to choose which pages to unmap and
+ * are never printed.
  */
-static long punch_chunk_isolated(int pmfd, char *m, long hole_cap, long *pairs)
+static long punch_chunk_isolated(int pmfd, char *m, long hole_cap,
+				 const unsigned long *held, long *pairs)
 {
 	unsigned long pfns[FRAG_CHUNK / FRAG_PAGE];
 	long npages = FRAG_CHUNK / FRAG_PAGE;
@@ -704,7 +727,7 @@ static long punch_chunk_isolated(int pmfd, char *m, long hole_cap, long *pairs)
 			if (pfns[i] == pfn + 1)
 				break;
 		}
-		if (i == npages)
+		if (i == npages && !(held && pfn_getbit(held, pfn + 1)))
 			continue;
 		if (munmap(m + off, (size_t)FRAG_PAGE) == 0) {
 			freed++;
@@ -995,7 +1018,8 @@ static int do_fragment_buddy(int argc, char **argv)
 		 */
 		if (pmfd >= 0 && chase_holes < FRAG_CHASE_HOLE_CAP)
 			chase_holes += punch_chunk_isolated(pmfd, m,
-				FRAG_CHASE_HOLE_CAP - chase_holes, &chase_pairs);
+				FRAG_CHASE_HOLE_CAP - chase_holes, seen,
+				&chase_pairs);
 		chase_maps[chase++] = m;
 	}
 
