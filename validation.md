@@ -11810,3 +11810,159 @@ this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence beyond
 the named candidate-build result. If GitHub retires or repurposes the
 `windows-latest` / `windows-2025` images, or drops the Hyper-V role from them,
 this claim is void until re-measured.
+
+## 2026-10-01 01:05 -03 — one sealed free-floor authority, a raise-only boot gate, and a free-floor invariant that admits nothing when the floor is unmet (EVD-0143)
+
+**What:** The configured GPU free floor had four independent spellings and one
+of them could go below the seal. `ramshared_vram::reserve_policy` owned
+`SEALED_PERCENT_SAFETY_FLOOR` but not the 2048 MiB / 20% pair;
+`ramshared_block::sparse_vram` and `ramshared_wsl2d` each carried private
+copies; `scripts/safety/preflight.sh` enforced the seal; and
+`ramshared-cli::cascade::boot` resolved `MIN_VRAM_HEADROOM_MIB` with a built-in
+default of **256 MiB**, silently clamped any resolved value up, and never
+consulted the seal at all. Three commits close that:
+
+- `3472ef1d` — the `alias_mib` doc comment stopped claiming the cascade boot
+  path exports resolved sizing into the environment (it cannot: `main.rs` is
+  `#![forbid(unsafe_code)]` under edition 2024, so `std::env::set_var` is
+  unavailable there).
+- `e476a3f3` — `SEALED_RESERVE_MIN_MIB = 2048` and
+  `SEALED_RESERVE_PERCENT = 20` are declared once in `reserve_policy.rs` and
+  re-exported from `ramshared_vram`; `sparse_vram` and `wsl2d` consume the
+  re-export instead of private literals;
+  `DEFAULT_MIN_VRAM_HEADROOM_MIB` is bound to `SEALED_RESERVE_MIN_MIB`; and
+  `resolve_boot_config_from` **refuses** any resolved value below the seal
+  (`BootError::ConfigInvalid`, raise-only, DT-8) instead of clamping it.
+  `scripts/safety/test-preflight-reserve-floor.sh` now compares the shell and
+  Rust literals **numerically**, so a change to either side alone fails the
+  test instead of drifting silently. The SPEC and IMPL for
+  `wsl2-cascade-boot` were corrected: the cushion is enforced by
+  `ReserveFloorPolicy` and `preflight.sh`, `boot` refuses below-seal values,
+  and `check_safety_net` remains the DEMOTE net (`vram_safety_net`),
+  deliberately unrelated to that cushion.
+- `39ef8cce` — `safe_target_bytes_never_spends_the_required_free_floor` pins
+  the agreement between `safe_target_bytes` and `required_free_bytes` over five
+  `GpuBudgetSnapshot` shapes.
+
+**Question:** Can an operator or a config file still drive the GPU free floor
+below the sealed 2048 MiB / 20% authority through any path, and does the
+admission arithmetic ever spend the floor it claims to hold?
+
+**Answer: no on both.** Every consumer now reads one literal, and the
+admission function either leaves `free_after >= required_free` or admits
+exactly zero.
+
+**The raise-only gate, in both directions** (`test-preflight-reserve-floor.sh`,
+`boot_config_refuses_headroom_below_the_sealed_authority`):
+
+| Override | `preflight.sh` | `resolve_boot_config_from` |
+| --- | --- | --- |
+| `128` / `256` / `512` / `2047` | refused: "is below the sealed authority" | `ConfigInvalid`, raise-only named |
+| `2048` (at the seal) | accepted; proceeds to the next gate | accepted |
+| `3072` / `4096` (raise) | accepted and honored | accepted |
+| `abc` | refused: "is not numeric" | `ConfigInvalid` |
+
+The alias `MIN_VRAM_HEADROOM_MIB` follows the same rule in both directions.
+No path clamps: a below-seal value is a refusal, never a silent bump to 2048.
+
+**The free-floor invariant** (`safe_target_bytes_never_spends_the_required_free_floor`,
+`runtime = 640 MiB`):
+
+| budget | used | total | requested | outcome |
+| --- | --- | --- | --- | --- |
+| 4016 MiB | 1024 MiB | 6144 MiB | 2048 MiB | admits, `free_after >= required_free` |
+| 4016 MiB | 0 | 4016 MiB | 4016 MiB | admits, floor held |
+| 4016 MiB | 3900 MiB | 4016 MiB | 2048 MiB | `target = 0` (floor already unmet) |
+| 4016 MiB | 512 MiB | (unknown) | 3000 MiB | admits, floor held without `total` |
+| 6144 MiB | 2048 MiB | 6144 MiB | 8192 MiB | clamped by request, floor held |
+
+The invariant is two obligations, not one. When `available >= required_free`
+the admitted target must leave `free_after >= required_free`. When
+`available < required_free` the target must be **exactly 0** — a single
+`free_after >= required_free` assertion is unachievable there, because
+allocating nothing cannot restore a floor that is already short. The first
+draft of this test failed on exactly that case (`target 0 spends the floor:
+budget=4211081216 used=4089446400 required_free=2818572288`) before the
+invariant was split.
+
+**Measured gates, this tree:**
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p ramshared-vram --lib` | **41 passed, 0 failed** |
+| `cargo test -p ramshared-cli` | **529 passed** (516 unit + 13 integration), 0 failed |
+| `scripts/safety/test-preflight-reserve-floor.sh` | `preflight_honors_raise_only_override: ok`, `preflight_refuses_below_sealed_floor: ok` |
+| `scripts/safety/test-control-plane-units.sh` | **PASS** (all named cases) |
+| `scripts/safety/test-nbd-product-preflight.sh` | **47/47 PASS** |
+| `boot.rs` slice coverage | **85.3%** (475/557) — ≥80% gate **PASS** |
+| `cargo fmt --all -- --check` | **PASS** (exit 0) |
+| `cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cli -p ramshared-wsl2d --all-targets -- -D warnings` | **PASS** (0 warnings) |
+
+**What this run does NOT prove:**
+
+1. **No live GPU capacity campaign.** `gpu-reserve-floor-authority` ITEM-6
+   stays env-bound: `scripts/p0/measure-gpu-reserve-floor.sh` has not been run
+   against a supervised GPU, so the 2048 MiB / 20% seal is enforced but not
+   empirically sized.
+2. **No live reboot rounds.** `wsl2-cascade-boot` stays PARTIAL: the three
+   reboot rounds and `BINARY_MATCH` on `ramsharedd` need a deployed daemon on
+   a real WSL2 restart.
+3. **No behaviour change is claimed for a compliant operator.** Someone
+   already running at or above 2048 MiB sees no difference. What changed is
+   that the non-compliant path used to be a silent clamp and is now a named
+   refusal.
+4. **`check_safety_net` is untouched.** It remains the DEMOTE net and still
+   does not read `MIN_VRAM_HEADROOM_MIB`; this entry does not re-attribute
+   that cushion to it.
+
+**Verdict:** ✅ works — the configured GPU free floor now has one sealed
+authority, every consumer reads it, the boot path refuses below-seal values
+instead of clamping them, and the admission arithmetic is pinned to never
+spend the floor it claims. Locally proven with the numbers above. This is
+authority consolidation and refusal honesty, not live GPU or reboot
+qualification.
+
+**Category:** source-static / invariant
+
+**How to measure:**
+```bash
+CARGO_BUILD_JOBS=1 cargo test -p ramshared-vram --lib
+CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli
+bash scripts/safety/test-preflight-reserve-floor.sh
+bash scripts/safety/test-control-plane-units.sh
+bash scripts/safety/test-nbd-product-preflight.sh
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli \
+  --files crates/ramshared-cli/src/cascade/boot.rs --min 80
+cargo fmt --all -- --check
+CARGO_BUILD_JOBS=1 cargo clippy -p ramshared-vram -p ramshared-block \
+  -p ramshared-cli -p ramshared-wsl2d --all-targets -- -D warnings
+```
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0143`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T04:05:42Z`.
+**Verified at:** `2026-10-01T04:05:42Z`.
+**Source revision:** `e476a3f3`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the refusal table next to the "no path clamps" sentence —
+the table alone does not show that the old behaviour was a silent bump. Keep
+the two-obligation invariant and the failing first-draft case
+(`target 0 spends the floor: budget=4211081216 used=4089446400
+required_free=2818572288`) together: that case is why the invariant is split,
+and without it a future edit may collapse the two obligations back into one
+unachievable assertion. Keep the measured revision `e476a3f3` distinct from
+its companions `3472ef1d` (doc contract) and `39ef8cce` (free-floor
+invariant).
+**Freshness:** Superseded as soon as any of `SEALED_RESERVE_MIN_MIB`,
+`SEALED_RESERVE_PERCENT`, `DEFAULT_MIN_VRAM_HEADROOM_MIB`, the raise-only
+branch in `resolve_boot_config_from`, the numeric shell↔Rust binding in
+`test-preflight-reserve-floor.sh`, or `safe_target_bytes` /
+`required_free_bytes` changes. Re-measure on any edit to
+`crates/ramshared-vram/src/reserve_policy.rs`,
+`crates/ramshared-cli/src/cascade/boot.rs`,
+`crates/ramshared-block/src/sparse_vram.rs`, or
+`scripts/safety/preflight.sh`. Never cite this entry as live GPU, reboot,
+BINARY_MATCH, benchmark, or three-tier qualification evidence. The seal's
+numeric values are the authority; this entry only records that every path
+now reads them.
