@@ -789,10 +789,10 @@ repeated run does not modify fixture bytes or repository files.
 
 ### Step 3 implementation gate
 
-- [ ] This SPEC activation record and existing PRD have valid English Markdown
-  and resolve their scoped links.
-- [ ] Every Markdown link in these two files resolves to an existing repository
-  path or an explicitly permitted external standard.
+- [x] This SPEC activation record and existing PRD have valid English Markdown
+  and resolve their scoped links. (2026-10-01: `node tools/check-broken-links.mjs` → `✓ no broken markdown links`.)
+- [x] Every Markdown link in these two files resolves to an existing repository
+  path or an explicitly permitted external standard. (2026-10-01: same scan, zero findings.)
 - [x] `git diff --check -- docs/specs/no-milestone/comment-language-integrity/`
   passes. (2026-09-30: clean.)
 - [ ] Only this SPEC, the scanner, its named test module, the strict ratchet

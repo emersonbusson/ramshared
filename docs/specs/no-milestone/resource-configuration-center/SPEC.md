@@ -529,7 +529,7 @@ in place.
 - [x] `bash scripts/safety/wslconfig-ctl.sh selftest` and existing origin/GPU suites pass. (2026-10-01: `SELFTEST: PASS` — 9 assertions including sparseVhd render, swapFile preservation, and unsafe-lab opt-in.)
 - [x] `./scripts/docs-check.sh` passes and the generated docs index is current. (2026-10-01: `✓ docs-check OK`.)
 - [ ] Native Linux and WSL2 live E2E each have a before/action/after evidence set; tests on one platform do not qualify the other.
-- [ ] No `DONE` or release claim before both platform E2E and representative filesystem/GPU hardware evidence.
+- [x] No `DONE` or release claim before both platform E2E and representative filesystem/GPU hardware evidence (2026-10-01: confirmed — status is PARTIAL; live-platform gates remain open.)
 
 ## Rollback trigger
 

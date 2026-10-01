@@ -111,8 +111,8 @@ recovery path and mark the row `PARTIAL`; this SPEC does not authorize the boot.
   transport; missing approval is `PARTIAL`/`REFUSED`.
 - [x] No kernel/module/host action is authorized by a documentation packet.
 - [x] N3 refusal preserves host authority; #41054 cannot smuggle a native tier.
-- [ ] DMA/MMIO/IRQ/uAPI/lifetime: N/A for this config-only documentation
-  slice; a kernel code change requires a new target-tree SPEC.
+- [x] DMA/MMIO/IRQ/uAPI/lifetime: N/A for this config-only documentation
+  slice; a kernel code change requires a new target-tree SPEC (2026-10-01: confirmed — zero kernel source touched.)
 
 ## Files create/modify/delete
 

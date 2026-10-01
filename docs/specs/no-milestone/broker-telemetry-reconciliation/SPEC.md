@@ -368,7 +368,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ra
 **Backend:**
 - [x] `cargo fmt --all -- --check` (2026-10-01: exit 0.)
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` (2026-10-01: exit 0, zero warnings.)
-- [ ] `cargo test --workspace`
+- [x] `cargo test --workspace` (2026-10-01: 1780 passed, 0 failed across 37 suites.)
 
 **GPU:**
 - [ ] VRAM smoke with `--telemetry-jsonl` (valid lines)
@@ -378,8 +378,6 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ra
 - [ ] `IMPL.md` (STEP 3) + `P0-RESULTS.md` (`tol_frac`/`streak` cell)
 
 **Cognitive gates:**
-- [ ] ITEM-2/3/7/8 with discipline + link + question + evidence + abort
-  (map above)
-- [ ] No vague language at a critical point (tolerance is a number, DT-7;
-  `streak` defined, DT-12; invariant is occupancy, DT-4; eviction = canary,
-  DT-6)
+- [x] ITEM-2/3/7/8 with discipline + link + question + evidence + abort
+  (2026-10-01: map rows verified — each has discipline #, kahneman-disciplines.md anchor, question, numeric evidence, and abort condition.)
+- [x] No vague language at a critical point (2026-10-01: DT-7 `tol_frac=0.10`/`streak=3` numbers; DT-12 streak algorithm explicit; DT-4 invariant=occupancy; DT-6 eviction=canary `demotes_delta>0`.)
