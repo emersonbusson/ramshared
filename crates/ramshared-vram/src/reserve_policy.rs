@@ -711,6 +711,69 @@ mod tests {
         );
     }
 
+    /// `safe_target_bytes` and `required_free_bytes` must agree on what stays
+    /// free. Two obligations, both of which can fail:
+    ///
+    /// 1. When the floor is currently met, whatever `safe_target_bytes` admits
+    ///    must still leave at least `required_free_bytes` untouched.
+    /// 2. When the floor is already unmet, `safe_target_bytes` must admit
+    ///    nothing — allocating zero cannot restore the floor, so "do not make
+    ///    it worse" is the only real obligation there.
+    ///
+    /// Without this, the two helpers could drift and the admission path could
+    /// spend the reserve. Capacity is always
+    /// `total_bytes.unwrap_or(budget_bytes).min(budget_bytes)`, so a snapshot
+    /// with `budget > total` is out of contract and is not exercised here —
+    /// callers already reject it (`trusted_available_at`).
+    #[test]
+    fn safe_target_bytes_never_spends_the_required_free_floor() {
+        let policy = sealed();
+        let runtime = 640 * MIB;
+        // Mirrors of the real shapes: idle adapter, partially used, nearly
+        // exhausted, total unknown (budget is the capacity), and a raised
+        // override that outgrows the 20% share.
+        let cases: &[(u64, u64, Option<u64>, u64)] = &[
+            // (budget, used, total, requested)
+            (4016 * MIB, 1024 * MIB, Some(6144 * MIB), 2048 * MIB),
+            (4016 * MIB, 0, Some(4016 * MIB), 4016 * MIB),
+            (4016 * MIB, 3900 * MIB, Some(4016 * MIB), 2048 * MIB),
+            (4016 * MIB, 512 * MIB, None, 3000 * MIB),
+            (6144 * MIB, 2048 * MIB, Some(6144 * MIB), 8192 * MIB),
+        ];
+        for &(budget_bytes, used_bytes, total_bytes, requested) in cases {
+            let snapshot = GpuBudgetSnapshot {
+                adapter: None,
+                total_bytes,
+                budget_bytes,
+                used_bytes,
+                source: GpuBudgetSource::DriverReported,
+                sampled_at: Instant::now(),
+            };
+            let capacity = ReserveFloorPolicy::helper_capacity(total_bytes, budget_bytes);
+            let configured = policy.configured_reserve_bytes(capacity);
+            let required_free = snapshot.required_free_bytes(configured, runtime);
+            let target = snapshot.safe_target_bytes(requested, configured, runtime);
+            let available = snapshot.available_bytes();
+            let free_after = available.saturating_sub(target);
+            if available < required_free {
+                // The floor is already unmet. Allocating zero cannot restore it,
+                // so the only obligation is to admit nothing at all.
+                assert_eq!(
+                    target, 0,
+                    "an unmet floor must admit nothing, got {target} \
+                     (available={available} required_free={required_free})"
+                );
+            } else {
+                assert!(
+                    free_after >= required_free,
+                    "target {target} spends the floor: budget={budget_bytes} used={used_bytes} \
+                     total={total_bytes:?} requested={requested} available={available} \
+                     free_after={free_after} required_free={required_free}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn process_env_reader_ignores_junk_and_keeps_valid_mib() {
         // DT-11: both documented names are read from the process environment;
