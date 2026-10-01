@@ -320,7 +320,7 @@ mod tests {
         let truncated = truncate_reason(&reason);
         assert!(truncated.len() <= MAX_CODEC_REFUSAL_REASON_BYTES);
         assert!(truncated.is_char_boundary(truncated.len()));
-        assert_eq!(truncated, format!("{prefix}"));
+        assert_eq!(truncated, prefix);
     }
 
     #[test]

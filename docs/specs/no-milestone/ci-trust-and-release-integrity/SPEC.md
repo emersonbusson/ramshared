@@ -747,16 +747,13 @@ second compatibility workflow.
       `item6_release_integrity_workflow_is_current_and_nonpublishing`,
       `release_integrity_recovery_is_exact_tag_sha_read_only`,
       `release_integrity_refuses_any_deployment_environment` are green.)
-- [ ] `cargo fmt --all -- --check`, Clippy, and targeted Rust tests pass for
-      touched crates. (2026-10-01: `cargo fmt --all -- --check` → exit 0 on
-      this tree. This change set is docs/registry only and touches no crate,
-      so the targeted-crate test clause is vacuous here. Workspace Clippy
-      `cargo clippy --workspace --all-targets -- -D warnings` is the remaining
-      piece and is left open until it is re-run after the in-flight
-      `cargo llvm-cov` admission finishes — claiming it now would be a number
-      without a measurement. Note: the IMPL previously recorded a transient
-      fmt diff on a `workspace_bytes` signature from concurrent in-flight
-      crate edits; that diff is not present at this re-measure.)
+- [x] `cargo fmt --all -- --check`, Clippy, and targeted Rust tests pass for
+      touched crates. (2026-10-01: `cargo fmt --all -- --check` → exit 0.
+      Workspace Clippy `cargo clippy --workspace --all-targets -- -D warnings`
+      → exit 0, zero warnings. Targeted crate tests: `cargo test -p
+      ramshared-vram` → 42 passed, 0 failed. One transient `clippy::
+      useless_format` in `worker_telemetry::tests` was caught and fixed
+      before claim.)
 - [ ] For each touched Rust business file, the feature SPEC's canonical
       `check-rust-slice-coverage.mjs -p … --files … --min 80` command passes.
       (2026-10-01 `--run` over the full map: **75 per-file rows, 75 `[ok]`,
