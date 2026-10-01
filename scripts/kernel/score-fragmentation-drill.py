@@ -97,6 +97,18 @@ def score(path):
     if 'reason=min-free-not-lowered' in body:
         print('  !! ready=0 reason=min-free-not-lowered')
 
+    bm = re.search(
+        r'FRAGMENT_BUDDY watermark_boost_factor saved=(-?\d+) set=0 now=(-?\d+)',
+        body)
+    if bm:
+        saved, now = bm.groups()
+        flag = 'OK' if now == '0' else 'FAIL-CLOSED'
+        print(f'boost_factor  saved={saved} set=0 now={now}  [{flag}]')
+    else:
+        print('boost_factor  [NO LINE - boost may be at default]')
+    if 'reason=boost-not-disabled' in body:
+        print('  !! ready=0 reason=boost-not-disabled')
+
     start = buddy_first(lines)
     ready = buddy_at_ready(lines)
 
@@ -147,6 +159,18 @@ def score(path):
         n = len(re.findall(pat, body))
         if n:
             print(f'  !! {label} x{n}')
+
+    # The DMA32 free/boost/min triple is what identifies a boost-limited
+    # run vs a min_free_limited one. Print each distinct one seen.
+    seen = []
+    for m in re.finditer(
+            r'DMA32 free:(\d+)kB boost:(\d+)kB min:(\d+)kB', body):
+        triple = (m.group(1), m.group(2), m.group(3))
+        if triple not in seen:
+            seen.append(triple)
+    for free, boost, mn in seen:
+        print(f'  DMA32 free={free}kB boost={boost}kB min={mn}kB'
+              f'  (base_min={int(mn) - int(boost)}kB)')
     print()
 
 
