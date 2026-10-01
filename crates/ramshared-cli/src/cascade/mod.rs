@@ -645,7 +645,10 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
 }
 
 /// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`).
-/// SPEC: docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md ITEM-4
+///
+/// Attended `up` sizing fallback only. The boot path resolves sizing through
+/// `boot::load_boot_config_from` (`/etc/ramshared/cascade.conf` → env →
+/// built-in), so this helper is not the sizing authority.
 fn default_mb_from_env(var: &str, fallback: u64) -> u64 {
     #[cfg(test)]
     if let Some((ref k, n)) = TEST_ENV_MB.with(|c| c.borrow().clone())
@@ -1438,6 +1441,8 @@ use lifecycle::{
     protection_state, render_status_json,
 };
 
+pub mod boot;
+
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
 fn trusted_gpu_budget_from_status(
     status: &serde_json::Value,
@@ -1833,6 +1838,7 @@ fn print_tier(name: &str, t: &TierSample) {
 }
 
 mod cascade_io;
+pub use boot::{BootConfig, BootError};
 pub use cascade_io::{down, migrate_legacy_cascade, up_with_args};
 
 #[cfg(test)]

@@ -210,6 +210,7 @@ enum CliCommand {
     Doctor { json: bool },
     Up { args: Vec<String> },
     MigrateLegacyCascade,
+    Boot,
     Down,
     Status { json: bool },
     Monitor { options: MonitorOptions },
@@ -386,6 +387,20 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
                 })
             }
         }
+        "boot" => {
+            // DT-1 / DT-7: `boot` is the single native bootstrap verb and takes
+            // no options. Unknown flags (including deploy-shaped ones) are
+            // refused by the parser before any gate runs; `parse_boot_invocation`
+            // is the in-depth backstop inside `boot` itself.
+            if options.is_empty() {
+                Ok(CliCommand::Boot)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "boot",
+                    options: options.to_vec(),
+                })
+            }
+        }
         "down" => {
             if options.is_empty() {
                 Ok(CliCommand::Down)
@@ -428,6 +443,7 @@ trait CliActionRunner {
         stdout: &mut dyn Write,
         stderr: &mut dyn Write,
     ) -> ExitCode;
+    fn boot(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn config(
@@ -531,6 +547,26 @@ impl CliActionRunner for SystemCliActions {
         stderr: &mut dyn Write,
     ) -> ExitCode {
         to_exit(cascade::migrate_legacy_cascade(), stderr)
+    }
+
+    fn boot(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        let result: Result<cascade::BootConfig, cascade::BootError> = cascade::boot::boot();
+        match &result {
+            Ok(config) => {
+                let _ = writeln!(
+                    stdout,
+                    "[boot] cascade active (vram={}MiB zram={}MiB headroom={}MiB)",
+                    config.vram_mib, config.zram_mib, config.min_vram_headroom_mib
+                );
+            }
+            Err(error) => {
+                // NFR-6: the refusal reason is visible on the invoking surface
+                // (journal via `StandardOutput=journal`) and stable enough for
+                // `status` to surface later.
+                let _ = writeln!(stdout, "[boot] REFUSED: {error}");
+            }
+        }
+        to_exit(result.map(|_| ()), stderr)
     }
 
     fn down(&mut self, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
@@ -675,6 +711,7 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
         Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
         Ok(CliCommand::MigrateLegacyCascade) => actions.migrate_legacy_cascade(stdout, stderr),
+        Ok(CliCommand::Boot) => actions.boot(stdout, stderr),
         Ok(CliCommand::Down) => actions.down(stdout, stderr),
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
         Ok(CliCommand::Config { mode }) => actions.config(mode, stdout, stderr),
@@ -782,6 +819,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared migrate-cascade --from-legacy  # attended one-time sealed-origin handoff"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared boot   # native fail-closed bootstrap (systemd unit entrypoint)"
     );
     let _ = writeln!(
         stderr,
@@ -1820,6 +1861,15 @@ mod tests {
             self.result()
         }
 
+        fn boot(
+            &mut self,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Boot);
+            self.result()
+        }
+
         fn down(
             &mut self,
             _stdout: &mut dyn std::io::Write,
@@ -2362,6 +2412,53 @@ mod tests {
             CliCommand::Recover { resume: true }
         );
         assert!(parse_cli_command(&cli_args(&["recover", "--force"])).is_err());
+    }
+
+    #[test]
+    fn boot_command_parses_and_dispatches() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&["boot"])).unwrap(),
+            CliCommand::Boot
+        );
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_from_args(&cli_args(&["boot"]), &mut actions, &mut stdout, &mut stderr);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(actions.calls, vec![CliCommand::Boot]);
+    }
+
+    #[test]
+    fn boot_command_rejects_unknown_options() {
+        // DT-7: `boot` has no deploy API. Every deploy-shaped flag and every
+        // unknown flag is refused by the parser before any gate runs.
+        for args in [
+            cli_args(&["boot", "--install"]),
+            cli_args(&["boot", "--upgrade"]),
+            cli_args(&["boot", "--deploy"]),
+            cli_args(&["boot", "--replace"]),
+            cli_args(&["boot", "--release"]),
+            cli_args(&["boot", "--release=0.14.0"]),
+            cli_args(&["boot", "--force"]),
+            cli_args(&["boot", "--uninstall"]),
+            cli_args(&["boot", "--json"]),
+            cli_args(&["boot", "--check"]),
+        ] {
+            let mut actions = RecordingCliActions::default();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = run_from_args(&args, &mut actions, &mut stdout, &mut stderr);
+
+            assert_eq!(exit, ExitCode::from(2), "{args:?} must refuse");
+            assert!(
+                actions.calls.is_empty(),
+                "{args:?} must not reach the boot action"
+            );
+            assert!(
+                String::from_utf8_lossy(&stderr).contains("invalid"),
+                "{args:?} must explain the refusal"
+            );
+        }
     }
 
     #[test]
