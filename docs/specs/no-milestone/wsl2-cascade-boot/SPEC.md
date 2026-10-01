@@ -440,19 +440,19 @@ Kinds: unit · integration · kselftest · WDK/SDV/Verifier · drill/E2E.
 
 ## Validation checklist
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `CARGO_BUILD_JOBS=1 cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli -- --test-threads=1`
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/boot.rs --min 80 --report-json tmp/wsl2-cascade-native-bootstrap-cov.json`
-- [ ] Linux LKM checks: **N/A** — this slice changes no C/Rust kernel code
-- [ ] Windows InfVerif / SDV / Driver Verifier / lab VM: **N/A** — no Windows driver surface in this slice
+- [x] `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] `CARGO_BUILD_JOBS=1 cargo clippy --workspace --all-targets -- -D warnings` (2026-10-01: exit 0, zero warnings.)
+- [x] `CARGO_BUILD_JOBS=1 cargo test -p ramshared-cli -- --test-threads=1` (2026-10-01: 13 passed, 0 failed.)
+- [x] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/boot.rs --min 80 --report-json tmp/wsl2-cascade-native-bootstrap-cov.json` (2026-10-01: 84.6% 471/557 — PASSED.)
+- [x] Linux LKM checks: **N/A** — this slice changes no C/Rust kernel code (2026-10-01: confirmed.)
+- [x] Windows InfVerif / SDV / Driver Verifier / lab VM: **N/A** — no Windows driver surface in this slice (2026-10-01: confirmed.)
 - [ ] Live path for this product surface: `bash -n` on the touched shell scripts;
       `bash scripts/safety/test-control-plane-units.sh`;
       `bash scripts/safety/test-nbd-product-preflight.sh`;
       then the three reboot rounds + the detached-origin round from the matrix
-- [ ] Every matrix row has a real test name
-- [ ] Kahneman critical rows have executable evidence
-- [ ] `./scripts/docs-check.sh`
-- [ ] `node tools/ci/check-public-hygiene.mjs --candidate`
-- [ ] `node tools/generate-docs-index.mjs --check`
-- [ ] `node tools/ci/check-gap-register.mjs`
+- [x] Every matrix row has a real test name (2026-10-01: 27 unit test names verified present in source; 2 drill/E2E rows and 2 live-host rows are platform-bound.)
+- [x] Kahneman critical rows have executable evidence (2026-10-01: #1/#3/#5/#9/#13/#16/#17 each map to named unit tests above.)
+- [x] `./scripts/docs-check.sh` (2026-10-01: `✓ docs-check OK`.)
+- [x] `node tools/ci/check-public-hygiene.mjs --candidate` (2026-10-01: `PUBLIC_HYGIENE_STATUS=PASS`.)
+- [x] `node tools/generate-docs-index.mjs --check` (2026-10-01: `✓ docs/INDEX.md is in sync`.)
+- [x] `node tools/ci/check-gap-register.mjs` (2026-10-01: `✓ gap register OK`.)
