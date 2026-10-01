@@ -359,25 +359,31 @@ static int do_mlock_hog(int argc, char **argv)
  * The recycle's proper place is phase 2, where it makes room for the ring,
  * not phase 1, where it exists to force splits.
  *
- * FRAG_CHASE_HARD_KB is the OOM backstop and a safety floor, not a lever
- * on the residue. The chase is unpinned until the hold, so a runaway hold
- * dies as the honest INCONCLUSIVE_NO_PATTERN; this stop is the cheaper
- * version of the same thing. Run 36823337153 showed that at 48 MiB it
- * binds *exactly* at the demotion threshold, and 16 MiB leaves 12--13 MiB
- * of order-7-and-up standing (runs 36873015167, 36877160708). Dropping it
- * to 4 MiB to split that residue is what run 36879744347 measured: the
- * chase reached the hold with the helper pinned at 1.9 GiB, then the punch
- * and the channel-open needed memory the residue had been protecting and
- * the guests OOM-killed sh (probe -12) and panicked on clone(). The residue
- * is the post-chase working set. 16 MiB sits above the unsplit floor
- * (128 pages) and above the ~9 MiB the punch, the ~2 MiB ring and init
- * need after ready=1. Splitting that residue has to happen by holding
- * through it -- by letting the chase take every page until the floor stops
- * it -- not by returning pages the allocator will prefer to split.
+ * FRAG_CHASE_HARD_KB is the OOM backstop and, now that the recycle is
+ * gone, the only thing standing between the chase and a depleted buddy.
+ * It is a safety floor first and a residue lever second. Run 36879744347
+ * is the reason it cannot be set casually: at 4 MiB the chase reached the
+ * hold with the helper pinned at 1.9 GiB, then the punch and the
+ * channel-open needed memory the residue had been protecting, the guests
+ * OOM-killed sh (probe -12) and panicked on clone(). The restored
+ * watermark is min_free_kbytes ~5694 kB and the ring needs ~2 MiB, so
+ * 8 MiB is the arithmetic floor and anything below it is the EVD-0155
+ * failure mode again.
+ *
+ * 16 MiB was the conservative choice after that panic and it is what run
+ * 36892314395 measured the cost of: the no-recycle chase held 75.75 MiB,
+ * split 21 high-order blocks, and still stopped at this floor with 5
+ * blocks standing -- 2816 pages on windows-latest and 2944 on
+ * windows-2025, 2048 of which are two untouched order-10 blocks. Dropping
+ * the floor by X MiB reduces that residue by roughly X MiB, because the
+ * only free memory left to take at the floor is the standing high-order.
+ * 8 MiB should split the two order-10 blocks; if it leaves
+ * exhausted=0 again the wall is not the floor and the next move is finer
+ * granularity in the hold, not another cut.
  */
 #define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
-#define FRAG_CHASE_HARD_KB 16384L
+#define FRAG_CHASE_HARD_KB 8192L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
