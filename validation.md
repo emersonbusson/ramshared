@@ -14819,7 +14819,7 @@ The daemon's own publication at `/run/ramshared/cache-status.json`
 
 | Binary under test | Source | `ramshared status --json` → `cache_state` |
 | --- | --- | --- |
-| installed `/opt/ramshared/current/bin/ramshared` (`v0.15.0-de32b421`, pre-fix) | parent of `a6eb8b5c` | `UNAVAILABLE` ❌ |
+| installed release `v0.15.0-de32b421` CLI (pre-fix) | parent of `a6eb8b5c` | `UNAVAILABLE` ❌ |
 | freshly built `target/debug/ramshared` | `3b78f65b` | `OFF` ✅ |
 
 Same daemon, same `cache-status.json`, same second. The only variable is the

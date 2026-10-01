@@ -49,10 +49,9 @@ Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollbac
 
 **No authorship trailers.** Commit messages and PR descriptions never carry
 `Co-Authored-By`, `Generated-with`, `Assisted-by`, or any other attribution
-line — neither the harness-generated form (`Claude … <noreply@anthropic.com>`)
-nor a hand-written equivalent. Do not append one "to be safe"; leave the
-message clean. If a commit message is supplied with such a trailer, strip it
-before committing.
+line — neither a harness-generated form nor a hand-written equivalent. Do not
+append one "to be safe"; leave the message clean. If a commit message is
+supplied with such a trailer, strip it before committing.
 PR descriptions must follow `.github/pull_request_template.md` strictly: canonical 4-column commits table (`| Commit | What was done | Why it was done | Details |`) with per-row `<details>` block (`**Arquivos:** ...<br>**Validacao:** ...<br>**Risco/rollback:** ...`). Every branch commit must be visible. Performance/hardware PRs must include the full 4-category hardware benchmark comparison table (1. Workload & Capacity, 2. Speed & Transfer Latency, 3. Pressure & Stalls, 4. Integrity & Stability), with mandatory Tier 3 (SSD) qualification metrics and `PASS_ZERO_PANIC` verdict (merges are strictly blocked by CI if missing). No internal methodology buzzwords or external links to raw JSON. PRs may be reviewed in PT-BR during draft/collaboration, but must transition to English before merge.
 
 ## Methodologies (SSDV3 and Kahneman)
