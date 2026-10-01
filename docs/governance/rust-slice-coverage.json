@@ -1185,6 +1185,54 @@
       "min": 80
     },
     {
+      "id": "cuda-rust-native-tiering-vram-codec",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/cuda-rust-native-tiering/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-vram",
+        "--files",
+        "crates/ramshared-vram/src/codec.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/codec-cov.json"
+      ],
+      "packages": [
+        "ramshared-vram"
+      ],
+      "files": [
+        "crates/ramshared-vram/src/codec.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "cuda-rust-native-tiering-worker-telemetry",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/cuda-rust-native-tiering/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-vram",
+        "--files",
+        "crates/ramshared-vram/src/worker_telemetry.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/worker-telemetry-cov.json"
+      ],
+      "packages": [
+        "ramshared-vram"
+      ],
+      "files": [
+        "crates/ramshared-vram/src/worker_telemetry.rs"
+      ],
+      "min": 80
+    },
+    {
       "id": "memory-broker-agent-psi",
       "kind": "rust-line-coverage",
       "spec": "docs/specs/no-milestone/broker-telemetry-reconciliation/SPEC.md",

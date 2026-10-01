@@ -300,6 +300,30 @@ mod tests {
     }
 
     #[test]
+    fn codec_labels_and_reason_truncation_are_total() {
+        // Every enum variant renders a stable label.
+        assert_eq!(CodecCapability::RawOnly.as_str(), "raw-only");
+        assert_eq!(CodecCapability::Available.as_str(), "available");
+        assert_eq!(CodecState::RawOnly.as_str(), "raw-only");
+        assert_eq!(CodecState::Ready.as_str(), "ready");
+        assert_eq!(CodecState::Faulted.as_str(), "faulted");
+        assert_eq!(CodecState::TimedOut.as_str(), "timed-out");
+        assert_eq!(CodecState::Disabled.as_str(), "disabled");
+
+        // A short reason is kept verbatim without entering the truncation path.
+        assert_eq!(truncate_reason("ok"), "ok");
+
+        // A reason whose byte cut would split a multi-byte UTF-8 character
+        // backs off to the nearest char boundary instead of panicking.
+        let prefix = "a".repeat(MAX_CODEC_REFUSAL_REASON_BYTES - 1);
+        let reason = format!("{prefix}é tail");
+        let truncated = truncate_reason(&reason);
+        assert!(truncated.len() <= MAX_CODEC_REFUSAL_REASON_BYTES);
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert_eq!(truncated, format!("{prefix}"));
+    }
+
+    #[test]
     fn logical_cache_bytes_are_never_budget_or_ram() {
         let envelope = WorkerTelemetryEnvelope::new(1_000, Some(budget()), Some(cache(1_000)));
         let cache = envelope.cache.clone().expect("cache present");

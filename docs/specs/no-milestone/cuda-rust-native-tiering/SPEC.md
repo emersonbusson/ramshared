@@ -227,6 +227,14 @@ The worker uses a serialized lifecycle for each provider operation: ready, in fl
 - Required tests: codec::tests::codec_bounds_reject_overflow; codec::tests::unsupported_provider_is_raw_only.
 - Cover target: at least 80% on business logic.
 
+**crates/ramshared-vram/src/worker_telemetry.rs**
+- Purpose: Versioned worker-cache telemetry envelope carrying lengths, counters, and a bounded refusal reason; physical accounting stays in frame-header fields and is never re-derived here.
+- RF / DT: RF-8; DT-8.
+- Types / functions: WorkerTelemetryEnvelope, WORKER_TELEMETRY_SCHEMA_VERSION, MAX_WORKER_TELEMETRY_PAYLOAD_BYTES, TELEMETRY_MAX_AGE_MS, MAX_CODEC_REFUSAL_REASON_BYTES.
+- Reference pattern: existing GPU-budget heartbeat payload limit in crates/ramshared-vram/src/lib.rs.
+- Required tests: worker_telemetry::tests::envelope_rejects_unknown_version_or_oversize; worker_telemetry::tests::envelope_omits_stale_or_malformed_cache; worker_telemetry::tests::refusal_reason_is_bounded_and_never_a_payload; worker_telemetry::tests::logical_cache_bytes_are_never_budget_or_ram; worker_telemetry::tests::codec_labels_and_reason_truncation_are_total.
+- Cover target: at least 80% on business logic.
+
 **crates/ramshared-block/src/compressed_cache.rs**
 - Purpose: Bounded extent index, slab/free-range allocation, metadata, overlap invalidation, admission, and raw/compressed publication.
 - RF / DT: RF-2 through RF-6; DT-4 through DT-7.
@@ -402,6 +410,18 @@ invocation. The command text below is the contract consumed by
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/compressed_cache.rs --min 80 --report-json tmp/compressed-cache-cov.json
 ```
 
+**crates/ramshared-vram/src/codec.rs**
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/codec.rs --min 80 --report-json tmp/codec-cov.json
+```
+
+**crates/ramshared-vram/src/worker_telemetry.rs**
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/worker_telemetry.rs --min 80 --report-json tmp/worker-telemetry-cov.json
+```
+
 ## Validation checklist
 
 - [ ] cargo fmt --all -- --check
@@ -415,12 +435,15 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ra
   `overlap_invalidation_removes_only_affected_entries`,
   `metadata_budget_caps_entry_count`,
   `zero_physical_target_allocates_no_metadata`.)
-- [ ] Coverage for `crates/ramshared-vram/src/codec.rs` — not yet gated. The
-  file is declared above with "Cover target: at least 80% on business logic",
-  but no `docs/governance/rust-slice-coverage.json` entry owns it and no
-  measured invocation is recorded here. Do not claim this row until the exact
-  command is bound in this SPEC, registered in the map, and measured on a tree
-  without uncommitted work in that file.
+- [x] Coverage for `crates/ramshared-vram/src/codec.rs`
+  (2026-10-01: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/codec.rs --min 80 --report-json tmp/codec-cov.json`
+  — 87.4% lines (311/356), gate PASSED.)
+- [x] Coverage for `crates/ramshared-vram/src/worker_telemetry.rs`
+  (2026-10-01: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/worker_telemetry.rs --min 80 --report-json tmp/worker-telemetry-cov.json`
+  — 100.0% lines (60/60), gate PASSED. All five named unit tests in
+  `worker_telemetry::tests` are present and green: `envelope_rejects_unknown_version_or_oversize`,
+  `envelope_omits_stale_or_malformed_cache`, `refusal_reason_is_bounded_and_never_a_payload`,
+  `logical_cache_bytes_are_never_budget_or_ram`, `codec_labels_and_reason_truncation_are_total`.)
 - [ ] Coverage for `crates/ramshared-cuda/src/nvcomp.rs` — N/A yet. The file is
   not created; ITEM-3 is gated on the exact nvCOMP pre-decode checksum
   mechanism (DT-7). Its cover target is not applicable before the file exists.
