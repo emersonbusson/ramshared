@@ -252,8 +252,16 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   `drivers/windows/ramshared/*.c` — zero hits for `password|credential|secret|token|api_key|apikey`;
   zero for `%p|%px|KASLR|kernel address|0xffff`; zero for pagefile/payload content on any
   `log|trace|wpp|etw|DbgPrint|KdPrint` path.)
-- [ ] **Kernel Oops/internal error:** failing IOCTL returns generic NTSTATUS; no implementation detail or
-  internal offset leaks to Ring-3.
+- [x] **Kernel Oops/internal error:** failing IOCTL returns generic NTSTATUS; no implementation detail or
+  internal offset leaks to Ring-3. (2026-10-01: verified against `drivers/windows/ramshared/*.c` —
+  the complete set of returned codes is `STATUS_SUCCESS`, `STATUS_PENDING`, `STATUS_INVALID_PARAMETER`,
+  `STATUS_INVALID_DEVICE_REQUEST`, `STATUS_INSUFFICIENT_RESOURCES`, `STATUS_REVISION_MISMATCH`,
+  `STATUS_DEVICE_BUSY`, `STATUS_DEVICE_NOT_READY`, `STATUS_DEVICE_NOT_CONNECTED`, `STATUS_CANCELLED`
+  and the SRB equivalents `SRB_STATUS_SUCCESS/ERROR/BUSY/PENDING/INVALID_REQUEST/NO_DEVICE/DATA_OVERRUN/
+  AUTOSENSE_VALID` — all documented public values, zero custom or implementation-defined codes.
+  `IoStatus.Information` is `0` on every error path and a clamped byte count
+  (`if (info > outLen) info = 0`) on success; `protocol.h` structs expose only fixed-width integers
+  and caller-supplied user VAs — no kernel pointer or internal offset reaches Ring-3.)
 
 ## Files to CREATE
 
@@ -713,7 +721,13 @@ kernel-page drill with confirmed residency (DT-21).
 
 - [x] Every critical ITEM points to `docs/methodology/kahneman-disciplines.md` (Map) with exact anchor (2026-10-01: all 9 distinct `#disc-N` anchors in this SPEC resolve to `docs/methodology/kahneman-disciplines.md`: `#disc-1`, `#disc-2`, `#disc-3`, `#disc-5`, `#disc-6`, `#disc-9`, `#disc-11`, `#disc-13`, `#disc-14`.)
 - [x] Every critical step records required question, minimum evidence, and abort trigger (2026-10-01: the Kahneman map at the `Step / ITEM | Kahneman discipline | Link | Required question | Minimum evidence | Abort trigger` table has zero empty or `—` cells across every critical row.)
-- [ ] No vague language at a critical point without observable criterion
+- [x] No vague language at a critical point without observable criterion (2026-10-01: lexical scan of
+  the whole SPEC for `hopefully|ideally|robust|efficient|adequate|sufficient|reasonable|appropriate|
+  best effort|properly|correctly|TBD|TODO|FIXME|maybe|perhaps|etc.` returns zero hits at any critical
+  gate. The only hedged words are design-rationale prose (DT-7 "lands later" for a future P2 feature;
+  DT-21 "a gate, not hope" is itself the anti-vague rule). Every critical gate — ITEM-8/R7/DT-21,
+  the Kahneman map rows, and the named-test matrix — carries an observable criterion: `% Usage > 0`,
+  `≥3 executions`, `B1 vs B2`, `ABORTS AS INCONCLUSIVE`, or an exact test name.)
 - [ ] **R7 gate (ITEM-8):** kernel-page drill has run and `DEGRADATION-MATRIX` is updated
   **before** any load on the real host
 

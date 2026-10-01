@@ -198,6 +198,9 @@ results are recorded in `IMPL.md`.
 | Route audit | `UPSTREAM_PR_ROUTE_AUDIT` | source/static | #3/#18 | Public PR population and decisive maintainer comments support the selected route. |
 | Human packet | `MAINTAINER_REQUESTED_PR_GATE` | refusal | #13/#18 | A patch-ready state without an explicit maintainer request cannot open a PR. |
 | N3 boundary | `N3_SCOPE_REFUSAL` | refusal | #2/#18 | N3 host RFC remains a separate pack. |
+| Config scope | `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL` | refusal | #2/#13 | No product tree is reachable from the series and no config symbol is read as product transport or native memory. |
+| Config scope | `X86_CONFIG_PAIR_MISMATCH_REFUSAL` | refusal | #13 | A third changed file diverges from the two-symbol allowlist and is refused. |
+| Config scope | `ARM64_INDEPENDENT_PAIR_MISMATCH_REFUSAL` | refusal | #13 | Arm64 keeps writeback at `y` with no redundant request; a smuggled file is refused. |
 | Evidence process | `UPSTREAM_EVIDENCE_REPLAY_IDEMPOTENCY` | process | #17 | Revalidation creates no duplicate issue comment or host effect. |
 | Maintenance | `UPSTREAM_REVALIDATION_TRIGGER` | process | #3/#15 | SHA/path/branch/Kconfig/build/30-day drift yields `NEEDS_REVALIDATION`. |
 
@@ -222,15 +225,57 @@ must not run host swap or pressure.
 
 Approved campaign:
 
-- [ ] Read the exact external target README and source at the pinned SHA.
-- [ ] Verify both canonical architecture paths and all four symbol values.
+- [x] Read the exact external target README and source at the pinned SHA.
+      (2026-10-01: fetched `README.md`, `Microsoft/config-wsl`,
+      `Microsoft/config-wsl-arm64`, `arch/x86/configs/config-wsl`, and
+      `arch/arm64/configs/config-wsl-arm64` from
+      `microsoft/WSL2-Linux-Kernel` at full SHA
+      `14794180686c2fb6307fbe359c359bec765249f3`. The README states that
+      issue reports are not accepted on that repository and route to the WSL
+      GitHub project, directs feature requests there as well, and gives the
+      official build entry point as
+      `make KCONFIG_CONFIG=Microsoft/config-wsl` — matching DT-U-2/DT-U-3.)
+- [x] Verify both canonical architecture paths and all four symbol values.
+      (2026-10-01: `Microsoft/config-wsl` is a symlink whose target text is
+      `../arch/x86/configs/config-wsl`; `Microsoft/config-wsl-arm64` is a
+      symlink to `../arch/arm64/configs/config-wsl-arm64` — both canonical
+      architecture files exist at the pinned SHA and are the resolved build
+      inputs. The four symbol values match the PRD table exactly:
+      x86 `arch/x86/configs/config-wsl` line 2205
+      `# CONFIG_BLK_DEV_UBLK is not set` and line 2191
+      `# CONFIG_ZRAM_WRITEBACK is not set`; arm64
+      `arch/arm64/configs/config-wsl-arm64` line 2580
+      `# CONFIG_BLK_DEV_UBLK is not set` and line 2565
+      `CONFIG_ZRAM_WRITEBACK=y`. x86 pair is the exact two-symbol request;
+      arm64 writeback is already `y` and must not be requested redundantly,
+      so `ARM64_INDEPENDENT_PAIR` holds.)
 - [ ] Run official build/sparse/package gates and record status per architecture.
 - [ ] If custom-kernel capability is approved, use isolated before/action/after
   evidence with no swap or pressure; capability remains non-product.
-- [ ] Pair x86/arm64 legitimate values with mismatch/refusal cases.
-- [ ] Pair config capability with `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL`.
-- [ ] Pair #41054 request with `NO_EXTERNAL_KERNEL_PR_REFUSAL`.
-- [ ] Keep N3 separate with `N3_SCOPE_REFUSAL`.
+- [x] Pair x86/arm64 legitimate values with mismatch/refusal cases.
+      (2026-10-01: `scripts/kernel/test-wsl-upstream-config-contribution.sh
+      --refusal-static` emits `PASS X86_CONFIG_PAIR_MISMATCH_REFUSAL` and
+      `PASS ARM64_INDEPENDENT_PAIR_MISMATCH_REFUSAL`, exit 0. The gates assert
+      the exact two-symbol candidate delta and that a smuggled third file
+      diverges from the allowlist; a manufactured negative case exits 1.)
+- [x] Pair config capability with `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL`.
+      (2026-10-01: same suite emits `PASS UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL`,
+      exit 0. Gates: no product tree (`crates/`, `drivers/`, `src/`, `lib/`) is
+      reachable from the contribution series, and no contribution document maps
+      `CONFIG_BLK_DEV_UBLK`/`CONFIG_ZRAM_WRITEBACK` to product transport or
+      native memory. Negative case injecting a `crates/` path exits 1 with
+      `FAIL product path crates/ reachable from contribution series`.)
+- [x] Pair #41054 request with `NO_EXTERNAL_KERNEL_PR_REFUSAL`.
+      (2026-10-01: same suite emits `PASS NO_EXTERNAL_KERNEL_PR_REFUSAL`, exit 0.
+      Gates: no `gh pr`/`gh api` or `git push` targeting
+      `microsoft/WSL2-Linux-Kernel` under `scripts/` or `.github/`, and
+      `MAINTAINER_REQUESTED_PR_GATE local_patch_only` is present. Negative case
+      appending `gh pr create --repo microsoft/WSL2-Linux-Kernel` exits 1.)
+- [x] Keep N3 separate with `N3_SCOPE_REFUSAL`.
+      (2026-10-01: same suite emits `PASS N3_SCOPE_REFUSAL`, exit 0. Gates: no
+      `docs/rfc/`, `RFC-N3`, or `n3-host` path is reachable from the
+      contribution series, and SPEC.md both names `N3_SCOPE_REFUSAL` and keeps
+      N3 as a separate pack.)
 - [ ] Keep missing environment evidence `PARTIAL`; do not update validation in
   this docs-only turn.
 
