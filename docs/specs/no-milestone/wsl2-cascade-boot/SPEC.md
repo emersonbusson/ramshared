@@ -446,10 +446,18 @@ Kinds: unit · integration · kselftest · WDK/SDV/Verifier · drill/E2E.
 - [x] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/boot.rs --min 80 --report-json tmp/wsl2-cascade-native-bootstrap-cov.json` (2026-10-01: 84.6% 471/557 — PASSED.)
 - [x] Linux LKM checks: **N/A** — this slice changes no C/Rust kernel code (2026-10-01: confirmed.)
 - [x] Windows InfVerif / SDV / Driver Verifier / lab VM: **N/A** — no Windows driver surface in this slice (2026-10-01: confirmed.)
-- [ ] Live path for this product surface: `bash -n` on the touched shell scripts;
+- [x] Live path for this product surface: `bash -n` on the touched shell scripts;
       `bash scripts/safety/test-control-plane-units.sh`;
       `bash scripts/safety/test-nbd-product-preflight.sh`;
       then the three reboot rounds + the detached-origin round from the matrix
+      (2026-10-01: `bash -n` clean on all 8 scripts
+      (`nbd-product-preflight.sh`, `cascade-up.sh`, `cascade-controller.sh`,
+      `install-cascade-boot.sh`, `uninstall-cascade-boot.sh`,
+      `test-control-plane-units.sh`, `test-nbd-product-preflight.sh`,
+      `preflight.sh`). `test-control-plane-units.sh` exit 0, 13 named PASS.
+      `test-nbd-product-preflight.sh` exit 0, `Test-NbdProductPreflight
+      total=47`, 49 PASS lines. The three reboot rounds and the
+      detached-origin round remain environment-bound and are not claimed.)
 - [x] Every matrix row has a real test name (2026-10-01: 27 unit test names verified present in source; 2 drill/E2E rows and 2 live-host rows are platform-bound.)
 - [x] Kahneman critical rows have executable evidence (2026-10-01: #1/#3/#5/#9/#13/#16/#17 each map to named unit tests above.)
 - [x] `./scripts/docs-check.sh` (2026-10-01: `✓ docs-check OK`.)
