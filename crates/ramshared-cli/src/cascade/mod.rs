@@ -1473,6 +1473,30 @@ fn gpu_budget_telemetry_invalid_or_stale(
     }
 }
 
+/// Map the daemon's published cache verdict onto the operator-facing state.
+///
+/// `ok` exists to stop a lying `"ACTIVE"` from being believed, not to erase the
+/// daemon's own verdict about a cache that is deliberately off. A released
+/// cache under control pressure (`"OFF"`) and a dead one (`"UNAVAILABLE"`) are
+/// different states for the operator and for recovery policy, so the named
+/// non-serving verdicts survive an `ok: false`.
+fn cache_state_from_status(
+    published: Option<&str>,
+    product_active: bool,
+    cache_status_ok: bool,
+) -> CacheState {
+    match published {
+        Some("OFF") => CacheState::Off,
+        Some("STUCK") => CacheState::Stuck,
+        Some("UNAVAILABLE") => CacheState::Unavailable,
+        Some("ACTIVE") if product_active && cache_status_ok => CacheState::Active,
+        Some("RESTRICTED") if product_active && cache_status_ok => CacheState::Restricted,
+        Some("ACTIVE") | Some("RESTRICTED") => CacheState::Unavailable,
+        _ if product_active => CacheState::Unavailable,
+        _ => CacheState::Off,
+    }
+}
+
 pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let pairs: Vec<(&str, u64, u64, i32)> = entries
         .iter()
@@ -1543,15 +1567,13 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         }
         _ => OriginState::Off,
     };
-    let cache_state = match status_text("cache_state") {
-        _ if product_active && !cache_status_ok => CacheState::Unavailable,
-        Some("ACTIVE") => CacheState::Active,
-        Some("RESTRICTED") => CacheState::Restricted,
-        Some("STUCK") => CacheState::Stuck,
-        Some("OFF") if !product_active => CacheState::Off,
-        _ if product_active => CacheState::Unavailable,
-        _ => CacheState::Off,
-    };
+    // `ok` exists to stop a lying "ACTIVE" from being believed, not to erase
+    // the daemon's own verdict about a cache that is deliberately off. A
+    // released cache under control pressure (`OFF`) and a dead one
+    // (`UNAVAILABLE`) are different states for the operator and for recovery
+    // policy, so the named non-serving verdicts survive an `ok: false`.
+    let cache_state =
+        cache_state_from_status(status_text("cache_state"), product_active, cache_status_ok);
     let control_state = supervisor_status
         .as_ref()
         .and_then(|value| value.get("control_state")?.as_str())
@@ -1864,6 +1886,74 @@ mod tests {
 
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    #[test]
+    fn released_cache_reports_off_not_unavailable() {
+        // A control-pressure release publishes `ok: false` beside an explicit
+        // `"OFF"`. That is a deliberate release, not a dead cache, and must
+        // stay distinguishable from `"UNAVAILABLE"`.
+        assert_eq!(
+            cache_state_from_status(Some("OFF"), true, false),
+            CacheState::Off
+        );
+        assert_eq!(
+            cache_state_from_status(Some("OFF"), true, true),
+            CacheState::Off
+        );
+        assert_eq!(
+            cache_state_from_status(Some("OFF"), false, false),
+            CacheState::Off
+        );
+    }
+
+    #[test]
+    fn stuck_verdict_survives_a_failed_ok_flag() {
+        // `STUCK` is a named death signature. `ok: false` must not demote it
+        // to the generic `UNAVAILABLE` bucket.
+        assert_eq!(
+            cache_state_from_status(Some("STUCK"), true, false),
+            CacheState::Stuck
+        );
+        assert_eq!(
+            cache_state_from_status(Some("UNAVAILABLE"), true, false),
+            CacheState::Unavailable
+        );
+    }
+
+    #[test]
+    fn ok_false_stops_a_lying_active_or_restricted() {
+        // This is what `ok` is for: a status that claims to be serving while
+        // reporting it is not healthy is not believed.
+        assert_eq!(
+            cache_state_from_status(Some("ACTIVE"), true, false),
+            CacheState::Unavailable
+        );
+        assert_eq!(
+            cache_state_from_status(Some("RESTRICTED"), true, false),
+            CacheState::Unavailable
+        );
+        assert_eq!(
+            cache_state_from_status(Some("ACTIVE"), true, true),
+            CacheState::Active
+        );
+        assert_eq!(
+            cache_state_from_status(Some("RESTRICTED"), true, true),
+            CacheState::Restricted
+        );
+    }
+
+    #[test]
+    fn missing_verdict_fails_closed_when_the_product_is_active() {
+        assert_eq!(
+            cache_state_from_status(None, true, false),
+            CacheState::Unavailable
+        );
+        assert_eq!(
+            cache_state_from_status(Some("NONSENSE"), true, true),
+            CacheState::Unavailable
+        );
+        assert_eq!(cache_state_from_status(None, false, false), CacheState::Off);
+    }
 
     #[test]
     fn gpu_budget_status_requires_fresh_driver_bound_telemetry() {
