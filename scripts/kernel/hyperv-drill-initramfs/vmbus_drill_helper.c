@@ -52,6 +52,13 @@
  * pattern cannot be built and this mode fails closed instead of reporting a
  * pattern it never created.
  *
+ * The allocation loop also lowers vm.min_free_kbytes for its duration and
+ * restores it before punching holes. Without that, the min watermark hides
+ * free high-order blocks from userspace faults: buddyinfo still lists them,
+ * MemAvailable says there is nothing left, and the loop stops with the test
+ * condition unmet no matter how low the floor sits. The read-back in the
+ * report is the value actually in force, not the value asked for.
+ *
  * Never prints addresses or PFNs. Evidence must not carry KASLR material.
  */
 #define _GNU_SOURCE
@@ -266,6 +273,50 @@ static void raise_max_map_count(void)
 }
 
 /*
+ * min_free_kbytes sets the per-zone min watermark. On a 2 GiB guest the
+ * default is ~20 MiB, so MemAvailable reads 2 MiB while /proc/buddyinfo
+ * still shows 15 MiB of free pages -- those pages are free but reserved,
+ * and a userspace page fault cannot cross the watermark to split the
+ * high-order blocks hidden behind it. That is why the allocation loop kept
+ * stopping with order-7 supply left no matter how low the MemAvailable
+ * floor went: the floor was fine, the watermark was the wall.
+ *
+ * This is a disposable drill guest whose purpose is to exhaust the buddy.
+ * Lowering the reserve is the only lever userspace has to reach those
+ * pages. It is restored before the channel-open exercise, which needs the
+ * normal reserve to allocate its ring. Best effort both ways: if the write
+ * fails the loop simply stops on the floor as before and says so.
+ */
+static long min_free_kb_read(void)
+{
+	FILE *f = fopen("/proc/sys/vm/min_free_kbytes", "r");
+	char buf[64];
+	long kb = -1;
+
+	if (!f)
+		return -1;
+	if (fgets(buf, sizeof(buf), f))
+		kb = strtol(buf, NULL, 10);
+	fclose(f);
+	return kb;
+}
+
+static void min_free_kb_write(long kb)
+{
+	char buf[32];
+	int fd, n;
+
+	fd = open("/proc/sys/vm/min_free_kbytes", O_WRONLY);
+	if (fd < 0)
+		return;
+	n = snprintf(buf, sizeof(buf), "%ld\n", kb);
+	if (n > 0 && write(fd, buf, (size_t)n) < 0) {
+		/* best effort */
+	}
+	close(fd);
+}
+
+/*
  * Free blocks at order 7 and above, across all zones. This is the condition
  * the drill is actually about: while any remain, the buddy can still satisfy
  * an order-7 request outright and the fallback is not under test.
@@ -375,6 +426,7 @@ static int do_fragment_buddy(int argc, char **argv)
 	long mib, hold, want, got = 0, locked = 0, i, off, stopped = 0;
 	long freed_pages = 0, held_pages = 0, no_pfn = 0, pairs = 0;
 	long high_before, high_locked, high_after, avail_kb;
+	long min_free_saved, min_free_set, min_free_now;
 	void **maps;
 	unsigned long *pfns = NULL, *seen = NULL;
 	unsigned long max_pfn = 0, seen_words = 0;
@@ -408,6 +460,25 @@ static int do_fragment_buddy(int argc, char **argv)
 	}
 
 	raise_max_map_count();
+
+	/*
+	 * Lower the min watermark before allocating so the loop can reach the
+	 * high-order blocks sitting behind it. Saved so it can be restored
+	 * before the ring allocation that follows.
+	 */
+	min_free_saved = min_free_kb_read();
+	min_free_set = 512;
+	min_free_kb_write(min_free_set);
+	/*
+	 * Read back rather than trusting the write: the sysctl is
+	 * best-effort and can be denied, and a silent no-op must not look
+	 * like the lever was pulled. The report carries the value that is
+	 * actually in force.
+	 */
+	min_free_now = min_free_kb_read();
+	printf("FRAGMENT_BUDDY min_free_kbytes saved=%ld set=%ld now=%ld\n",
+	       min_free_saved, min_free_set, min_free_now);
+	fflush(stdout);
 
 	/*
 	 * This guest is disposable and this process is the point of the
@@ -571,6 +642,17 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * order-0 -- far more than the 2 MiB ring needs -- and the held buddies
 	 * keep order-7 from reforming.
 	 */
+	/*
+	 * Restore the watermark before punching. The pattern is in place --
+	 * pages are locked and buddies are held -- so raising the reserve
+	 * again does not rebuild high orders, and the vm_area_dup() slab
+	 * the punch needs should allocate against the normal reserve rather
+	 * than eating into it. The channel open that follows needs that
+	 * reserve too, to allocate its ring.
+	 */
+	if (min_free_saved > 0)
+		min_free_kb_write(min_free_saved);
+
 	set_oom_adj("0\n");
 	for (i = 0; i < got && freed_pages < FRAG_HOLE_CAP; i++) {
 		char *m = maps[i];
