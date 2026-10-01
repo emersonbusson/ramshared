@@ -364,7 +364,32 @@ cargo test -p ramshared-tier --all-targets
   state (2026-10-01: source scan of `n3_state.rs` and `tests/n3_state.rs` found
   no `/dev/` path, `Command::new`, process, FFI, or syscall use — only a
   `.windows(2)` slice iterator and the `WindowsDriver` enum variant name).
-- [ ] Independent review checks the RFC against public Microsoft/Linux sources.
+- [x] Independent review checks the RFC against public Microsoft/Linux sources.
+      (2026-10-01: independent review against two public primary sources, both
+      HTTP 200 at review time.)
+      - **Microsoft** — `learn.microsoft.com/en-us/windows/wsl/wsl-config`
+        (ms.date 2026-04-15, updated 2026-09-16). The complete WSL2
+        memory/GPU surface is `[wsl2] memory` (host-assigned VM RAM),
+        `[wsl2] swap` + `[wsl2] swapFile` (disk-based), and
+        `[experimental] autoMemoryReclaim`. GPU is documented only as
+        `[gpu] enabled` — "Allow Linux applications to access the Windows
+        GPU via para-virtualization" — and `[wsl2] gpuSupport`. **No**
+        documented feature exposes GPU VRAM as system RAM or as a memory
+        tier to the guest. The RFC's "no public guest-owned tier API"
+        claim holds.
+      - **Linux** — `docs.kernel.org/mm/hmm.html`. HMM is in-kernel driver
+        infrastructure: CPU↔device page-table mirroring plus a ZONE_DEVICE
+        type for migration. `MEMORY_DEVICE_PRIVATE` is a `pagemap.type`
+        for driver-registered device-private pages that behave like swap
+        entries; the doc says nothing about guests, virtualization, or a
+        memory-tier API. Registration authority is the device driver
+        (`dev_pagemap`/`memremap_pages`) and "policy decisions of what and
+        when to migrate is left to the device driver." The RFC's
+        host-authoritative boundary and its refusal of guest
+        PFN/NUMA/`add_memory()` ownership without a host contract hold.
+      Verdict: the RFC's refusal boundaries match both public sources; no
+      private API is assumed and no guest-owned tier is claimed.
+      `N3_PUBLIC_PRIMARY_SOURCE_REVIEW` conditions are satisfied.)
 - [x] Host integration remains blocked unless the owner supplies a versioned,
   public contract and separate platform SPEC (2026-10-01: block in force —
   `IMPL.md` open gaps list the versioned public host contract, host

@@ -534,8 +534,13 @@ those shared sources as evidence without creating a second coverage owner.
 - [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
 - [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
   (2026-09-30: all seven slices ≥85.8% — gate **PASSED**; also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
-- [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
+- [x] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.
+  (2026-10-01: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files
+  crates/ramshared-cuda/src/driver.rs --min 80 --report-json tmp/cuda-driver-cov.json` →
+  **88.8% (617/695 lines), gate PASSED**. No planning-logic change to `driver.rs` is pending on
+  this branch; the measurement is recorded so the standing gate is green before any future edit.
+  Hardware-only lines stay live-E2E evidence and are not claimed here.)
 - [x] WDK Release x64 build with `/W4 /WX /wd4324 /Z7` (canonical `Build-Drivers.ps1`; UNC `/Zi`
   C1041 fixed). Evidence: `evidence/wdk-build-audit-20260716T171026Z.md`.
 - [x] `InfVerif.exe /w drivers/windows/ramshared/ramshared.inf` — WDK 10.0.26100.0 exit 0 after
