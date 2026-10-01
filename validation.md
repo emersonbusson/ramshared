@@ -13465,3 +13465,113 @@ run that shows the restored watermark is no longer the binding floor.
 Re-read both runtime jobs before citing. Job-level `success` on
 `hyperv-runtime-drill` is never a gate closure. Never cite this entry as
 CoCo or send-gate evidence.
+
+## 2026-10-01 12:40 -03 — the chase-held partner doubles the recycle rate and does not move the residue; the margin still owns the tail (EVD-0156)
+
+**What:** Score of the chase-held-buddy lever (fork `c94d10f44538`, the
+recycle accepting an earlier chase chunk's survivor as its isolation
+partner). Drill run **36883261849**. Both runtime jobs
+`VERDICT=INCONCLUSIVE_CAP_REACHED`, `stop=chase-memfree-margin`. Job-level
+`success` on all three jobs is **not** a gate closure.
+
+**Verdict:** 🔴 fails — third signal open; partner lever doubles holes/chunk and the residue does not move
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY chase=… holes=…` and the
+buddyinfo line after `ready=1` from both `drill-runtime` jobs. The recycle
+rate is `chase_holes / chase`; the residue is the order-7-and-up page
+total from that buddyinfo line (field 5+k for order k, k ≥ 7), not the
+block count. Compare **both** against the same pair from the previous run
+before concluding a partner change did anything — a rate that moves while
+the residue page total does not is a null on the third signal. Score the
+third signal only from `RESULT … (reread=…) exhausted=…`.
+
+| Job | Result | Residue at `ready=1` | Holes / chunk | Net hold |
+| --- | --- | --- | --- | --- |
+| windows-latest | `high_order_7plus_blocks=7 (reread=7) exhausted=0` | buddyinfo `1 0 0 1 2 1 1 2 1 2 2` — 7 blocks, **3584 pages / 14.0 MiB** | `32768 / 3227` = **10.15** | 3227 × 5.85 pages ≈ 18.7 MiB |
+| windows-2025 | `high_order_7plus_blocks=5 (reread=5) exhausted=0` | buddyinfo `0 1 1 1 0 1 0 0 2 0 3` — 5 blocks, **3584 pages / 14.0 MiB** | `32768 / 3215` = **10.19** | 3215 × 5.81 pages ≈ 18.5 MiB |
+
+The EVD-0134 acceptance triple on this run: `PHASE1 cycle_fails=0 / 120
+steps` and `MMAP_HOLD path=/dev/uio0 ... maps=5` with
+`MMAP_HOLD path=.../channels/14/ring ... maps=1` are **green**;
+`high_order_7plus_blocks=0` with `exhausted=1` is **red**. Lifecycle
+`PASS cycles=30 phase2=yes`, `order7_dmesg=0`, `accept4_failures=0`,
+`oops=0`, `rebind=yes`, `SPLATS=0`, `FAULTS=0` on both guests. No OOM,
+no panic. The `c94d10f44538` rollback trigger (oops / `out_of_memory()` /
+probe -12 / holes-per-chunk still 5.0) **does not fire**.
+
+**The lever is real and it is a null at the same time.** Against the
+four-run table in EVD-0154 the recycle rate moves 5.00 → 10.15/10.19 —
+doubled, on both guests, after two partner sets that did nothing (EVD-0152
+in-chunk only 4.996/5.004, EVD-0154 main-held 5.005/5.003). The chase's
+own earlier chunks are the partner that works. But the residue does not
+move: **3584 pages / 14.0 MiB of order-7-and-up on both guests**, against
+EVD-0154's 3072/3328 pages. Net hold is the same too — 18.7/18.5 MiB here
+against 18.4/19.3 MiB in EVD-0154. The recycle rate sets how many chunks
+fit in the budget; the budget sets the residue.
+
+**The "8 holes per chunk" structural maximum is wrong.** It assumed a
+physically contiguous 64 KiB chunk (8 even PFNs in 16 pages). A `mmap` of
+64 KiB is only virtually contiguous; its 16 pages arrive from different
+splits and can all carry even PFNs. The measured 10.15 frees/chunk is not
+an accounting error: `32768` freed + `18864` held = `51632` = `3227 × 16`
+exactly on windows-latest, and `32768 + 18672 = 51440 = 3215 × 16` on
+windows-2025. `punch_chunk_isolated()` still frees only even PFNs whose
+`pfn+1` is held; there are simply more than 8 such pages in a chunk.
+`FRAG_CHASE_HOLE_CAP = FRAG_CHASE_CAP * 8` therefore truncated both runs
+at `chase_holes=32768` exactly — a second EVD-0151-class binding, at the
+same moment the memfree margin stopped the loop, so raising it alone buys
+almost nothing until the tail can run.
+
+**Why the tail cannot split (the mechanism).** The recycle returns 10 of
+16 pages as isolated order-0 and the next chunk's faults re-take those
+first (`__rmqueue_smallest` drains the order-0 list before it splits). The
+chase therefore never reaches the high-order blocks it exists to destroy:
+`unsplit` settles at 697/853 pages while 3584 pages sit in order-7-and-up.
+That is the EVD-0152 model inversion, quantified. The comment on
+`FRAG_CHASE_UNSPLIT` that claims "splitting refills unsplit so the floor
+cannot bind while any block above order-0 remains" is true of a
+non-recycling chase and false of this one: the recycle refills unsplit
+**without** splitting. And `FRAG_CHASE_HARD_KB` at 16 MiB then stops the
+loop with 14 of the ~17 MiB of `MemFree` sitting in exactly those
+high-order blocks — the margin's own size is what leaves them standing.
+Both guests landing on 3584 pages despite different block shapes is the
+proof: the residue is `margin − unsplit − low-order`, not a sample.
+
+**The next lever is a tail that stops recycling.** One order-0 fault from
+an order-7 block destroys it (leaving order-6 and below free, `MemFree`
+almost unchanged); reaching those faults only requires draining the
+unsplit pool the recycle was refilling. At `unsplit=697` that is ~44
+chunks of 16 pages, then ~30 further faults to split the 28 order-7
+equivalents in 3584 pages. On the order of 50–80 chunks and 3 MiB of net
+hold, against an 11.5 MiB budget (`MemFree` 17 MiB − restored watermark
+5.6 MiB). The main punch still runs afterwards and returns 16 MiB of
+isolated order-0 for the ring, so the channel-open does not pay for the
+tail.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0156`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T15:35:00Z`.
+**Verified at:** `2026-10-01T15:48:00Z`.
+**Source revision:** `c94d10f44538`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep both `chase_holes=32768` lines beside the hole/chunk
+rate and beside the `3584 pages / 14.0 MiB` residue. The pair of exact
+sums (`32768 + 18864 = 3227 × 16`) is what rules out an accounting bug
+and makes 10.15 a real rate rather than a divided-by-the-wrong-denominator
+artifact. Keep the two buddyinfo lines even though the block shapes
+differ: the shapes differ and the page total does not, which is what
+makes the residue a function of the margin. Keep EVD-0154's four-run
+holes-per-chunk table in view — without the 5.00 baselines the doubling
+cannot be attributed to the chase-held partner.
+**Freshness:** Superseded for the holes-per-chunk claim by any run
+reporting a partner set or chunk size that moves the rate again, and for
+the residue claim by any run whose `stop` is no longer
+`chase-memfree-margin` while high-order blocks remain, or whose residue
+page total moves off 3584 without a margin change. Superseded for the
+third-signal claim only by `exhausted=1` with `reread=0`. Re-read both
+runtime jobs before citing. Job-level `success` on `hyperv-runtime-drill`
+is never a gate closure. Never cite this entry as CoCo or send-gate
+evidence.
