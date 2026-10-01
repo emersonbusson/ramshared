@@ -421,8 +421,23 @@ static int do_mlock_hog(int argc, char **argv)
  * the freed half's order-2 buddy, so the freed half stays order-2 and
  * cannot coalesce past it -- the order-7 depletion just measured is
  * not undone. Cap the groups like the holes: each munmap splits a VMA.
+ *
+ * Two properties make the runs findable. The per-cpu page cache is
+ * drained first: it serves recycled, physically scattered order-0 pages
+ * before the buddy splits anything, so a reserve taken against a warm
+ * PCP comes back scattered and holds no 8-consecutive-PFN run at all --
+ * run 36921241614 reported order2_reserve groups=0 pages=0 with
+ * reserve=48 of 64 KiB chunks and the guest then died on a shell fork
+ * that had no order-2 stack to allocate. After the drain, a refill
+ * splits a high-order block and hands out sequential PFNs. The reserve
+ * chunks are then 2 MiB, not 64 KiB, and are scanned wholesale: a
+ * 16-page window almost never contains an 8-run even when the pages
+ * are contiguous but misaligned, while a 512-page window does.
  */
-#define FRAG_RESERVE_CHUNKS 48
+#define FRAG_PCP_SOAK_CHUNK (2L * 1024 * 1024)
+#define FRAG_PCP_SOAK_CHUNKS 4
+#define FRAG_RESERVE_CHUNK (2L * 1024 * 1024)
+#define FRAG_RESERVE_CHUNKS 16
 #define FRAG_ORDER2_GROUPS 32
 
 /*
@@ -834,6 +849,8 @@ static int do_fragment_buddy(int argc, char **argv)
 	long unsplit_at_stop = -1;
 	void **maps, **chase_maps;
 	void *reserve[FRAG_RESERVE_CHUNKS];
+	void *soak[FRAG_PCP_SOAK_CHUNKS];
+	long soak_got = 0;
 	long reserve_got = 0, order2_groups = 0, order2_pages = 0;
 	unsigned long *pfns = NULL, *seen = NULL;
 	unsigned long max_pfn = 0, seen_words = 0;
@@ -951,6 +968,31 @@ static int do_fragment_buddy(int argc, char **argv)
 	fflush(stdout);
 
 	/*
+	 * Drain the per-cpu page cache before the reserve, so the reserve
+	 * itself comes from buddy splits and therefore in runs. Order-0
+	 * faults are served from the PCP first, and those pages are
+	 * recycled and physically scattered; the soak holds them so they
+	 * cannot come back. Held for the whole pattern with the reserve
+	 * and released just before ready=1, see below.
+	 */
+	for (i = 0; i < FRAG_PCP_SOAK_CHUNKS; i++) {
+		char *m;
+
+		m = mmap(NULL, FRAG_PCP_SOAK_CHUNK, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (m == MAP_FAILED)
+			break;
+		for (off = 0; off < FRAG_PCP_SOAK_CHUNK; off += FRAG_PAGE)
+			m[off] = 1;
+		if (mlock(m, FRAG_PCP_SOAK_CHUNK) != 0) {
+			munmap(m, FRAG_PCP_SOAK_CHUNK);
+			break;
+		}
+		soak[i] = m;
+		soak_got++;
+	}
+
+	/*
 	 * Take the order-2 reserve first so it is carved out of an
 	 * untouched buddy and comes back as contiguous runs. Held for the
 	 * whole pattern, which keeps it out of the allocation being
@@ -959,14 +1001,14 @@ static int do_fragment_buddy(int argc, char **argv)
 	for (i = 0; i < FRAG_RESERVE_CHUNKS; i++) {
 		char *m;
 
-		m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
+		m = mmap(NULL, FRAG_RESERVE_CHUNK, PROT_READ | PROT_WRITE,
 			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 		if (m == MAP_FAILED)
 			break;
-		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE)
+		for (off = 0; off < FRAG_RESERVE_CHUNK; off += FRAG_PAGE)
 			m[off] = 1;
-		if (mlock(m, FRAG_CHUNK) != 0) {
-			munmap(m, FRAG_CHUNK);
+		if (mlock(m, FRAG_RESERVE_CHUNK) != 0) {
+			munmap(m, FRAG_RESERVE_CHUNK);
 			break;
 		}
 		reserve[i] = m;
@@ -1198,8 +1240,9 @@ static int do_fragment_buddy(int argc, char **argv)
 			for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE) {
 				unsigned long spfn = 0;
 
-				if (pagemap_pfn(pmfd, m + off, &spfn) == 0)
-					pfn_setbit(seen, spfn);
+				if (pagemap_pfn(pmfd, m + off, &spfn) == 0 &&
+				    spfn)
+					pfn_setbit(seen, spfn - 1);
 			}
 		}
 		chase_maps[chase++] = m;
@@ -1234,8 +1277,21 @@ static int do_fragment_buddy(int argc, char **argv)
 				held_pages++;
 				continue;
 			}
-			pfn--;
-			if ((pfn & 1UL) == 0 && pfn_getbit(seen, pfn + 1)) {
+			/*
+			 * seen[x] means "the page with PFN x+1 is ours":
+			 * pass 1 and the chase both store orig-1, so the
+			 * two sources share one bias. The order-0 buddy of
+			 * PFN n is n^1, so a page is only safe to free when
+			 * it is even and its true buddy n+1 is ours and
+			 * stays held. An earlier form decremented the PFN
+			 * first and then tested pfn+1, which paired an odd
+			 * page with the wrong neighbour and let a freed
+			 * page meet a free buddy. That coalesced holes
+			 * after the loop had already measured zero and
+			 * rebuilt one order-7 block (run 36921241614,
+			 * stop=order7-depleted with exhausted=0).
+			 */
+			if ((pfn & 1UL) == 0 && pfn_getbit(seen, pfn)) {
 				if (munmap(m + off, (size_t)FRAG_PAGE) == 0) {
 					freed_pages++;
 					pairs++;
@@ -1291,7 +1347,7 @@ static int do_fragment_buddy(int argc, char **argv)
 		char *m = reserve[i];
 
 		off = 0;
-		while (off + 8 * FRAG_PAGE <= FRAG_CHUNK &&
+		while (off + 8 * FRAG_PAGE <= FRAG_RESERVE_CHUNK &&
 		       order2_groups < FRAG_ORDER2_GROUPS) {
 			unsigned long p0 = 0, p = 0;
 			int run = 1, j;
@@ -1375,7 +1431,9 @@ static int do_fragment_buddy(int argc, char **argv)
 	for (i = 0; i < chase; i++)
 		munmap(chase_maps[i], FRAG_CHUNK);
 	for (i = 0; i < reserve_got; i++)
-		munmap(reserve[i], FRAG_CHUNK);
+		munmap(reserve[i], FRAG_RESERVE_CHUNK);
+	for (i = 0; i < soak_got; i++)
+		munmap(soak[i], FRAG_PCP_SOAK_CHUNK);
 	free(seen);
 	free(maps);
 	free(pfns);
