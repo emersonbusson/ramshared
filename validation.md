@@ -14162,3 +14162,212 @@ is left at its default. Superseded for the residue ceiling by any clean
 run below 1280 pages. Job-level `success` or `failure` on
 `hyperv-runtime-drill` is never a gate closure. Never cite this entry as
 CoCo or send-gate evidence.
+
+## EVD-0161 — one order-7 block from zero, then the watermark restore panicked both guests
+
+**Verdict:** 🔴 fails — run 36906731699 closed the residue to **128 pages /
+1 block** (windows-latest) and **2 blocks** (windows-2025), printed
+`ready=1` on both, and then panicked both guests before the channel-open
+could finish. The third signal is not closed (`exhausted=0`), but the
+series is one split away and the panic cause is measured and distinct from
+EVD-0155 and EVD-0160.
+
+**Category:** drill / fragmentation acceptance — EVD-0134 third signal,
+near-close with a post-`ready=1` panic whose mechanism is identified.
+
+**How to measure:** download both runtime job logs of run 36906731699
+(`gh run view -R emersonbusson/WSL2-Linux-Kernel 36906731699 --job <id>
+--log`) and run `score-fragmentation-drill.py` on them. The decisive
+fields are the `min_free_kbytes` / `watermark_boost_factor` read-back
+lines, the `ready=1 … high_order_7plus=…->…->…` line, the
+`--- BUDDY AFTER FRAGMENT ---` snapshot immediately after it, and the
+`DMA32 free: … boost: … min: …` triples in each `Mem-Info` block. The
+residue is the buddyinfo **after** `FRAGMENT_BUDDY ready=1`, not the start
+snapshot and not the post-lifecycle one.
+
+### Run
+
+| Job | id | outcome |
+| --- | --- | --- |
+| drill-kernel | 110520957070 | success |
+| drill-runtime windows-latest | 110521291736 | **failure (panic after ready=1)** |
+| drill-runtime windows-2025 | 110521291752 | **failure (panic after ready=1)** |
+
+Source revision `440adf89b73b`. Workflow conclusion `failure`. Both
+guests printed `ready=1` and then died inside the channel-open phase;
+`HYPERV_DRILL_FRAGMENT status=137`, `HYPERV_DRILL_LIFECYCLE status=137`.
+Neither guest reached a usable lifecycle, so this run contributes **no**
+lifecycle evidence.
+
+### Both sysctls took — the boost lever is proven
+
+```
+FRAGMENT_BUDDY min_free_kbytes saved=5704 set=512 now=512
+FRAGMENT_BUDDY watermark_boost_factor saved=15000 set=0 now=0
+```
+
+windows-latest and windows-2025 agree. The fail-closed checks from
+`2ce7fbc1796f` did not fire, because both writes were real. This is the
+second consecutive run in which `min_free_kbytes` lowering is proven and
+the first in which `watermark_boost_factor` suppression is proven.
+
+### The residue: one split from the acceptance condition
+
+windows-latest `--- BUDDY AFTER FRAGMENT ---` (the snapshot that produced
+`high_order_7plus_blocks_reread=1`):
+
+```
+Node 0, zone    DMA32   2209      0      0      0      1      0      1      1      0      0      0
+```
+
+That is orders 0–10: `o0=2209`, `o4=1`, `o6=1`, **`o7=1`**, and nothing
+above. Residue = **1 block / 128 pages / 0.50 MiB**. The `reread` is
+authoritative and agrees with the helper (`high_order_7plus_blocks_helper=1`).
+
+windows-2025: `high_order_7plus=496->25->2`, `unsplit=225`, `chase=1406`,
+`holes=0 pairs=0`. Its post-`ready=1` buddyinfo bytes were dropped by the
+serial console; the helper count of 2 stands as the residue.
+
+Residue ladder across the no-recycle series (order-7+ pages at `ready=1`):
+
+| run | floor | boost | residue (wl / w25) |
+| --- | --- | --- | --- |
+| 36883261849 | 16 MiB | default | 3584 |
+| 36892314395 | 16 MiB | default | 2816 / 2944 |
+| 36894869321 | 8 MiB | default | 1408 / 1280 |
+| **36906731699** | **4 MiB** | **0** | **128 / 2 blocks** |
+
+An order-of-magnitude improvement. `holes=0 pairs=0` on both guests:
+nothing recycled, every chunk held, which is the configuration that
+splits.
+
+Why the last block survived: the buddy at `ready=1` still held `o4=1` and
+`o6=1`. `__rmqueue_smallest` serves an order-4 chunk from order-4 first,
+then order-6, and only then splits order-7. Three more 64 KiB chunks
+would have emptied those and forced the split. The chase stopped at
+`stop=chase-memfree-margin` with `unsplit=334`, `high_order_7plus=…->…->1`.
+
+### The panic: restoring the watermarks before the hold
+
+Both guests printed `ready=1`, then `=== CHANNEL OPEN UNDER FRAGMENTATION
+===`, then died. windows-latest `Mem-Info` sequence:
+
+```
+DMA32 free:9764kB boost:0kB min:5704kB low:7756kB high:9808kB …
+  unevictable:1990016kB
+Out of memory: Killed process 83 (sh) …
+DMA32 free:9764kB boost:14712kB min:20416kB low:22468kB high:24520kB …
+  unevictable:1990016kB
+Out of memory: Killed process 158 (sh) …
+DMA32 free:18596kB boost:14712kB min:20416kB …
+Out of memory and no killable processes...
+Kernel panic - not syncing: System is deadlocked on memory
+```
+
+Printed `min` already includes boost: `20416 = 5704 + 14712`. The base
+min is restored to its saved 5704, and `boost_watermark()` then rebuilt a
+14712 kB boost because the buddy is exactly the non-coalescing pattern
+this drill constructs. `wmark_pages()` adds `zone->watermark_boost` on top
+of `_watermark[WMARK_MIN]`, so the effective mark was **20416 kB** against
+**9764 kB** free, with **1990016 kB** locked and unevictable and the
+helper pinned at `oom_score_adj=-1000`. Every
+`GFP_HIGHUSER_MOVABLE|__GFP_ZERO|__GFP_COMP` order-0 fault failed,
+`out_of_memory()` killed the drill's `sh` processes one by one, then
+reached `init` with nothing killable and panicked.
+
+The helper code that did this sits between `ready=1` and `sleep(hold)`:
+
+```c
+	if (min_free_saved > 0)
+		min_free_kb_write(min_free_saved);
+	if (boost_saved >= 0)
+		boost_factor_write(boost_saved);
+
+	if (hold > 0)
+		sleep((unsigned int)hold);
+```
+
+The pin (`set_oom_adj("-1000\n")`) is set before `ready=1` and is correct:
+the pattern must outlive the process's next fault. The restore timing is
+what is wrong. Keeping min=512 and boost=0 through the hold leaves the
+mark at 512 kB against ~17 MB free after the punch, which is the state the
+channel-open needs.
+
+### What changed and why
+
+1. **Restore moved to teardown**, next to `set_oom_adj("0\n")` and the
+   munmaps. min=512 / boost=0 stay in force through the channel-open. The
+   variable under test is fragmentation, not the reserve.
+2. **The chase floor is driven off `min_free_set`** (the number this run
+   wrote) instead of `live_min_watermark_kb()`. The live sum includes
+   whatever `watermark_boost` is standing and therefore chases a rising
+   target — that is what EVD-0160 measured and what made the 2048 floor
+   resolve to 9484 kB on run 36899458556. With boost suppressed the two
+   are equal, so this is a determinism change, not a safety removal.
+3. **`FRAG_CHASE_HARD_KB` 4096 → 1024**, `FRAG_CHASE_WMARK_MARGIN`
+   2048 → 256. Floor becomes `max(1024, 512+256) = 1024`. The 4 MiB floor
+   stopped the chase three chunks short of splitting the last order-7.
+   After the punch returns 16 MiB of holes the channel-open still has
+   ~17 MB.
+4. **`floor_kb`, `wmark_kb`, `free_kb` are printed** on the `ready=1` line
+   so the next stop reason is measured rather than inferred.
+
+### Rollback trigger
+
+`440adf89b73b`'s trigger fires on this run on three counts: an
+`out_of_memory()` occurred, windows-2025 logged `probe failed … (-12)`
+twice (the trigger names `-12`), and the residue is at 128 pages — but the
+trigger's residue clause was "at or above 1280", which this run does not
+cross. The panic and the `-12` are enough. The corrective change on top
+reverts to `440adf89b73b` if it oopses, panics, OOMs on the hold, returns
+`-12` from probe, prints `ready=0` with `reason=min-free-not-lowered` or
+`reason=boost-not-disabled` on both guests, or leaves a residue at or
+above **128** pages.
+
+### What must not be lost
+
+- EVD-0160's boost finding stands and is now twice-supported: boost is
+  the limiter when left at its default, and suppressing it is what bought
+  the 1408 → 128 collapse.
+- EVD-0155's correction stands separately: that panic was an un-lowered
+  `min_free_kbytes` plus a `MemFree` floor blind to `free_pcp`. Three
+  distinct panics, three distinct causes. Do not collapse them.
+- The residue model stands: recycle is anti-correlated with splitting,
+  hold is what splits, and clearing one order-N block to order-6-and-below
+  costs `1+2+4+…` held pages. At `o7=1` with `o4=1, o6=1` still present,
+  three more order-4 chunks are what close it.
+- `high_order_7plus_blocks_reread` is authoritative over the helper
+  count. Serial console drops bytes; never "fix" the source for a dropped
+  byte, and never take the start snapshot as a residue.
+- The two EVD-0134 non-third signals are green since 36883261849 and are
+  not disturbed by this run: `cycle*_bind_fail=0`, and `MMAP_HOLD /dev/uio0
+  maps>0` (the 4 KiB UIO ring alone satisfies the hold criterion). The
+  2 MiB sysfs ring is not required to close the gate.
+- Lifecycle evidence from 36894869321 is untouched and still green:
+  `PHASE1 cycle_fails=0 / 120 steps`, `MMAP_HOLD /dev/uio0 maps=5`, sysfs
+  ring `maps=1`, `LIFECYCLE_VERDICT=PASS cycles=30`, `order7_dmesg=0
+  accept4_failures=0`. This run's lifecycle is not evidence.
+- CoCo remains a hardware boundary (COCO-1..5). Nothing in this series
+  changes it and nothing here may be cited as CoCo or send-gate evidence.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0161`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T18:33:00Z`.
+**Verified at:** `2026-10-01T19:05:00Z`.
+**Source revision:** `440adf89b73b`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep both `Mem-Info` `DMA32 free/boost/min` triples — they
+are the only record that `min` was restored to 5704 before boost rebuilt
+to 14712, and that is what separates this panic from EVD-0155 and
+EVD-0160. Keep the `--- BUDDY AFTER FRAGMENT ---` line
+`2209 0 0 0 1 0 1 1 0 0 0`; it is the exact shape of "one split from
+zero" and it is how the next run's residue is judged. Keep the
+`probe failed … (-12)` lines on windows-2025.
+**Freshness:** Superseded for the third signal by a run that prints
+`RESULT high_order_7plus_blocks=0 (reread=0) exhausted=1` with
+`stop=order7-depleted` and a surviving channel-open. Superseded for the
+panic cause only by a run that panics with min=512 and boost=0 still in
+force — that would be a different mechanism and must not be filed under
+this entry. Job-level `success` or `failure` on `hyperv-runtime-drill` is
+never a gate closure. Never cite this entry as CoCo or send-gate evidence.

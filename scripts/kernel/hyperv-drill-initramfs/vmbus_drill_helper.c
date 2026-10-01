@@ -367,13 +367,15 @@ static int do_mlock_hog(int argc, char **argv)
  * 512+6924 -- and windows-2025 panicked on init's clone() with
  * `free:12588kB` all order-0, so an order-1 GFP_KERNEL had nothing to
  * split. Suppressing boost is what makes a low floor meaningful:
- * watermark_boost_factor=0 keeps min at the value we wrote, so
- *     mem_free_kb() < max(FRAG_CHASE_HARD_KB,
- *                         live_min_watermark_kb() + FRAG_CHASE_WMARK_MARGIN)
- * resolves to a constant again. The live term stays as the safety net --
- * if boost ever comes back the floor rises and the chase stops instead of
- * OOMing. Both sysctls are read back and fail closed: run 36879744347
- * killed two guests on a silent min_free_kbytes write that never took.
+ * watermark_boost_factor=0 calls setup_per_zone_wmarks(), which zeroes
+ * zone->watermark_boost and keeps min at the value we wrote. The floor is
+ * driven off min_free_set -- the number this run asked for -- and not off
+ * live_min_watermark_kb(), whose sum includes whatever boost is standing
+ * and therefore chases a rising target. Both sysctls are read back and
+ * fail closed: run 36879744347 killed two guests on a silent
+ * min_free_kbytes write that never took. Run 36906731699 proved the low
+ * floor is reachable (order-7+ down to a single block) and that restoring
+ * the watermarks before the hold is what kills the guest.
  *
  * The residue does not have to be held. __rmqueue_smallest serves order-0
  * first, so the chase must empty the no-split budget (unsplit) before it
@@ -388,8 +390,8 @@ static int do_mlock_hog(int argc, char **argv)
  */
 #define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
-#define FRAG_CHASE_HARD_KB 4096L
-#define FRAG_CHASE_WMARK_MARGIN 2048L
+#define FRAG_CHASE_HARD_KB 1024L
+#define FRAG_CHASE_WMARK_MARGIN 256L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
@@ -791,8 +793,8 @@ static int do_fragment_buddy(int argc, char **argv)
 {
 	long mib, hold, want, got = 0, locked = 0, i, off, stopped = 0;
 	long freed_pages = 0, held_pages = 0, no_pfn = 0, pairs = 0;
-	long high_before, high_locked, high_after, free_kb;
-	long wmark_kb, floor_kb;
+	long high_before, high_locked, high_after, free_kb = -1;
+	long wmark_kb = -1, floor_kb = -1;
 	long min_free_saved, min_free_set, min_free_now;
 	long boost_saved, boost_now;
 	long chase = 0, chase_locked = 0;
@@ -1095,8 +1097,9 @@ static int do_fragment_buddy(int argc, char **argv)
 		free_kb = mem_free_kb();
 		wmark_kb = live_min_watermark_kb();
 		floor_kb = FRAG_CHASE_HARD_KB;
-		if (wmark_kb >= 0 && wmark_kb + FRAG_CHASE_WMARK_MARGIN > floor_kb)
-			floor_kb = wmark_kb + FRAG_CHASE_WMARK_MARGIN;
+		if (min_free_set > 0 &&
+		    min_free_set + FRAG_CHASE_WMARK_MARGIN > floor_kb)
+			floor_kb = min_free_set + FRAG_CHASE_WMARK_MARGIN;
 		if (free_kb >= 0 && free_kb < floor_kb) {
 			stopped = 1;
 			stop_reason = "chase-memfree-margin";
@@ -1214,27 +1217,37 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * order 7 or above. It is not "the loop stopped", which is true of
 	 * every floor and every refusal as well.
 	 */
-	printf("FRAGMENT_BUDDY ready=1 chunks=%ld pages=%ld held=%ld freed=%ld locked=%ld pairs=%ld chunk_kib=64 cap_chunks=%ld hole_cap=%ld chase=%ld chase_holes=%ld chase_pairs=%ld unsplit=%ld exhausted=%ld pagemap=1 stop=%s high_order_7plus=%ld->%ld->%ld\n",
+	printf("FRAGMENT_BUDDY ready=1 chunks=%ld pages=%ld held=%ld freed=%ld locked=%ld pairs=%ld chunk_kib=64 cap_chunks=%ld hole_cap=%ld chase=%ld chase_holes=%ld chase_pairs=%ld unsplit=%ld exhausted=%ld pagemap=1 stop=%s high_order_7plus=%ld->%ld->%ld floor_kb=%ld wmark_kb=%ld free_kb=%ld\n",
 	       got, got * (FRAG_CHUNK / FRAG_PAGE), held_pages, freed_pages,
 	       locked, pairs, want, FRAG_HOLE_CAP, chase, chase_holes,
 	       chase_pairs, unsplit_at_stop, high_after == 0 ? 1L : 0L,
-	       stop_reason, high_before, high_locked, high_after);
+	       stop_reason, high_before, high_locked, high_after,
+	       floor_kb, wmark_kb, free_kb);
 	fflush(stdout);
 
 	/*
-	 * Restore the watermark only. The channel-open exercise needs the
-	 * normal reserve to allocate its ring, and the margin the floors kept
-	 * is what lets it. The pin stays on for the reason above.
+	 * The watermarks stay where the pattern put them -- min_free_kbytes
+	 * at 512 and watermark_boost_factor at 0 -- for the whole hold,
+	 * including the drill's channel-open exercise. Restoring them here
+	 * is what killed run 36906731699: with ~2 GiB locked and this
+	 * process pinned at -1000, writing back min=5704 and boost_factor
+	 * 15000 let boost_watermark() rebuild a 14712 kB boost against
+	 * 9764 kB free. wmark_pages() adds boost on top of min, so the
+	 * effective mark was 20416 kB, every GFP_HIGHUSER_MOVABLE fault
+	 * failed, out_of_memory() found no killable process, and the guest
+	 * panicked on "System is deadlocked on memory". The variable under
+	 * test is fragmentation, not the reserve; a 20 MB watermark against
+	 * a 9 MB free guest makes the test impossible regardless of the ring
+	 * code. Restore only at teardown, next to dropping the pin.
 	 */
-	if (min_free_saved > 0)
-		min_free_kb_write(min_free_saved);
-	if (boost_saved >= 0)
-		boost_factor_write(boost_saved);
-
 	if (hold > 0)
 		sleep((unsigned int)hold);
 
 	set_oom_adj("0\n");
+	if (min_free_saved > 0)
+		min_free_kb_write(min_free_saved);
+	if (boost_saved >= 0)
+		boost_factor_write(boost_saved);
 	for (i = 0; i < got; i++)
 		munmap(maps[i], FRAG_CHUNK);
 	for (i = 0; i < chase; i++)
