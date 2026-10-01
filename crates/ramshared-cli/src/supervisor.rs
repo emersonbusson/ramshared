@@ -2733,17 +2733,13 @@ mod tests {
             "systemctl-fixture",
             "#!/bin/sh\ncase \"$1\" in\n  --version) exit 0 ;;\n  ramshared-invalid-command) exit 1 ;;\n  *) exit 2 ;;\nesac\n",
         );
+        // Exit-code mapping is the subject here, not spawn latency. The budget
+        // only has to bound the call, so it is generous enough to survive the
+        // parallel suite spawning this shell on a loaded host.
+        let budget = Duration::from_secs(5);
+        assert!(run_systemctl_bounded_for(&systemctl, &["--version"], budget).is_ok());
         assert!(
-            run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(100),)
-                .is_ok()
-        );
-        assert!(
-            run_systemctl_bounded_for(
-                &systemctl,
-                &["ramshared-invalid-command"],
-                Duration::from_millis(100),
-            )
-            .is_err()
+            run_systemctl_bounded_for(&systemctl, &["ramshared-invalid-command"], budget).is_err()
         );
     }
 
