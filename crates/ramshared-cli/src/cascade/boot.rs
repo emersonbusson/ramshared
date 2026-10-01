@@ -31,7 +31,13 @@ pub const DEFAULT_VRAM_MIB: u64 = 1024;
 /// Built-in conservative sizing (RF-4, DT-3).
 pub const DEFAULT_ZRAM_MIB: u64 = 1024;
 /// Built-in shared-hardware cushion (DT-3).
-pub const DEFAULT_MIN_VRAM_HEADROOM_MIB: u64 = 256;
+///
+/// Bound to the sealed GPU free-floor authority — `MIN_VRAM_HEADROOM_MIB` is
+/// the operator-facing name for the same configured reserve
+/// (`ramshared_vram::SEALED_RESERVE_MIN_MIB`) that `ReserveFloorPolicy` and
+/// `preflight.sh` enforce. A built-in of 256 MiB is the retired silent default
+/// that admitted a shared host with almost no GPU headroom; it must not return.
+pub const DEFAULT_MIN_VRAM_HEADROOM_MIB: u64 = ramshared_vram::SEALED_RESERVE_MIN_MIB;
 
 /// Config keys accepted in `/etc/ramshared/cascade.conf` (PRD §7).
 pub const CONF_KEY_VRAM_MIB: &str = "VRAM_MIB";
@@ -281,6 +287,15 @@ pub fn resolve_boot_config_from(
         (None, Some(n)) => (n, ConfigSource::Env),
         (None, None) => (DEFAULT_MIN_VRAM_HEADROOM_MIB, ConfigSource::Default),
     };
+    // DT-8 raise-only, same rule `preflight.sh` and `ReserveFloorPolicy` apply
+    // to this name: the operator may be more conservative than the seal, never
+    // less. A value below the sealed authority is a refusal, not a clamp.
+    if min_vram_headroom_mib < DEFAULT_MIN_VRAM_HEADROOM_MIB {
+        return Err(BootError::ConfigInvalid(format!(
+            "MIN_VRAM_HEADROOM_MIB={min_vram_headroom_mib} is below the sealed authority \
+             {DEFAULT_MIN_VRAM_HEADROOM_MIB} MiB (raise-only)"
+        )));
+    }
 
     Ok(ResolvedBootConfig {
         config: BootConfig {
@@ -1083,8 +1098,41 @@ mod tests {
         let config = load_boot_config_from(&dir.join("cascade.conf"), &MapEnv::new()).unwrap();
         assert_eq!(config.vram_mib, 1024);
         assert_eq!(config.zram_mib, 1024);
-        assert_eq!(config.min_vram_headroom_mib, 256);
+        assert_eq!(
+            config.min_vram_headroom_mib, DEFAULT_MIN_VRAM_HEADROOM_MIB,
+            "the built-in cushion must be the sealed reserve authority, not a silent low default"
+        );
+        assert_eq!(
+            DEFAULT_MIN_VRAM_HEADROOM_MIB,
+            ramshared_vram::SEALED_RESERVE_MIN_MIB
+        );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn boot_config_refuses_headroom_below_the_sealed_authority() {
+        // DT-8 raise-only: 256 MiB is the retired silent default and 512 MiB is
+        // the old conf test value — both undercut the seal and must be refused,
+        // never clamped up and never accepted as if they were the cushion.
+        for low in ["256", "512", "2047"] {
+            let dir = temp_dir("below-seal");
+            let conf = dir.join("cascade.conf");
+            write(&conf, &format!("MIN_VRAM_HEADROOM_MIB={low}\n"));
+            let error = resolve_boot_config_from(&conf, &MapEnv::new()).unwrap_err();
+            assert!(
+                matches!(error, BootError::ConfigInvalid(_)),
+                "MIN_VRAM_HEADROOM_MIB={low} must be refused, got {error:?}"
+            );
+            let mut map = HashMap::new();
+            map.insert("MIN_VRAM_HEADROOM_MIB".to_string(), low.to_string());
+            let error =
+                resolve_boot_config_from(&dir.join("absent.conf"), &MapEnv(map)).unwrap_err();
+            assert!(
+                matches!(error, BootError::ConfigInvalid(_)),
+                "env MIN_VRAM_HEADROOM_MIB={low} must be refused, got {error:?}"
+            );
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
@@ -1093,12 +1141,12 @@ mod tests {
         let conf = dir.join("cascade.conf");
         write(
             &conf,
-            "# sizing\nVRAM_MIB=2048\nZRAM_MIB=4096\nMIN_VRAM_HEADROOM_MIB=512\n\nNBD_LOWER_SINK=\n",
+            "# sizing\nVRAM_MIB=2048\nZRAM_MIB=4096\nMIN_VRAM_HEADROOM_MIB=3072\n\nNBD_LOWER_SINK=\n",
         );
         let resolved = resolve_boot_config_from(&conf, &MapEnv::new()).unwrap();
         assert_eq!(resolved.config.vram_mib, 2048);
         assert_eq!(resolved.config.zram_mib, 4096);
-        assert_eq!(resolved.config.min_vram_headroom_mib, 512);
+        assert_eq!(resolved.config.min_vram_headroom_mib, 3072);
         assert_eq!(resolved.vram_source, ConfigSource::Etc);
         assert_eq!(resolved.zram_source, ConfigSource::Etc);
         assert_eq!(resolved.headroom_source, ConfigSource::Etc);
@@ -1123,12 +1171,12 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("RAMSHARED_VRAM_MIB".to_string(), "2048".to_string());
         map.insert("RAMSHARED_ZRAM_MIB".to_string(), "512".to_string());
-        map.insert("MIN_VRAM_HEADROOM_MIB".to_string(), "128".to_string());
+        map.insert("MIN_VRAM_HEADROOM_MIB".to_string(), "4096".to_string());
         let env = MapEnv(map);
         let resolved = resolve_boot_config_from(&dir.join("cascade.conf"), &env).unwrap();
         assert_eq!(resolved.config.vram_mib, 2048);
         assert_eq!(resolved.config.zram_mib, 512);
-        assert_eq!(resolved.config.min_vram_headroom_mib, 128);
+        assert_eq!(resolved.config.min_vram_headroom_mib, 4096);
         assert_eq!(resolved.vram_source, ConfigSource::Env);
         assert_eq!(resolved.zram_source, ConfigSource::Env);
         assert_eq!(resolved.headroom_source, ConfigSource::Env);

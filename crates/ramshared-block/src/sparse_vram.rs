@@ -471,15 +471,13 @@ pub fn idle_free_secs_from_env() -> u64 {
         .clamp(1, 3600)
 }
 
-/// GPU free floor before another chunk alloc (MiB → bytes). Default 512.
 /// Sealed manifest literals for the configured reserve (DT-3).
 ///
-/// The same numbers the host-origin seal accepts
-/// (`gpu_reserve_min_mib = 2048`, `gpu_reserve_percent = 20`). They live here
-/// so a path that has no manifest yet still enforces the sealed authority
-/// instead of an arbitrary default.
-pub const SEALED_RESERVE_MIN_MIB: u64 = 2048;
-pub const SEALED_RESERVE_PERCENT: u64 = 20;
+/// Re-exported from `ramshared_vram::reserve_policy` — the single authority.
+/// A path that has no manifest yet still enforces the sealed values instead of
+/// an arbitrary default; a second literal here would be a drift hazard the
+/// seal cannot detect.
+pub use ramshared_vram::{SEALED_RESERVE_MIN_MIB, SEALED_RESERVE_PERCENT};
 
 /// Resolves the configured reserve once: sealed manifest values, raised only
 /// by an environment override that is at least as conservative (DT-8).

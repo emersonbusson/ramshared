@@ -18,12 +18,22 @@ preflight="$root/scripts/safety/preflight.sh"
 }
 
 # The sealed literals the gate enforces must match the Rust authority.
-for pair in \
-  "SEALED_RESERVE_MIN_MIB=2048:ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB" \
-  "SEALED_RESERVE_PERCENT=20:ramshared_block::sparse_vram::SEALED_RESERVE_PERCENT"; do
-  shell_literal=${pair%%:*}
-  grep -Fq "$shell_literal" "$preflight" || {
-    echo "preflight must declare $shell_literal" >&2
+# Values are extracted from both sides and compared numerically so a change to
+# either one alone fails this test instead of silently drifting.
+rust_policy="$root/crates/ramshared-vram/src/reserve_policy.rs"
+[[ -f $rust_policy ]] || {
+  echo "sealed authority source missing: $rust_policy" >&2
+  exit 1
+}
+for name in SEALED_RESERVE_MIN_MIB SEALED_RESERVE_PERCENT; do
+  shell_value=$(grep -E "^${name}=" "$preflight" | head -1 | cut -d= -f2 | tr -dc '0-9')
+  rust_value=$(grep -E "pub const ${name}: u64 =" "$rust_policy" | head -1 | sed -E 's/.*= *([0-9]+).*/\1/')
+  [[ -n $shell_value && -n $rust_value ]] || {
+    echo "cannot read $name from preflight ('$shell_value') and reserve_policy ('$rust_value')" >&2
+    exit 1
+  }
+  [[ $shell_value == "$rust_value" ]] || {
+    echo "$name drifts: preflight=$shell_value reserve_policy=$rust_value" >&2
     exit 1
   }
 done

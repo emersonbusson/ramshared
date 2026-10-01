@@ -39,7 +39,7 @@
 | --- | --- |
 | DT-1 | `boot` is the single top-level verb. `up --bootstrap` is rejected by the parser. |
 | DT-2 | Identity gate evaluates **in-process** via `ramshared_tier::nbd_readiness::evaluate_product`. No shell-outs to `nbd-product-preflight.sh`. |
-| DT-3 | Sizing authority: `/etc/ramshared/cascade.conf` → `RAMSHARED_VRAM_MIB`/`RAMSHARED_ZRAM_MIB`/`MIN_VRAM_HEADROOM_MIB` env → built-in 1024/1024/256. Sealed `cascade.conf.example` is **never** read for sizing. |
+| DT-3 | Sizing authority: `/etc/ramshared/cascade.conf` → `RAMSHARED_VRAM_MIB`/`RAMSHARED_ZRAM_MIB`/`MIN_VRAM_HEADROOM_MIB` env → built-in 1024/1024/`ramshared_vram::SEALED_RESERVE_MIN_MIB` (2048). `MIN_VRAM_HEADROOM_MIB` is the operator-facing name for the configured GPU free floor; a resolved value below the seal is refused (raise-only, DT-8), never clamped. Sealed `cascade.conf.example` is **never** read for sizing. |
 | DT-4 | Approval wire format `activate:<release>[:vram=<n>:zram=<n>]` with version **equality**. Token must be root-owned and not group/world-writable (`uid==0 && mode&0o022==0`). |
 | DT-5 | `TimeoutStopSec=infinity`; `ExecStop` journals `NBD_STOP_WINDOW=unbounded` on entry. |
 | DT-6 | Display honesty: text and JSON surfaces never claim "active" without a live daemon. |

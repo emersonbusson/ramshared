@@ -27,6 +27,22 @@ const MIB: u64 = 1024 * 1024;
 /// (DT-2). This constant is the seal-verification threshold.
 pub const SEALED_PERCENT_SAFETY_FLOOR: u64 = 20;
 
+/// Sealed host-origin manifest `gpu_reserve_min_mib` (DT-3).
+///
+/// The one literal every consumer must read. Sparse-tier admission, the
+/// isolated cache worker, the daemon startup line, the preflight go/no-go gate,
+/// and the cascade boot headroom default all bind to this value; a second copy
+/// of `2048` is a drift hazard the seal cannot detect.
+pub const SEALED_RESERVE_MIN_MIB: u64 = 2048;
+
+/// Sealed host-origin manifest `gpu_reserve_percent` (DT-3).
+///
+/// Equal to [`SEALED_PERCENT_SAFETY_FLOOR`] today and required to be
+/// `>=` it by [`ReserveFloorPolicy::from_manifest`]. They stay distinct
+/// constants: one is what the seal attests, the other is the lowest value a
+/// reseal may attest.
+pub const SEALED_RESERVE_PERCENT: u64 = 20;
+
 /// The two documented configuration names, both read from the **process
 /// environment** exactly as `ReserveFloorEnv` reads them
 /// (DT-11). Neither name is deprecated in this slice.
@@ -342,13 +358,10 @@ mod tests {
     use crate::{GpuBudgetSnapshot, GpuBudgetSource};
     use std::time::Instant;
 
-    /// Sealed defaults used across the tests: 2048 MiB / 20%.
-    ///
-    /// 2048 MiB is the strictest of the declared policies and matches the
-    /// host-origin manifest this SPEC is written against. 20% is the
-    /// non-negotiable floor.
-    const SEALED_MIN_MIB: u64 = 2048;
-    const SEALED_PERCENT: u64 = 20;
+    /// Sealed defaults used across the tests, bound to the public authority so
+    /// a resealed literal cannot drift away from what the tests exercise.
+    const SEALED_MIN_MIB: u64 = SEALED_RESERVE_MIN_MIB;
+    const SEALED_PERCENT: u64 = SEALED_RESERVE_PERCENT;
 
     #[test]
     fn source_labels_are_human_readable() {

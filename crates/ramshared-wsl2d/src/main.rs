@@ -41,8 +41,8 @@ use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
 use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
 use ramshared_vram::{
-    GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetTelemetry, VramMemory, VramProvider,
-    WorkerCacheTelemetry,
+    GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetTelemetry, SEALED_RESERVE_MIN_MIB,
+    SEALED_RESERVE_PERCENT, VramMemory, VramProvider, WorkerCacheTelemetry,
 };
 use ramshared_vulkan::VulkanProvider;
 #[cfg(test)]
@@ -1066,15 +1066,12 @@ fn validate_host_origin_manifest_bytes(
     Ok(())
 }
 
-/// Sealed reserve literals the host-origin manifest is verified against.
-///
-/// These are the integrity constants of check (a). `sparse_vram` carries the
-/// same numbers for the no-manifest path; the two are pinned equal by
-/// `enforcement_binding_matches_verified_seal`.
-const SEALED_RESERVE_MIN_MIB: u64 = 2048;
-const SEALED_RESERVE_PERCENT: u64 = 20;
-
 /// DT-7 check (b): bind the resolved policy to what the seal verified.
+///
+/// The verified literals come from the single authority in
+/// `ramshared_vram::reserve_policy` (`SEALED_RESERVE_MIN_MIB` /
+/// `SEALED_RESERVE_PERCENT`); a local copy would be a drift hazard the seal
+/// cannot detect.
 ///
 /// Two inequalities that can actually fail. A resolver that wrote a lower
 /// minimum trips the first; one that dropped or altered the percentage trips
@@ -6845,15 +6842,17 @@ mod tests {
     fn enforcement_binding_matches_verified_seal() {
         use ramshared_vram::ReserveFloorPolicy;
 
-        // The literals the seal verifies must equal the literals the
-        // no-manifest path enforces, or the two surfaces diverge again.
+        // The sealed literals are one authority. Pin the attested values so a
+        // change to them is a deliberate, test-visible act rather than drift.
+        assert_eq!(SEALED_RESERVE_MIN_MIB, 2048);
+        assert_eq!(SEALED_RESERVE_PERCENT, 20);
         assert_eq!(
-            SEALED_RESERVE_MIN_MIB,
-            ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB
+            ramshared_block::sparse_vram::SEALED_RESERVE_MIN_MIB,
+            SEALED_RESERVE_MIN_MIB
         );
         assert_eq!(
-            SEALED_RESERVE_PERCENT,
-            ramshared_block::sparse_vram::SEALED_RESERVE_PERCENT
+            ramshared_block::sparse_vram::SEALED_RESERVE_PERCENT,
+            SEALED_RESERVE_PERCENT
         );
 
         let resolved =
