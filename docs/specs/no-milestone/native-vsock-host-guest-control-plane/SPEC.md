@@ -202,13 +202,13 @@
 - Cover: ≥ 80%
 - Kahneman: #13
 
-**`crates/ramshared-winsvc/src/product_online.rs`**
-- What: Add AF_HYPERV listener, VHDX lifecycle (`wsl.exe --mount`), heartbeat deadline tracking. Absorb `Watch-RamSharedWsl.ps1` monitoring.
+**`crates/ramshared-winsvc/src/control_plane.rs`**
+- What: Add VHDX lifecycle (`wsl.exe --mount`/`--unmount`) and heartbeat deadline tracking. Absorb `Manage-RamSharedOrigin.ps1` attach/detach and `Watch-RamSharedWsl.ps1` deadline logic. The AF_HYPERV listener lives in `crates/ramshared-ipc/src/vsock.rs` (see the ITEM-2 entry); `product_online.rs` remains the production composition site and is unchanged for this slice.
 - RF / DT: RF-1, RF-3, RF-4, DT-4, DT-5.
-- Symbols: add `HypervListener`, `VhdxLifecycle`, `HeartbeatTracker`; modify `HostGates` to receive vsock messages instead of file reads.
-- Tests: `vhdx_attach_timeout_is_bounded`, `vhdx_attach_is_idempotent`, `heartbeat_deadline_revokes_lease`, `hyperv_listener_accepts_guest_connection`.
+- Symbols: add `VhdxLifecycle`, `HeartbeatTracker`, `ControlPlaneTelemetry`, `CommandRunner`, `WslRunner`. `VhdxLifecycle` takes an injectable `CommandRunner` so the success and PartUUID-idempotency paths are unit-provable without a Windows host; production uses `WslRunner`.
+- Tests: `vhdx_attach_timeout_is_bounded`, `vhdx_attach_is_idempotent`, `vhdx_attach_records_partuuid_on_success`, `vhdx_detach_is_bounded`, `vhdx_detach_clears_attached_list`, `heartbeat_deadline_revokes_lease`.
 - Cover: ≥ 80%
-- Kahneman: #16 (bounded attach)
+- Kahneman: #16 (bounded attach), #17 (idempotent attach)
 
 **`crates/ramshared-winsvc/src/config.rs`**
 - What: Add `vsock_guid: String`, `vsock_port: u32`, `lease_timeout_secs: u64`, `hmac_secret: String` fields.
@@ -227,8 +227,8 @@
 ### DELETE
 
 - `scripts/safety/ramshared-host-gate.sh` — absorbed into `ramshared-wsl2d/src/host_gate.rs`. Deprecate at Phase 4, remove at N+2.
-- `scripts/windows/Manage-RamSharedOrigin.ps1` — absorbed into `ramshared-winsvc/src/product_online.rs`. Deprecate at Phase 4, remove at N+2.
-- `scripts/windows/Watch-RamSharedWsl.ps1` — absorbed into `ramshared-winsvc/src/product_online.rs`. Deprecate at Phase 4, remove at N+2.
+- `scripts/windows/Manage-RamSharedOrigin.ps1` — absorbed into `ramshared-winsvc/src/control_plane.rs` (`VhdxLifecycle`). Deprecate at Phase 4, remove at N+2.
+- `scripts/windows/Watch-RamSharedWsl.ps1` — absorbed into `ramshared-winsvc/src/control_plane.rs` (`HeartbeatTracker` deadline logic). Deprecate at Phase 4, remove at N+2.
 
 ---
 
@@ -302,8 +302,11 @@
 | `crates/ramshared-ipc/src/lib.rs` | `tests::handshake_finish_rejects_replayed_host_challenge` | unit/replay | #13/#17 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_timeout_is_bounded` | unit | #16 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_is_idempotent` | unit | #17 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_attach_records_partuuid_on_success` | unit | #17 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_detach_is_bounded` | unit | #16 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::vhdx_detach_clears_attached_list` | unit | #17 | ≥ 80% |
 | `crates/ramshared-winsvc/src/control_plane.rs` | `tests::heartbeat_deadline_revokes_lease` | unit | #13 | ≥ 80% |
+| `crates/ramshared-winsvc/src/control_plane.rs` | `tests::heartbeat_lease_remaining_is_zero_once_expired` | unit/refusal | #13 | ≥ 80% |
 
 ---
 
@@ -317,9 +320,13 @@
 - [ ] Every matrix row has a real test name
 - [ ] Kahneman critical rows have executable evidence
 
-The Linux coverage run passes for `ramshared-ipc/src/lib.rs` (90.0%),
-`ramshared-ipc/src/vsock.rs` (85.7%), `ramshared-wsl2d/src/host_gate.rs`
-(95.0%), and `ramshared-winsvc/src/control_plane.rs` (87.0%). The earlier
-matrix pointed the VHDX lease tests at `product_online.rs`, but those tests
-are actually in `control_plane.rs`; the paths above now match the source. The
-Windows-only product composition is covered by the separate Windows test job.
+The Linux coverage run passes for `ramshared-ipc/src/lib.rs` (84.3%),
+`ramshared-ipc/src/vsock.rs` (93.0%), `ramshared-wsl2d/src/host_gate.rs`
+(90.0%), and `ramshared-winsvc/src/control_plane.rs` (95.9%) — one snapshot of
+the four files together on 2026-09-30, produced by the exact command above.
+Earlier figures in this file used a different llvm-cov line denominator and are
+superseded. The VHDX/heartbeat helpers landed in `control_plane.rs`, not
+`product_online.rs`; the files section, the DELETE absorption targets, and the
+test matrix now all name the real path. `product_online.rs` remains the
+production composition site and is outside this slice. The Windows-only
+product composition is covered by the separate Windows test job.

@@ -4,7 +4,7 @@
 
 ## Status
 
-**PARTIAL (protocol, gate, and transport source; product path not wired)** · Linux slice coverage and Windows-target type-check/Clippy were re-run on 2026-09-27 · live E2E and `BINARY_MATCH` are pending. Linux AF_VSOCK connect now uses nonblocking connect, `poll`, `SO_ERROR`, and a hard five-second ceiling; Windows AF_HYPERV bind/listen/accept is implemented with bounded nonblocking accept and RAII socket cleanup. Neither daemon starts this listener/client. The current protocol has a guest nonce/HMAC request and an unauthenticated `HandshakeAck`; it has no `HandshakeFinish` type or three-message proof flow. The handshake is not composed with lease or manifest delivery, and disconnect does not yet revoke cache authority. The prior September 23 audit changed a VHDX command timeout; that separate local test does not qualify a Windows host run.
+**PARTIAL (protocol, gate, and transport source; product path not wired)** · Linux slice coverage and Clippy re-run on 2026-09-30 · live E2E and `BINARY_MATCH` are pending. Linux AF_VSOCK connect uses nonblocking connect, `poll`, `SO_ERROR`, and a hard five-second ceiling; Windows AF_HYPERV bind/listen/accept is implemented with bounded nonblocking accept and RAII socket cleanup. Neither daemon starts this listener/client. The current protocol has a guest nonce/HMAC request and an unauthenticated `HandshakeAck`; it has no `HandshakeFinish` type or three-message proof flow. The handshake is not composed with lease or manifest delivery, and disconnect does not yet revoke cache authority. `VhdxLifecycle` takes an injectable `CommandRunner`, so the attach success path, the PartUUID idempotency skip, and detach cleanup are unit-provable without a Windows host; the production `WslRunner` still requires `wsl.exe`.
 
 ## Files
 
@@ -13,7 +13,7 @@
 | `crates/ramshared-ipc/src/lib.rs` | ITEM-1 / RF-2, DT-2 | Shared protocol crate: `VsockFrameHeader` (24-byte binary framing, magic `0x52414D53`, version 3, `correlation_id`), 21 message types, serde JSON control messages with 4KB cap, raw manifest encoding, HMAC-SHA256 (manual implementation using `sha2`), version negotiation. 11 unit tests. |
 | `crates/ramshared-ipc/src/vsock.rs` | ITEM-2 / RF-1, DT-1 | Functional source adapters: Linux AF_VSOCK nonblocking connect with caller timeout capped at 5s and `SO_ERROR` result checks; Windows AF_HYPERV service listener with canonical GUID conversion, wildcard VM ID, nonblocking accept deadline, typed errors, and RAII ownership. `vsock_available` probes socket creation. Hermetic tests cover deadline handling, accept timeout/error, GUID conversion, stream behavior, and platform refusal. Live Windows/WSL socket exchange remains untested. |
 | `crates/ramshared-wsl2d/src/host_gate.rs` | ITEM-3 / RF-5, DT-6 | Absorbed gate logic from `ramshared-host-gate.sh`: origin manifest validation (SHA-256, size bounds, JSON fields), guardian health check (stale/unhealthy rejection), safe-mode gate (foreign boot_id rejection), lease minting (all-gates-required), lease expiry detection. 14 unit tests including shadow comparison. |
-| `crates/ramshared-winsvc/src/control_plane.rs` | ITEM-4, ITEM-5, ITEM-6 / RF-1, RF-3, RF-4, DT-4, DT-5 | HeartbeatTracker (guest-initiated, 3× interval lease timeout), VhdxLifecycle (`wsl.exe --mount`/`--unmount` with mutex serialization and 10s timeout), ControlPlaneTelemetry (status JSON fields). 11 unit tests. |
+| `crates/ramshared-winsvc/src/control_plane.rs` | ITEM-4, ITEM-5, ITEM-6 / RF-1, RF-3, RF-4, DT-4, DT-5 | HeartbeatTracker (guest-initiated, 3× interval lease timeout), VhdxLifecycle (`wsl.exe --mount`/`--unmount` with mutex serialization, 10s timeout, and an injectable `CommandRunner` — production `WslRunner`), ControlPlaneTelemetry (status JSON fields). 21 unit tests. |
 | `crates/ramshared-ipc/Cargo.toml` | ITEM-1 | Crate manifest with `serde`, `serde_json`, `sha2` dependencies. |
 | `crates/ramshared-ipc/README.md` | ITEM-1 | Crate README with Scope & Responsibility, Workspace Dependencies, Safety Invariants, Testing sections. |
 | `Cargo.toml` (workspace) | ITEM-1 | Added `crates/ramshared-ipc` to workspace members. |
@@ -21,12 +21,12 @@
 
 ## Validation Results
 
-1. **Transport and Protocol Tests (`ramshared-ipc`)**: 30 passed, 0 failed on Linux.
+1. **Transport and Protocol Tests (`ramshared-ipc`)**: 34 passed, 0 failed on Linux.
    - Covers protocol frames and HMAC primitives, Linux connect boundedness, late poller deadline rejection, socket error propagation, five-second cap, bounded accept timeout, accept error propagation, canonical Hyper-V service GUID validation, read timeout, disconnect detection, stream read/write, and platform-specific unsupported behavior.
    - `CARGO_BUILD_JOBS=1 cargo clippy -p ramshared-ipc --all-targets -- -D warnings` — **PASS**.
    - `CARGO_BUILD_JOBS=1 cargo check -p ramshared-ipc --all-targets --target x86_64-pc-windows-gnu` — **PASS**; this type-checks Windows library and test code but does not execute a Windows listener.
 
-2. **Previously recorded Gate Logic Tests (`ramshared-wsl2d`)**: 142 passed, 0 failed
+2. **Gate Logic Tests (`ramshared-wsl2d`)**: 172 library + 121 `ramsharedd` binary tests passed, 0 failed (re-run 2026-09-30).
    - `host_gate::tests::validate_origin_manifest_matches_script` — **PASS**
    - `host_gate::tests::validate_origin_manifest_rejects_bad_hash` — **PASS**
    - `host_gate::tests::validate_origin_manifest_rejects_empty` — **PASS**
@@ -42,25 +42,49 @@
    - `host_gate::tests::lease_expiry_is_detected` — **PASS** (checks only whether the deadline has passed; it does not revoke authority or alter I/O behavior)
    - `host_gate::tests::host_gate_shadow_comparison` — **PASS**
 
-3. **Control Plane Tests (`ramshared-winsvc`)**: Current workspace run: 212 passed, 0 failed, 1 ignored in the library suite; 4 probe tests passed.
+3. **Control Plane Tests (`ramshared-winsvc`)**: 229 passed, 0 failed, 1 ignored in the library suite; 4 probe tests passed (re-run 2026-09-30). All 21 `control_plane::tests::*` pass:
    - `control_plane::tests::heartbeat_deadline_revokes_lease` — **PASS**
    - `control_plane::tests::heartbeat_lease_remaining_counts_down` — **PASS**
    - `control_plane::tests::heartbeat_tracker_lease_remaining_zero_when_no_heartbeat` — **PASS**
-   - `control_plane::tests::vhdx_attach_is_idempotent` — **PASS**
+   - `control_plane::tests::heartbeat_lease_remaining_is_zero_once_expired` — **PASS** (zero-timeout expiry reports 0, no underflow)
+   - `control_plane::tests::heartbeat_recovers_from_a_poisoned_lock` — **PASS**
+   - `control_plane::tests::vhdx_attach_records_partuuid_on_success` — **PASS** (success path via injected `CommandRunner`)
+   - `control_plane::tests::vhdx_attach_is_idempotent` — **PASS** (**Kahneman #17 proof**: second attach of the same PartUUID issues exactly one spawn)
+   - `control_plane::tests::vhdx_attach_failure_leaves_list_empty` — **PASS**
+   - `control_plane::tests::vhdx_detach_clears_attached_list` — **PASS**
+   - `control_plane::tests::vhdx_recovers_from_a_poisoned_lock` — **PASS**
    - `control_plane::tests::vhdx_attach_timeout_is_bounded` — **PASS**
    - `control_plane::tests::vhdx_detach_is_bounded` — **PASS**
    - `control_plane::tests::vhdx_attached_partuuids_empty_after_failed_attach` — **PASS**
+   - `control_plane::tests::vhdx_command_runner_reaps_a_timed_out_child` — **PASS** (`#[cfg(unix)]`)
    - `control_plane::tests::control_plane_telemetry_serializes` — **PASS**
    - `control_plane::tests::control_plane_state_as_str` — **PASS**
    - `control_plane::tests::default_impls_match_new` — **PASS**
-   - `control_plane::tests::command_timeout_extension_does_not_panic` — **PASS**
+   - `control_plane::tests::bounded_command_accepts_success` — **PASS**
+   - `control_plane::tests::bounded_command_reports_spawn_failure` — **PASS**
+   - `control_plane::tests::bounded_command_reports_nonzero_exit` — **PASS**
+   - `control_plane::tests::wsl_runner_adapts_bounded_command_output` — **PASS**
 
-4. **Rust Slice Coverage Gate** (min 80%):
-   - `crates/ramshared-ipc/src/lib.rs`: **90.0%** (215/239) — **PASS**
-   - `crates/ramshared-ipc/src/vsock.rs`: **85.7%** (330/385) — **PASS** on Linux. Windows-only FFI branches are excluded from this coverage run; they type-check and pass Clippy on the Windows target.
-   - `crates/ramshared-wsl2d/src/host_gate.rs`: **95.0%** (247/260) — **PASS**, previous recorded run.
-   - `crates/ramshared-winsvc/src/control_plane.rs`: **87.0%** (181/208) — **PASS**.
+   The retired `command_timeout_extension_does_not_panic` is gone: its subject
+   (the timeout-argument extension) no longer exists in `run_command_bounded`,
+   which takes a `deadline` and is covered by `bounded_command_*` and
+   `vhdx_command_runner_reaps_a_timed_out_child`.
+
+4. **Rust Slice Coverage Gate** (min 80%, metric=lines; single snapshot 2026-09-30):
+   - `crates/ramshared-ipc/src/lib.rs`: **84.3%** (129/153) — **PASS**
+   - `crates/ramshared-ipc/src/vsock.rs`: **93.0%** (198/213) — **PASS** on Linux. Windows-only FFI branches are excluded from this coverage run; they type-check and pass Clippy on the Windows target.
+   - `crates/ramshared-wsl2d/src/host_gate.rs`: **90.0%** (117/130) — **PASS**
+   - `crates/ramshared-winsvc/src/control_plane.rs`: **95.9%** (140/146) — **PASS**
    - Combined gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-ipc,ramshared-wsl2d,ramshared-winsvc --files crates/ramshared-ipc/src/lib.rs,crates/ramshared-ipc/src/vsock.rs,crates/ramshared-wsl2d/src/host_gate.rs,crates/ramshared-winsvc/src/control_plane.rs --min 80` — **PASS**.
+
+   These replace earlier figures recorded under a different llvm-cov line
+   denominator (`lib.rs` 215/239, `vsock.rs` 330/385, `host_gate.rs` 247/260,
+   `control_plane.rs` 181/208). The 2026-09-30 snapshot is the authority: it is
+   one measurement of the four files together, produced by the exact command
+   above. `control_plane.rs` rose from 80.0% (108/135) after `VhdxLifecycle`
+   gained its injectable `CommandRunner` and 10 tests covered the success,
+   idempotency-skip, detach-cleanup, spawn-failure, expiry, and poison-recovery
+   branches that were previously unreachable.
 
 5. **Code Quality & Lints**:
    - `cargo fmt --all --check` — **PASS**
@@ -94,6 +118,7 @@
 - **#16 (Read timeout bounded):** `vsock_stream_read_timeout_is_bounded` verifies read timeout fires within 500ms.
 - **#15 (Disconnect detection):** `vsock_disconnect_detected_within_interval` verifies EOF/error on socket close within 500ms.
 - **#17 (Shadow comparison):** `host_gate_shadow_comparison` verifies Rust gate logic matches script on fixture inputs.
+- **#17 (VHDX idempotency):** `vhdx_attach_is_idempotent` asserts the injected `CommandRunner` is invoked exactly once across two `attach` calls with the same PartUUID. Before 2026-09-30 this test asserted `partuuids.len() <= 1` and never reached the skip branch, so the retry-safety claim was unproven.
 - **#13 (Lease revocation):** Current helper test `lease_expiry_is_detected` verifies only that the lease deadline has passed. Cache-admission revocation and verified-origin continuation have no product-path implementation or test yet.
 - **#16 (VHDX bounded):** `vhdx_attach_timeout_is_bounded` verifies attach completes within 15s window.
 
