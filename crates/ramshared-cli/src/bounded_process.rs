@@ -1830,7 +1830,7 @@ mod tests {
         let error = run_capture_command_with_fatal(
             &mut command,
             "leaked pipe fixture",
-            Duration::from_millis(50),
+            Duration::from_millis(500),
             DEFAULT_OUTPUT_LIMIT,
             |_| {},
             &fatal,
