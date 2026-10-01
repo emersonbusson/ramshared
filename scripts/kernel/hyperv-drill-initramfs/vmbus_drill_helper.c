@@ -30,10 +30,13 @@
  * reports INCONCLUSIVE. This mode takes <mib> as a ceiling the loop must not
  * reach and allocates 64 KiB chunks until /proc/buddyinfo shows no free
  * block of order 7 or above -- the test condition, measured rather than
- * inferred. It then punches physical buddy holes: one member of every
- * (pfn, pfn^1) pair whose buddy is also ours is unmapped. A freed page's
- * buddy is always held, so nothing above order-0 can coalesce, order-7
- * cannot reappear, and the survivors still satisfy order-0 fallback. It
+ * inferred. It then punches a bounded set of physical buddy holes: one
+ * member of every (pfn, pfn^1) pair whose buddy is also ours is unmapped.
+ * A freed page's buddy is always held, so nothing above order-0 can
+ * coalesce, order-7 cannot reappear, and the survivors still satisfy
+ * order-0 fallback. Hole count is capped: the property is what matters,
+ * not the density, and an uncapped punch drains the Unmovable slab through
+ * vm_area_dup() until out_of_memory() panics an unkillable guest. It
  * prints FRAGMENT_BUDDY ready=1 only after the pattern is in place.
  *
  * The loop stops on the measured condition, not on hard refusal:
@@ -222,7 +225,27 @@ static int do_mlock_hog(int argc, char **argv)
 #define FRAG_CHUNK (64L * 1024)
 #define FRAG_MAX_CHUNKS 48000
 #define FRAG_PAGE 4096L
-#define FRAG_SAFETY_KB 8192L
+/*
+ * Allocation-phase floor. Low enough that the last order-7 block in the
+ * free remainder can still be split -- the first measured run stopped at
+ * 8 MiB with one such block left -- and high enough that a page fault
+ * cannot run into pagefault_out_of_memory() (which retries forever
+ * against an unkillable process). 2 MiB is 512 pages: more than one
+ * 64 KiB chunk needs to fault in, far below the point where a fault
+ * cannot be satisfied.
+ */
+#define FRAG_SAFETY_KB 2048L
+/*
+ * Hole-phase caps. Punching one hole per eligible page needs one
+ * vm_area_struct per surviving run. On a 2 GiB guest that is ~250k slab
+ * objects; once the Unmovable free pool is exhausted, vm_area_dup() fails
+ * into out_of_memory() and -- with this process unkillable -- the kernel
+ * panics with "System is deadlocked on memory". That is exactly what run
+ * 36794687025 did on windows-2025. The property that matters is "no two
+ * free pages are buddies", not how dense the holes are, so cap them and
+ * stop punching before slab starves.
+ */
+#define FRAG_HOLE_CAP 4096L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
@@ -298,6 +321,25 @@ static long mem_available_kb(void)
 }
 
 /*
+ * Pin or unpin this process against the OOM killer. Pin only while the
+ * allocation loop is building the pattern: a kill there is a clean
+ * INCONCLUSIVE, a hang is not. Unpin before punching holes -- that phase
+ * allocates slab, and an unkillable process plus an Unmovable shortage is
+ * a guest panic, not a drill failure.
+ */
+static void set_oom_adj(const char *value)
+{
+	int fd = open("/proc/self/oom_score_adj", O_WRONLY);
+
+	if (fd < 0)
+		return;
+	if (write(fd, value, strlen(value)) < 0) {
+		/* best effort */
+	}
+	close(fd);
+}
+
+/*
  * PFN of a populated page. Returns 0 and stores the PFN, or -1 when the
  * entry is absent, swapped out, or pagemap is withholding PFNs (no
  * CAP_SYS_ADMIN). PFNs are used only to choose which pages to unmap and
@@ -332,7 +374,7 @@ static int do_fragment_buddy(int argc, char **argv)
 {
 	long mib, hold, want, got = 0, locked = 0, i, off, stopped = 0;
 	long freed_pages = 0, held_pages = 0, no_pfn = 0, pairs = 0;
-	long high_before, high_after, avail_kb;
+	long high_before, high_locked, high_after, avail_kb;
 	void **maps;
 	unsigned long *pfns = NULL, *seen = NULL;
 	unsigned long max_pfn = 0, seen_words = 0;
@@ -369,19 +411,11 @@ static int do_fragment_buddy(int argc, char **argv)
 
 	/*
 	 * This guest is disposable and this process is the point of the
-	 * drill. Keep the OOM killer off us: if memory truly runs out the
-	 * allocation stops instead of us being killed mid-pattern.
+	 * drill. Keep the OOM killer off us during allocation: if memory
+	 * truly runs out the loop stops instead of us being killed
+	 * mid-pattern. This is dropped again before hole-punching.
 	 */
-	{
-		int oom = open("/proc/self/oom_score_adj", O_WRONLY);
-
-		if (oom >= 0) {
-			if (write(oom, "-1000\n", 6) < 0) {
-				/* best effort: the pattern still works */
-			}
-			close(oom);
-		}
-	}
+	set_oom_adj("-1000\n");
 
 	maps = calloc((size_t)want, sizeof(*maps));
 	pfns = calloc((size_t)want * (FRAG_CHUNK / FRAG_PAGE), sizeof(*pfns));
@@ -403,18 +437,34 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * no longer holds a free block of order 7 or above -- that is the
 	 * test condition, measured, not inferred.
 	 *
-	 * Do not run to hard refusal: pagefault_out_of_memory() on this
-	 * kernel only warns and retries the fault, so touching into true
-	 * exhaustion with an unkillable process hangs instead of failing.
-	 * The MemAvailable floor stops us first and is still far below any
-	 * order-7 supply.
+	 * The order-7 test runs BEFORE the MemAvailable floor. The first
+	 * measured run stopped on the floor with one order-7 block still in
+	 * the free remainder: the floor, not the buddy, was what kept the
+	 * test condition unmet. The floor is a last resort against
+	 * pagefault_out_of_memory(), which on this kernel only warns and
+	 * retries the fault, so touching into true exhaustion with an
+	 * unkillable process hangs instead of failing.
 	 */
 	for (i = 0; i < want; i++) {
 		char *m;
 		long high;
 
+		if ((got % 32) == 0) {
+			high = high_order_blocks();
+			if (high == 0) {
+				stopped = 1;
+				stop_reason = "order7-depleted";
+				break;
+			}
+		}
+
 		avail_kb = mem_available_kb();
 		if (avail_kb >= 0 && avail_kb < FRAG_SAFETY_KB) {
+			/*
+			 * Floor reached. If order-7 is already gone we are
+			 * done; otherwise this is a real shortage and we
+			 * must stop rather than fault into a hang.
+			 */
 			stopped = 1;
 			stop_reason = "memavailable-floor";
 			break;
@@ -431,15 +481,6 @@ static int do_fragment_buddy(int argc, char **argv)
 			m[off] = 1;
 		maps[i] = m;
 		got++;
-
-		if ((got % 256) == 0) {
-			high = high_order_blocks();
-			if (high == 0) {
-				stopped = 1;
-				stop_reason = "order7-depleted";
-				break;
-			}
-		}
 	}
 	/* One final check: the loop may have stopped on the ceiling. */
 	if (stopped == 0 && high_order_blocks() == 0) {
@@ -455,6 +496,10 @@ static int do_fragment_buddy(int argc, char **argv)
 		if (mlock(maps[i], FRAG_CHUNK) == 0)
 			locked++;
 	}
+	high_locked = high_order_blocks();
+	printf("FRAGMENT_BUDDY allocated chunks=%ld high_order_7plus=%ld->%ld locked=%ld stop=%s\n",
+	       got, high_before, high_locked, locked, stop_reason);
+	fflush(stdout);
 
 	pmfd = open("/proc/self/pagemap", O_RDONLY);
 	if (pmfd < 0) {
@@ -516,13 +561,25 @@ static int do_fragment_buddy(int argc, char **argv)
 	 * serve order-0 requests. Pages whose buddy is not ours are held:
 	 * freeing them could pair with leftover free memory and rebuild the
 	 * high orders we just drained.
+	 *
+	 * The property is what matters, not the density. Each munmap splits a
+	 * VMA and allocates a vm_area_struct from the Unmovable slab; a quarter
+	 * million of them drained that pool on a 2 GiB guest and the resulting
+	 * out_of_memory() panicked the machine because this process was
+	 * unkillable. Cap the holes, drop the OOM pin first, and stop punching
+	 * before slab starves. FRAG_HOLE_CAP holes still free 16 MiB of
+	 * order-0 -- far more than the 2 MiB ring needs -- and the held buddies
+	 * keep order-7 from reforming.
 	 */
-	for (i = 0; i < got; i++) {
+	set_oom_adj("0\n");
+	for (i = 0; i < got && freed_pages < FRAG_HOLE_CAP; i++) {
 		char *m = maps[i];
 
-		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE) {
+		for (off = 0; off < FRAG_CHUNK && freed_pages < FRAG_HOLE_CAP;
+		     off += FRAG_PAGE) {
 			unsigned long pfn =
 				pfns[i * (FRAG_CHUNK / FRAG_PAGE) + off / FRAG_PAGE];
+
 			if (!pfn) {
 				held_pages++;
 				continue;
@@ -542,10 +599,10 @@ static int do_fragment_buddy(int argc, char **argv)
 	}
 
 	high_after = high_order_blocks();
-	printf("FRAGMENT_BUDDY ready=1 chunks=%ld pages=%ld held=%ld freed=%ld locked=%ld pairs=%ld chunk_kib=64 cap_chunks=%ld exhausted=%ld pagemap=1 stop=%s high_order_7plus=%ld->%ld\n",
+	printf("FRAGMENT_BUDDY ready=1 chunks=%ld pages=%ld held=%ld freed=%ld locked=%ld pairs=%ld chunk_kib=64 cap_chunks=%ld hole_cap=%ld exhausted=%ld pagemap=1 stop=%s high_order_7plus=%ld->%ld->%ld\n",
 	       got, got * (FRAG_CHUNK / FRAG_PAGE), held_pages, freed_pages,
-	       locked, pairs, want, stopped, stop_reason, high_before,
-	       high_after);
+	       locked, pairs, want, FRAG_HOLE_CAP, stopped, stop_reason,
+	       high_before, high_locked, high_after);
 	fflush(stdout);
 
 	if (hold > 0)
