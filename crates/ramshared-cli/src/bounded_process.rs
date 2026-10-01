@@ -585,7 +585,14 @@ pub(crate) fn run_capture_command<F>(
 where
     F: FnOnce(u32),
 {
-    run_capture_command_with_fatal(command, label, timeout, output_limit, on_spawn, &ExitController)
+    run_capture_command_with_fatal(
+        command,
+        label,
+        timeout,
+        output_limit,
+        on_spawn,
+        &ExitController,
+    )
 }
 
 fn run_capture_command_with_fatal<F>(
@@ -702,8 +709,7 @@ where
             }
             Ok(false) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
             Ok(false) => {
-                let proof =
-                    force_exit_observed(child.child_mut(), label, REAP_GRACE, fatal)?;
+                let proof = force_exit_observed(child.child_mut(), label, REAP_GRACE, fatal)?;
                 break (
                     Some(ProcessSpawnError::ExecutionTimeout {
                         command: label.to_string(),
