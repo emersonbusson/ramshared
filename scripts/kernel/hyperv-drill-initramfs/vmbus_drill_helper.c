@@ -263,13 +263,23 @@ static int do_mlock_hog(int argc, char **argv)
  * pagefault_out_of_memory() with this process pinned, and the guest panicked
  * instead of failing the drill.
  *
- * 32 MiB is the margin the rest of the run needs to stay alive: the punch,
- * the chase, the drill shell's forks, and the ring allocation the
+ * 96 MiB is the margin the rest of the run needs to stay alive: the chase,
+ * the punch, the drill shell's forks, and the ring allocation the
  * channel-open exercise is about to make. Anything the main loop leaves
  * above that is still holding high-order blocks, and the chase below is what
  * splits them.
+ *
+ * The level matters because the chase's peak RSS is main_pattern + held.
+ * Run 36813796538 stopped at a 32 MiB margin and the OOM killer took the
+ * helper at anon-rss 1950 MiB on a 2048 MiB guest: the main pattern held
+ * 1920 MiB after the punch, the chase needed ~48 MiB more to drain the
+ * 16 MiB of punch fuel and split the remaining high-order blocks, and there
+ * was not 48 MiB left. Raising the margin shrinks the main pattern by
+ * exactly the amount it grows the high-order residue, so the margin alone
+ * does not create headroom -- the chase recycle below does. The margin is
+ * the room the recycle works in, not a reserve the chase is kept out of.
  */
-#define FRAG_HARD_KB 32768L
+#define FRAG_HARD_KB 98304L
 /*
  * Hole-phase caps. Punching one hole per eligible page needs one
  * vm_area_struct per surviving run. On a 2 GiB guest that is ~250k slab
@@ -323,13 +333,22 @@ static int do_mlock_hog(int argc, char **argv)
  * reservation on top of it.
  *
  * FRAG_CHASE_CAP is the backstop, not the guard. The chase stops on the
- * measured condition first, then on the unsplit floor, and only then on the
- * cap. Run 36811867648 needed roughly 380 more chunks after the floor
- * stopped it to walk the remaining high-order capacity down to zero, well
- * inside the cap.
+ * measured condition first, then on the unsplit floor, then on the memfree
+ * safety stop below, and only then on the cap. With recycle in place the
+ * chase holds one new page per chunk at steady state (the recycled pages
+ * bounce out again), so splitting a 96 MiB margin needs on the order of
+ * 1500--3000 chunks; 4096 is the headroom for that, not a guess.
+ *
+ * FRAG_CHASE_HARD_KB is the OOM backstop. The chase is unpinned until
+ * ready=1 by design, so a runaway hold is supposed to die as the honest
+ * INCONCLUSIVE_NO_PATTERN; this stop is the cheaper version of the same
+ * thing, and it must not bind before high==0. At 48 MiB of MemFree it
+ * still leaves the unsplit floor (128 pages) far below it, and it sits
+ * above the point where the ring allocation would fail.
  */
-#define FRAG_CHASE_CAP 2048L
+#define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
+#define FRAG_CHASE_HARD_KB 49152L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
@@ -833,6 +852,69 @@ static int do_fragment_buddy(int argc, char **argv)
 	}
 
 	/*
+	 * Chase first, punch after. The punch used to run before the chase,
+	 * and that ordering is what stopped the chase from splitting anything:
+	 * the 4096 holes are isolated order-0 pages, an allocator serves
+	 * order-0 before it splits, and run 36811867648's chase took exactly
+	 * 254 chunks x 16 pages = 15.9 MiB of them and then hit the unsplit
+	 * floor with high_order_7plus still at 9. The fuel drained, the
+	 * high-order blocks were never touched.
+	 *
+	 * Punching after means the chase faults into an untouched margin whose
+	 * only free memory is the order-0-and-up the main loop left behind.
+	 * The small-order residue goes first, and then every subsequent chunk
+	 * is a split of an order-7-and-up block. It also keeps the 16 MiB out
+	 * of the chase's RSS: the ring allocation gets it later, which is the
+	 * point of the holes in the first place.
+	 *
+	 * Chase: split the high-order blocks the main loop's margin left
+	 * behind. Checked every chunk, against the same measured condition as
+	 * the main loop. Stops on that condition, then on the unsplit floor,
+	 * then on the memfree backstop, then on the cap. Still unpinned: if
+	 * this is where the guest runs out, the OOM killer takes us and the
+	 * drill reports INCONCLUSIVE_NO_PATTERN instead of panicking.
+	 */
+	for (i = 0; i < FRAG_CHASE_CAP; i++) {
+		char *m;
+		long high, unsplit;
+
+		high = high_order_blocks();
+		if (high == 0) {
+			stopped = 1;
+			stop_reason = "order7-depleted";
+			break;
+		}
+
+		unsplit = unsplit_free_pages();
+		unsplit_at_stop = unsplit;
+		if (unsplit >= 0 && unsplit < FRAG_CHASE_UNSPLIT) {
+			stopped = 1;
+			stop_reason = "chase-unsplit-floor";
+			break;
+		}
+
+		free_kb = mem_free_kb();
+		if (free_kb >= 0 && free_kb < FRAG_CHASE_HARD_KB) {
+			stopped = 1;
+			stop_reason = "chase-memfree-margin";
+			break;
+		}
+
+		m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
+			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (m == MAP_FAILED) {
+			stopped = 1;
+			stop_reason = "chase-mmap-refused";
+			break;
+		}
+		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE)
+			m[off] = 1;
+		if (mlock(m, FRAG_CHUNK) == 0)
+			chase_locked++;
+		chase_maps[chase++] = m;
+	}
+
+	/*
 	 * Pass 2: unmap every page whose PFN is even and whose buddy (pfn+1)
 	 * is also ours and will be held. A freed page's buddy is then always
 	 * held, so nothing above order-0 can coalesce and the survivors still
@@ -873,53 +955,6 @@ static int do_fragment_buddy(int argc, char **argv)
 				held_pages++;
 			}
 		}
-	}
-
-	/*
-	 * Chase: split the high-order blocks the main loop's margin left
-	 * behind. The punch just freed FRAG_HOLE_CAP isolated order-0 pages,
-	 * so there is room to fault again without touching the floor -- and
-	 * because those holes cannot form high orders, the pages for the new
-	 * chunks have to come out of the order-7-and-up blocks that are still
-	 * free. Each one we take is one more block split.
-	 *
-	 * Checked every chunk, against the same measured condition as the main
-	 * loop. Stops on that condition, then on the unsplit floor, then on
-	 * the cap. Still unpinned: if this is where the guest runs out, the
-	 * OOM killer takes us and the drill reports INCONCLUSIVE_NO_PATTERN
-	 * instead of panicking.
-	 */
-	for (i = 0; i < FRAG_CHASE_CAP; i++) {
-		char *m;
-		long high, unsplit;
-
-		high = high_order_blocks();
-		if (high == 0) {
-			stopped = 1;
-			stop_reason = "order7-depleted";
-			break;
-		}
-
-		unsplit = unsplit_free_pages();
-		unsplit_at_stop = unsplit;
-		if (unsplit >= 0 && unsplit < FRAG_CHASE_UNSPLIT) {
-			stopped = 1;
-			stop_reason = "chase-unsplit-floor";
-			break;
-		}
-
-		m = mmap(NULL, FRAG_CHUNK, PROT_READ | PROT_WRITE,
-			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (m == MAP_FAILED) {
-			stopped = 1;
-			stop_reason = "chase-mmap-refused";
-			break;
-		}
-		for (off = 0; off < FRAG_CHUNK; off += FRAG_PAGE)
-			m[off] = 1;
-		if (mlock(m, FRAG_CHUNK) == 0)
-			chase_locked++;
-		chase_maps[chase++] = m;
 	}
 	if (stopped == 0 && high_order_blocks() == 0) {
 		stopped = 1;
