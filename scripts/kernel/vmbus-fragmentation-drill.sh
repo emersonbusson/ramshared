@@ -237,11 +237,17 @@ esac
 EXHAUSTED="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*exhausted=\([0-9]*\).*/\1/p')"
 PAGEMAP="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*pagemap=\([0-9]*\).*/\1/p')"
 STOPREASON="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*stop=\([a-z0-9-]*\).*/\1/p')"
+# unsplit= is the chase floor's measured value at stop: buddyinfo order-0
+# plus the per-cpu page cache. It is not a gate input -- stop= already
+# names the floor -- but carrying it on the RESULT line makes a
+# chase-unsplit-floor stop self-explanatory without digging the helper
+# line out of the console, which is how run 36811867648 was diagnosed.
+UNSPLIT="$(printf '%s\n' "$FRAG_LINE" | sed -n 's/.*unsplit=\(-\?[0-9]*\).*/\1/p')"
 # Trust the helper's post-chase count; the reread is secondary evidence and
 # is expected to disagree if the pattern was reclaimed after ready=1.
 HIGH_ORDER_REREAD="${HIGH_ORDER:-unknown}"
 HIGH_ORDER="${HIGH_ORDER_HELPER:-$HIGH_ORDER}"
-say "RESULT high_order_7plus_blocks=${HIGH_ORDER:-unknown} (reread=${HIGH_ORDER_REREAD:-$HIGH_ORDER}) exhausted=${EXHAUSTED:-unknown} pagemap=${PAGEMAP:-unknown} stop=${STOPREASON:-unknown} order7_dmesg=$ORDER7 accept4_failures=$ACCEPT oops=$OOPS rebind=$REBOUND"
+say "RESULT high_order_7plus_blocks=${HIGH_ORDER:-unknown} (reread=${HIGH_ORDER_REREAD:-$HIGH_ORDER}) exhausted=${EXHAUSTED:-unknown} pagemap=${PAGEMAP:-unknown} unsplit=${UNSPLIT:-unknown} stop=${STOPREASON:-unknown} order7_dmesg=$ORDER7 accept4_failures=$ACCEPT oops=$OOPS rebind=$REBOUND"
 
 # Exit codes for init:
 #   0  PASS            pressure achieved and ring allocation survived it

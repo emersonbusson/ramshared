@@ -11966,3 +11966,218 @@ branch in `resolve_boot_config_from`, the numeric shell↔Rust binding in
 BINARY_MATCH, benchmark, or three-tier qualification evidence. The seal's
 numeric values are the authority; this entry only records that every path
 now reads them.
+
+## 2026-10-01 01:11 -03 — the missing page was the per-cpu cache; the floor level then stopped the split cycle (EVD-0144)
+
+**What:** [Run 36811867648](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36811867648)
+(`Hyper-V runtime drill`, fork `f2339e1c4feb`) — all three jobs green, and
+the first run of the corrected chase floor. Companion
+[run 36811867606](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36811867606)
+(`VMBus upstream candidate`, same SHA) is green on all three jobs
+(`wsl-backport`, `kernel (x86_64)`, `kernel (arm64)`).
+
+**Question:** with the chase floor counting the pages a fault can actually
+take, does it close the third EVD-0134 acceptance signal
+(`high_order_7plus_blocks=0` with `exhausted=1`)?
+
+**Answer: the quantity is right and the chase runs. The level is wrong, and
+it stopped the chase at the drain-to-split boundary instead of at
+exhaustion. This entry also corrects the formula EVD-0142 wrote down.**
+
+| Signal | windows-2025 | windows-latest |
+| --- | --- | --- |
+| `cycle_fails=0 / 120 steps` | ✅ | ✅ |
+| `MMAP_HOLD /dev/uio0 maps=5`, ring `maps=1` | ✅ | ✅ |
+| `LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes` | ✅ | ✅ |
+| `SPLATS=0` / `FAULTS=0` | ✅ | ✅ |
+| `min_free_kbytes saved=5704 set=512 now=512` | ✅ | ✅ |
+| `rebind=yes`, `order7_dmesg=0`, `accept4_failures=0`, `oops=0` | ✅ | ✅ |
+| `after_fragment MAPS count=12 bytes=20279296 pages=4939` | ✅ exact | ✅ exact |
+| **`chase=` iterations** | ✅ `254` (was `0`) | ✅ `405` (was `0`) |
+| **`unsplit=` at stop** | ✅ `504` | ✅ `498` |
+| `pagemap=1` | ✅ | ✅ |
+| **`high_order_7plus` / `exhausted`** | ❌ `495->10->9`, `0` | ❌ `500->11->8`, `0` |
+| `stop=` | `chase-unsplit-floor` | `chase-unsplit-floor` |
+| `HYPERV_DRILL_RESULT status=PARTIAL` | ✅ ×3 intact | ✅ ×3 intact |
+| job | success | success |
+
+### Correction to EVD-0142: the floor was counting the wrong quantity
+
+EVD-0142 named the chase floor as `MemFree − Σ_{k≥1} buddyinfo[k]·2^k`, and
+GAP-REGISTER row 41 repeated it as "order-0 buddy + pcp + slack". Both the
+formula and that expansion are wrong, and the wrongness is exactly why
+EVD-0142's run printed `chase=0 stop=chase-unsplit-floor` on both guests.
+
+`MemFree − Σ_{k≥1} buddyinfo[k]·2^k` is algebraically just `buddyinfo`'s own
+order-0 count. `MemFree` is `NR_FREE_PAGES`, and `buddyinfo` prints
+`zone->free_area[order].nr_free`; the two describe the same buddy free
+lists. Subtracting every page that sits in an order-1-or-higher block leaves
+the order-0 count and nothing else. That is not the quantity a fault can
+take without splitting, because a freed page does not start there.
+
+### What the kernel actually does
+
+`free_frozen_page_commit()` (`mm/page_alloc.c`) does `pcp->count += 1 << order`
+and **never calls `account_freepages()`**. `account_freepages()` is the only
+`NR_FREE_PAGES` increment; it carries `lockdep_assert_held(&zone->lock)` and
+runs only on the buddy add/remove path. A page released by `munmap`
+therefore goes to the per-cpu page cache first, is free and allocatable, and
+is invisible to **both** `MemFree` and `buddyinfo` until something drains the
+pcp into the buddy. `/proc/zoneinfo`'s `pagesets` block is what reports it:
+`pcp->count` per cpu per zone.
+
+### Measured, not argued
+
+The same three numbers agree on a live WSL2 host and on the EVD-0142 drill
+guest:
+
+| Figure | Drill guest (run 36808657969) | WSL2 host (2026-10-01) |
+| --- | --- | --- |
+| old formula (`MemFree − Σ_{k≥1}`) | 14 417 | 335 658 |
+| `buddyinfo` order-0 | 14 364 | 335 526 |
+| gap (vmstat drift) | 53 | 132 |
+| `pcp->count` (zoneinfo `pagesets`) | 100 175 | 61 960 |
+| **correct unsplit = order-0 + pcp** | **114 539** | **397 486** |
+
+On the drill guest the old floor read 14 417 after the punch that freed 4 096
+isolated pages — those 4 096 were in the pcp and counted by nothing — so the
+floor fired before the chase had taken a single page. That is `chase=0`.
+
+The host row settles whether `MemFree` includes the pcp: `MemFree` minus
+`buddyinfo`'s total is 132 pages, the same vmstat drift as the order-0 gap,
+not the pcp. `MemFree` excludes the pcp.
+
+**The corrected contract:** the chase floor is `buddyinfo` order-0 **plus**
+`pcp->count` from `/proc/zoneinfo`'s `pagesets` — exactly the pages a fault
+can take without splitting a higher-order block, because a fault tries the
+pcp first, then the order-0 buddy lists, and only then splits. It is never
+`MemFree`, never `MemAvailable`, and never `buddyinfo`'s own order-0 count.
+Implemented as `buddy_order0_pages()` + `pcp_free_pages()` +
+`unsplit_free_pages()` in fork `268b72b08465` / RamShared `9a7b49fc`, with
+the measured value reported on the `ready=` line as `unsplit=`.
+
+### The wall this run measured: unsplit excludes the high orders
+
+With the quantity corrected, the chase ran and then stopped at the wrong
+place. Both guests:
+
+```
+FRAGMENT_BUDDY ready=1 … chase=254 unsplit=504 exhausted=0 pagemap=1
+  stop=chase-unsplit-floor high_order_7plus=495->10->9     (windows-2025)
+FRAGMENT_BUDDY ready=1 … chase=405 unsplit=498 exhausted=0 pagemap=1
+  stop=chase-unsplit-floor high_order_7plus=500->11->8     (windows-latest)
+```
+
+The buddy account at that moment is the whole argument:
+
+| | windows-2025 | windows-latest |
+| --- | --- | --- |
+| `Node 0, zone DMA32` orders 0..10 | `1 1 1 1 2 1 2 2 2 0 5` | `0 1 2 2 1 1 0 2 1 2 2` |
+| total free pages (from that line) | 6 095 | 3 658 |
+| of which order-10 blocks | 5 blocks = 5 120 pages = 20 MiB | 2 blocks = 2 048 pages = 8 MiB |
+| `high_order_7plus` (helper, authoritative) | 9 | 8 (reread 6) |
+
+`unsplit` counts only what a fault can take **without splitting**, so it
+excludes the high orders the chase exists to drain. The floor read as
+starvation at 504 pages while 6 095 pages (23.8 MiB) were still free and
+20 MiB of that sat in order-10 alone. The chase had just finished emptying
+the pcp — 254 and 405 iterations — and stood exactly at the point where the
+next fault starts splitting. The floor stopped it there, which is why only
+one to three high-order blocks were consumed.
+
+Splitting refills `unsplit`: an order-10 yields 1 024 order-0 pages, a 64 KiB
+chase chunk takes 16 and leaves 1 008. So while any block above order-0
+remains, a **low** floor cannot bind — it only binds when there is nothing
+left to split. A low floor is therefore a real starvation guard and still
+lets the split cycle run until `high==0`, which is what `exhausted=1`
+measures.
+
+### Fix shipped: the floor is the watermark the drill already sets
+
+`FRAG_CHASE_UNSPLIT` goes from 512 pages ("one 2 MiB subchannel ring") to
+**128 pages** — one order-0 page count of the `min_free_kbytes=512 KiB`
+watermark the drill has already written, not a reservation on top of it.
+`FRAG_CHASE_CAP` (2048) stays the backstop: this run needed roughly 380 more
+chunks to finish the job, well inside it. The chase loop order is unchanged
+and still checks `high==0` first, so `order7-depleted` wins when reached.
+
+The fragmentation `RESULT` line now also carries `unsplit=`, so a
+`chase-unsplit-floor` stop is self-explanatory without digging the helper
+line out of the console — which is how this run had to be diagnosed. It is
+not a gate input; `stop=` already names the floor.
+
+Shipped as fork `97114ebadb5d` (this commit's RamShared mirror).
+
+### What this run does not prove
+
+- **Not the third EVD-0134 signal.** `high_order_7plus_blocks=0` with
+  `exhausted=1` is still open. Both guests ended `exhausted=0` with high
+  orders free.
+- **Not the CoCo path.** `vmbus_uses_shared_page_chunks()` is
+  `!encrypted && (hv_isolated || IS_ENABLED(CONFIG_ARM64))`, which is false
+  on ordinary x86_64 Hyper-V, so this drill exercised the `vzalloc()`
+  branch. The chunked order-N → order-0 fallback stays unexercised and the
+  verdict must travel with
+  `VERDICT_SCOPE ordinary-x86_64-vzalloc-path; co-co-chunked-fallback-not-exercised`.
+- **Not build, KUnit, GPADL/UIO or CoCo qualification** beyond the named
+  candidate-build result 36811867606. The companion green build is not gate
+  closure.
+
+EVD-0142's remaining observations stand unchanged: the fragmentation-first
+ordering fixes the rebind, the `after_fragment` map balance is exact on both
+guests, and the candidate build is green. Only its chase-floor formula is
+superseded, by this entry.
+
+**Verdict:** 🟡 partial — the chase floor now counts the pages a fault can
+take without splitting (`buddyinfo` order-0 plus the per-cpu page cache) and
+the chase runs (`chase=254`/`405`, previously `0`), the console verdict is
+intact on both guests, the map balance after the full
+bind → probe → unbind → rebind cycle is exact
+(`count=12 bytes=20279296 pages=4939`, identical to the lifecycle
+`BASELINE`), and the companion candidate build is green on all three jobs.
+The floor then stopped the chase at the drain-to-split boundary because
+`unsplit` excludes the very high-order blocks the chase exists to split:
+`stop=chase-unsplit-floor` at `unsplit=504`/`498` with `high_order_7plus` at
+9/8 and 6 095/3 658 free pages still in the buddy. The level is corrected to
+the 128-page watermark. `high_order_7plus_blocks=0` with `exhausted=1`
+remains open.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36811867648 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `FRAGMENT_BUDDY`, `chase=`, `unsplit=`, `exhausted=`, `stop=`,
+`high_order_7plus`, `BUDDY AFTER FRAGMENT`, `after_fragment MAPS`. The
+decisive arithmetic is the pair `unsplit=504` against
+`Node 0, zone DMA32 1 1 1 1 2 1 2 2 2 0 5`: the floor fired while five
+order-10 blocks (20 MiB) were still free, which is only possible because
+`unsplit` excludes them. For the formula correction, the decisive arithmetic
+is the three-number table above (`MemFree − buddyinfo_total = 132` pages of
+vmstat drift, not the pcp).
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0144`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T04:11:00Z`.
+**Verified at:** `2026-10-01T04:11:00Z`.
+**Source revision:** `f2339e1c4feb`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three-number table (old formula / order-0 / pcp /
+sum) next to the `MemFree − buddyinfo_total = 132` row — the pair is the
+root-cause argument that `MemFree` excludes the pcp and that the old formula
+collapsed to order-0. Keep the measured revision `f2339e1c4feb` distinct
+from the correction revision `268b72b08465` (RamShared `9a7b49fc`) and from
+the floor-level revision `97114ebadb5d`. Keep the buddy account
+(`1 1 1 1 2 1 2 2 2 0 5`, 6 095 pages, five order-10) next to
+`unsplit=504` — either alone does not show that the floor fired at the
+drain-to-split boundary. Keep the candidate-build green result separate from
+the drill verdict: a green build is not gate closure.
+**Freshness:** Superseded as soon as a run of `97114ebadb5d` or later reports
+`high_order_7plus_blocks=0` with `exhausted=1`. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence beyond
+the named candidate-build result 36811867606, and never cite it as evidence
+for the chunked order-zero fallback — that path is not reachable on these
+guests. If GitHub retires or repurposes the `windows-latest` /
+`windows-2025` images, or drops the Hyper-V role from them, this claim is
+void until re-measured.

@@ -301,15 +301,35 @@ static int do_mlock_hog(int argc, char **argv)
  * 36808657969 got chase=0 from a "MemFree minus the high orders" floor that
  * is algebraically buddyinfo's order-0 again. See unsplit_free_pages().
  *
- * FRAG_CHASE_UNSPLIT is one 2 MiB subchannel ring, so stopping on the floor
- * still leaves enough for the channel-open exercise that follows.
+ * The level of that floor matters as much as the quantity. Run 36811867648
+ * stopped at unsplit=504 (windows-2025) and 498 (windows-latest) with
+ * high_order_7plus still at 9 and 8, while buddyinfo held 6101 and 3658
+ * free pages in total -- most of it in the very blocks the chase exists to
+ * split, including five order-10 blocks on windows-2025. Unsplit excludes
+ * high orders, so it read as starvation while the guest still had 24 MiB.
+ * The chase had just finished draining the pcp (254 and 405 iterations) and
+ * was at the point where the next fault starts splitting; the floor stopped
+ * it there, which is why only one or three high-order blocks were consumed.
+ *
+ * Splitting refills unsplit (an order-10 yields 1024 order-0 pages; a
+ * 64 KiB chase chunk takes 16 and leaves 1008), so while any block above
+ * order-0 remains the floor cannot bind -- it only binds when there is
+ * nothing left to split. A low floor is therefore a real starvation guard
+ * and still lets the split cycle run until high==0, which is what
+ * exhausted=1 measures.
+ *
+ * FRAG_CHASE_UNSPLIT is one order-0 page count of the watermark the drill
+ * has already set (min_free_kbytes=512 KiB = 128 pages), not a separate
+ * reservation on top of it.
  *
  * FRAG_CHASE_CAP is the backstop, not the guard. The chase stops on the
  * measured condition first, then on the unsplit floor, and only then on the
- * cap.
+ * cap. Run 36811867648 needed roughly 380 more chunks after the floor
+ * stopped it to walk the remaining high-order capacity down to zero, well
+ * inside the cap.
  */
 #define FRAG_CHASE_CAP 2048L
-#define FRAG_CHASE_UNSPLIT 512L
+#define FRAG_CHASE_UNSPLIT 128L
 
 /*
  * Punching one hole per freed page needs one VMA per surviving run, which is
