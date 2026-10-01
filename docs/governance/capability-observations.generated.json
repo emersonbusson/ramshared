@@ -262,6 +262,7 @@
       "documented_surface": {
         "implementation_paths": [
           "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-vulkan/src/lib.rs",
           "scripts/docs-check.sh",
           "scripts/package/build-linux-bundle.sh",
           "scripts/windows/Test-WindowsCiStatic.ps1",
@@ -580,6 +581,8 @@
           "crates/ramshared-vram/src/reserve_policy.rs",
           "crates/ramshared-wsl2d/src/gpu_budget.rs",
           "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/p0/bench.sh",
+          "scripts/p0/measure-gpu-reserve-floor.sh",
           "scripts/safety/preflight.sh",
           "scripts/safety/test-preflight-reserve-floor.sh",
           "tools/ci/check-rust-slice-coverage.mjs"
