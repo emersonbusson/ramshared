@@ -57,8 +57,8 @@ Implement `SPEC.md` only.
       `fake_codec_roundtrip_is_byte_exact`,
       `fake_codec_checksum_mismatch_refuses_before_decode`.
 
-**Cover:** `crates/ramshared-vram/src/codec.rs` — **90.1%** (317/352 lines), gate PASSED.
-(Re-measured 2026-09-30 with the full fake codec and both integration
+**Cover:** `crates/ramshared-vram/src/codec.rs` — **87.4%** (311/356 lines), gate PASSED.
+(Re-measured 2026-10-01 after the worker_telemetry label/truncation test was added; the prior 90.1% (317/352) measurement predates the current file size.)
 suites in the run; the earlier 132/135 figure predated `FakeCodec`.)
 
 ### ITEM-2 — Extent index, slab allocator, raw bypass — ✅ implemented
@@ -147,18 +147,16 @@ suites in the run; the earlier 132/135 figure predated `FakeCodec`.)
       `cpu_codec_arm_refuses_oversize_extents`,
       `cpu_codec_arm_max_encoded_len_is_a_bound`.
 
-**Cover (gate 2026-09-30, `--min 80`, packages `ramshared-vram,ramshared-block`):**
+**Cover (re-measured 2026-10-01, `--min 80`):**
 
 | File | Lines | % |
 | --- | --- | --- |
-| `crates/ramshared-vram/src/codec.rs` | 317/352 | **90.1%** |
+| `crates/ramshared-vram/src/codec.rs` | 311/356 | **87.4%** |
+| `crates/ramshared-vram/src/worker_telemetry.rs` | 60/60 | **100.0%** |
 | `crates/ramshared-block/src/compressed_cache.rs` | 222/247 | **89.9%** |
 | `crates/ramshared-block/src/gpu_cache_worker.rs` | 623/722 | **86.3%** |
 
-Gate: **PASSED**. Tests in the run: 223 passed, 0 failed (159 block lib +
-17 `gpu_cache_compression` + 7 `cpu_codec_control_arm` + 6
-`gpu_worker_protocol` + 34 vram lib). `cargo clippy --all-targets` on both
-crates: 0 errors, 0 warnings.
+Gate: **PASSED**. Workspace Clippy exit 0, zero warnings (2026-10-01).
 
 #### Contract notes (not defects — do not "fix")
 
@@ -212,8 +210,8 @@ Host-side validation 2026-09-30 (no GPU, no nvCOMP; the deterministic
 | --- | --- |
 | Tests (`ramshared-vram`, `ramshared-block`, `ramshared-wsl2d`, `ramshared-cli`) | **1003 passed / 0 failed** (19 hardware-gated ignored) |
 | `cargo clippy --all-targets -p ramshared-vram -p ramshared-block -p ramshared-cli -- -D warnings` | 0 errors, 0 warnings |
-| Cover `crates/ramshared-vram/src/codec.rs` | **90.1%** (317/352) |
-| Cover `crates/ramshared-vram/src/worker_telemetry.rs` | **86.7%** (52/60) |
+| Cover `crates/ramshared-vram/src/codec.rs` | **87.4%** (311/356) |
+| Cover `crates/ramshared-vram/src/worker_telemetry.rs` | **100.0%** (60/60) |
 | Cover `crates/ramshared-block/src/compressed_cache.rs` | **89.9%** (222/247) |
 | Cover `crates/ramshared-block/src/gpu_cache_worker.rs` | **80.1%** (672/839) |
 | Cover `crates/ramshared-block/src/ipc_cache_client.rs` | **84.0%** (305/363) |
