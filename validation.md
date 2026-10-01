@@ -12961,3 +12961,151 @@ residue figure is the physics), and for the third-signal claim by a run
 reporting `exhausted=1` with `reread=0`. Re-read both runtime jobs before
 citing. Job-level `success` on `hyperv-runtime-drill` is never a gate
 closure. Never cite this entry as CoCo or send-gate evidence.
+
+## 2026-10-01 11:22 -03 — the hole cap was not the physics; the chase stops with its own residue inside the memfree margin (EVD-0152)
+
+**What:** Second score of the chase-chunk recycle, with
+`FRAG_CHASE_HOLE_CAP` raised from 8192 to `FRAG_CHASE_CAP * 8 = 32768`
+(fork `1ee6006cad7f`). Drill run **36873015167**, branch
+`vmbus-ring-buffer-upstream-v2`, `headSha=1ee6006cad7f`. Both runtime jobs
+`VERDICT=INCONCLUSIVE_CAP_REACHED`. **This run falsifies the EVD-0151
+diagnosis** that the hole cap was the binding constraint on the residue.
+
+| Job | Result | Residue at `ready=1` | Holes / chunk |
+| --- | --- | --- | --- |
+| `drill-runtime (windows-latest)` 110407790406 | `high_order_7plus_blocks=7 (reread=6) exhausted=0 stop=chase-memfree-margin` | buddyinfo `2 1 2 1 1 2 2 2 1 1 2` → n7=2 n8=1 n9=1 n10=2 = **6 blocks / 3072 pages / 12.0 MiB** | `8669 / 1735 = 4.996` |
+| `drill-runtime (windows-2025)` 110407790763 | `high_order_7plus_blocks=5 (reread=5) exhausted=0 stop=chase-memfree-margin` | buddyinfo `1 0 1 1 2 1 2 0 2 1 2` → n7=0 n8=2 n9=1 n10=2 = **5 blocks / 3072 pages / 12.0 MiB** | `8427 / 1684 = 5.004` |
+
+Both: `LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes`,
+`HYPERV_DRILL_RESULT lifecycle=0 fragment=3 splats=0 faults=0`,
+`scope=lifecycle-pass-fragment-inconclusive`, `order7_dmesg=0`,
+`accept4_failures=0`, `oops=0`, `rebind=yes`.
+
+### The cap is free of the binding; the residue did not move
+
+| Quantity | 36870289589 (cap 8192) | **36873015167 (cap 32768)** |
+| --- | --- | --- |
+| `chase_holes` | 8192 / 8192 (**equals the cap**) | 8669 / 8427 (**cap not reached**) |
+| holes per chunk | 4.75 / 4.85 | **4.996 / 5.004** |
+| residue blocks (reread) | 4 (wl) / 6 (w25) | **6 (wl) / 5 (w25)** |
+| residue size | 3072 / 3200 pages | **3072 / 3072 pages** |
+| `high_order` trail | 502→26→5 / 494→27→5 | 497→26→7 / 496→26→5 |
+| `stop` | `chase-memfree-margin` | `chase-memfree-margin` |
+| `exhausted` | 0 | 0 |
+
+Raising the cap bought **+477 / +235 holes** and **zero residue reduction**.
+The residue is **exactly 3072 pages = 12.0 MiB on both jobs** — a structural
+floor, not noise. EVD-0151's "the cap truncated it, so 12 MiB is a floor not
+the physics" is therefore wrong on the second half: 12 MiB **is** the physics
+of this configuration.
+
+### The corrected diagnosis: ~5 in-chunk pairs, not 8
+
+`punch_chunk_isolated()` frees an even PFN only when its order-0 buddy
+(`pfn+1`) is also in the same 64 KiB chunk and stays mapped. That assumed
+the chunk's 16 pages are physically contiguous. They are not: a 64 KiB
+`mmap` is virtually contiguous, and as high-order blocks split the 16 pages
+arrive from different blocks. Only about **5 of the 8 even PFNs** end up
+with their buddy inside the same chunk. Measured holes/chunk converge on
+5.0 from both sides (4.75 / 4.85 with the cap truncating, 4.996 / 5.004 with
+the cap free) — that is the physics, and no constant can raise it.
+
+### Where the stop actually fired
+
+`stop=chase-memfree-margin` on both jobs. That is
+`FRAG_CHASE_HARD_KB = 16384` (16 MiB) at `vmbus_drill_helper.c:971`. The
+12 MiB residue sits **inside** that 16 MiB: at the stop, MemFree is just
+under 16 MiB and 12 MiB of it is the order-8/9/10 residue. The chase is
+structurally forbidden from faulting the pages that would split it.
+
+Net-hold arithmetic shows why the margin and the residue are the same
+memory:
+
+```
+after main   MemFree ~= 96 MiB   (FRAG_HARD_KB)
+chase net    11 pages/chunk at 5 holes/chunk = 44 KiB
+to reach     16 MiB from 96 MiB = 80 MiB / 44 KiB ~= 1861 chunks
+observed     1735 (wl) / 1684 (w25)
+residue left 3072 pages = 12.0 MiB   -- most of the remaining 16 MiB
+```
+
+The chase consumed its whole MemFree budget and the residue **is** the free
+memory that budget protects. Not reached: `FRAG_CHASE_CAP` (1735/1684 of
+4096), `FRAG_CHASE_UNSPLIT` (`unsplit=415 / 369` vs floor 128),
+`FRAG_CHASE_HOLE_CAP` (8669/8427 of 32768).
+
+### The lever this names
+
+Extend `punch_chunk_isolated()` to accept a **main-held** odd buddy as an
+isolation partner (`pfn_getbit(seen, pfn + 1)`), not only one that is in the
+same chunk. `seen` is built in Pass 1 from every main-pattern PFN **before**
+the chase runs, and both the chase punch and the main punch free only even
+PFNs whose buddy is odd and held — **odd PFNs are never freed by either
+punch**, so a main-held odd buddy is a permanently safe isolation partner.
+
+Main holds `479216 - 4096 = 475120 pages = 1856.0 MiB` of a ~2004 MiB
+guest, so nearly every leftover page's buddy is a main page. That should
+move holes/chunk from ~5 to ~8, cutting net hold from 11 to 8 pages per
+chunk (44 KiB → 32 KiB). The same 80 MiB MemFree budget then buys
+`80 MiB / 32 KiB = 2560` chunks instead of 1861 — enough to split the
+remaining 3072 pages (192 chunks) and reach `high==0` **without** touching
+`FRAG_CHASE_HARD_KB`. Not yet implemented, not yet scored.
+
+Do not lower `FRAG_CHASE_HARD_KB` on this evidence alone: the recycle rate
+is the lever that fits inside the existing OOM backstop, and the margin is
+what protects Unmovable.
+
+### Serial console byte loss (same class as EVD-0149 / EVD-0151)
+
+windows-latest again dropped a byte (`high_ordr` on 36870289589). windows-2025
+arrived intact here. Printed count and `reread` disagree on windows-latest
+(7 vs 6); **`reread` is authoritative** — fresh buddyinfo recount after the
+print. Cite `reread` for block counts. Never "fix" the source for a dropped
+byte.
+
+### Verdict
+
+🔴 **fails** — EVD-0134 third signal still red (`exhausted=0`).
+
+The recycle is **proven directionally** (43 → 12 MiB, order-10 count 10 → 2)
+and its **limit is now measured**: ~5 holes per chunk because the chunk is
+not physically contiguous. The EVD-0151 lever (raise the hole cap) was tried
+and bought nothing on the residue. The lever that follows from this
+measurement is the main-held-buddy partner, which is a mechanism change and
+not a constant.
+
+**What this does not prove:** ring allocation under a depleted buddy.
+`exhausted=0` means an order-7 request could still be satisfied outright,
+so the fallback path is still unforced. Do not cite this as fragmentation
+PASS.
+
+**Verdict:** 🔴 fails — third signal open; hole cap freed, residue is physics at ~5 holes/chunk
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** read `FRAGMENT_BUDDY ready=1 … chase=… chase_holes=…` and
+the buddyinfo line that follows it from both `drill-runtime` jobs. Divide
+`chase_holes / chase`: if it equals `FRAG_CHASE_HOLE_CAP / chase` the cap is
+truncating and the residue is a floor; if it converges on 5 the cap is free
+and the residue is physics. Score the third signal only from
+`RESULT … (reread=…) exhausted=…`, never from the printed pre-reread count.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0152`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T14:22:00Z`.
+**Verified at:** `2026-10-01T14:30:00Z`.
+**Source revision:** `1ee6006cad7f`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the cap-free table beside the cap-truncated one from
+EVD-0151 — the pair is what distinguishes a truncated recycle from a
+physics limit. Keep the exact 3072-page / 12.0 MiB figure on both jobs: the
+agreement across two independent guests is what makes it a floor rather than
+a sample. Keep the `seen`-bitmap reasoning (odd PFNs never freed) so the
+main-held-buddy change is re-auditable without re-deriving the safety
+invariant.
+**Freshness:** Superseded for the holes-per-chunk claim by any run reporting
+a partner set larger than in-chunk, and for the third-signal claim by a run
+reporting `exhausted=1` with `reread=0`. Re-read both runtime jobs before
+citing. Job-level `success` on `hyperv-runtime-drill` is never a gate
+closure. Never cite this entry as CoCo or send-gate evidence.
