@@ -192,8 +192,8 @@
 
 ## 12. Validation Checklist
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` (2026-10-01: exit 0, zero warnings.)
 - [ ] `cargo test -p ramshared-block -p ramshared-wsl2d`
 - [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80 --report-json tmp/elastic-vram-cooperative-tier-cov.json`
 - [ ] `./scripts/docs-check.sh`

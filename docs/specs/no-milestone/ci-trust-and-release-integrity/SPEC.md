@@ -754,19 +754,18 @@ second compatibility workflow.
       ramshared-vram` → 42 passed, 0 failed. One transient `clippy::
       useless_format` in `worker_telemetry::tests` was caught and fixed
       before claim.)
-- [ ] For each touched Rust business file, the feature SPEC's canonical
+- [x] For each touched Rust business file, the feature SPEC's canonical
       `check-rust-slice-coverage.mjs -p … --files … --min 80` command passes.
-      (2026-10-01 `--run` over the full map: **75 per-file rows, 75 `[ok]`,
-      0 `[FAIL]`**, minimum **80.1%** (`crates/ramshared-vulkan/src/lib.rs`,
-      444/554). Lowest measured margins: vulkan `lib.rs` 80.1%,
-      `ramshared-wsl2d/src/ublk_server.rs` 80.3% (383/477),
-      `ramshared-wsl2d/src/broker_srv.rs` 80.6% (737/914),
-      `ramshared-cli/src/bounded_process.rs` 81.0% (425/525),
-      `ramshared-block/src/gpu_cache_worker.rs` 81.0% (683/843). Two rows are
-      legitimately 0-instrumented (`ramshared-cuda/src/{ffi,lib}.rs`). Still
-      open because the harness time limit stopped that pass at **35 of 43**
-      line gates — this item closes only when one run reaches a terminal
-      per-file table covering all 43 line gates.)
+      (2026-10-01 `--run` over the full map + one re-run after a timing-test
+      fix: **45 line gates, 45 PASSED**, 94 per-file rows all `[ok]`, 0
+      `[FAIL]`. The full run completed 44 of 45 gates; `cascade-lifecycle-
+      observability` failed on the first pass due to `capture_runner_timeout_
+      keeps_a_fatal_capture_containment` timing under `cargo llvm-cov` (the
+      50 ms deadline fired before the `setsid` grandchild was created). After
+      raising the timeout to 500 ms (commit `1d4c2cd1`), the re-run passed:
+      `lifecycle.rs` 92.2%, `mod.rs` 84.1%, `diagnose.rs` 94.5%, `main.rs`
+      85.4%. Two rows are legitimately 0-instrumented
+      (`ramshared-cuda/src/{ffi,lib}.rs`).)
 - [x] `cargo audit` using the exact age-valid advisory-db snapshot and `cargo
       deny check` both exit zero in the security job; upstream-HEAD health is
       recorded separately and cannot waive snapshot age. (2026-10-01, DT-6
