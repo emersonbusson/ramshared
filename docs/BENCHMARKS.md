@@ -474,3 +474,73 @@ possible. It is recorded as the single observation it is.
 
 **Related evidence:** `validation.md` EVD-0121 (DEMOTE action),
 EVD-0122 (defect, root cause, fix, live revalidation).
+
+## 2026-10-01 02:01 -03 — idle VRAM/RAM headroom under load (read-only)
+
+**Context**
+- Branch/commit: `feat/ramshared-v0.15.0-readiness` @ `8ca8c9e289c0`
+  (`docs(validation): record the daemon-owned pid record proof`)
+- Machine: WSL2 on NVIDIA GeForce RTX 2060, driver 617.14, 6144 MiB VRAM total,
+  kernel `6.18.40.1-microsoft-standard-WSL2+`, RAM 15995 MiB, swap 6143 MiB
+  (`zram0` prio 200, `/dev/sdb` prio −2)
+- Load snapshot (**condition `loaded`**): `rustc` at 103% CPU / 678 MiB RSS
+  (in-flight build), four `claude` processes resident; dev tree dirty with
+  uncommitted CUDA→DXG LUID work
+- Cache telemetry at sample time: `cache_state=UNAVAILABLE`,
+  `vram_cached_kib=0`, `cache_releases=0`, `cache_fallback_reads=97`,
+  `cache_target_kib=33792`, `origin_state=READY`,
+  `daemon_instance_id=2543940-8351476`
+- Tool/parameters: `scripts/p0/measure-vram-headroom.sh` — **read-only**
+  (allocates nothing; `nvidia-smi` + `free` only). 3 rounds × 15 samples,
+  30 s window, 2 s interval
+
+**Results**
+
+| Metric | n | min | median | p99 | max | mean | stddev | unit |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Free VRAM | 45 | 4692 | 4826 | 4981 | 4981 | 4855 | 81 | MiB |
+| Used VRAM | 45 | 974 | 1129 | 1263 | 1263 | 1100 | 81 | MiB |
+| RAM available | 45 | 11003 | 11597 | 11790 | 11790 | 11515 | 169 | MiB |
+| RAM free | 45 | 8183 | 8368 | 8902 | 8902 | 8404 | 155 | MiB |
+| Swap used | 45 | 564 | 570 | 570 | 570 | 569 | 2 | MiB |
+
+Per-round free VRAM (the stability that decides whether idle-VRAM harvesting
+is trustworthy):
+
+| Round | n | min | max | mean | stddev | volatility (range/mean) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 15 | 4775 | 4846 | 4801 | 16 | 1.5% |
+| 2 | 15 | 4692 | 4835 | 4805 | 44 | 3.0% |
+| 3 | 15 | 4825 | 4981 | 4959 | 38 | 3.1% |
+
+**Honest reading**
+- Supported: under a genuinely loaded developer machine, free VRAM is both
+  large (median 4826 MiB of 6144 MiB) and stable (per-round volatility
+  1.5–3.1%). Idle-VRAM harvesting has a real pool to work with and the pool
+  is not thrashing at this scale of background load.
+- Supported: **RamShared contributed 0 MiB of dedicated VRAM in this window.**
+  `cache_state=UNAVAILABLE` with `vram_cached_kib=0` and `cache_releases=0`,
+  while `cache_target_kib=33792` shows the cache *wanting* 33 MiB and holding
+  none. Any dedicated-VRAM figure seen on the Windows side during this window
+  therefore does not include RamShared cache bytes. This is a now-sample, not
+  a before→after around a workload launch, and it does not by itself prove
+  that RamShared returns VRAM under demand — it proves RamShared held none
+  here.
+- Not supported: re-growth of the cache after a pressure event. Still needs
+  the supervised Windows watchdog harness (carried from the EVD-0122 entry).
+- Not supported: the `available_bytes` idle ceiling of 2721 MiB noted in the
+  EVD-0122 entry was not re-exercised here (`gpu_headroom_kib` is `null`
+  while the cache is `UNAVAILABLE`), so that clamp is neither confirmed nor
+  cleared by this run.
+- No competitor is side-by-side in this window: this is not a swap-backend
+  comparison and must not be read as one.
+- Missing proof: multi-adapter, AMD/Intel, cache `ACTIVE` headroom, and any
+  three-tier stress. The CUDA→DXG LUID binding work is in flight separately
+  and is what would move `cache_state` off `UNAVAILABLE`.
+
+**Publication status:** `legacy-unqualified` — host-private raw CSVs at
+`/tmp/vram-headroom-20261001/`, no in-repo SHA-256 artifacts. Not a baseline,
+not a regression PASS, not a promotion claim.
+
+**Machine-readable twin:** `docs/benchmarks/results.jsonl`
+run `vram-headroom-loaded-20261001-0201`.
