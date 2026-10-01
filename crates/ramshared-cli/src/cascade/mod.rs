@@ -1454,6 +1454,25 @@ fn trusted_gpu_budget_from_status(
     budget.trusted_available_at(now, 5_000).map(|_| budget)
 }
 
+/// True only when the daemon published a `gpu_budget` object that cannot be
+/// trusted right now.
+///
+/// A missing key or a JSON `null` is an honest "no budget bound" report (the
+/// daemon runs `gpu_budget_guard=allocator_only`). That is valid telemetry,
+/// not invalid or stale telemetry, so it must not alarm.
+fn gpu_budget_telemetry_invalid_or_stale(
+    cache_status: Option<&serde_json::Value>,
+    now_unix_ms: Option<u64>,
+) -> bool {
+    let Some(status) = cache_status else {
+        return false;
+    };
+    match status.get("gpu_budget") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(_) => trusted_gpu_budget_from_status(status, now_unix_ms).is_none(),
+    }
+}
+
 pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let pairs: Vec<(&str, u64, u64, i32)> = entries
         .iter()
@@ -1502,9 +1521,6 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
             .and_then(|value| value.get(key))
             .and_then(serde_json::Value::as_u64)
     };
-    let gpu_budget_reported = cache_status
-        .as_ref()
-        .is_some_and(|value| value.get("gpu_budget").is_some());
     let gpu_budget = cache_status
         .as_ref()
         .and_then(|value| trusted_gpu_budget_from_status(value, unix_time_ms()));
@@ -1559,7 +1575,9 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     if product_active && !cache_status_current {
         measurement_errors.push("cache_status_not_current".to_string());
     }
-    if product_active && gpu_budget_reported && gpu_budget.is_none() {
+    if product_active
+        && gpu_budget_telemetry_invalid_or_stale(cache_status.as_ref(), unix_time_ms())
+    {
         measurement_errors.push("gpu_budget_telemetry_invalid_or_stale".to_string());
     }
     if product_active && !supervisor_status_current {
@@ -1875,6 +1893,94 @@ mod tests {
 
         let malformed = serde_json::json!({"gpu_budget": {"available_bytes": 4000}});
         assert!(trusted_gpu_budget_from_status(&malformed, Some(5000)).is_none());
+    }
+
+    #[test]
+    fn gpu_budget_absent_or_null_is_honest_not_stale() {
+        // No status file at all: nothing was published, so there is nothing
+        // stale to alarm about.
+        assert!(!gpu_budget_telemetry_invalid_or_stale(None, Some(5000)));
+
+        // A status file with no `gpu_budget` key is also an honest "no budget
+        // bound" report.
+        let absent_key = serde_json::json!({
+            "schema_version": 1,
+            "ok": true,
+            "cache_state": "ACTIVE"
+        });
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&absent_key),
+            Some(5000)
+        ));
+
+        // Explicit `"gpu_budget": null` is the daemon's `allocator_only`
+        // guard with no budget bound. It is valid telemetry and must not be
+        // classified as invalid or stale.
+        let null_budget = serde_json::json!({
+            "schema_version": 1,
+            "ok": false,
+            "cache_state": "UNAVAILABLE",
+            "gpu_budget": null
+        });
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&null_budget),
+            Some(5000)
+        ));
+        // The same is true when the clock cannot be read: an honest "no
+        // budget bound" does not become stale just because time is unknown.
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&null_budget),
+            None
+        ));
+    }
+
+    #[test]
+    fn gpu_budget_published_but_untrustworthy_is_stale() {
+        let trusted = serde_json::json!({
+            "gpu_budget": {
+                "schema_version": 1,
+                "adapter": {
+                    "backend": "vulkan",
+                    "key": "uuid:fixture",
+                    "luid": "aabbccdd:00001122"
+                },
+                "total_bytes": 8000,
+                "budget_bytes": 6000,
+                "used_bytes": 2000,
+                "available_bytes": 4000,
+                "source": "driver_reported",
+                "sampled_at_unix_ms": 1000
+            }
+        });
+        // Fresh, driver-bound, parseable: valid telemetry.
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&trusted),
+            Some(5000)
+        ));
+
+        // Outside the 5s trust window: stale.
+        assert!(gpu_budget_telemetry_invalid_or_stale(
+            Some(&trusted),
+            Some(6001)
+        ));
+
+        // Published but malformed: invalid.
+        let malformed = serde_json::json!({"gpu_budget": {"available_bytes": 4000}});
+        assert!(gpu_budget_telemetry_invalid_or_stale(
+            Some(&malformed),
+            Some(5000)
+        ));
+
+        // Published but not driver-bound: untrustworthy.
+        let mut local_only = trusted.clone();
+        local_only["gpu_budget"]["source"] = serde_json::json!("provider_local_estimate");
+        assert!(gpu_budget_telemetry_invalid_or_stale(
+            Some(&local_only),
+            Some(5000)
+        ));
+
+        // Published object with no clock reading: cannot be trusted.
+        assert!(gpu_budget_telemetry_invalid_or_stale(Some(&trusted), None));
     }
 
     fn parse_proc_swaps(text: &str) -> Vec<SwapEntry> {
