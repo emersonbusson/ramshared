@@ -10875,3 +10875,242 @@ manifests, `docs/governance/capability-observations.generated.json`, the
 capability generator, or the six named checkers changes. Never cite this entry
 as product, kernel, GPU, Windows driver, benchmark, or three-tier qualification
 evidence — it records only that the repository's own trust gates are green.
+
+## 2026-10-01 00:17 -03 — BUG-3 hold-in-mmap window measured; two new helper defects (EVD-0137)
+
+**What:** Run
+[36794687025](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36794687025)
+(`Hyper-V runtime drill`, `conclusion=failure`, contribution-fork SHA
+`3fc95c7b41da`, completed `2026-10-01T00:17:40Z`) re-ran the lifecycle and
+fragmentation drills after the EVD-0134 three-harness-defect fixes. It is
+recorded as **FAIL** overall, but it is the run that **closed the BUG-3
+acceptance signal** and exposed two further harness defects.
+
+**Question:** With `mmap-hold` opening `O_RDWR`, `new_id` verified instead of
+a redundant `bind`, and `fragment-buddy` allocating 64 KiB chunks to a ceiling,
+do the three EVD-0134 acceptance signals hold?
+
+**Answer: two of three.** The lifecycle half is fully green. Fragmentation is
+still INCONCLUSIVE, and one of the two runtime jobs panicked the guest.
+
+**What the run proves — the BUG-3 window is now measured, not prepared:**
+
+| Signal (EVD-0134 acceptance) | windows-latest | windows-2025 |
+| --- | --- | --- |
+| zero `cycle*_bind_fail` | ✅ `PHASE1 cycle_fails=0 / 120 steps` | ✅ `PHASE1 cycle_fails=0 / 120 steps` |
+| `MMAP_HOLD ... maps>0` | ✅ `/dev/uio0 maps=5`, ring `maps=1` | ✅ `/dev/uio0 maps=5`, ring `maps=1` |
+| `high_order_7plus_blocks=0` with `exhausted=1` | ❌ `=1`, `exhausted=1` | ❌ not reached (panic) |
+
+The hold-in-mmap evidence:
+
+| Fact | Value |
+| --- | --- |
+| UIO device mapping | `MMAP_HOLD path=/dev/uio0 bytes=4096 maps=5 hold=8` |
+| sysfs ring mapping | `MMAP_HOLD path=.../channels/14/ring bytes=2097152 maps=1 hold=8` |
+| window | `PHASE2 hold-in-mmap window OPEN (mapping alive across restore_nic)` |
+| lifecycle verdict | `LIFECYCLE_VERDICT=PASS cycles=30 phase2=yes` (both guests) |
+| map balance over 30 cycles | `BASELINE` = `PHASE1-AFTER` = `12 maps / 20 279 296 bytes / 4 939 pages` |
+| damage | `HYPERV_DRILL_SPLATS count=0`, `HYPERV_DRILL_FAULTS count=0`, `FAULTS_NONE` |
+
+Both mappings stayed alive while `restore_nic` tore the channel down. That is
+the BUG-3 repro the previous runs only prepared: a userspace mapping held open
+across ring release. It is ordinary x86_64 Hyper-V evidence for the window, not
+a claim that a release-during-map fault occurred.
+
+One accounting note, not scored: after the hold released, `FINAL MAPS` stayed
+at `13 / 53 915 648 / 13 150` instead of returning to the 12-map baseline. In
+EVD-0134's run the same `+1` was returned by `AFTER-TEARDOWN` because
+`mmap-hold` had mapped nothing. Here the mapping had been real. Whether the
+residue is deferred release or a leak is **not** determined by this run and is
+**not** a claim either way.
+
+**The two harness defects** (the reason one job failed and the other stayed
+INCONCLUSIVE):
+
+1. **windows-2025 kernel panic during hole-punching.**
+   `FRAGMENT_BUDDY` unmapped every eligible page and split the VMA once per
+   page: `chunks=31376 freed=250958`. That is ~250k `vm_area_struct` slab
+   objects. Measured stack:
+   `munmap → __vm_munmap → do_vmi_munmap → do_vmi_align_munmap →
+   vms_complete_munmap_vmas → vms_gather_munmap_vmas → __split_vma →
+   vm_area_dup → alloc_slab_page → out_of_memory`,
+   `gfp_mask=0x40cc0(GFP_KERNEL|__GFP_COMP), order=0, oom_score_adj=-1000`,
+   then `Kernel panic - not syncing: System is deadlocked on memory`.
+   The helper was unkillable, so the OOM killer had no target.
+2. **Order-7 supply one block short.** windows-latest reported
+   `FRAGMENT_BUDDY ready=1 chunks=31376 ... exhausted=1 pagemap=1
+   stop=memavailable-floor high_order_7plus=505->1`, then
+   `high_order_7plus_blocks=1`, `VERDICT=INCONCLUSIVE_ORDER7_STILL_AVAILABLE`.
+   The 8 MiB `MemAvailable` floor fired with one order-7 block still free in
+   the remainder. The pattern was correct; the loop stopped before the test
+   condition.
+
+**What this run still does NOT prove:**
+
+1. **The order-zero fallback cannot run on this guest.** `vmbus_uses_shared_page_chunks()`
+   is `!encrypted && (hv_isolated || IS_ENABLED(CONFIG_ARM64))`; a hosted x86_64
+   runner is neither, so every ring here is `vzalloc()` and the chunked
+   order-N → order-0 path is unreachable. It would not log either
+   (`__GFP_NORETRY | __GFP_NOWARN`): `order7_dmesg=0`.
+2. **No host-rescind / GPADL response-rescind interleaving.**
+3. **No CoCo.** COCO-1..5 remain open; this entry is never a CoCo gate.
+4. **Map residue after a real hold** — see the accounting note above.
+
+**Root cause fixed in the same work stream** (fork `abffeb386ae1`, RamShared
+`83aad531`; re-measured by run 36796811977, not by this entry):
+cap the punch at 4096 holes, drop `oom_score_adj` to 0 before punching, move
+the order-7 test ahead of the floor and lower the floor to 2 MiB, and add a
+post-mlock `high_order_7plus=A->B` diagnostic.
+
+**Verdict:** 🔴 does not work — `HYPERV_DRILL_RESULT status=PARTIAL
+scope=lifecycle-pass-fragment-inconclusive` on windows-latest and a guest
+panic on windows-2025. **Two of the three EVD-0134 acceptance signals are
+green**, and the BUG-3 window is measured. Keep those positives next to the
+red: a reader who sees only `conclusion=failure` will over-claim against the
+patch set, and a reader who sees only `window OPEN` will over-claim for the
+fragmentation drill.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36794687025 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `MMAP_HOLD`, `PHASE2 hold`, `FRAGMENT_BUDDY`, `high_order_7plus_blocks`,
+`LIFECYCLE_VERDICT`, `deadlocked`, `vm_area_dup`.
+The `hyperv-drill-windows-latest` artifact holds `drill-console.log` and
+`drill-vm-report.txt`. A fully green re-run must show the three EVD-0134
+signals together: zero `cycle*_bind_fail`, `MMAP_HOLD ... maps>0`, and
+`high_order_7plus_blocks=0` with `exhausted=1`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0137`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T00:17:39Z`.
+**Verified at:** `2026-10-01T01:05:00Z`.
+**Source revision:** `3fc95c7b41da`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep until the series is sent or withdrawn. Keep the two
+positive signals next to the FAIL and the panic stack next to the PARTIAL —
+each side alone invites a wrong conclusion. Keep the `FINAL MAPS=13` residue
+as an open observation, not as a leak claim.
+**Freshness:** Superseded as soon as a run shows all three EVD-0134 signals
+green and no guest panic. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
+GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
+drops the Hyper-V role from them, this claim is void until re-measured.
+
+## 2026-10-01 00:42 -03 — hole cap stops the panic; the min watermark is the wall (EVD-0138)
+
+**What:** Run
+[36796811977](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36796811977)
+(`Hyper-V runtime drill`, `conclusion=success`, contribution-fork SHA
+`abffeb386ae1`, completed `2026-10-01T00:42:56Z`) re-ran the drills after the
+EVD-0137 hole-cap fix. All three jobs are green: `drill-kernel`,
+`drill-runtime (windows-latest)` and `drill-runtime (windows-2025)`. The
+workflow-level `success` is the harness staying alive and scoring honestly;
+the drill verdict itself is still **PARTIAL**.
+
+**Question:** Does capping the punch at 4096 holes and dropping the OOM pin
+before punching stop the guest panic, and does the 2 MiB floor let the
+allocation loop reach `high_order_7plus_blocks=0`?
+
+**Answer: the panic is gone, the order-7 drain is not.**
+
+**Panic fix confirmed on both guests:**
+
+| Fact | windows-latest | windows-2025 |
+| --- | --- | --- |
+| guest completed | ✅ | ✅ (panicked on the previous run) |
+| `FRAGMENT_BUDDY freed=` | `4096` | `4096` |
+| `hole_cap=` | `4096` | `4096` |
+| `HYPERV_DRILL_SPLATS` | `0` | `0` |
+| `HYPERV_DRILL_FAULTS` | `0` | `0` |
+| `LIFECYCLE_VERDICT` | `PASS cycles=30 phase2=yes` | `PASS cycles=30 phase2=yes` |
+| `MMAP_HOLD` | `/dev/uio0 maps=5`, ring `maps=1` | `/dev/uio0 maps=5`, ring `maps=1` |
+| `PHASE2 hold-in-mmap window` | `OPEN` | `OPEN` |
+
+Capping the punch at 4096 holes is enough to keep the Unmovable slab away from
+`out_of_memory()` on a 2 GiB guest, and the buddy-isolation property does not
+depend on hole density.
+
+**Order-7 still available — and the measurement shows why:**
+
+| Fact | windows-latest | windows-2025 |
+| --- | --- | --- |
+| `FRAGMENT_BUDDY allocated ... stop=` | `31466` chunks, `507->4`, `memavailable-floor` | `31464` chunks, `508->5`, `memavailable-floor` |
+| `FRAGMENT_BUDDY ready=1 ... high_order_7plus=` | `507->4->3` | `508->5->3` |
+| `high_order_7plus_blocks` (script read) | `1` | `3` |
+| `VERDICT` | `INCONCLUSIVE_ORDER7_STILL_AVAILABLE` | `INCONCLUSIVE_ORDER7_STILL_AVAILABLE` |
+| `HYPERV_DRILL_RESULT` | `PARTIAL lifecycle=0 fragment=3` | `PARTIAL lifecycle=0 fragment=3` |
+
+The three-stage trace is the new diagnostic: before → after alloc+mlock → after
+punch. The punch's own `vm_area_dup` slab is what was draining order-7 in
+earlier runs; with only 4096 holes it drains 1–2 blocks and no more.
+
+**Root cause — the floor was never the wall.** The buddyinfo the script
+captured after the pattern is decisive:
+
+```
+Node 0, zone DMA32  3206  1  2  1  1  2  2  0  0  1  0
+```
+
+`order0=3206 … order6=2 order7=0 order8=0 order9=1 order10=0` — **15 MiB of
+free pages including an order-9 block**, while `MemAvailable` reads **2 MiB**
+and the loop is stopped by `FRAG_SAFETY_KB=2048`. The gap is the zone min
+watermark: `min:20344kB` on this 2 GiB guest. Those pages are free in
+`buddyinfo` but reserved, and a userspace page fault cannot cross the
+watermark to split the high-order blocks sitting behind it. Lowering
+`FRAG_SAFETY_KB` cannot help — 3432 lower-order free pages sit between the
+floor and that order-9 block, and the reserve holds all of them.
+
+**What this run still does NOT prove** (unchanged):
+
+1. **The order-zero fallback cannot run on this guest** — `order7_dmesg=0`,
+   `vmbus_uses_shared_page_chunks()` false on hosted x86_64.
+2. **No host-rescind / GPADL response-rescind interleaving.**
+3. **No CoCo.** COCO-1..5 remain open; this entry is never a CoCo gate.
+4. **`high_order_7plus_blocks=0` is not reached**, so the third EVD-0134
+   acceptance signal is still open.
+
+**Root cause fixed in the same work stream** (fork `f84e6d40ac79`, RamShared
+`27e61542`; in flight as run 36798464398): save `vm.min_free_kbytes`, set it
+to 512 for the allocation loop, restore it before hole-punching so the
+`vm_area_dup` slab and the ring allocation that follows run against the normal
+reserve, and read the sysctl back so a denied write cannot look like a pulled
+lever.
+
+**Verdict:** 🟡 partial — the harness is now survivable and the lifecycle half
+is fully green on both guests, but `HYPERV_DRILL_RESULT status=PARTIAL
+scope=lifecycle-pass-fragment-inconclusive` on both, so the EVD-0134 gate is
+not closed. The candidate is not implicated: `SPLATS=0`, `FAULTS=0`,
+`accept4_failures=0`, `LIFECYCLE_VERDICT=PASS`, and the BUG-3 window is open on
+both guests. Keep those positives next to the PARTIAL.
+
+**Category:** kernel-runtime-audit
+
+**How to measure:** `gh run view 36796811977 --repo emersonbusson/WSL2-Linux-Kernel --log`
+and grep `min_free`, `FRAGMENT_BUDDY`, `high_order_7plus`, `Node 0, zone`,
+`MemAvailable`, `VERDICT`, `HYPERV_DRILL_RESULT`.
+The decisive pair is the `FRAGMENT_BUDDY ready=1` line and the following
+`Node 0, zone DMA32` buddyinfo line: when they disagree about whether
+high-order supply remains, the watermark is between them. A closed gate needs
+`high_order_7plus_blocks=0` with `exhausted=1` and `pagemap=1`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0138`.
+**Owner role:** `kernel-runtime-engineer`.
+**Observed at:** `2026-10-01T00:42:51Z`.
+**Verified at:** `2026-10-01T01:10:00Z`.
+**Source revision:** `abffeb386ae1`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the buddyinfo line next to the MemAvailable figure — the
+pair is the root-cause argument, and either alone is unconvincing. Keep the
+`conclusion=success` clearly separated from `HYPERV_DRILL_RESULT status=PARTIAL`:
+the workflow staying green is harness health, not gate closure.
+**Freshness:** Superseded as soon as a run of fork `f84e6d40ac79` or later
+shows `high_order_7plus_blocks=0` with `exhausted=1`. Re-run on any change to
+`.github/workflows/hyperv-runtime-drill.yml` or anything under
+`Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/drill/`. Never cite
+this entry as build, KUnit, CoCo or GPADL/UIO qualification evidence. If
+GitHub retires or repurposes the `windows-latest` / `windows-2025` images, or
+drops the Hyper-V role from them, this claim is void until re-measured.
