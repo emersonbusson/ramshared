@@ -13322,3 +13322,146 @@ materially above 5.0, or by a run whose `stop` is no longer
 `chase-memfree-margin` while high-order blocks remain. Re-read both runtime
 jobs before citing. Job-level `success` on `hyperv-runtime-drill` is never
 a gate closure. Never cite this entry as CoCo or send-gate evidence.
+
+## 2026-10-01 12:20 -03 — the 4 MiB chase margin is an OOM, not a lever; the residue is the post-chase working set (EVD-0155)
+
+**What:** Score of the `FRAG_CHASE_HARD_KB` 16384 → 4096 change (fork
+`7aafed374df6`, the lever EVD-0154 named). Drill run **36879744347**.
+**Both runtime jobs failed.** windows-2025 **kernel panicked**; windows-latest
+OOM-killed `sh` twice and the UIO probe failed with `-12`. The commit's own
+rollback trigger fired and the change is reverted (`682a8747e122`).
+
+| Job | id | outcome |
+| --- | --- | --- |
+| drill-kernel | 110428167568 | success (the candidate built and pinned clean) |
+| drill-runtime windows-2025 | 110431364336 | **failure — kernel panic** |
+| drill-runtime windows-latest | 110431364347 | **failure — OOM, probe -12** |
+
+### What actually happened
+
+Neither guest reached `FRAGMENT_BUDDY ready=1`. The console has no
+`RESULT` / `VERDICT` line at all.
+
+windows-latest, first OOM at 1.51 s:
+
+```
+sh invoked oom-killer: gfp_mask=0x40cc0(GFP_KERNEL|MP), order=1
+  [ 102]  0 102 497429 497310 497139 1 170 4136960 0 -1000 vmbus_drill_hel
+oom-kill: task=sh,pid=83
+Out of memory: Killed process 83 (sh)
+DMA32 free:5376kB boost:0kB min:5692kB low:7744kB high:9796kB
+  mlocked:1984720kB unevictable:1984720kB free_pcp:15356kB
+```
+
+Second OOM at 1.72 s killed `sh` again, and then:
+
+```
+hv_vmbus: probe failed for device 07b18d84-… (-12)
+uio_hv_generic 07b18d84-…: probe with driver uio_hv_generic failed with error -12
+```
+
+windows-2025 went further and died on `clone()` inside `file_init_path`:
+
+```
+free:3432 free_pcp:1392
+DMA32 free:13728kB boost:12288kB min:17992kB low:20044kB high:22096kB
+  mlocked:1986520kB
+[ 103]  0 103 497947 497830 497659 1 170 4141056 0 -1000 vmbus_drill_hel
+Out of memory and no killable processes...
+Kernel panic - not syncing: System is deadlocked on memory
+  out_of_memory → __alloc_pages_slowpath → copy_process → kernel_clone
+```
+
+The helper is at `oom_score_adj=-1000` holding **1.9 GiB mlocked** in both
+dumps. It is unkillable by design (the pattern must survive the hold), so
+once free memory crossed the watermark the OOM killer had nothing it could
+take and either murdered the shell or panicked.
+
+### The mechanism — the margin is a watermark floor
+
+`min_free_kbytes` is saved and set to 512 for the allocation, then
+**restored** before the hold so the channel-open can allocate its ring. The
+saved value is `5694`, and the OOM dumps show `min:5692kB` / `min:17992kB`
+— i.e. **the restore already happened**. At that point windows-latest was at
+`free:5376kB` against `min:5692kB`: below the min watermark, with 15 MiB
+sitting in pcp that an order-1 `GFP_KERNEL` cannot use.
+
+A 16 MiB chase margin leaves ~16 MiB free at `ready=1` and the restored
+watermark is ~5.7 MiB, so the punch, the ~2 MiB ring and `init` all fit. A
+4 MiB margin leaves ~4 MiB free, the restore pushes the watermark to 5.7
+MiB, and the very next allocation is already underwater. The 12--13 MiB
+residue EVD-0154 measured was never "wasted free" — **it is the post-chase
+working set**.
+
+This is why the margin cannot be used as the residue lever. EVD-0154's
+arithmetic (192 chunks / 8.25 MiB net hold / land at 7.75 MiB) was correct
+about how much hold the residue costs and wrong about what the residue is
+for. Holding it is what kills the guest.
+
+### The lever this names instead
+
+Split the residue by **recycling** it, not by holding it. Freeing the even
+half of a high-order block leaves the odd half held, so nothing coalesces,
+and the freed half is exactly the isolated order-0 the ring wants. That
+raises the holes-per-chunk rate and drops the net hold per chunk at the
+same time, which is the only direction that helps both `high_order=0` and
+the working set.
+
+The in-chunk partner set caps that rate at ~5.0 (EVD-0152/0154). The
+main-held partner is a measured null (EVD-0154). What is still untried is
+the **chase-held** partner: consecutive chase chunks draw from the same
+leftover region, so an even PFN's odd buddy is often a page an earlier
+chase chunk kept. Those survivors are held for the whole chase and already
+in the helper's RSS. Implemented in `punch_chunk_isolated()`'s call site:
+survivors are recorded into the same `seen` bitmap after each chunk is
+punched, and the bitmap is now sized from `MemTotal` rather than the main
+pattern's `max_pfn` because chase PFNs sit above the main region.
+
+`FRAG_CHASE_HARD_KB` stays at **16384**. It is a safety floor above the
+restored watermark and the ~9 MiB of post-chase working set, not a dial.
+
+Not yet scored.
+
+### Verdict
+
+🔴 **fails** — EVD-0134 third signal still red, and the EVD-0154 lever is
+now **tried and is dangerous**. Do not lower `FRAG_CHASE_HARD_KB` again
+without also changing how the residue is split; run 36879744347 is the
+panic that proves holding it is fatal. The remaining lever is the
+chase-held buddy partner (rate above 5.0, net hold below 11 pages/chunk).
+
+**What this does not prove:** that the chase-held partner raises the rate
+above 5.0, or that `high_order=0` is reachable on a 2 GiB guest at all.
+
+**Verdict:** 🔴 fails — third signal open; the 4 MiB margin panics, recycle is the path
+
+**Category:** kernel-drill / fragmentation qualification
+
+**How to measure:** a run that OOMs or panics never prints `RESULT`. Score
+it from the OOM dump: the helper's `oom_score_adj`, `mlocked`, and
+`DMA32 … min:` against `free:`. If `free` is below `min` with the helper
+pinned, the margin bound before the watermark was restored. For a clean
+run, score the third signal only from `RESULT … (reread=…) exhausted=…`,
+and the recycle rate from `chase_holes / chase` — ~5.0 is the in-chunk
+physics, anything materially above it means a partner set that works.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0155`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-01T15:20:00Z`.
+**Verified at:** `2026-10-01T15:28:00Z`.
+**Source revision:** `7aafed374df6`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep both OOM dumps and the watermark arithmetic
+(`free:5376kB` vs `min:5692kB` with `mlocked:1984720kB`). They are the
+proof that the residue is a working set, which is the whole reason the
+margin must not move. Keep the `clone()` panic trace: "no killable
+processes" is what an unkillable 1.9 GiB holder does to a guest, and that
+is the failure mode any future margin change has to avoid by construction,
+not by luck.
+**Freshness:** Superseded by a run that closes the EVD-0134 third signal
+(`exhausted=1`, `reread=0`, `stop=order7-depleted`) without OOM, or by a
+run that shows the restored watermark is no longer the binding floor.
+Re-read both runtime jobs before citing. Job-level `success` on
+`hyperv-runtime-drill` is never a gate closure. Never cite this entry as
+CoCo or send-gate evidence.
