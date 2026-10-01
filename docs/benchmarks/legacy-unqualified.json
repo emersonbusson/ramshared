@@ -65,6 +65,13 @@
       "run_id": "wsl2-gpu-containment-20260930-0451",
       "qualified": false,
       "reason": "Host-private raw sampler output with no in-repo SHA-256 artifact manifest and no matched baseline; this loaded-condition containment observation cannot be a regression baseline, a regression PASS, or a promotion claim."
+    },
+    {
+      "id": "legacy-vram-headroom-loaded-20261001-0201",
+      "benchmark_id": "2026-10-01-vram-headroom-loaded",
+      "run_id": "vram-headroom-loaded-20261001-0201",
+      "qualified": false,
+      "reason": "Read-only headroom snapshot with no ramshared-evidence/v1 envelope, no in-repo SHA-256 artifact manifest, and no matched baseline; this loaded-condition observation cannot be a regression baseline, a regression PASS, or a promotion claim."
     }
   ]
 }

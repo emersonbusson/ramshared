@@ -475,6 +475,7 @@ possible. It is recorded as the single observation it is.
 **Related evidence:** `validation.md` EVD-0121 (DEMOTE action),
 EVD-0122 (defect, root cause, fix, live revalidation).
 
+<!-- ramshared-benchmark-id: 2026-10-01-vram-headroom-loaded -->
 ## 2026-10-01 02:01 -03 — idle VRAM/RAM headroom under load (read-only)
 
 **Context**
