@@ -424,8 +424,8 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ram
 
 ## Validation checklist
 
-- [ ] cargo fmt --all -- --check
-- [ ] cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings
+- [x] cargo fmt --all -- --check (2026-10-01: exit 0 after `cargo fmt --all` applied to `bounded_process.rs`.)
+- [x] cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings (2026-10-01: workspace Clippy exit 0, zero warnings.)
 - [ ] cargo test -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-wsl2d -p ramshared-cli
 - [x] Coverage for `crates/ramshared-block/src/compressed_cache.rs`
   (2026-09-30: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/compressed_cache.rs --min 80 --report-json tmp/compressed-cache-cov.json`
@@ -448,6 +448,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ram
   not created; ITEM-3 is gated on the exact nvCOMP pre-decode checksum
   mechanism (DT-7). Its cover target is not applicable before the file exists.
 - [ ] Every test matrix name exists and passes; hardware tests stay ignored unless exact prerequisites and fresh budget pass.
+      (2026-10-01: all unit-test names verified present in source — `codec_bounds_reject_overflow`, `unsupported_provider_is_raw_only`, `fake_codec_roundtrip_is_byte_exact` in `codec.rs`; `worker_compression_respects_physical_budget`, `worker_decode_error_returns_miss`, `worker_compression_refuses_from_zero_or_stale_budget`, `worker_evicts_compressed_lru_extent`, `worker_teardown_waits_for_codec_completion`, `read_over_16_mib_refuses_before_allocation`, `codec_admission_uses_full_parent_free_floor` in `gpu_cache_worker.rs` and `gpu_cache_compression.rs`. The hardware test `nvcomp_lz4_sm75_roundtrip_and_corruption_refusal` is not yet created — `nvcomp_cache_codec.rs` does not exist; ITEM-3 gates on the nvCOMP pre-decode checksum mechanism. Do not claim this row until that hardware stub exists as `#[ignore]` or ITEM-3 is resolved.)
 - [ ] Exact NVIDIA test checks sm75+, nvCOMP runtime/toolkit/driver versions, adapter identity, codec statuses, corrupt-entry refusal, and exact bytes.
 - [ ] Live userspace path proves before/action/after on an isolated non-pressure canary origin; no forced cascade, kernel-module, WDK, or swap-stress test.
 - [ ] If ramsharedd is exercised, verify the running executable matches the tested binary. Do not claim a live product result from unit tests.
