@@ -108,16 +108,26 @@ if [ -z "$HELPER" ]; then
 fi
 # 600s hold: the channel-open exercise and the buddy snapshots below have to
 # finish while the pattern is still in place.
-"$HELPER" fragment-buddy "$HOGB" 600 >>"$LOG" 2>&1 &
-HOGPID=$!
-
+# Wait for ready=1 using shell builtins only -- no seq, no grep, no
+# sleep, no kill. Every fork needs a compound page from the buddy the
+# pattern is busy draining, and run 36927495556 w25 lost the shell to
+# `page allocation failure: order:1` at exactly that moment, taking the
+# console with it: neither ready=1 nor RESULT survived into the
+# artifact. The log is the state, so read it with the read builtin and
+# use `read -t` as the tick. The harness timeout_sec is the backstop.
 FRAG_READY=no
-for _ in $(seq 1 120); do
-	if grep -q 'FRAGMENT_BUDDY ready=' "$LOG" 2>/dev/null; then
-		FRAG_READY=yes
+_ticks=0
+while [ "$FRAG_READY" = no ] && [ "$_ticks" -lt 180 ]; do
+	while read -r _line; do
+		case "$_line" in
+		*"FRAGMENT_BUDDY ready="*) FRAG_READY=yes ;;
+		esac
+	done < "$LOG" 2>/dev/null || true
+	if [ "$FRAG_READY" = yes ]; then
 		break
 	fi
-	sleep 1
+	read -t 1 _junk 2>/dev/null || true
+	_ticks=$((_ticks + 1))
 done
 # The helper writes both the ready and the refusal lines to the log; echo the
 # decisive one to the console so the uploaded artifact carries it.

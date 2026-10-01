@@ -437,7 +437,7 @@ static int do_mlock_hog(int argc, char **argv)
 #define FRAG_PCP_SOAK_CHUNK (2L * 1024 * 1024)
 #define FRAG_PCP_SOAK_CHUNKS 4
 #define FRAG_RESERVE_CHUNK (2L * 1024 * 1024)
-#define FRAG_RESERVE_CHUNKS 16
+#define FRAG_RESERVE_CHUNKS 8
 #define FRAG_ORDER2_GROUPS 32
 
 /*
@@ -672,41 +672,6 @@ static long mem_total_pages(void)
 	return kb < 0 ? -1 : kb / 4;
 }
 
-/*
- * Free pages at order 0 on the buddy free lists, across all zones.
- *
- * buddyinfo field 5 is order 0; see high_order_blocks() for the layout.
- * This is only half of the unsplit figure -- the per-cpu page cache is not
- * on these lists and is counted separately by pcp_free_pages().
- */
-static long buddy_order0_pages(void)
-{
-	FILE *f = fopen("/proc/buddyinfo", "r");
-	char line[512];
-	long sum = 0;
-
-	if (!f)
-		return -1;
-	while (fgets(line, sizeof(line), f)) {
-		char *save = NULL;
-		char *tok = strtok_r(line, " \t\n", &save);
-		int field = 0;
-
-		while (tok) {
-			field++;
-			if (field == 5) {
-				char *end = NULL;
-				long v = strtol(tok, &end, 10);
-
-				if (end != tok && v > 0)
-					sum += v;
-			}
-			tok = strtok_r(NULL, " \t\n", &save);
-		}
-	}
-	fclose(f);
-	return sum;
-}
 
 /*
  * Free pages sitting in the per-cpu page cache, summed over every cpu and
@@ -770,18 +735,58 @@ static long pcp_free_pages(void)
  * "MemFree minus the high orders" floor, which is algebraically just
  * buddyinfo's order-0 again, and got chase=0 for the same reason.
  *
- * The number rises whenever the allocator splits a high order (order-10 ->
- * 1024 order-0 pages, take 16, +1008), so the floor cannot fire while high
- * orders remain. It is a starvation guard; high==0 is what ends the chase.
+ * Orders 0 through 6, not order-0 alone. Run 36927495556 wl is why: the
+ * chase stopped at chase-unsplit-floor with unsplit=114 while 25
+ * high-order blocks, 88.5 MiB, were still free, and high_order_7plus
+ * never moved across the whole chase (26->26). Counting order-0 plus the
+ * pcp reads near zero whenever the leftover free memory is parked in
+ * orders 1..6 and above, which is exactly the state the main loop's
+ * margin leaves behind, so the floor fires before a single high order is
+ * split. The older claim that the number rises on a split and therefore
+ * cannot fire while high orders remain is true only after a split has
+ * happened; with the wrong measure no split is ever forced.
+ *
+ * This sum is the no-split budget: pages the allocator can still hand out
+ * by serving or splitting below order 7. It is a starvation guard;
+ * high==0 is what ends the chase.
  */
+static long low_order_free_pages(void)
+{
+	FILE *f = fopen("/proc/buddyinfo", "r");
+	char line[512];
+	long sum = 0;
+
+	if (!f)
+		return -1;
+	while (fgets(line, sizeof(line), f)) {
+		char *save = NULL;
+		char *tok = strtok_r(line, " \t\n", &save);
+		int field = 0;
+
+		while (tok) {
+			field++;
+			if (field >= 5 && field - 5 <= 6) {
+				char *end = NULL;
+				long v = strtol(tok, &end, 10);
+
+				if (end != tok && v > 0)
+					sum += v * (1L << (field - 5));
+			}
+			tok = strtok_r(NULL, " \t\n", &save);
+		}
+	}
+	fclose(f);
+	return sum;
+}
+
 static long unsplit_free_pages(void)
 {
-	long order0 = buddy_order0_pages();
+	long low = low_order_free_pages();
 	long pcp = pcp_free_pages();
 
-	if (order0 < 0 || pcp < 0)
+	if (low < 0 || pcp < 0)
 		return -1;
-	return order0 + pcp;
+	return low + pcp;
 }
 
 /*
