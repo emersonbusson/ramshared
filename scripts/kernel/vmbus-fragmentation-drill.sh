@@ -108,6 +108,23 @@ if [ -z "$HELPER" ]; then
 fi
 # 600s hold: the channel-open exercise and the buddy snapshots below have to
 # finish while the pattern is still in place.
+#
+# Tick source first. read -t on a closed or EOF fd returns immediately, so a
+# 180-iteration wait loop would burn through in milliseconds and report the
+# pattern missing while the helper is still allocating. init leaves fd 0 alone
+# and only redirects 1 and 2, so stdin is already the console; reopen it from
+# /dev/console when it is not a tty. exec is a redirection, not a fork, and
+# forks are exactly what this section must avoid. The [ -r ] test is load
+# bearing: under set -e a failed exec redirection is fatal and `|| true`
+# does not catch it in busybox ash, so the path must be proven readable
+# before it is opened.
+if [ ! -t 0 ] && [ -r /dev/console ]; then
+	exec 0</dev/console
+fi
+# The helper holds the pattern for 600s in the background. Its stdin is
+# closed so it cannot race the tick below for console input.
+"$HELPER" fragment-buddy "$HOGB" 600 >>"$LOG" 2>&1 </dev/null &
+HOGPID=$!
 # Wait for ready=1 using shell builtins only -- no seq, no grep, no
 # sleep, no kill. Every fork needs a compound page from the buddy the
 # pattern is busy draining, and run 36927495556 w25 lost the shell to
@@ -191,8 +208,10 @@ discover_nic() {
 NIC="${NIC:-$(discover_nic || true)}"
 if [ -z "${NIC:-}" ]; then
 	say "REFUSE: no synthetic NIC bound to hv_netvsc; cannot force ring realloc"
-	kill "$HOGPID" 2>/dev/null || true
-	wait "$HOGPID" 2>/dev/null || true
+	if [ -n "${HOGPID:-}" ]; then
+		kill "$HOGPID" 2>/dev/null || true
+		wait "$HOGPID" 2>/dev/null || true
+	fi
 	exit 2
 fi
 say "NIC=$NIC (discovered from hv_netvsc binding)"
@@ -293,8 +312,12 @@ say "--- BUDDY FINAL ---"
 buddy
 
 # --- teardown hog -----------------------------------------------------------
-kill "$HOGPID" 2>/dev/null || true
-wait "$HOGPID" 2>/dev/null || true
+# Null-safe: set -u aborts on an unset HOGPID, and a missing teardown line
+# would leave the helper's 600s hold pinned after the verdict is already out.
+if [ -n "${HOGPID:-}" ]; then
+	kill "$HOGPID" 2>/dev/null || true
+	wait "$HOGPID" 2>/dev/null || true
+fi
 say "=== END vmbus-fragmentation-drill ==="
 say "log=$LOG"
 exit "$RC"
