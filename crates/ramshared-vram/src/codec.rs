@@ -505,7 +505,11 @@ impl<M: VramMemory> GpuCacheCodec<M> for FakeCodec {
         Self::worst_case_encoded_len(logical_len)
     }
 
-    fn workspace_bytes(&self, _item_count: usize, _max_logical_len: usize) -> Result<usize, VramError> {
+    fn workspace_bytes(
+        &self,
+        _item_count: usize,
+        _max_logical_len: usize,
+    ) -> Result<usize, VramError> {
         Ok(0)
     }
 
@@ -894,7 +898,10 @@ mod tests {
             )
             .expect("compress");
         assert_eq!(results.len(), 2);
-        assert!(results[0].status.is_ok(), "zeros must compress: {results:?}");
+        assert!(
+            results[0].status.is_ok(),
+            "zeros must compress: {results:?}"
+        );
         assert!(
             results[0].encoded_len < zeros.len(),
             "repetitive data must shrink"

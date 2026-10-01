@@ -267,13 +267,23 @@ mod tests {
         let fresh = WorkerTelemetryEnvelope::new(10_000, None, Some(cache(10_000)));
         assert!(fresh.cache.is_some());
 
-        let stale = WorkerTelemetryEnvelope::new(10_000 + TELEMETRY_MAX_AGE_MS + 1, None, Some(cache(10_000)));
-        assert!(stale.cache.is_none(), "stale cache telemetry must be omitted");
+        let stale = WorkerTelemetryEnvelope::new(
+            10_000 + TELEMETRY_MAX_AGE_MS + 1,
+            None,
+            Some(cache(10_000)),
+        );
+        assert!(
+            stale.cache.is_none(),
+            "stale cache telemetry must be omitted"
+        );
 
         let mut malformed = cache(10_000);
         malformed.schema_version = 7;
         let dropped = WorkerTelemetryEnvelope::new(10_000, None, Some(malformed));
-        assert!(dropped.cache.is_none(), "unknown cache schema must be omitted");
+        assert!(
+            dropped.cache.is_none(),
+            "unknown cache schema must be omitted"
+        );
     }
 
     #[test]
