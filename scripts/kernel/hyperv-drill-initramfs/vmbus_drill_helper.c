@@ -359,19 +359,21 @@ static int do_mlock_hog(int argc, char **argv)
  * The recycle's proper place is phase 2, where it makes room for the ring,
  * not phase 1, where it exists to force splits.
  *
- * FRAG_CHASE_HARD_KB is the absolute backstop. The binding constraint is
- * the live watermark: the chase stops at
+ * Watermark boost is the real limiter, not the floor constant. Run
+ * 36899458556 drove the chase floor off the live min+boost watermark and
+ * made things worse: fragmenting is exactly what boost_watermark() reacts
+ * to, so the floor chased a rising target. windows-latest OOMed its own
+ * helper at `free:7024kB boost:6924kB min:7436kB` -- min is already
+ * 512+6924 -- and windows-2025 panicked on init's clone() with
+ * `free:12588kB` all order-0, so an order-1 GFP_KERNEL had nothing to
+ * split. Suppressing boost is what makes a low floor meaningful:
+ * watermark_boost_factor=0 keeps min at the value we wrote, so
  *     mem_free_kb() < max(FRAG_CHASE_HARD_KB,
  *                         live_min_watermark_kb() + FRAG_CHASE_WMARK_MARGIN)
- * because a constant below the watermark is how run 36879744347 killed two
- * guests. That run's first OOM reads `boost:0kB min:5692kB` -- min is the
- * *saved* min_free_kbytes, so the write to 512 never took -- while
- * `free_pcp:15356kB` sat where a MemFree floor cannot see it. An order-1
- * GFP_KERNEL from sh then hit the un-lowered watermark and OOMed; a second
- * OOM on each guest raised the watermark further via boost (+4 MiB wl,
- * +12 MiB w25) and windows-2025 panicked on clone(). min_free_kb_write()
- * is silent on failure, so fragment-buddy now fails closed if the read-back
- * is not the requested value. Without that check no floor is safe.
+ * resolves to a constant again. The live term stays as the safety net --
+ * if boost ever comes back the floor rises and the chase stops instead of
+ * OOMing. Both sysctls are read back and fail closed: run 36879744347
+ * killed two guests on a silent min_free_kbytes write that never took.
  *
  * The residue does not have to be held. __rmqueue_smallest serves order-0
  * first, so the chase must empty the no-split budget (unsplit) before it
@@ -386,7 +388,7 @@ static int do_mlock_hog(int argc, char **argv)
  */
 #define FRAG_CHASE_CAP 4096L
 #define FRAG_CHASE_UNSPLIT 128L
-#define FRAG_CHASE_HARD_KB 2048L
+#define FRAG_CHASE_HARD_KB 4096L
 #define FRAG_CHASE_WMARK_MARGIN 2048L
 
 /*
@@ -445,6 +447,46 @@ static void min_free_kb_write(long kb)
 	if (fd < 0)
 		return;
 	n = snprintf(buf, sizeof(buf), "%ld\n", kb);
+	if (n > 0 && write(fd, buf, (size_t)n) < 0) {
+		/* best effort */
+	}
+	close(fd);
+}
+
+/*
+ * watermark_boost_factor scales zone->_watermark_boost. Every free that
+ * cannot coalesce raises the watermark by that factor of the fragmented
+ * gap, which is precisely the pattern this drill builds: run 36899458556
+ * measured boost:6924kB on a guest whose min_free_kbytes was 512, so the
+ * effective watermark sat at 7436 kB and an order-0 fault OOMed the
+ * helper mid-chase. 0 disables the boost entirely and is the only way a
+ * floor below the boosted watermark is reachable. Restored after ready=1
+ * like min_free_kbytes, because the ring allocation that follows wants
+ * the guest's normal anti-fragmentation behaviour.
+ */
+static long boost_factor_read(void)
+{
+	FILE *f = fopen("/proc/sys/vm/watermark_boost_factor", "r");
+	char buf[64];
+	long v = -1;
+
+	if (!f)
+		return -1;
+	if (fgets(buf, sizeof(buf), f))
+		v = strtol(buf, NULL, 10);
+	fclose(f);
+	return v;
+}
+
+static void boost_factor_write(long v)
+{
+	char buf[32];
+	int fd, n;
+
+	fd = open("/proc/sys/vm/watermark_boost_factor", O_WRONLY);
+	if (fd < 0)
+		return;
+	n = snprintf(buf, sizeof(buf), "%ld\n", v);
 	if (n > 0 && write(fd, buf, (size_t)n) < 0) {
 		/* best effort */
 	}
@@ -752,6 +794,7 @@ static int do_fragment_buddy(int argc, char **argv)
 	long high_before, high_locked, high_after, free_kb;
 	long wmark_kb, floor_kb;
 	long min_free_saved, min_free_set, min_free_now;
+	long boost_saved, boost_now;
 	long chase = 0, chase_locked = 0;
 	long chase_holes = 0, chase_pairs = 0;
 	long unsplit_at_stop = -1;
@@ -819,6 +862,28 @@ static int do_fragment_buddy(int argc, char **argv)
 		 */
 		printf("FRAGMENT_BUDDY ready=0 pagemap=0 reason=min-free-not-lowered\n");
 		fflush(stdout);
+		return 3;
+	}
+
+	/*
+	 * Same discipline for boost. min_free_kbytes alone is not the
+	 * watermark: zone->_watermark_boost is added on top of it, and
+	 * fragmenting is what makes boost move. Run 36899458556 left this
+	 * at the default and the floor chased it from 2048 kB up past
+	 * 9484 kB, so the change that was meant to go deeper than the 8 MiB
+	 * run stopped earlier and then OOMed anyway.
+	 */
+	boost_saved = boost_factor_read();
+	boost_factor_write(0);
+	boost_now = boost_factor_read();
+	printf("FRAGMENT_BUDDY watermark_boost_factor saved=%ld set=0 now=%ld\n",
+	       boost_saved, boost_now);
+	fflush(stdout);
+	if (boost_now != 0) {
+		printf("FRAGMENT_BUDDY ready=0 pagemap=0 reason=boost-not-disabled\n");
+		fflush(stdout);
+		if (min_free_saved > 0)
+			min_free_kb_write(min_free_saved);
 		return 3;
 	}
 
@@ -1163,6 +1228,8 @@ static int do_fragment_buddy(int argc, char **argv)
 	 */
 	if (min_free_saved > 0)
 		min_free_kb_write(min_free_saved);
+	if (boost_saved >= 0)
+		boost_factor_write(boost_saved);
 
 	if (hold > 0)
 		sleep((unsigned int)hold);
