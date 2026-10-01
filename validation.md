@@ -11383,3 +11383,199 @@ failures and the fix that addresses them; the third EVD-0134 acceptance
 signal remains open until a run reports `high_order_7plus_blocks=0` with
 `exhausted=1` on the pattern that was measured, not on a re-read after the
 pattern was lost.
+
+## 2026-10-01 02:36 -03 — the pin window is proven; the chase floor and the rebind are not what they looked like (EVD-0141)
+
+**What:** Run
+[36803317912](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36803317912)
+(`Hyper-V runtime drill`, contribution-fork SHA `bac075bbf292`, base
+`93f51579e7df248780214094418f205253383cc5`) re-ran the drills after the OOM
+pin was moved to cover exactly the hold. **All three jobs are green and the
+workflow concluded `success`** — `drill-kernel`, `windows-2025` and
+`windows-latest`. This is the first run in which both guests survived and the
+helper's own measurement and the script's later re-read agreed exactly.
+
+**Question:** With the pin covering only the hold, and allocation, punch and
+chase running unpinned, does the drill reach `high_order_7plus_blocks=0` with
+`exhausted=1` and keep the ring opening?
+
+**Answer: the pin window is proven correct. The chase floor is not, and the
+rebind failure is not a fragmentation result at all. Two independent harness
+defects, both now fixed; neither is a candidate regression.**
+
+### The pin window is proven
+
+This is the result the redesign was for. Every previous run had the pin in one
+of two wrong windows — on during allocation (guest panic, EVD-0140
+`windows-latest`) or off at `ready=1` (pattern destroyed before the script
+measured it, EVD-0140 `windows-2025`). Run 36803317912 holds the pin across
+the hold and nothing else:
+
+| Signal | windows-2025 | windows-latest |
+| --- | --- | --- |
+| `cycle_fails=0 / 120 steps` | yes | yes |
+| `PHASE2 hold-in-mmap window OPEN` | yes | yes |
+| `SPLATS=0` / `FAULTS=0` | yes | yes |
+| `min_free_kbytes saved=… set=512 now=512` | `5694` | `5704` |
+| helper `high_order_7plus` third value | **6** | **4** |
+| script re-read of `/proc/buddyinfo` | **6** | **4** |
+| guest survived the whole drill | yes | yes |
+
+The two counts agree **exactly**, on both guests, for the first time. That
+agreement is the proof: when the pin was wrong the two numbers disagreed by
+two orders of magnitude (1 vs 356 on EVD-0140 `windows-2025`), because the
+script was reading a buddy the helper had already been forced to give back.
+`exhausted=0` is also now trustworthy — it means the measured condition did
+not hold, not merely that the loop stopped.
+
+### Finding 1 — the chase floor counts the wrong memory
+
+Both guests stopped with `stop=chase-floor` and `exhausted=0`, leaving 6 and 4
+high-order blocks free. The floor was `MemFree` at 32 MiB. That is the wrong
+quantity, for a sharper reason than the `MemAvailable` error recorded in
+EVD-0140. windows-2025 after the punch:
+
+```
+Node 0, zone    DMA32      0      2      1      1      1      2      0      2      2      2      0
+```
+
+Orders 0 through 10. Total free is 7552 KiB, of which **7168 KiB sits in the
+six blocks of order 7 and above** (2×512 KiB + 2×1 MiB + 2×2 MiB) and only
+384 KiB is left in orders 1–5. **Free order-0 is zero pages.**
+
+A `MemFree` floor at 32 MiB therefore fires at 7552 KiB — "almost nothing
+left, stop" — at exactly the moment when an order-0 fault has nothing to take
+and the allocator must split a high-order block to serve it. The chase exists
+to force those splits. Measured in `MemFree` it forbids them: while high-order
+blocks remain they *are* most of `MemFree`, so the floor is reached before the
+split it exists to allow has happened. The same trap, one level further in.
+
+The floor that means what a later allocation can actually take is **free
+order-0 pages**, `buddyinfo` field 5. That is what the helper now counts.
+
+### Finding 2 — the rebind failure is not a fragmentation result
+
+`rebind_fail` / `unable to open channel: -22` appeared on both guests, and
+EVD-0140 attributed it to the destroyed pattern. **That attribution is wrong,
+and this run is what disproves it.** On `windows-2025` the same failure happens
+at t=5.2s — before the fragmentation drill has started, on a healthy buddy
+(`MemAvailable=2018096kB`, order-10 still holds 489 blocks):
+
+```
+RESTORE begin
+RESTORE driver=/…/bf29fd3a-7407-4a3d-9c36-fb8c0340b614/driver
+  [5.223854] hv_netvsc bf29fd3a-… (unnamed net_device) (uninitialized): unable to open channel: -22
+```
+
+It then recurs at t=11.3s (the EXIT-trap `restore_nic`, after the helpers have
+exited) and t=13.5s (the frag drill's own rebind). `windows-latest` is the
+same at t=6.0s, t=12.1s and t=14.2s. A failure that reproduces on an untouched
+buddy is not a fragmentation result.
+
+**It is a pre-existing `uio_hv_generic` lifecycle gap, and not a candidate
+regression.** The mechanism is exact. The synthetic NIC is one VMBus device
+that the lifecycle drill hands to `uio_hv_generic` and then back to
+`hv_netvsc`:
+
+```
+restore_nic() {
+    echo "$NIC" >"$DRIVER_DIR/uio_hv_generic/unbind"
+    echo "$CLS" >"$DRIVER_DIR/uio_hv_generic/remove_id"
+    echo "$NIC" >"$DRIVER_DIR/hv_netvsc/bind"
+}
+```
+
+`hv_uio_open()` calls `vmbus_connect_ring()` on the first open of `/dev/uio0`
+and `hv_uio_release()` calls `vmbus_disconnect_ring()` on the last close.
+`hv_uio_remove()` does neither. So when `restore_nic` unbinds the driver while
+the BUG-3 helper still holds that fd, the channel is never disconnected and is
+left in `CHANNEL_OPENED_STATE`; the subsequent `hv_netvsc` probe calls
+`__vmbus_open()` and gets `-EINVAL`. Verified in the fork tree at
+`bac075bbf292` against base `93f51579e7df`: **`hv_uio_remove`, `hv_uio_open`
+and `hv_uio_release` are byte-identical** (`hv_uio_remove` 273 B in both).
+The series changes `hv_uio_cleanup`, `hv_uio_probe` and `hv_uio_new_channel`;
+it does not touch the remove path. This is upstream behaviour the series
+inherits, not something the series introduced.
+
+The consequence for the drill is ordering: the channel-open exercise cannot
+follow the hold-in-mmap, because the hold-in-mmap is what makes that channel
+unopenable for the rest of the boot. It has to run first, on a boot-clean NIC.
+
+**Correction to EVD-0140.** Its `windows-2025` section says the
+`rebind_fail` / `unable to open channel: -22` "ran against that same
+reassembled buddy" and that it is "not evidence about ring allocation under
+fragmentation". The second half is right and is confirmed here. The first half
+is not: the same `-22` is present at `restore_nic` on a healthy buddy at
+t=5.2s. The destroyed pattern is not its cause. `validation.md` is
+append-only, so EVD-0140 stands as written and is corrected here.
+
+**Minor measurement note.** `nic_driver` printed a `/sys/.../driver` path
+rather than `none` when nothing was bound, because `readlink -f` canonicalises
+a missing leaf and exits 0, so `|| echo none` never fires. `REBOUND=no` is
+still the correct verdict — the path contains no `hv_netvsc` — but the log
+cannot distinguish "bound to another driver" from "bound to none". The
+`case` is what decides, and it decided correctly.
+
+### Supporting evidence for the candidate
+
+Not the gate, but worth recording: the BUG-3 hold-in-mmap held. `PHASE2-BEFORE-TEARDOWN`
+and `PHASE2-AFTER-TEARDOWN` both report `MAPS count=13 bytes=53915648
+pages=13150`, against `BASELINE MAPS count=12 bytes=20279296 pages=4939` —
+the ring's `vmbus_alloc_buffer` vmalloc entries survived `restore_nic`, which
+runs `hv_uio_remove` → `vmbus_free_ring`, while the mapping was still held.
+`FAULTS_NONE` after release means the hold did not UAF. That is the behaviour
+patches 0003/0006 (retained owner) are meant to produce.
+
+**What that does not establish:** `FINAL MAPS` is still `13` after the
+helpers released, against a baseline of 12. Whether the deferred free runs on
+the last munmap is therefore **not reconciled in this run** — later
+`after_fragment` shows 9, but by then the NIC has lost its driver entirely, so
+that does not close it. Not claimed.
+
+### What this run does not prove
+
+- `high_order_7plus_blocks=0` with `exhausted=1` is **still open** — both
+  guests stopped at `stop=chase-floor` with 6 and 4 blocks free. This is the
+  third EVD-0134 acceptance signal and the only one still red.
+- `PASS_RING_ALLOCATION_UNDER_FRAGMENTATION` was not reached. The frag drill
+  short-circuited on `exhausted != 1` before the rebind check, so its verdict
+  is `INCONCLUSIVE_CAP_REACHED`, not a FAIL — and the rebind would have failed
+  anyway for the reason above.
+- The CoCo chunked order-N → order-0 fallback is still unreachable on ordinary
+  x86_64: `vmbus_uses_shared_page_chunks()` is false there and every ring is
+  `vzalloc()`. No SEV-SNP, TDX or Arm CCA platform evidence. COCO-1..5 remain
+  open.
+
+### One more harness defect found while scoring this run
+
+Companion run
+[36803317892](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36803317892)
+(`VMBus upstream candidate`, same SHA) failed on both arches at "Apply and
+build every patch in the series", while `wsl-backport` stayed green. The
+byte-pin passed on all six patches and then `git apply` died with `error: No
+valid patches in input` and exit 128 — before a single patch was applied. The
+apply loop iterates `$PATCH_DIR/*.patch`, and that glob reaches
+`0000-cover-letter.patch` first: mail prose that `git send-email` wants in the
+directory but `git apply` correctly rejects. `SHA256SUMS` pins only 0001–0006,
+which is why the byte-pin passed and the loop still died. The same step has
+failed identically on 36796812218, 36798464363 and 36800977475 — every
+candidate run since the cover letter landed — while `hyperv-runtime-drill.yml`
+stayed green on the same bytes because it already skips `0000-*`. No patch
+byte is involved; only the loop that feeds files to `git apply` was wrong.
+
+### Fix shipped
+
+Contribution-fork `747faf4ae312` — chase floor counted in free order-0 pages
+(`FRAG_CHASE_ORDER0`, `stop=chase-order0-floor`) instead of `MemFree`, and the
+fragmentation drill runs **first**, on a boot-clean NIC, so the channel-open
+exercise measures ring allocation under fragmentation and not the UIO
+lifecycle. Contribution-fork `4f1b44ee8048` — the candidate workflow skips
+`0000-*` the way the drill workflow always has. Both pushed together as
+`4f1b44ee8048`; the resulting runs are scored separately.
+
+Source revision: `bac075bbf292` (drills as measured), `4f1b44ee8048` (fixes).
+`10000`-line note: this entry does not qualify the candidate for upstream
+submission. It proves the OOM pin window, retires a mis-attributed rebind
+failure, and records the correction of EVD-0140. The third EVD-0134
+acceptance signal remains open until a run reports
+`high_order_7plus_blocks=0` with `exhausted=1`.
