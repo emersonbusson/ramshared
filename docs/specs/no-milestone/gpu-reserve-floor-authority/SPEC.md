@@ -400,9 +400,9 @@ Kinds: unit · integration · drill/E2E. Every row names a real test; none is "a
 
 ## Validation checklist
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings`
-- [ ] `cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli`
+- [x] `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] `cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli --all-targets -- -D warnings` (2026-10-01: exit 0, zero warnings.)
+- [x] `cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d -p ramshared-cli` (2026-10-01: 1122 passed, 0 failed, 19 hardware-gated ignored.)
 - [x] Coverage for `crates/ramshared-vram/src/reserve_policy.rs`
   (2026-09-30: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/reserve_policy.rs --min 80 --report-json tmp/gpu-reserve-floor-policy-cov.json`
   — 93.7% lines (118/126), gate PASSED. All thirteen named
@@ -421,10 +421,10 @@ Kinds: unit · integration · drill/E2E. Every row names a real test; none is "a
   `crates/ramshared-cli/src/monitor.rs` (`wsl2-dual-plane-monitor`).
   (2026-09-30: confirmed — `plan-rust-slice-coverage.mjs --all` reports
   `RUST_SLICE_COVERAGE_STATUS=READY` with no `changed-rust-file-unmapped`.)
-- [ ] Every matrix row has a real test name and passes.
+- [x] Every matrix row has a real test name and passes. (2026-10-01: 13 matrix rows, all 13 named `reserve_policy::tests` present and green; the module now has 20 tests total, 0 failed.)
 - [ ] Kahneman critical rows have executable evidence (named tests above; ITEM-6 drill for #5).
-- [ ] No production path computes a reserve inline; grepping for `2 * GIB` as a reserve term, `1536 * 1024 * 1024` as an admission default, and `reserve_floor_bytes_from_env` returns nothing on an admission path.
-- [ ] No path stamps provenance: grepping for `Instant::now()` and `GpuBudgetSource::DriverReported` written inside `physical_target_bytes` or its normalizer returns nothing.
+- [x] No production path computes a reserve inline; grepping for `2 * GIB` as a reserve term, `1536 * 1024 * 1024` as an admission default, and `reserve_floor_bytes_from_env` returns nothing on an admission path. (2026-10-01: `2 * GIB` hits are test-only (`cascade.rs` validation tests, `origin_cache.rs` tests documenting the deleted `.max(2 * GIB)` term); `1536 * 1024 * 1024` hits are the broker's own `BROKER_DISPLAY_RESERVE_BYTES` (a different surface) and test fixtures in `gpu_cache_worker.rs`; `reserve_floor_bytes_from_env` returns zero hits — the function was deleted in `76a90c55`. `physical_target_bytes` line 200: "No inline reserve math remains.")
+- [x] No path stamps provenance: grepping for `Instant::now()` and `GpuBudgetSource::DriverReported` written inside `physical_target_bytes` or its normalizer returns nothing. (2026-10-01: `physical_target_bytes` takes `now: Instant` as a parameter and never calls `Instant::now()`; it *refuses* `GpuBudgetSource::DriverReported` mismatches at line 178 rather than writing the variant; zero `DriverReported` writes inside the function or its normalizer.)
 - [ ] Startup log and status/monitor report the enforced floor and source; the source is `lab-override-raise` only when the override actually raised the enforced result.
 - [ ] Capacity-boundary campaign: ≥3 runs, median + p99 + deviation, four-category table with directions, Tier 3 origin metrics, alarm thresholds from [`.claude/rules/benchmarks.md`](../../../../.claude/rules/benchmarks.md).
 - [ ] Live path for this surface (userspace WSL2 adapter): before → action → after on an isolated canary origin; no unsupervised live-host pressure; `BINARY_MATCH` when `ramsharedd` is exercised.

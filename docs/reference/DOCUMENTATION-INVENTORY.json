@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 354,
-    "classified": 351,
+    "total": 355,
+    "classified": 352,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -1361,6 +1361,18 @@
     },
     {
       "path": "docs/runbooks/windows-autonomous-broker.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/windows-elevation.md",
       "disposition": "classified",
       "ruleId": "operation-runbooks",
       "verification": {

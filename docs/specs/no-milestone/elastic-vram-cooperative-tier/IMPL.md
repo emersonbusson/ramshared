@@ -4,7 +4,7 @@
 
 ## Status
 
-Implemented · cover **93.7%** / **96.6%** (PASS $\ge 80\%$) · unit matrix **PASS** · docs-check **OK**.
+Implemented · cover **89.7%** / **93.8%** (PASS $\ge 80\%$) · unit matrix **PASS** · docs-check **OK**.
 
 ## Files
 
@@ -22,7 +22,8 @@ Implemented · cover **93.7%** / **96.6%** (PASS $\ge 80\%$) · unit matrix **PA
 
 ### Unit and Static Checks
 
-- `cargo test -p ramshared-block --lib elastic_cache::tests`: **7 passed, 0 failed** (exit 0).
+- `cargo test -p ramshared-block -p ramshared-wsl2d`: **350 passed, 0 failed** (19 hardware-gated ignored) (exit 0).
+- `cargo test -p ramshared-block --lib elastic_cache::tests`: **8 passed, 0 failed** (exit 0).
 - `cargo test -p ramshared-wsl2d --lib governor::tests`: **2 passed, 0 failed** (exit 0).
 - `cargo clippy -p ramshared-block -p ramshared-wsl2d --all-targets -- -D warnings`: exit 0 (0 warnings).
 - `cargo fmt --all -- --check`: exit 0.
@@ -30,12 +31,12 @@ Implemented · cover **93.7%** / **96.6%** (PASS $\ge 80\%$) · unit matrix **PA
 
 ### Canonical Slice Coverage Gate
 
-Verified via `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80`:
+Verified via `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80` (2026-10-01):
 
 | Production File | Lines Covered | Total Lines | Line Coverage | Gate Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `crates/ramshared-block/src/elastic_cache.rs` | 373 | 398 | **93.7%** | **PASS** ($\ge 80\%$) |
-| `crates/ramshared-wsl2d/src/governor.rs` | 85 | 88 | **96.6%** | **PASS** ($\ge 80\%$) |
+| `crates/ramshared-block/src/elastic_cache.rs` | 442 | 493 | **89.7%** | **PASS** ($\ge 80\%$) |
+| `crates/ramshared-wsl2d/src/governor.rs` | 45 | 48 | **93.8%** | **PASS** ($\ge 80\%$) |
 
 ### SPEC Required Tests Matrix
 
@@ -47,10 +48,11 @@ Verified via `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ram
 | `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_spillover_on_dma_timeout` | unit | #15 | PASS |
 | `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_eviction_worker_flushes_cold_chunks_under_deadline` | unit | #16 | PASS |
 | `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_sparse_extent_idempotent_read_write` | unit | #17 | PASS |
+| `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_elastic_recovery_promotes_on_green_settle` | unit | #13 | PASS |
 
 ## Gaps
 
-- **Closed:** Elastic chunk router, dynamic headroom governor, bounded DMA watchdog circuit breaker, and sub-100ms cold chunk eviction implemented with full test coverage.
+- **Closed:** Elastic chunk router, dynamic headroom governor, bounded DMA watchdog circuit breaker, sub-100ms cold chunk eviction, and RF-5 elastic recovery (`promote` re-admits SSD-spilled chunks after Green settle) implemented with full test coverage.
 - **Out of Scope (Phase 2):** In-kernel Linux module (`rs_vram.ko` / LKM) implementing ring-0 bio redirection.
 
 ## Rollback Trigger
@@ -65,4 +67,4 @@ Revert if any DMA watchdog false-positives occur under nominal GPU load, if chun
 | `RF-2` | `ITEM-2` | `test_sparse_extent_allocation_on_demand` |
 | `RF-3` | `ITEM-3` | `test_spillover_on_dma_timeout` |
 | `RF-4` | `ITEM-4` | `test_eviction_worker_flushes_cold_chunks_under_deadline` |
-| `RF-5` | `ITEM-5` | `test_elastic_cache_out_of_bounds_and_spillover_edges` |
+| `RF-5` | `ITEM-5` | `test_elastic_recovery_promotes_on_green_settle` |
