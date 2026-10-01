@@ -1405,10 +1405,17 @@ mod tests {
 
         fn program(&self, name: &str, source: &str) -> std::path::PathBuf {
             let path = self.path.join(name);
-            fs::write(&path, source).unwrap();
-            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            // Publish through a temporary name and rename. A freshly written
+            // script that is exec'd in place can surface ETXTBSY ("Text file
+            // busy") when parallel fixtures race the kernel's write-side
+            // deny-write-access check on spawn. Rename publishes a path whose
+            // write handle is already closed.
+            let staging = self.path.join(format!("{name}.staging"));
+            fs::write(&staging, source).unwrap();
+            let mut permissions = fs::metadata(&staging).unwrap().permissions();
             permissions.set_mode(0o700);
-            fs::set_permissions(&path, permissions).unwrap();
+            fs::set_permissions(&staging, permissions).unwrap();
+            fs::rename(&staging, &path).unwrap();
             path
         }
     }

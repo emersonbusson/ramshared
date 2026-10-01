@@ -423,6 +423,17 @@ Kinds: unit · integration · drill/E2E. Every row names a real test; none is "a
   `RUST_SLICE_COVERAGE_STATUS=READY` with no `changed-rust-file-unmapped`.)
 - [x] Every matrix row has a real test name and passes. (2026-10-01: 13 matrix rows, all 13 named `reserve_policy::tests` present and green; the module now has 20 tests total, 0 failed.)
 - [ ] Kahneman critical rows have executable evidence (named tests above; ITEM-6 drill for #5).
+      (2026-10-01: ITEM-1 through ITEM-5 are green with executable named tests —
+      `cargo test -p ramshared-vram --lib` 42 passed / 0 failed,
+      `cargo test -p ramshared-block --lib` 178 passed / 0 failed,
+      `cargo test -p ramshared-wsl2d --lib` 179 passed / 0 failed,
+      `cargo test -p ramshared-cli --bin ramshared` 537 passed / 0 failed,
+      and `scripts/safety/test-preflight-reserve-floor.sh` exit 0 with
+      `preflight_honors_raise_only_override: ok` and
+      `preflight_refuses_below_sealed_floor: ok`. All 21 named tests in the
+      required-tests matrix resolve to source. **ITEM-6 (#5) stays open**: the
+      capacity-boundary run and live adapter session are lab-bound and are not
+      claimed.)
 - [x] No production path computes a reserve inline; grepping for `2 * GIB` as a reserve term, `1536 * 1024 * 1024` as an admission default, and `reserve_floor_bytes_from_env` returns nothing on an admission path. (2026-10-01: `2 * GIB` hits are test-only (`cascade.rs` validation tests, `origin_cache.rs` tests documenting the deleted `.max(2 * GIB)` term); `1536 * 1024 * 1024` hits are the broker's own `BROKER_DISPLAY_RESERVE_BYTES` (a different surface) and test fixtures in `gpu_cache_worker.rs`; `reserve_floor_bytes_from_env` returns zero hits — the function was deleted in `76a90c55`. `physical_target_bytes` line 200: "No inline reserve math remains.")
 - [x] No path stamps provenance: grepping for `Instant::now()` and `GpuBudgetSource::DriverReported` written inside `physical_target_bytes` or its normalizer returns nothing. (2026-10-01: `physical_target_bytes` takes `now: Instant` as a parameter and never calls `Instant::now()`; it *refuses* `GpuBudgetSource::DriverReported` mismatches at line 178 rather than writing the variant; zero `DriverReported` writes inside the function or its normalizer.)
 - [x] Startup log and status/monitor report the enforced floor and source; the source is `lab-override-raise` only when the override actually raised the enforced result. (2026-10-01: `ReserveFloorSource::source_label` in `crates/ramshared-vram/src/reserve_policy.rs` returns `LabOverrideRaise` → `"lab-override-raise"` only when `enforced > base.enforced`; the string is asserted by `source_labels_are_human_readable`. `crates/ramshared-cli/src/monitor.rs` reports the floor and its source and explicitly never claims `lab-override-raise` for a recomputed value that was not raised.)

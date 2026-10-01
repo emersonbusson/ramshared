@@ -260,6 +260,7 @@ No production file is deleted.
 | `bounded_process.rs` | `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_reaps_successful_leader_and_all_stdio_redirected_descendant` | adversarial process/pipe | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_on_spawn_panic_cannot_strand_owned_child` | panic/process | #15/#16 | ≥80% via canonical transport owner |
+| `bounded_process.rs` | `source_only_true_before_action_after_is_ordered` | source-only E2E (`/bin/true`) | #3/#13 | before → action → after ordered; zero host pressure |
 | Windows guardian | `healthy_guest_with_stale_monitor_never_terminates` | manufactured | #13/#16 | N/A |
 | Windows guardian | `guardian_terminates_exactly_once_and_enters_safe_mode` | manufactured | #17 | N/A |
 | Windows guardian | `host_safe_mode_gate_survives_guardian_and_guest_restart` | manufactured | #16/#17 | N/A |
@@ -285,7 +286,16 @@ source under two active SPECs.
 - [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs --min 80 --report-json tmp/wsl2-control-plane-pressure-incident-cov.json`
 - [x] PowerShell parser and full Windows static suite
 - [x] systemd shell static tests and docs-check
-- [ ] source-only `/bin/true` before/action/after where authorization permits
+- [x] source-only `/bin/true` before/action/after where authorization permits
+      (2026-10-01: `bounded_process::tests::source_only_true_before_action_after_is_ordered`
+      walks the SSDV3 before → action → after protocol with `/bin/true` as the action —
+      a zero-pressure no-op, so no swap, ublk, or GPU load is involved and host-safety
+      authorization is satisfied. BEFORE records a source-only observable; ACTION runs
+      `/bin/true` through the real `run_capture_command` bounded spawn path (exit 0,
+      empty stdout/stderr); AFTER records a distinct phase and asserts the two are
+      ordered. `cargo test -p ramshared-cli --bin ramshared` 538 passed / 0 failed;
+      `cargo clippy -p ramshared-cli --all-targets -- -D warnings` exit 0;
+      `cargo fmt -p ramshared-cli -- --check` exit 0.)
 - [ ] VM guardian and Docker/cron ancestry remain env-bound, not DONE
 
 Rollback trigger: admitted aggregate above max, threshold deviation, stale
