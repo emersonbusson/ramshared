@@ -11579,3 +11579,130 @@ submission. It proves the OOM pin window, retires a mis-attributed rebind
 failure, and records the correction of EVD-0140. The third EVD-0134
 acceptance signal remains open until a run reports
 `high_order_7plus_blocks=0` with `exhausted=1`.
+
+## 2026-10-01 03:05 -03 — fragmentation-first is proven; the chase floor counts pages the buddy does not report (EVD-0142)
+
+**What:** [Run 36806229800](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36806229800)
+(`Hyper-V runtime drill`, fork `4f1b44ee8048`) — all three jobs green.
+Companion [run 36806229637](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36806229637)
+(`VMBus upstream candidate`, same SHA) is also green on all three jobs
+(`wsl-backport`, `kernel (x86_64)`, `kernel (arm64)`), which is the first
+green candidate build since the cover letter landed.
+
+**Question:** does fragmentation-first ordering fix the rebind, and does the
+order-0 chase floor close the third EVD-0134 acceptance signal?
+
+**Answer: the rebind is fixed. The chase floor is not, and its failure is
+measurement, not candidate behaviour.**
+
+| Signal | windows-2025 | windows-latest |
+| --- | --- | --- |
+| `cycle_fails=0 / 120 steps` | ✅ | ✅ |
+| `MMAP_HOLD /dev/uio0 maps=5`, ring `maps=1`, window OPEN | ✅ | ✅ |
+| `SPLATS=0` / `FAULTS=0` | ✅ | ✅ |
+| `min_free_kbytes saved=… set=512 now=512` | ✅ 5704 | ✅ 5704 |
+| **`rebind=yes`, `nic_driver=…/hv_netvsc`** | ✅ | ✅ |
+| `after_fragment MAPS count=12 bytes=20279296 pages=4939` | ✅ exact baseline | ✅ exact baseline |
+| helper vs script re-read | 9 / 9 | 9 / 8 |
+| `exhausted=1` + `high_order=0` | ❌ `exhausted=0`, `high=9`, `chase=0` | ❌ same |
+
+### The rebind is fixed: fragmentation-first works
+
+`RESULT … rebind=yes` and `nic_driver=/sys/bus/vmbus/drivers/hv_netvsc` on
+both guests. The synthetic NIC came back to `hv_netvsc` cleanly after the
+BUG-3 hold-in-mmap, which is what EVD-0141 showed is impossible if the
+fragmentation drill runs *after* the lifecycle drill: `hv_uio_remove` never
+calls `vmbus_disconnect_ring`, so unbinding `uio_hv_generic` while a helper
+still holds `/dev/uio0` leaves the channel in `CHANNEL_OPENED_STATE` and the
+following `__vmbus_open()` returns `-EINVAL`. Running fragmentation first
+gives it a boot-clean NIC and lets the lifecycle drill consume the channel
+afterwards. Two runs in a row now (EVD-0141 reproduced the `-22` at t=5.2s
+*before* the frag drill when the order was reversed).
+
+### The map balance is exact after the frag drill's rebind
+
+`after_fragment MAPS count=12 bytes=20279296 pages=4939` on both guests —
+the same triple the lifecycle drill records as `BASELINE`. That is direct
+allocate/free-balance evidence on this candidate across a full bind →
+`uio_hv_generic` probe (which allocates the 2 MiB ring set) → unbind →
+`hv_netvsc` rebind cycle. It is a second, independent point against the
+EVD-0088/0089/011 retention signature, measured on a real Hyper-V guest
+rather than by sampling `/proc/vmallocinfo` on the daily host.
+
+### Why `chase=0`: the punched pages never reach buddyinfo
+
+Both guests: `ready=1 … chase=0 exhausted=0 … stop=chase-order0-floor
+high_order_7plus=…->10->9`. The punch worked — `held=4103 freed=4096
+pairs=4096` is a clean 1:1 buddy-pair split, exactly the isolation guarantee
+— and then the chase ran **zero** iterations because the floor fired on the
+first check.
+
+`/proc/buddyinfo` reports `zone->free_area[order].nr_free`. It does **not**
+include the per-cpu page cache. A page freed by `munmap` goes to the pcp, not
+onto the buddy free list, so it is free in `MemFree` and invisible to
+`buddyinfo`. The arithmetic on windows-2025 is exact:
+
+```
+before free        503145 pages
+locked             495408 pages
+overhead (pt/VMA)   ~1470 pages
+expected buddyinfo   6267 pages
+observed buddyinfo   6267 pages
+if punches landed   10363 pages   (6267 + 4096)
+```
+
+The 4096 punched pages contributed **zero** to buddyinfo. They are in the
+pcp. A floor on buddyinfo's order-0 count therefore reads 1 after a punch
+that just freed 4096 pages, and forbids the very allocation that is supposed
+to split the remaining high orders. `chase=0`, `high=9`, and the third
+acceptance signal stays red on a healthy candidate.
+
+`MemFree` is the opposite error: while high orders remain they *are* most of
+it (EVD-0141, windows-2025: 7.5 MiB free with 7.0 inside six order-7-and-up
+blocks), so a `MemFree` floor forbids the split it exists to allow.
+
+Neither quantity is "pages a fault can take without splitting something."
+That is `MemFree − Σ_{k≥1} buddyinfo[k]·2^k` — order-0 buddy + pcp + slack.
+It rises when the allocator splits a high order (order-10 → 1024 order-0
+pages, take 16, +1008), so the floor cannot fire while high orders remain; it
+is a starvation guard, and `high==0` is what actually ends the chase.
+
+### Candidate build is green
+
+[36806229637](https://github.com/emersonbusson/WSL2-Linux-Kernel/actions/runs/36806229637):
+all three jobs success. The `0000-*` skip added in `4f1b44ee8048` works —
+"Apply and build every patch in the series" reached all six pinned patches
+instead of dying on the cover letter with exit 128. Strict checkpatch, W=1,
+Sparse on both arches, CoCo static invariants plus both gate self-tests, and
+20/20 named KUnit cases. This closes the last build-qualification blocker.
+
+### What this run does not prove
+
+- `high_order_7plus_blocks=0` with `exhausted=1` is **still open** — both
+  guests stopped at `stop=chase-order0-floor` with 9 blocks free. This is the
+  third EVD-0134 acceptance signal and the only one still red.
+- `PASS_RING_ALLOCATION_UNDER_FRAGMENTATION` was not reached. The frag drill
+  short-circuits on `exhausted != 1` before the rebind check, so its verdict
+  is `INCONCLUSIVE_CAP_REACHED`. The rebind itself is green and is reported
+  separately.
+- On windows-latest the helper's third `high_order_7plus` value (9) and the
+  script's `/proc/buddyinfo` re-read (8) differ by one. The helper's value is
+  authoritative by contract; the one-block difference is the same
+  measurement-timing class of discrepancy EVD-0141 fixed for the pin window
+  and is not a candidate result.
+- The CoCo chunked order-N → order-0 fallback remains unreachable on ordinary
+  x86_64. COCO-1..5 remain open.
+
+### Fix shipped
+
+Contribution-fork `b54451c44eb5` (RamShared `c2fea8a9`) replaces
+`order0_free_pages()` with `unsplit_free_pages()` = `MemFree` pages minus
+every page in an order-1-or-higher buddyinfo block, raises the floor to 512
+pages (one 2 MiB subchannel ring, so the channel-open exercise still has
+something to allocate), and renames `FRAG_CHASE_ORDER0` → `FRAG_CHASE_UNSPLIT`
+and `stop=chase-order0-floor` → `stop=chase-unsplit-floor` so the log names
+the quantity actually counted. `order0_free_pages()` is removed outright —
+Day-0, no dead paths. Helper builds clean with
+`cc -O2 -Wall -Wextra -Werror -static`.
+
+Source revision: `4f1b44ee8048` (as measured), `b54451c44eb5` (fix).
