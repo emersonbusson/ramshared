@@ -15611,3 +15611,136 @@ entry as evidence that the guardian is immutably deployed.
 task's principal or arguments, or if the 9P checkout path is ever removed.
 
 ---
+
+---
+
+## 2026-10-01 21:42 -03 — the guardian repoint failed on its own task-XML seal, not on ACLs (EVD-0170)
+
+**What:** EVD-0169 left the root cause of `LastTaskResult=1` unidentified. It
+is identified: **the guardian's own tamper-evidence refused the edit.**
+
+`Invoke-GuardianWatch` calls `Assert-GuardianTaskXmlSeal` as its first
+assertion, before any probe:
+
+```
+function Invoke-GuardianWatch {
+    if (-not (Test-AbsoluteWindowsPath -Path $ArtifactRoot)) { throw "ArtifactRoot must be an absolute Windows path" }
+    Test-SealedGuardianIdentity
+    Assert-GuardianTaskXmlSeal
+```
+
+`Assert-GuardianTaskXmlSeal` fingerprints `Export-ScheduledTask` and compares
+it to a sealed fingerprint; a mismatch throws
+`guardian_task_operator_edit_detected`:
+
+```
+$actual = Export-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+if ((Get-GuardianTaskXmlFingerprint -Xml $actual) -cne [string]$seal.guardian_task_xml_fingerprint) {
+    throw "guardian_task_operator_edit_detected"
+}
+```
+
+The fingerprint is `SHA-256` over the UTF-8 bytes of the task XML with
+newlines normalized to LF. The seal lives at
+`C:\ProgramData\RamShared\guardian-backup\RamSharedWslGuardian.v1.seal.json`,
+`schema_version: 1`, `phase: "activated"`.
+
+**Measurement that confirms it:**
+
+| Object | Value |
+| --- | --- |
+| sealed fingerprint (post-revert) | `50C7C406…D22F7` |
+| live `Export-ScheduledTask` fingerprint (post-revert) | `50C7C406…D22F7` — **exact match** |
+| live fingerprint during the repoint | different — the action's `-File` argument is inside the serialized XML |
+| guardian exit under mismatch | `LastTaskResult=1`, task `State=Ready` |
+| guardian exit under match | `State=Running`, proof published every 1 s |
+
+Direct invocation without `-Run` exits 0 because it only prints the PLAN
+envelope and never reaches `Invoke-GuardianWatch`. That is why a manual smoke
+run looked healthy while the scheduled task died.
+
+**Classification:**
+
+- **not a defect — correct fail-closed behaviour.** The seal exists so a task
+  action cannot be swapped underneath a running guardian without detection. A
+  static suite case is named for exactly this:
+  `guardian_task_xml_seal_refuses_operator_edit_and_preserves_backup`
+  (`scripts/windows/Test-RamSharedWslWatchdogStatic.ps1`, asserting the same
+  PASS line the fixture prints). The repoint hit that production case.
+- **reproduced operator error (mine):** `Set-ScheduledTask -Action` is an
+  out-of-band edit. The guardian correctly treated it as tampering. EVD-0169's
+  "scheduled-task execution context / ACL" hypothesis was **wrong** and is
+  retracted here. ACLs on the product data directory and both scripts grant
+  `BUILTIN\Users` `ReadAndExecute`, and the task principal (`emedev`,
+  `RunLevel=Highest`, `LogonType=Interactive`) has `FullControl` on the
+  directory and the `.ps1`. The Task Scheduler Operational channel is
+  `IsEnabled=False`, which is why no event log entry explained the exit.
+- **static risk (open, unchanged):** the guardian still executes a mutable 9P
+  checkout path. GAP row 36 stays open.
+
+**The correct procedure (not executed here):** the action may only change
+through the script's own sealed activation path, which re-seals the XML:
+
+1. Stage the task to `Disabled` through the script's registration path.
+2. Run `Watch-RamSharedWsl.ps1` **from the directory the action should name**,
+   because `Get-SealedGuardianTaskArguments` builds the `-File` argument from
+   `$PSScriptRoot` — so launching it from `C:\ProgramData\RamShared\` is what
+   makes the sealed action name the installed copy.
+3. Invoke `-Action activate` with the exact attended approval string
+   `RAMSHARED_ATTENDED_GUARDIAN_ACTIVATION`. `Activate-GuardianTask` refuses
+   unless the task is currently `Disabled`, re-registers with the new action,
+   enables it, and calls `Write-GuardianTaskSeal` so the fingerprint covers the
+   new XML.
+4. Verify: seal fingerprint equals the live `Export-ScheduledTask`
+   fingerprint, `State=Running`, and the health proof `mtime` within
+   `stale_after_seconds`.
+
+Steps 1–3 require an attended approval and are deliberately not run in this
+session.
+
+**What this run does NOT prove:**
+
+- **GAP row 36 is still open.** The task still runs the 9P checkout path. The
+  sealed activation procedure is identified, not executed.
+- **No boot round.** EVD-0168's units remain armed but unexercised.
+- **The gate has still not run for real** on this host.
+- **`SharedWslHostMemoryGate.psm1` is now present** beside the installed
+  `.ps1` (EVD-0169), but nothing has proven the installed pair runs under the
+  sealed activation path.
+- Not vsock, multi-vendor GPU, CoCo, screenshot-challenge, or
+  `cache_state: ACTIVE` evidence.
+
+**Verdict:** ✅ works (root cause identified and measured; seal/fingerprint
+match reproduced; correct procedure identified), ⚠️ partial (sealed activation
+not executed; guardian still on the 9P path)
+
+**Category:** guardian deployment provenance; task-XML tamper seal; procedure
+correction
+**How to measure:** After any change to the guardian task action,
+`Get-FileHash`-equivalent of `Export-ScheduledTask` normalized to LF must equal
+`guardian_task_xml_fingerprint` in the seal file. If they differ the guardian
+must refuse and exit non-zero — that refusal is the feature. A successful
+repoint is proven by all four at once: fingerprints equal, `State=Running`,
+health proof age ≤ `stale_after_seconds`, and the action's `-File` argument is
+the intended installed path. The negative case is mandatory: an out-of-band
+`Set-ScheduledTask -Action` must still be refused.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0170`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T00:42:32Z`.
+**Verified at:** `2026-10-02T00:42:32Z`.
+**Source revision:** `49b88631`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the seal/live fingerprint pair with the
+`Assert-GuardianTaskXmlSeal` body and the `Invoke-GuardianWatch` call site —
+that trio is the root cause. Keep the retraction of EVD-0169's ACL hypothesis
+visible; a reader must not go looking at ACLs again. Keep the four-step
+procedure with its "not executed here" sentence. Never cite this entry as
+evidence that the guardian is immutably deployed.
+**Freshness:** Superseded when the sealed activation is executed, or on any
+change to `Get-GuardianTaskXmlFingerprint`, `Assert-GuardianTaskXmlSeal`,
+`Activate-GuardianTask`, `Get-SealedGuardianTaskArguments`, or the seal file's
+schema.
+
+---
