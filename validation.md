@@ -15352,3 +15352,141 @@ schema, the origin manifest schema, or the `critical_dev_ts` alias check
 changes.
 
 ---
+
+---
+
+## 2026-10-01 21:27 -03 — RF-1 lifecycle approval granted for this host; gate + cascade + supervisor enabled, nothing started (EVD-0168)
+
+**What:** Following EVD-0167, the operator granted the RF-1 lifecycle approval
+that `install-cascade-boot.sh` refuses to mint on its own. Scope chosen and
+recorded here per the standing high-blast-radius rule: **enable only**. The
+three boot-path units were enabled and **not** started, so no host-gate run
+occurred in this session and no device was touched.
+
+```
+$ sudo systemctl enable ramshared-host-gate.service \
+      ramshared-cascade.service ramshared-supervisor.service
+Created symlink /etc/systemd/system/multi-user.target.wants/ramshared-host-gate.service → /etc/systemd/system/ramshared-host-gate.service.
+Created symlink /etc/systemd/system/multi-user.target.wants/ramshared-cascade.service → /etc/systemd/system/ramshared-cascade.service.
+Created symlink /etc/systemd/system/multi-user.target.wants/ramshared-supervisor.service → /etc/systemd/system/ramshared-supervisor.service.
+```
+
+**Before → after (unit state only):**
+
+| Unit | Before | After | Started by this action? |
+| --- | --- | --- | --- |
+| `ramshared-host-gate.service` | `disabled` | `enabled` | no — `ActiveState=inactive`, `SubState=dead`, `ExecMainStartTimestamp=` empty |
+| `ramshared-cascade.service` | `disabled` | `enabled` | no — `ActiveState=inactive`, `SubState=dead`, `ExecMainStartTimestamp=` empty |
+| `ramshared-supervisor.service` | `disabled` | `enabled` | no — already `active` since `2026-10-01 20:45:29 -03`, i.e. **before** this action; only the wants symlink is new |
+| `ramshared-vram-tier.service` | `disabled` | `disabled` | untouched (see the provenance finding below) |
+| `ramshared-beta-health.service` | `disabled` | `disabled` | untouched |
+| `ramsharedd.service` | `disabled` | `disabled` | untouched |
+
+Runtime state after the action, proving "enable only" held:
+
+```
+$ ls /run/ramshared/host-resume-lease.json
+ls: cannot access '/run/ramshared/host-resume-lease.json': No such file or directory
+$ sudo test -f /etc/ramshared/origin.conf && echo present
+present
+```
+
+The live lease is still absent and the live `/etc/ramshared/origin.conf` is
+still present and untouched — the gate's leading `rm -f` did not run, because
+the unit did not run.
+
+**Classification:**
+
+- **reproduced behaviour:** `systemctl enable` on these three units creates
+  only the `multi-user.target.wants` symlinks and does not execute
+  `ExecStart`. Verified by the empty `ExecMainStartTimestamp` on both the gate
+  and the cascade, and by the supervisor's pre-existing start timestamp.
+- **product decision, not a defect:** RF-1 is opt-in by contract. This entry
+  is the approval record for **this host**, not a change to that contract.
+  `install-cascade-boot.sh` still prints `NBD_INSTALL_ENABLED=0` and still
+  refuses `--enable`; nothing in the installer was altered.
+- **static risk (open):** the boot-time failure mode is unproven. The gate
+  reads `/mnt/c/ProgramData/RamShared/...` and on **any** failure — including
+  a stale guardian proof or an unready Windows mount — it has already executed
+  `rm -f` on `/etc/ramshared/origin.conf` before parsing, then exits without
+  re-minting. On a WSL2 start where the Windows guardian has not refreshed its
+  proof within `stale_after_seconds` (15 s on this host), the cascade will fail
+  closed with no origin authority until a later successful gate run. That is
+  correct fail-closed behaviour, and it is also a real availability gap at
+  boot. It is not resolved by enabling the unit.
+
+**Second finding recorded at the operator's direction — sealed-release
+integrity of `ramshared-vram-tier.service` (static risk, deliberately not
+fixed here):**
+
+| Property | Observed |
+| --- | --- |
+| Unit file in the repo | none — only the installed copy at `/etc/systemd/system/ramshared-vram-tier.service` |
+| `ExecStart` | `/usr/local/bin/ramshared-vram-service.sh` — **outside** the sealed release tree |
+| In the release `SHA256SUMS` | no |
+| Under the read-only seal | no (release tree is `0555`/`0444`; this script is a separate mutable path) |
+| Repo counterpart for the script | `packaging/scripts/ramshared-vram-service.sh`, exercised by `scripts/safety/test-legacy-vram-service.sh` |
+| Current state | `disabled` since the 2026-09-23 boot-path sanitization recorded in `docs/specs/no-milestone/wsl2-cascade-boot/PRD.md` |
+
+The sealed product path is `ramshared-cascade.service` → `ramshared boot`, not
+this unit. The unit is off and is not on the cascade path, so this is a
+provenance/hygiene gap rather than a live exposure. Per the recorded operator
+decision it is **not** remediated in this session: no rewrite into the sealed
+tree, no removal. If it is ever re-enabled, it must first be brought under the
+release seal.
+
+**What this run does NOT prove:**
+
+- **No boot round.** Nothing has yet observed a WSL2 start with these units
+  enabled. "Cascades active at WSL2 start" remains unproven until one is
+  captured `before→action→after`.
+- **The gate has still never run for real on this host.** EVD-0167's minting
+  proof is a test-root dry-run. This session started nothing.
+- **`ramshared boot` still cannot pass `verify_host_lease` on this boot** —
+  the lease is boot-bound and only the gate mints it.
+- **The boot-time stale-proof failure mode is untested** (the static risk
+  above). Do not claim boot availability from this entry.
+- **The live zombie is still present.** GPU worker PID `195541` is `Z`
+  `<defunct>` under daemon `195515`; the running daemon is the pre-fix
+  `v0.15.0-de32b421` binary. Enabling units does not clear it.
+- Not vsock, multi-vendor GPU, CoCo, screenshot-challenge, or
+  `cache_state: ACTIVE` evidence.
+
+**Verdict:** ✅ works (enable-only scope executed exactly; nothing started;
+live origin.conf and lease state unchanged), ⚠️ partial (no boot round; gate
+never run for real; boot-time stale-proof risk open; `ramshared-vram-tier`
+provenance gap open)
+
+**Category:** cascade lifecycle; RF-1 boot enablement; sealed-release integrity
+**How to measure:** `systemctl is-enabled` on `ramshared-host-gate.service`,
+`ramshared-cascade.service` and `ramshared-supervisor.service` must report
+`enabled`, and immediately after enablement `systemctl is-active` on the first
+two must still report `inactive` with an empty `ExecMainStartTimestamp` — that
+pair is what distinguishes "enable only" from a silent start. The claim
+"cascades active at WSL2 start" additionally requires a captured WSL2 start
+in which the gate mints a lease and `ramshared boot` reaches an active cascade;
+until then the claim is refused. For the provenance finding, `grep` the unit's
+`ExecStart` path against the release `SHA256SUMS`: any hit outside the sealed
+tree is the gap.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0168`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T00:27:00Z`.
+**Verified at:** `2026-10-02T00:29:18Z`.
+**Source revision:** `0eaef455`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the before/after unit table beside the empty
+`ExecMainStartTimestamp` evidence — that pair is what makes "enable only" a
+falsifiable claim rather than an assertion. Keep the three `ls`/`test -f`
+lines showing the lease absent and `origin.conf` present. Keep the
+`ramshared-vram-tier` provenance table with its "deliberately not fixed here"
+sentence; do not let it read as remediated. Never cite this entry as a boot
+round, a live host-gate run, or lease-gate qualification.
+**Freshness:** Superseded on the first WSL2 start that exercises these units,
+on any `systemctl disable` of them, on any change to
+`scripts/safety/ramshared-host-gate.sh`'s failure ordering (the leading `rm -f`
+before parsing), or if `ramshared-vram-tier.service` is enabled or rewritten
+into the sealed tree.
+
+---
