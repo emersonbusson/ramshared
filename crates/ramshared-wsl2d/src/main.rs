@@ -42,7 +42,7 @@ use ramshared_cuda::Cuda;
 use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
 use ramshared_vram::{
     GpuAdapterIdentity, GpuBudgetSnapshot, GpuBudgetTelemetry, SEALED_RESERVE_MIN_MIB,
-    SEALED_RESERVE_PERCENT, TELEMETRY_MAX_AGE_MS, VramMemory, VramProvider, WorkerCacheTelemetry,
+    SEALED_RESERVE_PERCENT, VramMemory, VramProvider, WorkerCacheTelemetry,
 };
 use ramshared_vulkan::VulkanProvider;
 #[cfg(test)]
@@ -3052,34 +3052,6 @@ fn recover_isolated_gpu_worker_if_failed<S: NbdRuntimeStarter>(
     }
 }
 
-/// The adapter budget this run is willing to assert right now.
-///
-/// `AuthoritativeOriginBackend::gpu_budget_telemetry` returns the sample from
-/// the last heartbeat that landed, which is the right thing for a client that
-/// may be asked at any moment. It is not the right thing to publish. While the
-/// cache is released, `refresh_cached_bytes` fails closed and never heartbeats,
-/// so the client keeps holding the sample from when the cache was last
-/// serving — minutes or hours old. Publishing that sample made `status --json`
-/// raise `gpu_budget_telemetry_invalid_or_stale` for the whole life of a
-/// deliberate release, which forced `overall_state: BLOCKED` and `ok: false`
-/// on a product that was behaving exactly as designed.
-///
-/// The CLI documents a missing key or a JSON `null` as the honest "no budget
-/// bound" report and explicitly does not alarm on it. That is what an untrusted
-/// sample publishes.
-fn published_gpu_budget(
-    held: Option<&GpuBudgetTelemetry>,
-    now_unix_ms: Option<u64>,
-) -> Option<GpuBudgetTelemetry> {
-    held.cloned().filter(|telemetry| {
-        now_unix_ms.is_some_and(|now| {
-            telemetry
-                .trusted_available_at(now, TELEMETRY_MAX_AGE_MS)
-                .is_some()
-        })
-    })
-}
-
 fn publish_origin_cache_status<S: NbdRuntimeStarter>(
     starter: &mut S,
     cache: &mut AuthoritativeOriginBackend<FileOrigin, OriginCache>,
@@ -3112,19 +3084,16 @@ fn publish_origin_cache_status<S: NbdRuntimeStarter>(
         }
     }
     let physical_cached_bytes = cache.refresh_cached_bytes();
+    let gpu_budget = cache.gpu_budget_telemetry().cloned();
     // DT-8: cache occupancy is published beside the adapter budget, never
-    // merged into it and never labelled as RAM. The budget object and the
-    // headroom figure are derived from the same trusted value so the two can
-    // never disagree about whether a sample is current.
-    let now_unix_ms = unix_time_ms();
-    let gpu_budget = published_gpu_budget(cache.gpu_budget_telemetry(), now_unix_ms);
+    // merged into it and never labelled as RAM.
     let gpu_cache = cache.cache_telemetry().cloned();
-    let gpu_headroom_kib = match (now_unix_ms, gpu_budget.as_ref()) {
-        (Some(now), Some(telemetry)) => telemetry
-            .trusted_available_at(now, TELEMETRY_MAX_AGE_MS)
-            .map(|bytes| bytes >> 10),
-        _ => None,
-    };
+    let gpu_headroom_kib = unix_time_ms().and_then(|now| {
+        gpu_budget
+            .as_ref()?
+            .trusted_available_at(now, 5_000)
+            .map(|bytes| bytes >> 10)
+    });
     let telemetry = cache.telemetry();
     starter.publish_origin_cache(&OriginCacheStatus {
         schema_version: 1,
@@ -13700,71 +13669,6 @@ Filename Type Size Used Priority
         assert_eq!(parsed["cache_fallback_reads"], 3);
 
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// A driver-reported, adapter-bound budget sampled at `sampled_at_unix_ms`.
-    fn budget_sample(sampled_at_unix_ms: u64) -> GpuBudgetTelemetry {
-        GpuBudgetTelemetry {
-            schema_version: 1,
-            adapter: Some(GpuAdapterIdentity {
-                backend: "cuda".into(),
-                key: "uuid:fixture".into(),
-                luid: Some("00000000:00012055".into()),
-            }),
-            total_bytes: Some(6 * GIB),
-            budget_bytes: 4 * GIB,
-            used_bytes: GIB,
-            available_bytes: 3 * GIB,
-            source: ramshared_vram::GpuBudgetSource::DriverReported,
-            sampled_at_unix_ms,
-        }
-    }
-
-    #[test]
-    fn a_stale_budget_sample_publishes_as_no_budget_bound() {
-        // This is the live defect: a released cache stops heartbeating, so the
-        // client keeps the sample from when it was last serving and the daemon
-        // used to publish it unchanged. `status --json` then raised
-        // `gpu_budget_telemetry_invalid_or_stale` for the whole life of a
-        // deliberate release and forced `ok: false`. An untrusted sample is
-        // the CLI's documented "no budget bound" case: `null`, no alarm.
-        let held = budget_sample(1_000);
-        let published = published_gpu_budget(Some(&held), Some(1_000 + TELEMETRY_MAX_AGE_MS + 1));
-        assert_eq!(published, None);
-    }
-
-    #[test]
-    fn a_fresh_driver_budget_publishes_unchanged() {
-        let held = budget_sample(1_000);
-        let published =
-            published_gpu_budget(Some(&held), Some(1_000 + TELEMETRY_MAX_AGE_MS)).expect("fresh");
-        assert_eq!(published, held);
-    }
-
-    #[test]
-    fn a_sample_published_without_a_clock_is_not_asserted() {
-        // No clock means the daemon cannot claim the sample is current.
-        let held = budget_sample(1_000);
-        assert_eq!(published_gpu_budget(Some(&held), None), None);
-    }
-
-    #[test]
-    fn an_unbound_or_untrusted_budget_publishes_as_no_budget_bound() {
-        // `trusted_available_at` refuses an adapter-less identity and a
-        // provider-local estimate. Both are "no budget bound", never a live
-        // driver budget.
-        let mut unbound = budget_sample(1_000);
-        unbound.adapter = None;
-        assert_eq!(published_gpu_budget(Some(&unbound), Some(1_000)), None);
-
-        let mut estimate = budget_sample(1_000);
-        estimate.source = ramshared_vram::GpuBudgetSource::ProviderLocalEstimate;
-        assert_eq!(published_gpu_budget(Some(&estimate), Some(1_000)), None);
-    }
-
-    #[test]
-    fn no_held_budget_publishes_as_no_budget_bound() {
-        assert_eq!(published_gpu_budget(None, Some(1_000)), None);
     }
 
     // --- native-vsock control-plane authority (SPEC ITEM-3 + matrix rows) ---
