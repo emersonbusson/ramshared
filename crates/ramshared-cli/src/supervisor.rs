@@ -1239,7 +1239,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    // Tests assert panics and unwrap injected fixtures on purpose. The crate
+    // denies both lints for production code; the deny must not leak into the
+    // test module that is supposed to exercise those paths.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use std::cell::RefCell;
