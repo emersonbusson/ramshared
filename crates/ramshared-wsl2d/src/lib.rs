@@ -8,6 +8,7 @@ pub mod backend;
 pub mod broker_srv;
 pub mod canary_probe;
 pub mod conn;
+pub mod control_plane;
 pub mod demote_status;
 pub mod governor;
 pub mod gpu_budget;

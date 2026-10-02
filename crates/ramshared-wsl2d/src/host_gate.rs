@@ -276,6 +276,21 @@ impl ControlPlaneAuthority {
         self.origin.as_ref()
     }
 
+    /// Install an already-verified sealed origin identity.
+    ///
+    /// Origin identity is established independently of the lease (for example
+    /// by `read_sealed_origin_manifest` on the host, or by a manifest the
+    /// caller has already validated). Installing it here is what makes RF-3
+    /// expressible: `admit_origin_io` must be able to succeed before any lease
+    /// exists and must survive lease loss and transport disconnect. Only
+    /// [`Self::lose_origin_identity`] may take it away.
+    ///
+    /// A later [`Self::accept_lease`] still installs the origin it is given;
+    /// that is the lease-coupled path and remains valid.
+    pub fn adopt_verified_origin(&mut self, origin: SealedOrigin) {
+        self.origin = Some(origin);
+    }
+
     /// Begin a handshake attempt. Does not grant any authority.
     pub fn begin_handshake(&mut self) {
         self.state = ControlPlaneState::Handshaking;
@@ -578,5 +593,100 @@ mod tests {
                 assert!(result.is_err(), "fixture should be invalid");
             }
         }
+    }
+
+    // --- adopt_verified_origin (RF-3) -----------------------------------
+
+    fn origin_fixture() -> SealedOrigin {
+        SealedOrigin {
+            logical_capacity_mib: 4096,
+            partuuid: "p".into(),
+            origin_vhdx: "v".into(),
+        }
+    }
+
+    #[test]
+    fn a_verified_origin_admitted_at_construction_survives_lease_loss_and_disconnect() {
+        let mut authority = ControlPlaneAuthority::disconnected();
+        assert!(
+            authority.admit_origin_io().is_err(),
+            "no origin yet: origin I/O must be refused"
+        );
+
+        authority.adopt_verified_origin(origin_fixture());
+        assert!(authority.admit_origin_io().is_ok());
+
+        // RF-3: a transport disconnect must not take the authoritative path
+        // down. Only the verified origin identity may.
+        authority.on_vsock_disconnect();
+        assert_eq!(authority.state(), ControlPlaneState::SafeMode);
+        assert!(
+            authority.admit_origin_io().is_ok(),
+            "disconnect must preserve the verified origin identity"
+        );
+        assert!(authority.admit_cache(1_000).is_err());
+
+        // And a lease loss leaves the origin path up as well.
+        let mut leased = ControlPlaneAuthority::disconnected();
+        leased.adopt_verified_origin(origin_fixture());
+        leased
+            .accept_lease(
+                LeaseToken {
+                    lease_id: 7,
+                    deadline_ms: 60_000,
+                },
+                origin_fixture(),
+                1_000,
+            )
+            .expect("accept lease");
+        assert!(leased.admit_cache(1_000).is_ok());
+        leased.on_lease_expired();
+        assert_eq!(leased.state(), ControlPlaneState::OriginOnly);
+        assert!(leased.admit_cache(1_000).is_err());
+        assert!(leased.admit_origin_io().is_ok());
+    }
+
+    #[test]
+    fn losing_the_origin_identity_blocks_every_path() {
+        let mut authority = ControlPlaneAuthority::disconnected();
+        authority.adopt_verified_origin(origin_fixture());
+        assert!(authority.admit_origin_io().is_ok());
+        authority.lose_origin_identity();
+        assert!(matches!(
+            authority.admit_origin_io(),
+            Err(GateError::OriginAuthorityRevoked)
+        ));
+        // Cache is refused before a lease exists too; the refusal code is the
+        // lease check, which is still fail-closed.
+        assert!(authority.admit_cache(1_000).is_err());
+    }
+
+    #[test]
+    fn origin_loss_on_a_leased_authority_is_reported_as_origin_authority_revoked() {
+        // The informative case: the lease is live and unexpired, so the only
+        // reason cache can be refused is the lost origin identity.
+        let mut authority = ControlPlaneAuthority::disconnected();
+        authority.adopt_verified_origin(origin_fixture());
+        authority
+            .accept_lease(
+                LeaseToken {
+                    lease_id: 9,
+                    deadline_ms: 60_000,
+                },
+                origin_fixture(),
+                1_000,
+            )
+            .expect("accept lease");
+        assert!(authority.admit_cache(1_000).is_ok());
+
+        authority.lose_origin_identity();
+        assert!(matches!(
+            authority.admit_cache(1_000),
+            Err(GateError::OriginAuthorityRevoked)
+        ));
+        assert!(matches!(
+            authority.admit_origin_io(),
+            Err(GateError::OriginAuthorityRevoked)
+        ));
     }
 }

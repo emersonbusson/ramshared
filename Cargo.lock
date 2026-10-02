@@ -1085,6 +1085,7 @@ dependencies = [
  "ramshared-cuda",
  "ramshared-dxg",
  "ramshared-integrity",
+ "ramshared-ipc",
  "ramshared-tier",
  "ramshared-uring",
  "ramshared-vram",

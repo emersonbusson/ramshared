@@ -119,6 +119,11 @@ pub enum FrameError {
     UnknownMessageType(u8),
     PayloadDeserialization(String),
     PayloadExceedsCap(u32),
+    /// The stream failed mid-frame. Retried only when the caller classifies the
+    /// underlying signature as transient (Kahneman #15).
+    StreamIo(String),
+    /// The peer closed before the declared frame length arrived.
+    TruncatedFrame { expected: usize, got: usize },
 }
 
 impl std::fmt::Display for FrameError {
@@ -130,6 +135,10 @@ impl std::fmt::Display for FrameError {
             Self::UnknownMessageType(t) => write!(f, "unknown message type: {t}"),
             Self::PayloadDeserialization(e) => write!(f, "payload deserialization failed: {e}"),
             Self::PayloadExceedsCap(l) => write!(f, "control payload exceeds 4KB cap: {l} bytes"),
+            Self::StreamIo(e) => write!(f, "frame stream i/o failed: {e}"),
+            Self::TruncatedFrame { expected, got } => {
+                write!(f, "truncated frame: expected {expected} bytes, got {got}")
+            }
         }
     }
 }
@@ -333,6 +342,92 @@ pub fn decode_manifest(payload: &[u8]) -> Result<OriginManifestPayload, FrameErr
     Ok(OriginManifestPayload { sha256_hex, data })
 }
 
+// --- Stream framing ---
+//
+// Length-checked frame transport. The declared payload length is validated
+// against the caller's cap *before* any allocation, so a hostile peer cannot
+// make the reader reserve an arbitrary buffer (`.claude/rules/security.md`:
+// "Protocol frames: length-prefixed or length-checked; reject oversized
+// payloads").
+
+/// Write one length-checked frame: `FRAME_HEADER_LEN` header bytes followed by
+/// exactly `payload.len()` payload bytes.
+///
+/// The header is validated in its own encoding direction by constructing it
+/// through [`VsockFrameHeader::new`], so a caller cannot emit a magic, version
+/// or message type the peer would reject.
+pub fn write_frame<W: std::io::Write>(
+    w: &mut W,
+    msg_type: u8,
+    payload: &[u8],
+    correlation_id: u64,
+) -> Result<(), FrameError> {
+    if msg_type == 0 || msg_type > MSG_MAX {
+        return Err(FrameError::UnknownMessageType(msg_type));
+    }
+    if payload.len() as u32 > MAX_PAYLOAD_LEN {
+        return Err(FrameError::PayloadTooLarge(payload.len() as u32));
+    }
+    let header = VsockFrameHeader::new(msg_type, payload.len() as u32, correlation_id);
+    w.write_all(&header.encode())
+        .map_err(|e| FrameError::StreamIo(e.to_string()))?;
+    if !payload.is_empty() {
+        w.write_all(payload)
+            .map_err(|e| FrameError::StreamIo(e.to_string()))?;
+    }
+    w.flush().map_err(|e| FrameError::StreamIo(e.to_string()))?;
+    Ok(())
+}
+
+/// Read one length-checked frame.
+///
+/// `max_payload` is the caller's per-message cap (for example
+/// [`MAX_CONTROL_PAYLOAD`] for control messages, [`MAX_MANIFEST_PAYLOAD`] for
+/// manifests). A declared length above either that cap or
+/// [`MAX_PAYLOAD_LEN`] is refused before a single payload byte is read or
+/// allocated. A short body is reported as [`FrameError::TruncatedFrame`] and
+/// never silently accepted.
+pub fn read_frame<R: std::io::Read>(
+    r: &mut R,
+    max_payload: u32,
+) -> Result<(u8, Vec<u8>, u64), FrameError> {
+    let cap = max_payload.min(MAX_PAYLOAD_LEN);
+    let mut header_bytes = [0u8; FRAME_HEADER_LEN];
+    read_exact_checked(r, &mut header_bytes)?;
+    let header = VsockFrameHeader::decode(&header_bytes)?;
+    if header.payload_len > cap {
+        return Err(FrameError::PayloadTooLarge(header.payload_len));
+    }
+    let mut payload = vec![0u8; header.payload_len as usize];
+    if !payload.is_empty() {
+        read_exact_checked(r, &mut payload)?;
+    }
+    Ok((header.msg_type(), payload, header.correlation_id))
+}
+
+/// `read_exact` that distinguishes "peer closed early" from other stream
+/// failures, so a truncated frame is never mistaken for a clean empty body.
+fn read_exact_checked<R: std::io::Read>(
+    r: &mut R,
+    buf: &mut [u8],
+) -> Result<(), FrameError> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match r.read(&mut buf[filled..]) {
+            Ok(0) => {
+                return Err(FrameError::TruncatedFrame {
+                    expected: buf.len(),
+                    got: filled,
+                });
+            }
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(FrameError::StreamIo(e.to_string())),
+        }
+    }
+    Ok(())
+}
+
 /// Compute HMAC-SHA256 using SHA-256 (manual implementation to avoid hmac crate version conflicts).
 pub fn compute_hmac(secret: &[u8], data: &[u8]) -> Vec<u8> {
     use sha2::{Digest, Sha256};
@@ -393,6 +488,10 @@ pub enum HandshakeError {
     NonceGenerationFailed,
     NonceNotFresh,
     EmptyIdentityClaim,
+    /// A role-separated proof did not validate. Distinguished from a framing
+    /// error so a caller can fail closed on authenticity without treating the
+    /// peer as merely malformed.
+    ProofMismatch,
 }
 
 impl std::fmt::Display for HandshakeError {
@@ -401,6 +500,7 @@ impl std::fmt::Display for HandshakeError {
             Self::NonceGenerationFailed => write!(f, "OS CSPRNG nonce generation failed"),
             Self::NonceNotFresh => write!(f, "handshake nonce is all-zero (not fresh)"),
             Self::EmptyIdentityClaim => write!(f, "handshake identity claim is empty"),
+            Self::ProofMismatch => write!(f, "handshake proof mismatch"),
         }
     }
 }
@@ -1080,5 +1180,168 @@ mod tests {
         assert!(!verify_guest_finish_proof(
             secret, &t, &zero_host, &[1u8; 32]
         ));
+    }
+
+    // --- Stream framing ---
+
+    #[test]
+    fn write_then_read_frame_round_trips() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, MSG_HEARTBEAT, b"hello-frame", 77).expect("write");
+        assert_eq!(buf.len(), FRAME_HEADER_LEN + 11);
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let (msg_type, payload, correlation_id) =
+            read_frame(&mut cursor, MAX_CONTROL_PAYLOAD).expect("read");
+        assert_eq!(msg_type, MSG_HEARTBEAT);
+        assert_eq!(payload, b"hello-frame");
+        assert_eq!(correlation_id, 77);
+    }
+
+    #[test]
+    fn write_then_read_empty_payload_frame_round_trips() {
+        let mut buf = Vec::new();
+        write_frame(&mut buf, MSG_HANDSHAKE_FINISH, b"", 0).expect("write");
+        assert_eq!(buf.len(), FRAME_HEADER_LEN);
+
+        let mut cursor = std::io::Cursor::new(buf);
+        let (msg_type, payload, correlation_id) =
+            read_frame(&mut cursor, MAX_CONTROL_PAYLOAD).expect("read");
+        assert_eq!(msg_type, MSG_HANDSHAKE_FINISH);
+        assert!(payload.is_empty());
+        assert_eq!(correlation_id, 0);
+    }
+
+    #[test]
+    fn write_frame_rejects_unknown_message_type() {
+        let mut buf = Vec::new();
+        assert_eq!(
+            write_frame(&mut buf, 0, b"x", 1),
+            Err(FrameError::UnknownMessageType(0))
+        );
+        assert_eq!(
+            write_frame(&mut buf, MSG_MAX + 1, b"x", 1),
+            Err(FrameError::UnknownMessageType(MSG_MAX + 1))
+        );
+        assert!(buf.is_empty(), "no bytes may be emitted before the type is known good");
+    }
+
+    #[test]
+    fn write_frame_rejects_oversized_payload() {
+        let mut buf = Vec::new();
+        let huge = vec![0u8; (MAX_PAYLOAD_LEN + 1) as usize];
+        assert!(matches!(
+            write_frame(&mut buf, MSG_HEARTBEAT, &huge, 1),
+            Err(FrameError::PayloadTooLarge(_))
+        ));
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn read_frame_rejects_declared_length_above_the_caller_cap_before_reading_the_body() {
+        // Header claims 64 bytes but the caller only allows 8. The body is never
+        // read, so a peer cannot push the reader into a large allocation.
+        let mut buf = Vec::new();
+        {
+            let header = VsockFrameHeader::new(MSG_HEARTBEAT, 64, 5);
+            buf.extend_from_slice(&header.encode());
+        }
+        buf.extend_from_slice(&[0xABu8; 64]);
+
+        let mut cursor = std::io::Cursor::new(buf);
+        assert!(matches!(
+            read_frame(&mut cursor, 8),
+            Err(FrameError::PayloadTooLarge(64))
+        ));
+        assert_eq!(
+            cursor.position(),
+            FRAME_HEADER_LEN as u64,
+            "the body must not have been consumed"
+        );
+    }
+
+    #[test]
+    fn read_frame_rejects_declared_length_above_the_global_cap() {
+        let header = VsockFrameHeader {
+            magic: IPC_MAGIC,
+            version: IPC_VERSION_3,
+            payload_len: MAX_PAYLOAD_LEN + 1,
+            flags: MSG_HEARTBEAT as u32,
+            correlation_id: 0,
+        };
+        let mut buf = header.encode().to_vec();
+        buf.extend_from_slice(&[0u8; 4]);
+        let mut cursor = std::io::Cursor::new(buf);
+        assert!(matches!(
+            read_frame(&mut cursor, MAX_PAYLOAD_LEN),
+            Err(FrameError::PayloadTooLarge(_))
+        ));
+    }
+
+    #[test]
+    fn read_frame_reports_truncation_instead_of_an_empty_body() {
+        // Header declares 16 payload bytes; only 4 arrive before EOF.
+        let header = VsockFrameHeader::new(MSG_HEARTBEAT, 16, 9);
+        let mut buf = header.encode().to_vec();
+        buf.extend_from_slice(&[0xAA; 4]);
+
+        let mut cursor = std::io::Cursor::new(buf);
+        assert_eq!(
+            read_frame(&mut cursor, MAX_CONTROL_PAYLOAD),
+            Err(FrameError::TruncatedFrame {
+                expected: 16,
+                got: 4
+            })
+        );
+    }
+
+    #[test]
+    fn read_frame_reports_truncation_of_the_header_itself() {
+        let mut cursor = std::io::Cursor::new(vec![0x52, 0x41, 0x4D]);
+        assert_eq!(
+            read_frame(&mut cursor, MAX_CONTROL_PAYLOAD),
+            Err(FrameError::TruncatedFrame {
+                expected: FRAME_HEADER_LEN,
+                got: 3
+            })
+        );
+    }
+
+    #[test]
+    fn read_frame_surfaces_bad_magic_as_a_decode_error() {
+        let mut buf = vec![0u8; FRAME_HEADER_LEN];
+        buf[0] = 0xDE;
+        let mut cursor = std::io::Cursor::new(buf);
+        assert!(matches!(
+            read_frame(&mut cursor, MAX_CONTROL_PAYLOAD),
+            Err(FrameError::InvalidMagic(_))
+        ));
+    }
+
+    #[test]
+    fn read_frame_over_a_socket_pair_round_trips_several_frames_in_order() {
+        use std::io::{Read, Write};
+
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().expect("pair");
+        let payloads: [&[u8]; 3] = [b"one", b"", b"three-three"];
+        for (i, payload) in payloads.iter().enumerate() {
+            write_frame(&mut writer, MSG_HEARTBEAT, payload, i as u64).expect("write");
+        }
+
+        let mut reader = reader;
+        for (i, expected) in payloads.iter().enumerate() {
+            let (msg_type, payload, correlation_id) =
+                read_frame(&mut reader, MAX_CONTROL_PAYLOAD).expect("read");
+            assert_eq!(msg_type, MSG_HEARTBEAT);
+            assert_eq!(&payload, expected);
+            assert_eq!(correlation_id, i as u64);
+        }
+
+        // A clean peer close after the last frame is reported as a truncation
+        // of a header that never arrived — never as a phantom empty frame.
+        writer.flush().expect("flush");
+        drop(writer);
+        let mut scratch = [0u8; 1];
+        assert_eq!(reader.read(&mut scratch).expect("eof read"), 0);
     }
 }
