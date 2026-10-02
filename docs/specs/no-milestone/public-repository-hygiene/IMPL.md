@@ -4,7 +4,7 @@
 
 ## Status
 
-PARTIAL · owned implementation, repository candidate, contract, validation, and cover ✓ · aggregate repository state has external residuals · BINARY_MATCH N/A
+PARTIAL · owned implementation, repository candidate, contract, local validation, and cover ✓ · hosted same-revision required CI remains unobserved · BINARY_MATCH N/A
 
 ## Files
 
@@ -117,12 +117,54 @@ and fences require an adjacent warning **before** the instruction.
 
 ## Gaps
 
-The five implementation/fixture gaps are closed. DONE is blocked by the five
-out-of-scope duplicate pure owners listed above and the missing Rust named test
-`daemon_worker_shutdown_drains_queued_io_before_stop` in
-`crates/ramshared-wsl2d/src/main.rs`. Their canonical owners must reconcile the
-map/source contracts and rerun aggregate gates. This slice does not qualify
-runtime, driver, signing, VM, WSL2, or physical-host behavior.
+The five implementation/fixture gaps are closed. Current local checks show no
+duplicate pure owners, generated documentation catalogs are in sync, and the
+memory-broker shutdown source matches the current DT-50 contract. The historical
+name `daemon_worker_shutdown_drains_queued_io_before_stop` is not a current
+SPEC requirement: queued I/O is preempted at the terminal iteration boundary.
+Keep status `PARTIAL` until hosted required CI reports success for the same
+source revision. This slice does not qualify runtime, driver, signing, VM,
+WSL2, or physical-host behavior.
+
+## 2026-09-27 local reconciliation
+
+- Planner `--all`: READY, exit 0; the shared source-owner map has no duplicate
+  line owners.
+- Public hygiene candidate: PASS, 1,156 selected files, 0 findings.
+- Public hygiene tests: 45/45; per-file Node cover: 93.58% lines, 81.58%
+  branches, 99.14% functions.
+- Planner tests: 44/44; per-file Node cover: 89.95% lines, 82.40% branches,
+  98.63% functions.
+- Documentation inventory, capability observations, campaign lifecycle, docs
+  index, and SPEC evidence checks pass in check mode.
+- The old queued-drain test name was superseded by DT-50's
+  `daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary`; the
+  continuous-refill test also exists under
+  `daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills`.
+
+Final local reconciliation completed after the release identity and evidence
+edits stabilized:
+
+- `RUSTC_WRAPPER= cargo test -p ramshared-cli`: 355 unit and 10 integration
+  tests passed; no failures.
+- `cargo test -p ramshared-wsl2d`: exit 0 after rerunning outside the restricted
+  test sandbox; all active test targets passed. Nineteen hardware, root, or
+  device-specific tests remained intentionally ignored.
+- `./scripts/docs-check.sh`: exit 0; every local documentation, release,
+  evidence, public-hygiene, and regression gate passed. Localization reports
+  `PARTIAL` only because the informational Portuguese translation has no
+  current human review receipt; its source and translation hashes match.
+- Campaign evidence catalog check: 176 observations, pass.
+- Bash syntax checks for `scripts/install.sh`,
+  `scripts/safety/install-cascade-boot.sh`, and
+  `scripts/safety/nbd-product-preflight.sh`: pass.
+- The prior direct preflight suite remains 47/47, and Clippy and rustfmt checks
+  passed before the final test-fixture-only literal correction.
+
+Hosted same-revision required CI remains unobserved, so this slice remains
+`PARTIAL`. No release build, host installation, or hosted workflow was run.
+Detailed command and evidence records are in the current
+`evidence/validation-summary.json` and `evidence-manifest.json`.
 
 ## Rollback trigger
 
@@ -142,4 +184,4 @@ consecutive no-load runs.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-1–RF-12 | checker, public binary contract, global ownership, planner trust inputs, clean-checkout gate, recovery compatibility, evidence governance | pending — no automatic commit |
+| RF-1–RF-12 | checker, public binary contract, global ownership, planner trust inputs, clean-checkout gate, recovery compatibility, evidence governance | No RF implementation changed in this validation/evidence reconciliation; see the recorded evidence and branch history. |

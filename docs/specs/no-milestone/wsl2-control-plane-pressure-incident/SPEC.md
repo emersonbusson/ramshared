@@ -190,7 +190,7 @@ No production file is deleted.
 | pswpin/pswpout | monitor JSONL | pages |
 | memory.high/max/oom/oom_kill | monitor JSONL | counters |
 | managed reservations | monitor JSONL | count/bytes/class |
-| unmanaged pressure | monitor JSONL | sanitized top-N |
+| unmanaged process memory footprint | monitor JSONL | sanitized top-N; distinct from PSI pressure |
 | supervisor action results | state/status | ordered action+status+error records |
 
 ## Living docs
@@ -230,6 +230,7 @@ No production file is deleted.
 | `workload.rs` | `pid_reuse_cannot_own_or_release_reservation` | unit | #13/#17 | ≥80% |
 | `workload.rs` | `managed_scope_uses_aggregate_ceiling` | unit | #9 | ≥80% |
 | `workload.rs` | `scope_invocation_id_is_persisted` | unit | #13 | ≥80% |
+| `workload.rs` | `exact_scope_status_parser_fails_closed_and_preserves_terminal_result` | parser/state refusal | #13/#16 | ≥80% |
 | `workload.rs` | `scope_ack_timeout_reaps_group_and_owned_descendant` | process/timeout | #15/#16 | ≥80% |
 | `supervisor.rs` | `supervisor_transitions_and_hysteresis_are_exact` | unit | #16 | ≥80% |
 | `supervisor.rs` | `supervisor_delay_enters_emergency` | unit | #16 | ≥80% |
@@ -242,6 +243,8 @@ No production file is deleted.
 | `supervisor.rs` | `freeze_applied_write_failure_recovers_exact_pending_identity_after_restart` | unit/restart | #13/#16/#17 | ≥80% |
 | `supervisor.rs` | `reconstructed_supervisor_kills_only_durable_termed_identity_after_grace` | unit/restart | #13/#16/#17 | ≥80% |
 | `supervisor.rs` | `supervisor_action_errors_are_bounded_single_line_and_control_free` | unit/adversarial | #13/#16 | ≥80% |
+| `supervisor.rs` | `action_error_deserialization_accepts_only_sanitized_bounded_values` | serialization/refusal | #13/#16 | ≥80% |
+| `supervisor.rs` | `successful_action_results_commit_only_their_owned_state` | unit/state | #13/#17 | ≥80% |
 | `supervisor.rs` | `bounded_systemctl_adapter_reaps_its_owned_timeout_fixture` | process/timeout | #15/#16 | ≥80% |
 | systemd lifecycle | `backend_lifecycle_has_no_pre_swapoff_kill_path` | static | #13/#16 | N/A |
 | `workload.rs` | `recovery_releases_gates_only_with_a_current_resume_lease` | unit | #16/#17 | ≥80% |
@@ -249,10 +252,15 @@ No production file is deleted.
 | `lifecycle.rs` | `using_vram_never_masks_critical_pressure` | unit | #13 | ≥80% via canonical lifecycle owner |
 | `lifecycle.rs` | `origin_failure_and_stuck_cache_are_never_green` | unit | #13/#16 | ≥80% via canonical lifecycle owner |
 | `monitor.rs` | `monitor_v4_records_full_pressure_and_sanitized_topn` | unit | #9 | ≥80% |
+| `monitor.rs` | `large_external_footprint_is_reported_as_usage` | unit | #9/#13 | ≥80% |
 | `monitor.rs` | `gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid` | process/timeout | #15/#16 | ≥80% |
+| `stress.rs` | `run_stops_at_an_unreachable_memory_floor_before_allocating` | safety floor | #13/#16 | ≥80% |
+| `stress.rs` | `run_uses_only_injected_telemetry_and_bounded_allocation` | injected telemetry, compaction, and 4-KiB backing | #13/#16 | ≥80% |
+| `stress.rs` | `active_cycle_stays_on_bounded_injected_backing` | one-second active cycle, injected telemetry, and 4-KiB backing | #13/#15/#16 | ≥80% |
 | `bounded_process.rs` | `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_reaps_successful_leader_and_all_stdio_redirected_descendant` | adversarial process/pipe | #15/#16 | ≥80% via canonical transport owner |
 | `bounded_process.rs` | `capture_runner_on_spawn_panic_cannot_strand_owned_child` | panic/process | #15/#16 | ≥80% via canonical transport owner |
+| `bounded_process.rs` | `source_only_true_before_action_after_is_ordered` | source-only E2E (`/bin/true`) | #3/#13 | before → action → after ordered; zero host pressure |
 | Windows guardian | `healthy_guest_with_stale_monitor_never_terminates` | manufactured | #13/#16 | N/A |
 | Windows guardian | `guardian_terminates_exactly_once_and_enters_safe_mode` | manufactured | #17 | N/A |
 | Windows guardian | `host_safe_mode_gate_survives_guardian_and_guest_restart` | manufactured | #16/#17 | N/A |
@@ -264,7 +272,9 @@ No production file is deleted.
 ## Validation checklist
 
 The incident slice owns line coverage only for `workload.rs`, `supervisor.rs`,
-and `monitor.rs`. The required `main.rs` and `cascade/lifecycle.rs` tests above
+`monitor.rs`, and `stress.rs`. The `monitor_pressure_tests.rs` module is compiled
+and run through `monitor.rs`; it is test code rather than a production line
+coverage target. The required `main.rs` and `cascade/lifecycle.rs` tests above
 remain incident evidence under the single `cascade-lifecycle-observability`
 owner. The `bounded_process.rs` tests likewise remain incident evidence under
 `cascade-transport-orchestration`. This avoids counting the same production
@@ -276,7 +286,16 @@ source under two active SPECs.
 - [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs --min 80 --report-json tmp/wsl2-control-plane-pressure-incident-cov.json`
 - [x] PowerShell parser and full Windows static suite
 - [x] systemd shell static tests and docs-check
-- [ ] source-only `/bin/true` before/action/after where authorization permits
+- [x] source-only `/bin/true` before/action/after where authorization permits
+      (2026-10-01: `bounded_process::tests::source_only_true_before_action_after_is_ordered`
+      walks the SSDV3 before → action → after protocol with `/bin/true` as the action —
+      a zero-pressure no-op, so no swap, ublk, or GPU load is involved and host-safety
+      authorization is satisfied. BEFORE records a source-only observable; ACTION runs
+      `/bin/true` through the real `run_capture_command` bounded spawn path (exit 0,
+      empty stdout/stderr); AFTER records a distinct phase and asserts the two are
+      ordered. `cargo test -p ramshared-cli --bin ramshared` 538 passed / 0 failed;
+      `cargo clippy -p ramshared-cli --all-targets -- -D warnings` exit 0;
+      `cargo fmt -p ramshared-cli -- --check` exit 0.)
 - [ ] VM guardian and Docker/cron ancestry remain env-bound, not DONE
 
 Rollback trigger: admitted aggregate above max, threshold deviation, stale

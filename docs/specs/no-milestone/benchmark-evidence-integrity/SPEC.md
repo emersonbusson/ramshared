@@ -5,14 +5,17 @@
 In scope now: a versioned public evidence envelope, deterministic validation of
 benchmark records and artifacts, explicit legacy-unqualified mappings for the
 five existing human benchmark entries, benchmark prose/registry parity, and a
-SPEC evidence-claim manifest checker. The tools are zero-dependency Node.js and
-read-only over repository inputs.
+SPEC evidence-claim manifest checker. The runtime monitor accepts benchmark
+metrics only from a promotable `ramshared-evidence/v1` PASS record and shows
+`AWAITING_QUALIFICATION` for legacy or incomplete records. Validation tools are
+zero-dependency Node.js; repository and runtime evidence reads are read-only.
 
 Out now: rewriting historical JSONL or validation entries, uploading private
-host artifacts, executing Windows/WSL2/kernel workloads, and automatically
-promoting any capability. Platform harness adapters remain owned by their
-feature SPECs; the current Windows storage harness already emits the context
-needed for a future registered record.
+host artifacts, executing Windows/WSL2/kernel workloads, automatically
+promoting any capability, or publishing a current benchmark pointer. Platform
+harness adapters remain owned by their feature SPECs; the current Windows
+storage harness already emits the context needed for a future registered
+record.
 
 Assumed ready: Node.js 22 in CI, `git`, the existing docs gate, and sanitized
 repository-relative artifacts. Heavy or host-private artifacts may be described
@@ -28,6 +31,7 @@ only as legacy-unqualified and cannot support PASS.
 | RF-7, RF-8 | ITEM-4 |
 | RF-9 | ITEM-2, ITEM-4 |
 | RF-10, NFR-1, NFR-4 | ITEM-5 |
+| RF-11 | ITEM-6 |
 
 ## Technical decisions
 
@@ -44,11 +48,14 @@ only as legacy-unqualified and cannot support PASS.
 | DT-9 | A claim manifest records SPEC path/hash, status, named tests, cover rows, live before/action/after, refusals, cleanup, artifacts and BINARY_MATCH applicability. `DONE` requires all applicable gates; env-bound is PARTIAL. | One explicit fail-closed claim contract. |
 | DT-10 | Initial repository integration validates benchmark parity globally and SPEC manifests only when present. Migrating existing feature claims is a separate governance item; absence never upgrades a claim. | Do not fabricate history or block unrelated code on guessed metadata. |
 | DT-11 | Findings print relative path, line or record ID, and rule code only; secret material and raw kernel addresses are never echoed. | This repository and its CI logs are public. |
+| DT-12 | The runtime monitor accepts only `ramshared-evidence/v1` records with `decision.verdict=PASS`, `decision.promotable=true`, a qualified comparison, clean source, matching loaded binary, passing legitimate/refusal checks, complete cleanup, zero residue, and recomputed metric summaries. Legacy `status` values are ignored. | The historical Build #5 JSON is explicitly unqualified and cannot be treated as a live or promotable result. |
 
 ## Atomicity and rollback
 
-- Atomicity frontier: repository documentation and read-only CI tools only.
-- Userspace/daemon: N/A — no process or package mutation.
+- Atomicity frontier: repository documentation, read-only CI tools, and the CLI
+  monitor's read-only benchmark input.
+- Userspace/daemon: monitor input parsing only; no service state or process
+  mutation.
 - Kernel/Windows driver: N/A — no load, unload, install or ABI change.
 - Host/persistent: N/A — no SCM, swap, pagefile, disk, GPU pressure or reboot.
 - Rollback: remove the new docs-check invocations and restore the last known-good
@@ -65,6 +72,7 @@ only as legacy-unqualified and cannot support PASS.
 | ITEM-3 parity | #13 | Does every public number have exactly one qualified or legacy identity? | live checker on repository + duplicate/missing fixture | Missing/duplicate mapping passes |
 | ITEM-4 claims | #13 | Can IMPL presence, unit-only evidence or env-bound evidence claim DONE? | `done_requires_complete_same_surface_evidence` | Any fabricated DONE passes |
 | ITEM-5 integration | #17 | Is the gate deterministic and replayable? | two consecutive `docs-check.sh` runs with byte-identical diagnostics | Exit/output differs on identical tree |
+| ITEM-6 runtime consumer | #13 | Can legacy or forged benchmark data render a green status? | `monitor_benchmark_rejects_legacy_unqualified_status`, `monitor_benchmark_rejects_nonpromotable_evidence`, `monitor_benchmark_rejects_dirty_or_incomplete_evidence`, `monitor_benchmark_accepts_promotable_v1_evidence` | Any unqualified or inconsistent record renders PASS |
 
 ## Security checklist (pre-impl)
 
@@ -158,6 +166,11 @@ only as legacy-unqualified and cannot support PASS.
 **`docs/INDEX.md`**
 - Regenerate after SPEC creation; no status promotion from this file.
 
+**`crates/ramshared-cli/src/monitor.rs`**
+- Read only promotable v1 benchmark evidence for the performance display;
+  reject legacy `status` fields and recompute displayed summaries from samples.
+- Tests: `monitor::tests::monitor_benchmark_*`.
+
 ## Observability
 
 | Signal | Where | Level / type |
@@ -186,6 +199,8 @@ only as legacy-unqualified and cannot support PASS.
 3. ITEM-3 — add stable prose IDs, legacy mapping and parity validation.
 4. ITEM-4 — implement explicit SPEC evidence-manifest validation and false-DONE fixtures.
 5. ITEM-5 — integrate docs-check, run twice, append validation, then write IMPL.
+6. ITEM-6 — make the runtime monitor consume only promotable v1 evidence and
+   prove legacy, non-promotable, dirty, incomplete, and forged records refuse.
 
 ## Required tests matrix
 
@@ -195,18 +210,34 @@ only as legacy-unqualified and cannot support PASS.
 | benchmark registry/prose | same :: `dated_benchmark_requires_exactly_one_registry_mapping` | live docs E2E | #13 | N/A — E2E-only |
 | `tools/ci/check-spec-evidence.mjs` | `check-spec-evidence.test.mjs` :: named tests above | unit/integration | #13 | N/A — Node |
 | `scripts/docs-check.sh` | two identical repository runs | live CLI E2E | #17 | N/A — orchestration |
+| `crates/ramshared-cli/src/monitor.rs` | `monitor::tests::monitor_benchmark_rejects_legacy_unqualified_status`, `monitor_benchmark_accepts_promotable_v1_evidence`, `monitor_benchmark_rejects_nonpromotable_evidence`, `monitor_benchmark_rejects_dirty_or_incomplete_evidence` | unit | #13 | `monitor.rs` ≥80% |
 
 ## Validation checklist
 
-- [ ] `node --test tools/ci/check-benchmark-evidence.test.mjs`
-- [ ] `node --test tools/ci/check-spec-evidence.test.mjs`
-- [ ] `node tools/ci/check-benchmark-evidence.mjs --check`
-- [ ] `node tools/ci/check-spec-evidence.mjs --check`
-- [ ] `./scripts/docs-check.sh` twice with identical exit/output
-- [ ] `node tools/generate-docs-index.mjs --check`
-- [ ] `git diff --check`
-- [ ] Every matrix test name exists and every refusal returns non-zero
-- [ ] Live CLI evidence contains before/action/after counts and no public-sensitive values
+- [x] `node --test tools/ci/check-benchmark-evidence.test.mjs` (2026-09-30: 29/29 pass.)
+- [x] `node --test tools/ci/check-spec-evidence.test.mjs` (2026-09-30: 10/10 pass.)
+- [x] `node tools/ci/check-benchmark-evidence.mjs --check` (2026-09-30: OK —
+  `sections=10 records=11 legacy=10 public_surfaces=5 public_claims=18`.)
+- [x] `node tools/ci/check-spec-evidence.mjs --check` (2026-09-30: OK —
+  `SPEC evidence manifests OK (count=4)`.)
+- [x] `./scripts/docs-check.sh` twice with identical exit/output
+  (2026-09-30: two runs, exit 0 both, byte-identical logs.)
+- [x] `node tools/generate-docs-index.mjs --check` (2026-09-30: `docs/INDEX.md is in sync`.)
+- [x] `cargo test -p ramshared-cli -j 1 monitor_benchmark_` (2026-09-30: 4/4 pass —
+  `rejects_legacy_unqualified_status`, `accepts_promotable_v1_evidence`,
+  `rejects_nonpromotable_evidence`, `rejects_dirty_or_incomplete_evidence`.)
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/monitor.rs --min 80` (2026-09-30: 84.6% (2172/2567) — PASS.)
+- [x] `git diff --check` (2026-09-30: clean.)
+- [x] Every matrix test name exists and every refusal returns non-zero
+  (2026-09-30: all four named tests present and green; each `rejects_*` asserts a
+  refusal rather than a value.)
+- [x] Live CLI evidence contains before/action/after counts and no public-sensitive values
+  (2026-09-30: `evidence/validation-summary.json` carries `before` / `action` /
+  `after` count objects and only integers and booleans — no paths, hostnames,
+  keys or user identifiers. The 2026-09-30 re-run reports
+  `sections=10 records=11 legacy=10 public_surfaces=5 public_claims=18`, which
+  is the current after-state; the committed summary remains the recorded
+  historical capture.)
 
 Rollback trigger: revert the validator integration if one malformed, duplicate,
 hash-mismatched, secret-bearing, statistically forged, incomparable or non-PASS

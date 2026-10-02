@@ -11,6 +11,7 @@ import { deflateSync } from 'node:zlib'
 import {
   classifyText,
   enumerateFiles,
+  fileSizeLimitFor,
   isSafeRepoPath,
   run,
   scanDocumentActivation,
@@ -20,6 +21,11 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const CLI = path.join(ROOT, 'tools/ci/check-public-hygiene.mjs')
 const AS_OF = new Date('2026-08-22T00:00:00Z')
+
+test('append_only_validation_log_has_a_bounded_larger_size_budget', () => {
+  assert.equal(fileSizeLimitFor('validation.md'), 1024 * 1024)
+  assert.equal(fileSizeLimitFor('docs/reliability/GAP-REGISTER.md'), 512 * 1024)
+})
 
 function git(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }) }
 function lineHash(line) { return createHash('sha256').update(`${line}\n`).digest('hex') }
@@ -1008,6 +1014,17 @@ test('rejects_private_profile_email_token_key_and_kernel_address', () => {
   const address = ['ffff', '888012345678'].join('')
   const findings = scanText('fixture.md', [windowsPath, email, token, key, address].join('\n'), undefined, AS_OF)
   assert.deepEqual(new Set(findings.map((item) => item.rule)), new Set(['PRIVATE_WINDOWS_PATH', 'EMAIL', 'TOKEN', 'PRIVATE_KEY', 'KERNEL_ADDRESS']))
+})
+
+test('systemd_unit_names_are_never_flagged_as_emails', () => {
+  const units = [
+    'user@1000.service',
+    'user-runtime-dir@1000.service',
+    'session-2.scope',
+    'dbus.socket',
+  ].join('\n')
+  const findings = scanText('validation.md', units, undefined, AS_OF)
+  assert.equal(findings.filter((item) => item.rule === 'EMAIL').length, 0)
 })
 
 test('every_concrete_public_identity_class_fails_even_beside_historical_warning', () => {

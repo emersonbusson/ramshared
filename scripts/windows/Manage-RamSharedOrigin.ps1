@@ -39,6 +39,23 @@ function Resolve-AbsoluteWindowsPath {
     return [IO.Path]::GetFullPath($expanded)
 }
 
+# Manifest policy compares paths, not strings. A sealed `origin_vhdx` and the
+# runtime path can be the same file while differing in separator, case, or
+# `.`/`..` segments; only a resolved ordinal-ignore-case comparison is sound.
+# An unresolvable side is never equal, so this stays fail-closed.
+function Test-SameWindowsPath {
+    param([AllowEmptyString()][string]$Left = "", [AllowEmptyString()][string]$Right = "")
+    if ([string]::IsNullOrWhiteSpace($Left) -and [string]::IsNullOrWhiteSpace($Right)) { return $true }
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) { return $false }
+    try {
+        $leftPath = Resolve-AbsoluteWindowsPath -Path $Left -Name "manifest path"
+        $rightPath = Resolve-AbsoluteWindowsPath -Path $Right -Name "runtime path"
+    } catch {
+        return $false
+    }
+    return [string]::Equals($leftPath, $rightPath, [StringComparison]::OrdinalIgnoreCase)
+}
+
 function Get-ConfiguredWslSwapVhdxPath {
     if (-not [string]::IsNullOrWhiteSpace($ExistingSwapVhdxPath)) {
         return Resolve-AbsoluteWindowsPath -Path $ExistingSwapVhdxPath -Name "ExistingSwapVhdxPath"
@@ -59,27 +76,32 @@ function Get-ConfiguredWslSwapVhdxPath {
 
 function Get-WslDistroStorageRoot {
     $registry = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss"
-    if (Test-Path -LiteralPath $registry) {
-        foreach ($entry in Get-ChildItem -LiteralPath $registry) {
-            $properties = Get-ItemProperty -LiteralPath $entry.PSPath
-            if ([string]$properties.DistributionName -ceq $Distro -and -not [string]::IsNullOrWhiteSpace([string]$properties.BasePath)) {
-                $base = Resolve-AbsoluteWindowsPath -Path ([string]$properties.BasePath) -Name "WSL distro BasePath"
-                $root = [IO.Path]::GetPathRoot($base)
-                if (-not [string]::IsNullOrWhiteSpace($root)) { return $root }
+    try {
+        if (Test-Path -LiteralPath $registry) {
+            foreach ($entry in Get-ChildItem -LiteralPath $registry -ErrorAction Stop) {
+                try {
+                    $properties = Get-ItemProperty -LiteralPath $entry.PSPath -ErrorAction Stop
+                    if ([string]$properties.DistributionName -ceq $Distro -and -not [string]::IsNullOrWhiteSpace([string]$properties.BasePath)) {
+                        $base = Resolve-AbsoluteWindowsPath -Path ([string]$properties.BasePath) -Name "WSL distro BasePath"
+                        $root = [IO.Path]::GetPathRoot($base)
+                        if (-not [string]::IsNullOrWhiteSpace($root)) {
+                            return [pscustomobject]@{ Root = $root; Source = "distro_basepath" }
+                        }
+                    }
+                } catch {
+                    continue
+                }
             }
         }
+    } catch {
+        # Registry access is observational; C: remains the bounded fallback.
     }
-    $swapRoot = [IO.Path]::GetPathRoot($ExistingSwapVhdx)
-    if ([string]::IsNullOrWhiteSpace($swapRoot)) { throw "cannot discover the WSL distro or swap storage volume" }
-    return $swapRoot
+    # Do not infer distro storage from the independent WSL swap VHDX path.
+    # If registry discovery is unavailable, C: is the bounded documented fallback.
+    return [pscustomobject]@{ Root = "C:\"; Source = "c_default" }
 }
 
 $ExistingSwapVhdx = Get-ConfiguredWslSwapVhdxPath
-$OriginVhdx = if ([string]::IsNullOrWhiteSpace($OriginVhdxPath)) {
-    Join-Path (Get-WslDistroStorageRoot) "RamShared\ramshared-origin.vhdx"
-} else {
-    Resolve-AbsoluteWindowsPath -Path $OriginVhdxPath -Name "OriginVhdxPath"
-}
 $OriginSize = if ($PSBoundParameters.ContainsKey("OriginSizeBytes")) { [uint64]$OriginSizeBytes } else { 5GB }
 if (($OriginSize % 1GB) -ne 0 -or $OriginSize -lt 5GB -or $OriginSize -gt 64GB -or $OriginSize -lt [uint64](($LogicalCapacityMiB + 1024) * 1MB)) {
     throw "origin container size must be whole GiB between 5 GiB and 64 GiB, and at least 1 GiB larger than logical capacity"
@@ -90,6 +112,7 @@ $GpuReserveMinMiB = 2048
 $GpuReservePercent = 20
 $ManifestPath = "C:\ProgramData\RamShared\ramshared-origin-manifest.json"
 $BackupRoot = "C:\ProgramData\RamShared\ramshared-origin-backup"
+$OriginHostFreeSpaceReserveBytes = [uint64]10GB
 $ApprovalToken = if ($OriginSize -eq 25GB) { "RAMSHARED_ORIGIN_25GIB_PARTUUID" } else { "RAMSHARED_ORIGIN_${OriginSizeGiB}GIB_PARTUUID" }
 $OwnershipProofSchema = 1
 $PartUuidWasSupplied = $PSBoundParameters.ContainsKey("PARTUUID")
@@ -99,13 +122,176 @@ $DiskGuid = ""
 $ExpectedSwapUuid = ""
 $CanonicalGuidPattern = '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
 
+function Get-OriginVolumeSnapshot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $root = [IO.Path]::GetPathRoot($Path)
+    if ([string]::IsNullOrWhiteSpace($root) -or $root -notmatch '^[A-Za-z]:\\$') { return $null }
+    try {
+        $drive = New-Object System.IO.DriveInfo($root)
+        if (-not $drive.IsReady -or $drive.DriveType -ne [IO.DriveType]::Fixed) { return $null }
+        $volumes = @(Get-Volume -FilePath $root -ErrorAction Stop)
+        if ($volumes.Count -ne 1) { return $null }
+        $volume = $volumes[0]
+        $fileSystemType = [string]$volume.FileSystemType
+        $uniqueId = [string]$volume.UniqueId
+        if ([string]::IsNullOrWhiteSpace($uniqueId) -or $fileSystemType -notin @("NTFS", "ReFS")) { return $null }
+        return [pscustomobject]@{
+            Root = $root
+            UniqueId = $uniqueId
+            DriveType = [string]$drive.DriveType
+            FileSystemType = $fileSystemType
+            FreeBytes = [uint64]$drive.AvailableFreeSpace
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Select-OriginStorageVolume {
+    param(
+        [AllowNull()][object]$DistroVolume,
+        [AllowNull()][object]$CVolume,
+        [Parameter(Mandatory = $true)][uint64]$RequiredOriginBytes,
+        [Parameter(Mandatory = $true)][uint64]$FreeSpaceReserveBytes
+    )
+    $requiredFreeBytes = $RequiredOriginBytes + $FreeSpaceReserveBytes
+    $seenVolumes = @{}
+    $observations = @()
+    $orderedCandidates = @(
+        [pscustomobject]@{ role = "distro"; volume = $DistroVolume },
+        [pscustomobject]@{ role = "c_fallback"; volume = $CVolume }
+    )
+    foreach ($entry in $orderedCandidates) {
+        $candidate = $entry.volume
+        if ($null -eq $candidate) { continue }
+        $root = [string]$candidate.Root
+        $uniqueId = [string]$candidate.UniqueId
+        if ($entry.role -eq "c_fallback" -and $root -ine "C:\") { continue }
+        if ($root -notmatch '^[A-Za-z]:\\$' -or
+            [string]$candidate.DriveType -cne "Fixed" -or
+            [string]$candidate.FileSystemType -notin @("NTFS", "ReFS") -or
+            [string]::IsNullOrWhiteSpace($uniqueId)) {
+            continue
+        }
+        if ($seenVolumes.ContainsKey($uniqueId)) { continue }
+        $seenVolumes[$uniqueId] = $true
+        $freeBytes = [uint64]$candidate.FreeBytes
+        $observations += "${root}=$freeBytes"
+        if ($freeBytes -ge $requiredFreeBytes) { return $candidate }
+    }
+    $observed = if ($observations.Count -gt 0) { $observations -join "," } else { "none" }
+    throw "origin_volume_headroom_insufficient: required_free_bytes=$requiredFreeBytes candidates=$observed"
+}
+
+function Resolve-OriginVhdxPath {
+    param(
+        [AllowEmptyString()][string]$RequestedPath = "",
+        [AllowEmptyString()][string]$SealedPath = "",
+        [AllowNull()][object]$DistroVolume,
+        [AllowNull()][object]$CVolume,
+        [uint64]$RequiredOriginBytes = $OriginSize,
+        [uint64]$FreeSpaceReserveBytes = $OriginHostFreeSpaceReserveBytes
+    )
+    if (-not [string]::IsNullOrWhiteSpace($SealedPath)) {
+        $sealed = Resolve-AbsoluteWindowsPath -Path $SealedPath -Name "sealed origin_vhdx"
+        if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
+            $requested = Resolve-AbsoluteWindowsPath -Path $RequestedPath -Name "OriginVhdxPath"
+            if (-not [string]::Equals($sealed, $requested, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "OriginVhdxPath conflicts with the sealed origin path"
+            }
+        }
+        return $sealed
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
+        return Resolve-AbsoluteWindowsPath -Path $RequestedPath -Name "OriginVhdxPath"
+    }
+    $selected = Select-OriginStorageVolume -DistroVolume $DistroVolume -CVolume $CVolume `
+        -RequiredOriginBytes $RequiredOriginBytes -FreeSpaceReserveBytes $FreeSpaceReserveBytes
+    return Join-Path $selected.Root "RamShared\ramshared-origin.vhdx"
+}
+
+function Get-SealedOriginVhdxPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "sealed origin manifest is malformed; refusing to choose a new storage path"
+    }
+    if ([int]$manifest.schema_version -ne 3 -or [string]::IsNullOrWhiteSpace([string]$manifest.origin_vhdx)) {
+        throw "sealed origin manifest path is invalid; refusing to choose a new storage path"
+    }
+    return Resolve-AbsoluteWindowsPath -Path ([string]$manifest.origin_vhdx) -Name "sealed origin_vhdx"
+}
+
+function Assert-OriginFreeSpace {
+    param(
+        [Parameter(Mandatory = $true)][uint64]$AvailableBytes,
+        [Parameter(Mandatory = $true)][uint64]$RequiredFreeBytes,
+        [Parameter(Mandatory = $true)][string]$Purpose
+    )
+    if ($AvailableBytes -lt $RequiredFreeBytes) {
+        throw "origin_free_space_insufficient: purpose=$Purpose required_free_bytes=$RequiredFreeBytes available_free_bytes=$AvailableBytes"
+    }
+}
+
+function Assert-OriginPathFreeSpace {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][uint64]$RequiredFreeBytes,
+        [Parameter(Mandatory = $true)][string]$Purpose
+    )
+    $volume = Get-OriginVolumeSnapshot -Path $Path
+    if ($null -eq $volume) { throw "origin_volume_unavailable: purpose=$Purpose" }
+    Assert-OriginFreeSpace -AvailableBytes $volume.FreeBytes -RequiredFreeBytes $RequiredFreeBytes -Purpose $Purpose
+    return $volume
+}
+
+$requestedOriginPath = if ($PSBoundParameters.ContainsKey("OriginVhdxPath")) { $OriginVhdxPath } else { "" }
+if ($Action -eq "test") {
+    # Manufactured tests must not inspect or depend on live host storage state.
+    $OriginVhdx = "C:\RamShared\manufactured-origin.vhdx"
+    $OriginStorageSelection = [ordered]@{ source = "manufactured_test"; drive_root = "C:\"; free_bytes = $null; required_free_bytes = $null }
+} else {
+    $sealedOriginPath = Get-SealedOriginVhdxPath -Path $ManifestPath
+    if (-not [string]::IsNullOrWhiteSpace($sealedOriginPath)) {
+        $OriginVhdx = Resolve-OriginVhdxPath -RequestedPath $requestedOriginPath -SealedPath $sealedOriginPath
+        $OriginStorageSelection = [ordered]@{ source = "sealed_manifest"; drive_root = [IO.Path]::GetPathRoot($OriginVhdx); free_bytes = $null; required_free_bytes = $null }
+    } elseif (-not [string]::IsNullOrWhiteSpace($requestedOriginPath)) {
+        $OriginVhdx = Resolve-OriginVhdxPath -RequestedPath $requestedOriginPath
+        $explicitVolume = Assert-OriginPathFreeSpace -Path $OriginVhdx `
+            -RequiredFreeBytes ($OriginSize + $OriginHostFreeSpaceReserveBytes) -Purpose "before explicit origin allocation"
+        $OriginStorageSelection = [ordered]@{
+            source = "explicit_path"
+            drive_root = $explicitVolume.Root
+            free_bytes = $explicitVolume.FreeBytes
+            required_free_bytes = $OriginSize + $OriginHostFreeSpaceReserveBytes
+        }
+    } else {
+        $preferredStorage = Get-WslDistroStorageRoot
+        $distroVolume = Get-OriginVolumeSnapshot -Path $preferredStorage.Root
+        $cVolume = Get-OriginVolumeSnapshot -Path "C:\"
+        $selectedVolume = Select-OriginStorageVolume -DistroVolume $distroVolume -CVolume $cVolume `
+            -RequiredOriginBytes $OriginSize -FreeSpaceReserveBytes $OriginHostFreeSpaceReserveBytes
+        $OriginVhdx = Resolve-OriginVhdxPath -DistroVolume $distroVolume -CVolume $cVolume `
+            -RequiredOriginBytes $OriginSize -FreeSpaceReserveBytes $OriginHostFreeSpaceReserveBytes
+        $selectionSource = if ($null -ne $distroVolume -and $selectedVolume.UniqueId -ceq $distroVolume.UniqueId) { [string]$preferredStorage.Source } else { "c_fallback" }
+        $OriginStorageSelection = [ordered]@{
+            source = $selectionSource
+            drive_root = $selectedVolume.Root
+            free_bytes = $selectedVolume.FreeBytes
+            required_free_bytes = $OriginSize + $OriginHostFreeSpaceReserveBytes
+        }
+    }
+}
+
 function Test-CanonicalOriginGuid {
     param([AllowNull()][object]$Value)
     return $Value -is [string] -and $Value -match $CanonicalGuidPattern
 }
 
 function Write-OriginPlan {
-    [ordered]@{ state = "PLAN"; action = $Action; distro = $Distro; origin_vhdx = $OriginVhdx; fixed_size_bytes = $OriginSize; logical_capacity_mib = $LogicalCapacityMiB; physical_cache_cap_mib = $PhysicalCacheCapMiB; chunk_mib = $ChunkMiB; gpu_reserve_min_mib = $GpuReserveMinMiB; gpu_reserve_percent = $GpuReservePercent; partuuid = $PARTUUID; expected_swap_uuid = "generated-during-install"; existing_wsl_swap_vhdx = $ExistingSwapVhdx; host_mutation_requires_run = $true; host_mutation_requires_attended_action = $true; host_mutation_requires_exact_approval = $ApprovalToken } | ConvertTo-Json -Depth 4
+    [ordered]@{ state = "PLAN"; action = $Action; distro = $Distro; origin_vhdx = $OriginVhdx; origin_storage_selection = $OriginStorageSelection; fixed_size_bytes = $OriginSize; logical_capacity_mib = $LogicalCapacityMiB; physical_cache_cap_mib = $PhysicalCacheCapMiB; chunk_mib = $ChunkMiB; gpu_reserve_min_mib = $GpuReserveMinMiB; gpu_reserve_percent = $GpuReservePercent; partuuid = $PARTUUID; expected_swap_uuid = "generated-during-install"; existing_wsl_swap_vhdx = $ExistingSwapVhdx; host_mutation_requires_run = $true; host_mutation_requires_attended_action = $true; host_mutation_requires_exact_approval = $ApprovalToken } | ConvertTo-Json -Depth 4
 }
 
 function Get-OriginConfigurationSha256 {
@@ -166,7 +352,7 @@ function Read-SealedOriginManifest {
     $partUuid = ([string]$manifest.partuuid).ToLowerInvariant()
     $diskGuid = ([string]$manifest.disk_guid).ToLowerInvariant()
     $expectedSwapUuid = ([string]$manifest.expected_swap_uuid).ToLowerInvariant()
-    if ($manifest.schema_version -ne 3 -or $manifest.origin_vhdx -cne $OriginVhdx -or $manifest.existing_wsl_swap_vhdx -cne $ExistingSwapVhdx -or $fixedSize -lt 5GB -or $fixedSize -gt 64GB -or ($fixedSize % 1GB) -ne 0 -or $fixedSize -lt [uint64](($logical + 1024) * 1MB) -or ($PSBoundParameters.ContainsKey("OriginSizeBytes") -and $fixedSize -ne [uint64]$OriginSize) -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
+    if ($manifest.schema_version -ne 3 -or -not (Test-SameWindowsPath -Left ([string]$manifest.origin_vhdx) -Right $OriginVhdx) -or -not (Test-SameWindowsPath -Left ([string]$manifest.existing_wsl_swap_vhdx) -Right $ExistingSwapVhdx) -or $fixedSize -lt 5GB -or $fixedSize -gt 64GB -or ($fixedSize % 1GB) -ne 0 -or $fixedSize -lt [uint64](($logical + 1024) * 1MB) -or ($PSBoundParameters.ContainsKey("OriginSizeBytes") -and $fixedSize -ne [uint64]$OriginSize) -or $logical -lt 1024 -or $logical -gt 24576 -or ($logical % 1024) -ne 0 -or $physical -lt 1024 -or $physical -gt $logical -or ($physical % 1024) -ne 0 -or [int]$manifest.chunk_mib -ne $ChunkMiB -or [int]$manifest.gpu_reserve_min_mib -ne $GpuReserveMinMiB -or [int]$manifest.gpu_reserve_percent -ne $GpuReservePercent -or [int]$manifest.ownership_proof_schema -ne $OwnershipProofSchema -or -not (Test-CanonicalOriginGuid -Value $partUuid) -or -not (Test-CanonicalOriginGuid -Value $diskGuid) -or -not (Test-CanonicalOriginGuid -Value $expectedSwapUuid) -or ([string]$manifest.configuration_sha256) -notmatch '^[0-9a-f]{64}$') {
         throw "sealed origin manifest policy mismatch"
     }
     $actualHash = Get-OriginConfigurationSha256 -ManifestLogicalCapacityMiB $logical -ManifestPhysicalCacheCapMiB $physical -ManifestPartUuid $partUuid -ManifestDiskGuid $diskGuid -ManifestExpectedSwapUuid $expectedSwapUuid -ManifestFixedSizeBytes $fixedSize
@@ -496,6 +682,64 @@ function Invoke-OriginManufacturedTests {
         $attachRequired.state -cne "ATTACH_REQUIRED" -or -not $attachRequired.host_mutation) {
         throw "manufactured origin attachment decision was not idempotent and fail closed"
     }
+    $distroEnough = [pscustomobject]@{ Root = "I:\"; UniqueId = "volume-i"; DriveType = "Fixed"; FileSystemType = "NTFS"; FreeBytes = [uint64]20GB }
+    $cEnough = [pscustomobject]@{ Root = "C:\"; UniqueId = "volume-c"; DriveType = "Fixed"; FileSystemType = "NTFS"; FreeBytes = [uint64]30GB }
+    $selected = Select-OriginStorageVolume -DistroVolume $distroEnough -CVolume $cEnough -RequiredOriginBytes ([uint64]5GB) -FreeSpaceReserveBytes ([uint64]10GB)
+    if ($selected.UniqueId -cne "volume-i") { throw "manufactured origin volume did not prefer the distro volume with reserve" }
+    Write-Output "PASS origin_volume_prefers_distro_volume_with_reserve"
+
+    $distroLow = [pscustomobject]@{ Root = "I:\"; UniqueId = "volume-i"; DriveType = "Fixed"; FileSystemType = "NTFS"; FreeBytes = [uint64]14GB }
+    $selectedFallback = Select-OriginStorageVolume -DistroVolume $distroLow -CVolume $cEnough -RequiredOriginBytes ([uint64]5GB) -FreeSpaceReserveBytes ([uint64]10GB)
+    if ($selectedFallback.UniqueId -cne "volume-c") { throw "manufactured origin volume did not fall back to C:" }
+    Write-Output "PASS origin_volume_falls_back_to_c_when_preferred_lacks_reserve"
+
+    $singleC = [pscustomobject]@{ Root = "C:\"; UniqueId = "volume-c"; DriveType = "Fixed"; FileSystemType = "NTFS"; FreeBytes = [uint64]15GB }
+    $selectedSingle = Select-OriginStorageVolume -DistroVolume $singleC -CVolume $singleC -RequiredOriginBytes ([uint64]5GB) -FreeSpaceReserveBytes ([uint64]10GB)
+    if ($selectedSingle.UniqueId -cne "volume-c") { throw "manufactured single-volume C: selection failed" }
+    Write-Output "PASS origin_single_volume_c_satisfies_default"
+
+    $cLow = [pscustomobject]@{ Root = "C:\"; UniqueId = "volume-c"; DriveType = "Fixed"; FileSystemType = "NTFS"; FreeBytes = [uint64]14GB }
+    $lowSpaceError = ""
+    try { $null = Select-OriginStorageVolume -DistroVolume $distroLow -CVolume $cLow -RequiredOriginBytes ([uint64]5GB) -FreeSpaceReserveBytes ([uint64]10GB) }
+    catch { $lowSpaceError = $_.Exception.Message }
+    if (-not $lowSpaceError.StartsWith("origin_volume_headroom_insufficient:") -or
+        -not $lowSpaceError.Contains("required_free_bytes=16106127360") -or
+        -not $lowSpaceError.Contains("I:\=15032385536,C:\=15032385536")) {
+        throw "manufactured origin volume did not refuse with required and observed byte counts"
+    }
+    Write-Output "PASS origin_volume_refuses_when_all_candidates_below_reserve"
+
+    $removableDistro = [pscustomobject]@{ Root = "I:\"; UniqueId = "removable-i"; DriveType = "Removable"; FileSystemType = "NTFS"; FreeBytes = [uint64]100GB }
+    $unsupportedC = [pscustomobject]@{ Root = "C:\"; UniqueId = "unsupported-c"; DriveType = "Fixed"; FileSystemType = "FAT32"; FreeBytes = [uint64]100GB }
+    $unsupportedRefused = $false
+    try { $null = Select-OriginStorageVolume -DistroVolume $removableDistro -CVolume $unsupportedC -RequiredOriginBytes ([uint64]5GB) -FreeSpaceReserveBytes ([uint64]10GB) }
+    catch { $unsupportedRefused = $_.Exception.Message -like "origin_volume_headroom_insufficient:*" }
+    if (-not $unsupportedRefused) { throw "manufactured selector accepted removable or unsupported-file-system storage" }
+    Write-Output "PASS origin_volume_rejects_removable_and_unsupported_filesystem"
+
+    $movedDistroPath = Resolve-OriginVhdxPath -SealedPath "C:\RamShared\ramshared-origin.vhdx" -DistroVolume $distroEnough -CVolume $cEnough
+    $movedDistroPathAgain = Resolve-OriginVhdxPath -SealedPath "C:\RamShared\ramshared-origin.vhdx" -DistroVolume $distroLow -CVolume $cEnough
+    if ($movedDistroPath -cne "C:\RamShared\ramshared-origin.vhdx" -or $movedDistroPathAgain -cne $movedDistroPath) {
+        throw "manufactured sealed origin path changed after distro volume movement or replay"
+    }
+    Write-Output "PASS origin_existing_manifest_path_survives_distro_volume_change"
+
+    $overrideRefused = $false
+    try { $null = Resolve-OriginVhdxPath -SealedPath "C:\RamShared\ramshared-origin.vhdx" -RequestedPath "I:\RamShared\ramshared-origin.vhdx" }
+    catch { $overrideRefused = $_.Exception.Message -like "OriginVhdxPath conflicts with the sealed origin path*" }
+    if (-not $overrideRefused) { throw "manufactured conflicting sealed-origin override was accepted" }
+    Write-Output "PASS origin_existing_manifest_override_mismatch_is_refused"
+
+    $postAllocationError = ""
+    try { Assert-OriginFreeSpace -AvailableBytes ([uint64]10GB - 1) -RequiredFreeBytes $OriginHostFreeSpaceReserveBytes -Purpose "post-allocation" }
+    catch { $postAllocationError = $_.Exception.Message }
+    if (-not $postAllocationError.Contains("origin_free_space_insufficient:") -or
+        -not $postAllocationError.Contains("required_free_bytes=10737418240") -or
+        -not $postAllocationError.Contains("available_free_bytes=10737418239")) {
+        throw "manufactured post-allocation reserve loss was accepted or reported without byte counts"
+    }
+    Assert-OriginFreeSpace -AvailableBytes $OriginHostFreeSpaceReserveBytes -RequiredFreeBytes $OriginHostFreeSpaceReserveBytes -Purpose "post-allocation boundary"
+    Write-Output "PASS origin_install_rechecks_post_create_reserve_before_manifest"
     Write-Output "PASS origin_plan_is_separate_fixed_and_identity_bound"
     Write-Output "PASS foreign_or_unproven_partuuid_is_rejected"
     Write-Output "PASS origin_install_failure_rolls_back_current_run_only"
@@ -519,6 +763,8 @@ if ($Action -eq "install" -and $PARTUUID -cne "00000000-0000-0000-0000-000000000
 
 switch ($Action) {
     "install" {
+        $null = Assert-OriginPathFreeSpace -Path $OriginVhdx `
+            -RequiredFreeBytes ($OriginSize + $OriginHostFreeSpaceReserveBytes) -Purpose "before fixed origin allocation"
         $transaction = New-OriginInstallTransaction
         try {
             if (Test-Path -LiteralPath $ExistingSwapVhdx) { Write-Verbose "existing WSL swap VHDX remains untouched" }
@@ -537,6 +783,8 @@ switch ($Action) {
             } finally {
                 if ($mounted) { Dismount-VHD -Path $transaction.staging_vhdx }
             }
+            $null = Assert-OriginPathFreeSpace -Path $OriginVhdx `
+                -RequiredFreeBytes $OriginHostFreeSpaceReserveBytes -Purpose "post-allocation origin reserve"
             $proof = Get-OriginVhdxOwnershipProof -VhdxPath $transaction.staging_vhdx
             $transaction.expected_proof = $proof
             $PARTUUID = $proof.partuuid

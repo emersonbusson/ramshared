@@ -5,6 +5,7 @@
  * Runs `cargo llvm-cov` on the named workspace packages, then asserts
  * **line** coverage ≥ `--min` (default 80) for each path in `--files`.
  * Workspace / package average does **not** pass the gate.
+ * Inline `#[cfg(test)]` module regions are excluded from production line metrics.
  *
  * Every Cargo invocation owns a temporary target/profile/report directory and
  * takes a bounded fail-closed lock. This prevents two legitimate local gates
@@ -32,6 +33,8 @@
  *                     (must include per-file summaries, e.g. from a prior --report-json).
  *   --allow-missing   If a --files path is absent from the profile, treat as note (still FAIL
  *                     unless the path also does not exist on disk → always FAIL).
+ *   --include-ignored Include ignored tests only for a slice with declared software-only
+ *                     prerequisites.
  *   --metric lines|regions|functions   Default: lines.
  *
  * Exit: 0 pass · 1 gate fail · 2 usage / tool error.
@@ -92,6 +95,7 @@ function parseArgs(argv) {
     reportJson: "",
     reportOnly: "",
     allowMissing: false,
+    includeIgnored: false,
     metric: "lines",
     help: false,
   };
@@ -120,6 +124,7 @@ function parseArgs(argv) {
     else if (argument === "--report-json") out.reportJson = next();
     else if (argument === "--report-only") out.reportOnly = next();
     else if (argument === "--allow-missing") out.allowMissing = true;
+    else if (argument === "--include-ignored") out.includeIgnored = true;
     else if (argument === "--metric") out.metric = next();
     else throw usageError(`unknown arg: ${argument}`);
   }
@@ -151,6 +156,276 @@ function normRepoPath(path, repoRoot = REPO_ROOT) {
   return normalized;
 }
 
+function maskRustCommentsAndLiterals(source) {
+  const masked = source.split("");
+  const blank = (start, end) => {
+    for (let index = start; index < end; index++) {
+      if (masked[index] !== "\n" && masked[index] !== "\r") masked[index] = " ";
+    }
+  };
+  const charEnd = (start) => {
+    let cursor = start + 1;
+    if (source[cursor] === "\\") {
+      cursor++;
+      if (source[cursor] === "u" && source[cursor + 1] === "{") {
+        cursor = source.indexOf("}", cursor + 2);
+        if (cursor < 0) return -1;
+        cursor++;
+      } else {
+        cursor += source[cursor] === "x" ? 3 : 1;
+      }
+    } else {
+      if (source[cursor] === "\n" || source[cursor] === "\r" || cursor >= source.length) return -1;
+      cursor += source.codePointAt(cursor) > 0xffff ? 2 : 1;
+    }
+    return source[cursor] === "'" ? cursor + 1 : -1;
+  };
+
+  for (let index = 0; index < source.length; ) {
+    if (source.startsWith("//", index)) {
+      let end = source.indexOf("\n", index + 2);
+      if (end < 0) end = source.length;
+      blank(index, end);
+      index = end;
+      continue;
+    }
+    if (source.startsWith("/*", index)) {
+      let depth = 1;
+      let cursor = index + 2;
+      while (cursor < source.length && depth > 0) {
+        if (source.startsWith("/*", cursor)) {
+          depth++;
+          cursor += 2;
+        } else if (source.startsWith("*/", cursor)) {
+          depth--;
+          cursor += 2;
+        } else {
+          cursor++;
+        }
+      }
+      blank(index, cursor);
+      index = cursor;
+      continue;
+    }
+
+    const rawString = source.slice(index).match(/^(?:br|cr|r)(#*)"/);
+    if (rawString) {
+      const marker = '"' + rawString[1];
+      const contentStart = index + rawString[0].length;
+      const close = source.indexOf(marker, contentStart);
+      const end = close < 0 ? source.length : close + marker.length;
+      blank(index, end);
+      index = end;
+      continue;
+    }
+    if (source[index] === '"') {
+      let cursor = index + 1;
+      while (cursor < source.length) {
+        if (source[cursor] === "\\") cursor += 2;
+        else if (source[cursor++] === '"') break;
+      }
+      blank(index, cursor);
+      index = cursor;
+      continue;
+    }
+    if (source[index] === "'") {
+      const end = charEnd(index);
+      if (end > index) {
+        blank(index, end);
+        index = end;
+        continue;
+      }
+    }
+    index++;
+  }
+  return masked.join("");
+}
+
+function rustLineAt(source, offset) {
+  let line = 1;
+  for (let index = 0; index < offset; index++) {
+    if (source[index] === "\n") line++;
+  }
+  return line;
+}
+
+function matchingRustBrace(source, openIndex) {
+  let depth = 0;
+  for (let index = openIndex; index < source.length; index++) {
+    if (source[index] === "{") depth++;
+    else if (source[index] === "}" && --depth === 0) return index;
+  }
+  return -1;
+}
+
+function findRustCfgTestModuleRanges(source) {
+  const masked = maskRustCommentsAndLiterals(source);
+  const ranges = [];
+  const modules = /#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\](?:\s*#\s*\[[^\]]*\])*\s*mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{/g;
+  for (const match of masked.matchAll(modules)) {
+    const open = masked.indexOf("{", match.index);
+    const close = matchingRustBrace(masked, open);
+    if (close < 0) {
+      throw new CoverageGateError(
+        "COVERAGE_SOURCE_TEST_RANGE_INVALID",
+        "could not match the body of an inline cfg(test) Rust module",
+        2,
+      );
+    }
+    ranges.push({ startLine: rustLineAt(masked, match.index), endLine: rustLineAt(masked, close) });
+  }
+  return ranges;
+}
+
+/**
+ * `#[cfg(not(test))]` items are compiled only outside the test profile, so the
+ * test binary can never execute them. Counting them in the production
+ * denominator is a false gate: the ratio cannot reach the floor no matter how
+ * complete the tests are. These are platform-adapter shims (`/proc`, sysfs,
+ * root-ownership checks); their business logic lives in the adjacent
+ * `*_with` injectables that the slice tests do cover.
+ */
+function findRustCfgNotTestRanges(source) {
+  const masked = maskRustCommentsAndLiterals(source);
+  const ranges = [];
+  const attribute = /#\s*\[\s*cfg\s*\(\s*not\s*\(\s*test\s*\)\s*\)\s*\]/g;
+  const itemStart =
+    /^(?:pub(?:\s*\([^)]*\))?\s+)?(?:unsafe\s+)?(?:async\s+)?(?:extern\s+"[^"]*"\s+)?(?:fn|mod|impl|struct|enum|union|trait|const|static|type)\b/;
+  for (const match of masked.matchAll(attribute)) {
+    let cursor = match.index + match[0].length;
+    while (true) {
+      while (cursor < masked.length && /\s/.test(masked[cursor])) cursor++;
+      if (masked.startsWith("#[", cursor)) {
+        const end = masked.indexOf("]", cursor);
+        if (end < 0) break;
+        cursor = end + 1;
+        continue;
+      }
+      break;
+    }
+    if (cursor >= masked.length) continue;
+    const startLine = rustLineAt(masked, match.index);
+    const tail = masked.slice(cursor, cursor + 120);
+    if (itemStart.test(tail)) {
+      // Whole item: body braces for fn/impl/mod/…, or the terminating `;`.
+      const open = masked.indexOf("{", cursor);
+      const semi = masked.indexOf(";", cursor);
+      if (open >= 0 && (semi < 0 || open < semi)) {
+        const close = matchingRustBrace(masked, open);
+        if (close < 0) {
+          throw new CoverageGateError(
+            "COVERAGE_SOURCE_TEST_RANGE_INVALID",
+            "could not match the body of an inline cfg(not(test)) Rust item",
+            2,
+          );
+        }
+        ranges.push({ startLine, endLine: rustLineAt(masked, close) });
+      } else if (semi >= 0) {
+        ranges.push({ startLine, endLine: rustLineAt(masked, semi) });
+      }
+      continue;
+    }
+    // Expression-statement or struct field. A top-level `,`/`;` before any
+    // brace means a single declaration (`file: fs::File,`); otherwise the
+    // statement's own block (`if … { … }`) is the gated region.
+    const open = masked.indexOf("{", cursor);
+    const end = statementEnd(masked, cursor, open);
+    if (end >= 0) ranges.push({ startLine, endLine: rustLineAt(masked, end) });
+  }
+  return ranges;
+}
+
+/**
+ * End of one cfg-gated statement starting at `cursor`, with `open` the index of
+ * the next `{` (or -1). A terminator before that brace ends a declaration;
+ * otherwise the statement runs through the brace it owns.
+ */
+function statementEnd(source, cursor, open) {
+  let depth = 0;
+  for (let index = cursor; index < source.length; index++) {
+    const char = source[index];
+    if (char === "{" || char === "(" || char === "[") {
+      if (char === "{" && depth === 0 && (open < 0 || index === open)) {
+        const close = matchingRustBrace(source, index);
+        return close < 0 ? -1 : close;
+      }
+      depth++;
+    } else if (char === "}" || char === ")" || char === "]") {
+      if (depth === 0) return index === cursor ? -1 : index;
+      depth--;
+    } else if (depth === 0 && (char === "," || char === ";")) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function findRustNonProductionRanges(source) {
+  return [...findRustCfgTestModuleRanges(source), ...findRustCfgNotTestRanges(source)];
+}
+
+function rustCfgTestModuleLineCoverage(exportData, repoRoot) {
+  // Rust 1.98 emits v0-mangled llvm-cov function names; classify test lines by source range.
+  const rangesByFile = new Map();
+  const rootPath = resolve(repoRoot);
+  for (const file of exportData.files ?? []) {
+    const rawName = file.filename || file.name || "";
+    if (!rawName) continue;
+    const key = normRepoPath(rawName, repoRoot);
+    if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+    const sourcePath = resolve(rootPath, key);
+    const relativePath = relative(rootPath, sourcePath);
+    if (relativePath.startsWith("..") || isAbsolute(relativePath) || !existsSync(sourcePath)) continue;
+    const ranges = findRustNonProductionRanges(readFileSync(sourcePath, "utf8"));
+    if (ranges.length > 0) rangesByFile.set(key, ranges);
+  }
+
+  const countsByFile = new Map();
+  for (const fn of exportData.functions ?? []) {
+    const rawName = fn.filenames?.[0];
+    if (!rawName) continue;
+    const key = normRepoPath(rawName, repoRoot);
+    const ranges = rangesByFile.get(key);
+    if (!ranges) continue;
+    const lines = countsByFile.get(key) ?? new Map();
+    for (const region of fn.regions ?? []) {
+      if (!Array.isArray(region) || region.length < 5) continue;
+      const [startLine, , endLine, , rawCount] = region;
+      const executionCount = Number(rawCount);
+      if (
+        !Number.isSafeInteger(startLine) ||
+        !Number.isSafeInteger(endLine) ||
+        endLine < startLine ||
+        !Number.isFinite(executionCount) ||
+        executionCount < 0
+      ) {
+        continue;
+      }
+      for (let line = startLine; line <= endLine; line++) {
+        if (!ranges.some((range) => line >= range.startLine && line <= range.endLine)) continue;
+        lines.set(line, Math.max(lines.get(line) ?? 0, executionCount));
+      }
+    }
+    if (lines.size > 0) countsByFile.set(key, lines);
+  }
+  return countsByFile;
+}
+
+function subtractRustUnitTestLines(summary, testLines) {
+  if (!testLines) return summary;
+  const count = summary.count - testLines.size;
+  const coveredTestLines = [...testLines.values()].filter((executionCount) => executionCount > 0).length;
+  const covered = (summary.covered ?? 0) - coveredTestLines;
+  if (count < 0 || covered < 0 || covered > count) {
+    throw new CoverageGateError(
+      "COVERAGE_REPORT_INVALID",
+      "llvm-cov function regions disagree with line summary while excluding cfg(test) modules",
+      2,
+    );
+  }
+  return { count, covered, percent: count === 0 ? 100 : (100 * covered) / count };
+}
+
 /**
  * @returns {Map<string, { percent: number, covered: number, count: number }>}
  */
@@ -170,35 +445,113 @@ function parseLlvmCovJson(content, metric, repoRoot = REPO_ROOT) {
     );
   }
   const map = new Map();
-  for (const file of files) {
-    const rawName = file.filename || file.name || "";
-    if (!rawName) continue;
-    const key = normRepoPath(rawName, repoRoot);
-    if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
-    const summary = file.summary?.[metric];
-    if (!summary || typeof summary.count !== "number") continue;
-    const count = summary.count;
-    const covered = summary.covered ?? 0;
-    const percent =
-      typeof summary.percent === "number"
-        ? summary.percent
-        : count === 0
-          ? 100
-          : (100 * covered) / count;
-    const previous = map.get(key);
-    if (previous) {
-      const mergedCount = previous.count + count;
-      const mergedCovered = previous.covered + covered;
-      map.set(key, {
-        count: mergedCount,
-        covered: mergedCovered,
-        percent: mergedCount === 0 ? 100 : (100 * mergedCovered) / mergedCount,
-      });
-    } else {
-      map.set(key, { count, covered, percent });
+  for (const exportData of data.data) {
+    const testModuleLines =
+      metric === "lines" ? rustCfgTestModuleLineCoverage(exportData, repoRoot) : new Map();
+    for (const file of exportData.files ?? []) {
+      const rawName = file.filename || file.name || "";
+      if (!rawName) continue;
+      const key = normRepoPath(rawName, repoRoot);
+      if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+      const rawSummary = file.summary?.[metric];
+      if (!rawSummary || typeof rawSummary.count !== "number") continue;
+      const summary =
+        metric === "lines" ? subtractRustUnitTestLines(rawSummary, testModuleLines.get(key)) : rawSummary;
+      const count = summary.count;
+      const covered = summary.covered ?? 0;
+      const percent =
+        typeof summary.percent === "number"
+          ? summary.percent
+          : count === 0
+            ? 100
+            : (100 * covered) / count;
+      const previous = map.get(key);
+      if (previous) {
+        const mergedCount = previous.count + count;
+        const mergedCovered = previous.covered + covered;
+        map.set(key, {
+          count: mergedCount,
+          covered: mergedCovered,
+          percent: mergedCount === 0 ? 100 : (100 * mergedCovered) / mergedCount,
+        });
+      } else {
+        map.set(key, { count, covered, percent });
+      }
     }
   }
   return map;
+}
+
+function parseUncoveredLlvmCovLines(content, repoRoot = REPO_ROOT) {
+  let data;
+  try {
+    data = JSON.parse(content);
+  } catch {
+    throw new CoverageGateError("COVERAGE_REPORT_INVALID", "failed to parse llvm-cov JSON", 2);
+  }
+  const files = data?.data?.[0]?.files;
+  if (!Array.isArray(files)) {
+    throw new CoverageGateError(
+      "COVERAGE_REPORT_INVALID",
+      "llvm-cov JSON missing data[0].files (use export with per-file summary)",
+      2,
+    );
+  }
+
+  const countsByFile = new Map();
+  for (const exportData of data.data) {
+    const testModuleLines = rustCfgTestModuleLineCoverage(exportData, repoRoot);
+    for (const fn of exportData.functions ?? []) {
+      const rawName = fn.filenames?.[0];
+      if (!rawName) continue;
+      const key = normRepoPath(rawName, repoRoot);
+      if (key.endsWith("_test.rs") || key.includes("/tests/")) continue;
+      const lines = countsByFile.get(key) ?? new Map();
+      for (const region of fn.regions ?? []) {
+        if (!Array.isArray(region) || region.length < 5) continue;
+        const [startLine, , endLine, , rawCount] = region;
+        const executionCount = Number(rawCount);
+        if (
+          !Number.isSafeInteger(startLine) ||
+          !Number.isSafeInteger(endLine) ||
+          endLine < startLine ||
+          !Number.isFinite(executionCount) ||
+          executionCount < 0
+        ) {
+          continue;
+        }
+        for (let line = startLine; line <= endLine; line++) {
+          if (testModuleLines.get(key)?.has(line)) continue;
+          lines.set(line, (lines.get(line) ?? 0) + executionCount);
+        }
+      }
+      countsByFile.set(key, lines);
+    }
+  }
+
+  const uncoveredByFile = new Map();
+  for (const [file, counts] of countsByFile) {
+    const uncoveredLines = [...counts]
+      .filter(([, count]) => count === 0)
+      .map(([line]) => line)
+      .sort((left, right) => left - right);
+    if (uncoveredLines.length === 0) continue;
+    const ranges = [];
+    let start = uncoveredLines[0];
+    let end = start;
+    for (const line of uncoveredLines.slice(1)) {
+      if (line === end + 1) {
+        end = line;
+        continue;
+      }
+      ranges.push(start === end ? String(start) : `${start}-${end}`);
+      start = line;
+      end = line;
+    }
+    ranges.push(start === end ? String(start) : `${start}-${end}`);
+    uncoveredByFile.set(file, ranges);
+  }
+  return uncoveredByFile;
 }
 
 function createLockOwner({
@@ -526,15 +879,23 @@ function runLlvmCov(
   packages,
   jsonOutPath,
   cargoTargetDir,
-  { repoRoot = REPO_ROOT, env = process.env, spawnCommand = spawnSync, error = console.error } = {},
+  {
+    repoRoot = REPO_ROOT,
+    env = process.env,
+    spawnCommand = spawnSync,
+    error = console.error,
+    includeIgnored = false,
+  } = {},
 ) {
   if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "Cargo.toml not found at repository root", 2);
   }
   const cargoArgs = ["llvm-cov"];
   for (const packageName of packages) cargoArgs.push("-p", packageName);
-  cargoArgs.push("--json", "--summary-only", "--output-path", jsonOutPath);
+  // Keep region data so a failed gate can name uncovered source spans.
+  cargoArgs.push("--json", "--output-path", jsonOutPath);
   cargoArgs.push("--", "--test-threads=1");
+  if (includeIgnored) cargoArgs.push("--include-ignored");
 
   const renderedArgs = cargoArgs.map((argument) =>
     argument === jsonOutPath ? "<private-run>/llvm-cov.json" : argument,
@@ -580,7 +941,7 @@ function runLlvmCov(
   }
 }
 
-function evaluateCoverage({ files, stats, min, allowMissing, metric, repoRoot = REPO_ROOT }) {
+function evaluateCoverage({ files, stats, uncoveredLines = new Map(), min, allowMissing, metric, repoRoot = REPO_ROOT }) {
   const rows = [];
   const violations = [];
   for (const file of files) {
@@ -619,6 +980,7 @@ function evaluateCoverage({ files, stats, min, allowMissing, metric, repoRoot = 
         file,
         percent: hit.percent,
         reason: `below ${min}% (${hit.covered}/${hit.count} ${metric})`,
+        uncoveredLines: uncoveredLines.get(file) ?? [],
       });
     }
   }
@@ -658,7 +1020,10 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       if (options.packages.length === 0) throw usageError("--packages / -p required unless --report-only");
       coverageContent = runWithCoverageIsolation({
         execute: (run) => {
-          runLlvmCov(options.packages, run.jsonPath, run.cargoTargetDir, { error });
+          runLlvmCov(options.packages, run.jsonPath, run.cargoTargetDir, {
+            error,
+            includeIgnored: options.includeIgnored,
+          });
           if (options.reportJson) {
             const destination = resolve(REPO_ROOT, options.reportJson);
             mkdirSync(dirname(destination), { recursive: true });
@@ -671,9 +1036,11 @@ function main(argv = process.argv, { print = console.log, error = console.error 
     }
 
     const stats = parseLlvmCovJson(coverageContent, options.metric);
+    const uncoveredLines = parseUncoveredLlvmCovLines(coverageContent);
     const { rows, violations } = evaluateCoverage({
       files,
       stats,
+      uncoveredLines,
       min: options.min,
       allowMissing: options.allowMissing,
       metric: options.metric,
@@ -692,6 +1059,14 @@ function main(argv = process.argv, { print = console.log, error = console.error 
       for (const violation of violations) {
         const percent = typeof violation.percent === "number" ? `${violation.percent.toFixed(1)}% ` : "";
         error(`  - ${violation.file}: ${percent}${violation.reason}`);
+        if (violation.uncoveredLines?.length) {
+          const chunkSize = 80;
+          for (let offset = 0; offset < violation.uncoveredLines.length; offset += chunkSize) {
+            const visible = violation.uncoveredLines.slice(offset, offset + chunkSize);
+            const end = Math.min(offset + visible.length, violation.uncoveredLines.length);
+            error(`    Uncovered source lines (${offset + 1}-${end} of ${violation.uncoveredLines.length}): ${visible.join(", ")}`);
+          }
+        }
       }
       error(
         "\nSSDV3 Step 3: business-logic files in the SPEC matrix must be ≥ min% (workspace average does not count).",
@@ -721,12 +1096,15 @@ export {
   createCoverageRun,
   createLockOwner,
   evaluateCoverage,
+  findRustCfgNotTestRanges,
+  findRustNonProductionRanges,
   installCoverageSignalCleanup,
   loadFilesFrom,
   main,
   normRepoPath,
   parseArgs,
   parseLlvmCovJson,
+  parseUncoveredLlvmCovLines,
   releaseCoverageLock,
   runLlvmCov,
   runWithCoverageIsolation,

@@ -74,13 +74,19 @@ for file in "$cascade" "$health" "$daemon"; do
 done
 for text in \
   'Type=simple' \
-  'ExecStart=/opt/ramshared/current/scripts/safety/cascade-controller.sh --execute' \
+  'ExecStart=/opt/ramshared/current/bin/ramshared boot' \
   'KillMode=process' \
   'SendSIGKILL=no' \
   'TimeoutStopSec=infinity'; do
   require_text "$cascade" "$text"
 done
-if grep -Eq '^ExecStop=' "$cascade" || grep -Eq '^TimeoutStopSec=[0-9]' "$cascade"; then
+for text in \
+  'ExecStop=' \
+  'ramshared down' \
+  'NBD_STOP_WINDOW=unbounded'; do
+  grep -Fq -- "$text" "$cascade" || { printf 'missing %s in %s\n' "$text" "$cascade" >&2; exit 1; }
+done
+if grep -Eq '^TimeoutStopSec=[0-9]' "$cascade"; then
   printf 'cascade unit may terminate the backend before clean shutdown proof\n' >&2; exit 1
 fi
 for text in \
@@ -338,6 +344,17 @@ with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as stream:
 if lease.get("boot_id") != boot_id:
     raise SystemExit("lease is not bound to this boot")
 PY
+# Kahneman #9/#16: status must distinguish NotFound from EACCES on the
+# safe-mode marker, and must read 0644 telemetry. Directory modes are the
+# executable evidence for that contract.
+[[ $(stat -c %a -- "$guardian_fixture/run/ramshared") == 755 ]] || {
+  printf 'runtime dir must stay listable for status telemetry (want 755, got %s)\n' \
+    "$(stat -c %a -- "$guardian_fixture/run/ramshared")" >&2; exit 1;
+}
+[[ $(stat -c %a -- "$guardian_fixture/var/lib/ramshared") == 711 ]] || {
+  printf 'safe-mode dir must stay searchable without listing (want 711, got %s)\n' \
+    "$(stat -c %a -- "$guardian_fixture/var/lib/ramshared")" >&2; exit 1;
+}
 grep -Fqx 'origin_path=/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555' "$origin_config" || {
   printf 'origin fixture did not bind the selected partition path\n' >&2; exit 1;
 }

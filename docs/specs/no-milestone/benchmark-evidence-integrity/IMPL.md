@@ -4,7 +4,7 @@
 
 ## Status
 
-implemented · cover N/A (Node) · E2E ✓ · BINARY_MATCH N/A
+partial · Node validators complete · runtime monitor fix source-tested · deployed E2E pending
 
 ## Files
 
@@ -16,6 +16,7 @@ implemented · cover N/A (Node) · E2E ✓ · BINARY_MATCH N/A
 | `tools/ci/check-spec-evidence.mjs` | ITEM-4 / RF-7–RF-9 | Explicit fail-closed claim manifest validation. |
 | `docs/specs/evidence-manifest.schema.json` | ITEM-4 / RF-7–RF-9 | Claim manifest contract. |
 | `scripts/docs-check.sh` | ITEM-5 / RF-10 | Runs tests and both live repository validators. |
+| `crates/ramshared-cli/src/monitor.rs` | ITEM-6 / RF-11 | Runtime panel refuses legacy/unqualified reports and recomputes displayed metrics from samples in promotable v1 evidence. |
 
 ## Validation (numbers)
 
@@ -28,12 +29,23 @@ implemented · cover N/A (Node) · E2E ✓ · BINARY_MATCH N/A
   test-runner fixtures; Rust slice coverage does not apply.
 - E2E: before 5 prose / 3 unmapped pre-schema rows → action validators → after
   5/5 sections and 3/3 rows mapped, all historical results non-promotable.
+- Runtime evidence consumer: the legacy Build #5 `latest.json` now returns
+  `AWAITING_QUALIFICATION`; only a clean, promotable v1 PASS with a qualified
+  comparison, binary match, completed cleanup, no residue, and consistent
+  samples may populate the panel.
+- Runtime tests: `cargo test -p ramshared-cli -j 1 monitor_benchmark_` → 4
+  passed; full CLI suite → 345 unit + 10 dispatch passed; strict Clippy passed;
+  `monitor.rs` line coverage → 88.7% (2,033/2,292); formatting and whitespace
+  checks passed.
 
 ## Gaps
 
-closed for the benchmark evidence and explicit claim-manifest slice. Existing
-features without a claim manifest remain unqualified; the separate
-documentation-governance slice owns migration and index presentation.
+The Node benchmark validators and claim-manifest slice are complete. ITEM-6
+adds the runtime monitor consumer, and its source tests and line-coverage gate
+pass. The changed parser has not passed a deployed `BINARY_MATCH` check because
+the corrected source has not been built and installed in the deployment
+environment. No promotable three-tier stress record exists yet, so the panel
+must remain `AWAITING_QUALIFICATION`.
 
 ## Rollback trigger
 
@@ -44,4 +56,5 @@ one false DONE, or nondeterministic output for identical input.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-1–RF-10 | ITEM-1–ITEM-5 | pending — no automatic commit |
+| RF-1–RF-10 | ITEM-1–ITEM-5 | earlier implementation commits in branch history |
+| RF-11 | ITEM-6 | `5e4d8289`, `4ebc75fa` |

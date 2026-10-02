@@ -1,0 +1,258 @@
+#!/bin/sh
+# PID 1 of the disposable VMBus drill guest.
+#
+# Boots from a single bzImage with the initramfs embedded. There is no distro,
+# no disk root, and no second stage: this mounts the kernel's own filesystems,
+# inventories VMBus, runs the lifecycle and fragmentation drills against the
+# exact candidate bytes, prints a machine-readable verdict on the serial
+# console, and powers the VM off.
+#
+# The host-safety contract of the drills is preserved by construction: this
+# guest exists only to be drilled and is deleted when the job ends. It is
+# never the daily WSL2 host, never holds anything worth keeping, and never
+# activates swap.
+#
+# Output contract (the host harness greps these):
+#   HYPERV_DRILL_BOOT kernel=<release>
+#   HYPERV_DRILL_VMBUS present=<yes/no> devices=<n>
+#   HYPERV_DRILL_SYMBOLS alloc=<n>
+#   HYPERV_DRILL_NIC id=<...>
+#   HYPERV_DRILL_LIFECYCLE status=<...>
+#   HYPERV_DRILL_FRAGMENT status=<...>
+#   HYPERV_DRILL_SPLATS count=<n>
+#   HYPERV_DRILL_RESULT status=<PASS|FAIL>
+#   HYPERV_DRILL_DONE
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/
+umask 022
+
+echo "HYPERV_DRILL_INIT begin"
+
+# --- filesystems -------------------------------------------------------------
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+mount -t tmpfs tmpfs /var/tmp 2>/dev/null
+mkdir -p /dev/shm /run
+mount -t tmpfs tmpfs /dev/shm 2>/dev/null
+mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null
+mount -t tracefs tracefs /sys/kernel/tracing 2>/dev/null
+
+# The fragmentation pattern punches one hole per freed page, which needs far
+# more VMAs than a normal process. The default 65530 is exhausted long before
+# the buddy is. Raised here as well as in the helper so the limit is already
+# in place when the first mmap runs.
+echo 1048576 >/proc/sys/vm/max_map_count 2>/dev/null || true
+
+# Serial console: make sure the UEFI stub's console=ttyS0 actually shows up.
+if [ -c /dev/console ]; then
+	exec >/dev/console 2>/dev/console
+fi
+if [ -c /dev/ttyS0 ]; then
+	exec >/dev/ttyS0 2>/dev/ttyS0
+fi
+
+# Power off only after the serial port has drained what we already wrote.
+# echo's write(2) returns when the tty layer accepts the bytes, not when the
+# UART has shifted them out, and printk reaches the same port through a
+# different path. Triggering sysrq while verdict bytes are still in the FIFO
+# lets `sysrq: Power Off` land mid-line and split the one line the host
+# harness matches on: run 36808657969 (windows-latest) reported NO_RESULT
+# from a guest that had printed `HYPERV_DRILL_RESULT ... status=PARTIAL`.
+# Closing the userspace writer first means only printk can emit afterwards,
+# and the verdict is already complete and on the wire.
+drain_and_poweroff() {
+	exec >/dev/null 2>/dev/null
+	sleep 2
+	sync
+	echo o >/proc/sysrq-trigger 2>/dev/null
+	poweroff -f 2>/dev/null
+	reboot -f 2>/dev/null
+	exit 0
+}
+
+# The status line is short and repeated three times so a single printk
+# split cannot take every copy of the token the host greps for.
+emit_status() {
+	printf '%s\n' "HYPERV_DRILL_RESULT status=$1"
+	printf '%s\n' "HYPERV_DRILL_RESULT status=$1"
+	printf '%s\n' "HYPERV_DRILL_RESULT status=$1"
+}
+
+echo "HYPERV_DRILL_BOOT kernel=$(uname -r)"
+echo "HYPERV_DRILL_BOOT cmdline=$(tr -d '\n' </proc/cmdline)"
+
+# --- VMBus inventory ---------------------------------------------------------
+if [ -d /sys/bus/vmbus ]; then
+	VMBUS_PRESENT=yes
+	VMBUS_DEVICES=$(ls /sys/bus/vmbus/devices 2>/dev/null | wc -l)
+else
+	VMBUS_PRESENT=no
+	VMBUS_DEVICES=0
+fi
+echo "HYPERV_DRILL_VMBUS present=$VMBUS_PRESENT devices=$VMBUS_DEVICES"
+
+if [ "$VMBUS_PRESENT" = yes ]; then
+	# Class ids only. Device instance ids are host-assigned and uninteresting,
+	# so they are deliberately not printed. The attribute is class_id (with an
+	# underscore); classid does not exist and silently yields an empty field.
+	for d in /sys/bus/vmbus/devices/*; do
+		[ -e "$d" ] || continue
+		cls=$(cat "$d/class_id" 2>/dev/null)
+		echo "HYPERV_DRILL_DEVICE class_id=$cls"
+	done
+fi
+
+SYMS=$(grep -cE 'vmbus_(alloc|free|release)_buffer' /proc/kallsyms 2>/dev/null)
+echo "HYPERV_DRILL_SYMBOLS alloc=${SYMS:-0}"
+
+if [ "$VMBUS_PRESENT" != yes ] || [ "${VMBUS_DEVICES:-0}" -eq 0 ]; then
+	emit_status FAIL
+	echo "HYPERV_DRILL_RESULT reason=no_vmbus"
+	echo "HYPERV_DRILL_DONE"
+	drain_and_poweroff
+fi
+
+# --- synthetic NIC discovery -------------------------------------------------
+# The instance id is host-assigned and differs on every VM. Discover it from
+# the driver binding instead of hardcoding a GUID.
+NIC=""
+for d in /sys/bus/vmbus/drivers/hv_netvsc/*; do
+	[ -e "$d" ] || continue
+	n=$(basename "$d")
+	case "$n" in
+	bind | unbind | uevent | module | new_id | remove_id) continue ;;
+	esac
+	if [ -d "$d" ]; then
+		NIC="$n"
+		break
+	fi
+done
+echo "HYPERV_DRILL_NIC id=${NIC:-none}"
+
+# --- shared helpers ----------------------------------------------------------
+vmbus_maps() {
+	awk '
+		/vmbus_alloc_buffer/ {
+			n++
+			total += $2
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^pages=/) {
+					split($i, p, "=")
+					pages += p[2]
+				}
+			}
+		}
+		END { printf "MAPS count=%d bytes=%d pages=%d\n", n, total, pages }
+	' /proc/vmallocinfo 2>/dev/null
+}
+
+splat_count() {
+	dmesg 2>/dev/null |
+		grep -cE 'BUG:|Oops:|panic:|WARNING:|hung task|Unable to handle|general protection'
+}
+
+# --- drills ------------------------------------------------------------------
+# Fragmentation runs FIRST. The BUG-3 hold-in-mmap in the lifecycle drill
+# leaves the synthetic NIC's channel in CHANNEL_OPENED_STATE: uio_hv_generic
+# disconnects the channel on the last close of /dev/uio0, but its .remove does
+# not, so unbinding the driver while a helper still holds that fd never calls
+# vmbus_disconnect_ring and __vmbus_open() then rejects the rebind with
+# -EINVAL. That is pre-existing upstream behaviour (drivers/uio/uio_hv_generic.c
+# is unchanged from the base at hv_uio_remove), and it is not a fragmentation
+# result -- run 36803317912 reproduced it on a healthy buddy at t=5.2s. Running
+# the channel-open exercise afterwards would therefore be measuring the UIO
+# lifecycle, not the ring allocation, and PASS_RING_ALLOCATION_UNDER_FRAGMENTATION
+# would be unreachable. Give the fragmentation drill a boot-clean NIC and let
+# the lifecycle drill consume the channel afterwards.
+HELPER=/bin/vmbus_drill_helper
+LIFECYCLE_STATUS=skipped
+FRAG_STATUS=skipped
+
+if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
+	export NIC
+	echo "HYPERV_DRILL_PHASE name=fragmentation"
+	# MemTotal, not a share of what looks free: the helper treats this as a
+	# ceiling the allocation loop must never reach, and stops on the
+	# measured condition instead. A 75% share stopped the loop with the
+	# untouched remainder still holding order-10 blocks, so order-7 never
+	# failed and the drill reported INCONCLUSIVE every run. MemTotal is
+	# above what the guest can allocate, so the helper's own margin decides
+	# when to stop and its high-order count is the real one.
+	FRAG_HOG=$(awk '/MemTotal/{print int($2 / 1024)}' /proc/meminfo)
+	echo "HYPERV_DRILL_FRAGMENT hog_mib=${FRAG_HOG:-0}"
+	sh /scripts/vmbus-fragmentation-drill.sh "${FRAG_HOG:-512}" /var/tmp/fragment.log
+	FRAG_STATUS=$?
+	echo "HYPERV_DRILL_FRAGMENT status=$FRAG_STATUS"
+	echo "HYPERV_DRILL_MAPS after_fragment $(vmbus_maps)"
+else
+	echo "HYPERV_DRILL_FRAGMENT status=skipped reason=${NIC:+no_helper}${NIC:-no_nic}"
+fi
+
+if [ -n "$NIC" ] && [ -x "$HELPER" ]; then
+	export NIC
+	echo "HYPERV_DRILL_PHASE name=lifecycle"
+	sh /scripts/vmbus-lifecycle-drill.sh 30 /var/tmp/lifecycle.log
+	LIFECYCLE_STATUS=$?
+	echo "HYPERV_DRILL_LIFECYCLE status=$LIFECYCLE_STATUS"
+	echo "HYPERV_DRILL_MAPS after_lifecycle $(vmbus_maps)"
+else
+	echo "HYPERV_DRILL_LIFECYCLE status=skipped reason=${NIC:+no_helper}${NIC:-no_nic}"
+fi
+
+# --- final scan --------------------------------------------------------------
+SPLATS=$(splat_count)
+echo "HYPERV_DRILL_SPLATS count=${SPLATS:-0}"
+
+# Deliberately excludes `order:7` and `page allocation failure`: those are the
+# proof that the fragmentation drill actually applied pressure, and the drill
+# scores them itself. Counting them here would FAIL a successful fallback.
+# What counts as damage is a splat or the channel-open regression signature.
+FAULTS=$(dmesg 2>/dev/null |
+	grep -cE 'BUG:|Oops:|panic:|accept4 failed|hung task|Unable to handle|general protection')
+echo "HYPERV_DRILL_FAULTS count=${FAULTS:-0}"
+
+# --- verdict -----------------------------------------------------------------
+# Drill exit codes:
+#   0  PASS         the drill ran its stress path cleanly
+#   1  FAIL         candidate damage, or the exercise could not run
+#   2  REFUSE       a guard tripped. Inside this guest that is a wiring fault,
+#                   not a host-safety refusal: this guest IS the disposable one.
+#   3  INCONCLUSIVE (fragmentation only) measurement ran but pressure was
+#                   insufficient. Not a failure, and not a gate closure.
+#
+# PASS requires a real VMBus guest, the candidate symbols present, a clean
+# dmesg, and every drill that ran to have run cleanly. INCONCLUSIVE is green
+# for the job and PARTIAL for the gate. A refused or failed drill is FAIL.
+RESULT=FAIL
+SCOPE=none
+if [ "$VMBUS_PRESENT" = yes ] &&
+	[ "${SYMS:-0}" -gt 0 ] &&
+	[ "${SPLATS:-0}" -eq 0 ] &&
+	[ "${FAULTS:-0}" -eq 0 ]; then
+	if [ "$LIFECYCLE_STATUS" = 0 ] && [ "$FRAG_STATUS" = 0 ]; then
+		RESULT=PASS
+		SCOPE=ordinary-hyperv-gpadl-uio-and-ring-under-fragmentation
+	elif [ "$LIFECYCLE_STATUS" = 0 ] && [ "$FRAG_STATUS" = 3 ]; then
+		RESULT=PARTIAL
+		SCOPE=lifecycle-pass-fragment-inconclusive
+	fi
+fi
+if [ "$LIFECYCLE_STATUS" = 2 ] || [ "$FRAG_STATUS" = 2 ]; then
+	RESULT=FAIL
+	SCOPE=drill-refused
+fi
+if [ "$LIFECYCLE_STATUS" = 1 ] || [ "$FRAG_STATUS" = 1 ]; then
+	RESULT=FAIL
+	SCOPE=drill-failed
+fi
+
+emit_status "$RESULT"
+echo "HYPERV_DRILL_RESULT lifecycle=$LIFECYCLE_STATUS fragment=$FRAG_STATUS splats=${SPLATS:-0} faults=${FAULTS:-0}"
+echo "HYPERV_DRILL_RESULT scope=$SCOPE"
+echo "HYPERV_DRILL_SCOPE note=no-co-co-hardware; co-co-chunked-fallback-not-exercised"
+echo "HYPERV_DRILL_DONE"
+
+drain_and_poweroff

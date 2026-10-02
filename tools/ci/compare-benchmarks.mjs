@@ -67,10 +67,10 @@ function evaluateLatency(candidate, baseline) {
 }
 
 function evaluateTailLatency(candidate, baseline) {
-  const candP99 = candidate.p99_cycle_latency_ms || 0;
-  const baseP99 = baseline.p99_cycle_latency_ms || 0;
-  if (candP99 === 0 || baseP99 === 0) {
-    return { status: '🟢 GAIN', isAlarm: false, deltaPct: 0, note: 'Sub-millisecond Real-Time' };
+  const candP99 = candidate.p99_cycle_latency_ms;
+  const baseP99 = baseline.p99_cycle_latency_ms;
+  if (!Number.isFinite(candP99) || !Number.isFinite(baseP99) || candP99 <= 0 || baseP99 <= 0) {
+    return { status: '🟡 UNMEASURED', isAlarm: false, deltaPct: 0, note: 'P99 missing' };
   }
   const deltaPct = calcDeltaPct(candP99, baseP99);
   if (deltaPct < -0.5) {
@@ -101,6 +101,37 @@ function main() {
 
   const baseline = parseJson(baselinePath);
   const candidate = parseJson(candidatePath);
+
+  if (baseline.metric_version !== 2 || candidate.metric_version !== 2) {
+    const alarms = ['legacy/unqualified stress metrics cannot support a release comparison'];
+    if (isJson) {
+      console.log(JSON.stringify({ baseline, candidate, alarms, passed: false }, null, 2));
+    } else {
+      console.error(alarms[0]);
+    }
+    process.exit(1);
+  }
+  if (baseline.total_allocated_mb !== candidate.total_allocated_mb
+      || baseline.battery_mode !== candidate.battery_mode
+      || baseline.cascade_mode !== candidate.cascade_mode) {
+    const alarms = ['incomparable workload: allocated RAM or test mode differs'];
+    if (isJson) {
+      console.log(JSON.stringify({ baseline, candidate, alarms, passed: false }, null, 2));
+    } else {
+      console.error(alarms[0]);
+    }
+    process.exit(1);
+  }
+  if (![baseline.reclaim_speed_gbs, candidate.reclaim_speed_gbs]
+      .every(value => Number.isFinite(value) && value > 0)) {
+    const alarms = ['unmeasured reclaim throughput cannot support a speed comparison'];
+    if (isJson) {
+      console.log(JSON.stringify({ baseline, candidate, alarms, passed: false }, null, 2));
+    } else {
+      console.error(alarms[0]);
+    }
+    process.exit(1);
+  }
 
   const alarms = [];
 
@@ -135,64 +166,38 @@ function main() {
   // Evaluate Stability Status
   const isPass = candidate.status === 'PASS_ZERO_PANIC';
   if (!isPass) alarms.push(`Host Stability Failed: ${candidate.status}`);
+  if (candidate.integrity_status !== 'PASS' || baseline.integrity_status !== 'PASS') {
+    alarms.push('independent integrity proof missing');
+  }
+  if (candidate.kernel_log_status !== 'PASS_ZERO_PANIC'
+      || baseline.kernel_log_status !== 'PASS_ZERO_PANIC') {
+    alarms.push('independent kernel log proof missing');
+  }
 
   if (isJson) {
     console.log(JSON.stringify({ baseline, candidate, alarms, passed: alarms.length === 0 }, null, 2));
     process.exit(alarms.length === 0 ? 0 : 1);
   }
 
-  const baseP50 = baseline.p50_cycle_latency_ms != null ? `${baseline.p50_cycle_latency_ms.toFixed(2)} ms` : `N/A (< 1.00 ms)`;
-  const candP50 = candidate.p50_cycle_latency_ms != null ? `${candidate.p50_cycle_latency_ms.toFixed(2)} ms` : `N/A (< 1.00 ms)`;
-  const baseP99 = baseline.p99_cycle_latency_ms != null ? `${baseline.p99_cycle_latency_ms.toFixed(2)} ms` : `N/A (< 2.00 ms)`;
-  const candP99 = candidate.p99_cycle_latency_ms != null ? `${candidate.p99_cycle_latency_ms.toFixed(2)} ms` : `N/A (< 2.00 ms)`;
-  const baseFaultLat = baseline.estimated_page_fault_lat_us != null ? `${baseline.estimated_page_fault_lat_us.toFixed(2)} µs` : `0.85 µs`;
-  const candFaultLat = candidate.estimated_page_fault_lat_us != null ? `${candidate.estimated_page_fault_lat_us.toFixed(2)} µs` : `0.85 µs`;
-
+  const measured = (value, unit = '') => Number.isFinite(value) ? `${value}${unit}` : 'N/A';
   if (isMarkdown) {
-    console.log(`| Category / Metric | Direction | Previous Baseline | Current PR Candidate | Delta (%) | Status | Hardware Meaning & Root-Cause Trigger |`);
-    console.log(`| :--- | :---: | :---: | :---: | :---: | :---: | :--- |`);
-    console.log(`| **1. Workload & Capacity** | | | | | | |`);
-    console.log(`| • Requested RAM Allocation | Baseline | ${baseline.total_allocated_mb} MB | ${candidate.total_allocated_mb} MB | ${formatDelta(calcDeltaPct(candidate.total_allocated_mb, baseline.total_allocated_mb))} | 🟡 NEUTRAL | Volume of memory pressure requested |`);
-    console.log(`| • Total Swap Engaged | 🔺 More = Tier Active | ${baseline.peak_swap_mb} MB | ${candidate.peak_swap_mb} MB | ${candidate.peak_swap_mb > baseline.peak_swap_mb ? '+' : ''}${candidate.peak_swap_mb - baseline.peak_swap_mb} MB | ${candidate.peak_swap_mb > 0 ? '🟢 GAIN' : '🟡 NEUTRAL'} | Active multi-tier hardware swap engaged |`);
-    console.log(`| • Tier 1 ZRAM (LZ4 Compression) | 🔺 More = Cache Hit | ${baseline.tier1_zram_mb} MB (${baseline.tier1_zram_pct}%) | ${candidate.tier1_zram_mb} MB (${candidate.tier1_zram_pct}%) | ${candidate.tier1_zram_mb > baseline.tier1_zram_mb ? '+' : ''}${candidate.tier1_zram_mb - baseline.tier1_zram_mb} MB | ${candidate.tier1_zram_mb > 0 ? '🟢 GAIN' : '🟡 NEUTRAL'} | Fast transparent kernel page compression |`);
-    console.log(`| • Tier 2 GPU VRAM (RTX 2060) | 🔺 More = Offload | ${baseline.tier2_vram_mb} MB (${baseline.tier2_vram_pct}%) | ${candidate.tier2_vram_mb} MB (${candidate.tier2_vram_pct}%) | ${candidate.tier2_vram_mb > baseline.tier2_vram_mb ? '+' : ''}${candidate.tier2_vram_mb - baseline.tier2_vram_mb} MB | ${candidate.tier2_vram_mb > 0 ? '🟢 GAIN' : '🟡 NEUTRAL'} | Direct PCIe DMA swap tier on NVIDIA GPU |`);
-    console.log(`| • Tier 3 Host SSD Spillover | 🔻 Less is better | ${baseline.tier3_ssd_mb} MB (${baseline.tier3_ssd_pct}%) | ${candidate.tier3_ssd_mb} MB (${candidate.tier3_ssd_pct}%) | 0.0% | ${ssdStatus} | 0% disk spill, saving host NAND flash life |`);
-    console.log(`| **2. Speed & Transfer Latency** | | | | | | |`);
-    console.log(`| • Tier 1 RAM Swap Speed | 🔺 Higher is better | ${(baseline.tier1_throughput_mbs || 120.0).toFixed(1)} MB/s | ${(candidate.tier1_throughput_mbs || 0.0).toFixed(1)} MB/s | ${formatDelta(calcDeltaPct(candidate.tier1_throughput_mbs || 0, baseline.tier1_throughput_mbs || 120))} | 🟢 GAIN | Transparent LZ4 In-RAM compression throughput |`);
-    console.log(`| • Tier 2 VRAM DMA Speed | 🔺 Higher is better | ${(baseline.tier2_throughput_mbs || 600.0).toFixed(1)} MB/s | ${(candidate.tier2_throughput_mbs || 0.0).toFixed(1)} MB/s | ${formatDelta(calcDeltaPct(candidate.tier2_throughput_mbs || 0, baseline.tier2_throughput_mbs || 600))} | 🟢 GAIN | Direct GPU PCIe DMA swap channel bandwidth |`);
-    console.log(`| • Speedup Factor vs Host SSD | 🔺 Higher is better | ${(baseline.tier2_speedup_vs_ssd || 30.0).toFixed(1)}x | ${(candidate.tier2_speedup_vs_ssd || 1.0).toFixed(1)}x | ${formatDelta(calcDeltaPct(candidate.tier2_speedup_vs_ssd || 1, baseline.tier2_speedup_vs_ssd || 30))} | 🟢 GAIN | Hardware acceleration multiplier vs Host VHDX |`);
-    console.log(`| • Allocation Latency (P50 Median) | 🔻 Less is better | ${baseP50} | ${candP50} | ${candidate.p50_cycle_latency_ms && baseline.p50_cycle_latency_ms ? formatDelta(calcDeltaPct(candidate.p50_cycle_latency_ms, baseline.p50_cycle_latency_ms)) : '0.0%'} | 🟢 GAIN | Typical cycle latency across memory ramp |`);
-    console.log(`| • Tail Latency (P99 Jitter) | 🔻 Less is better | ${baseP99} | ${candP99} | ${formatDelta(tailLatency.deltaPct)} | ${tailLatency.status} | 99th percentile peak cycle stall / PCIe jitter |`);
-    console.log(`| • Hardware Page Fault Latency | 🔻 Less is better | ${baseFaultLat} | ${candFaultLat} | 0.0% | 🟢 GAIN | Hardware VRAM DMA vs 180µs disk fallback |`);
-    console.log(`| • Reclaim Bus Throughput | 🔺 Higher is better | ${baseline.reclaim_speed_gbs.toFixed(2)} GB/s | ${candidate.reclaim_speed_gbs.toFixed(2)} GB/s | ${formatDelta(throughput.deltaPct)} | ${throughput.status} | Sustained physical PCIe DMA bus bandwidth |`);
-    console.log(`| • Reclaim Duration | 🔻 Less is better | ${baseline.reclaim_duration_ms.toFixed(2)} ms | ${candidate.reclaim_duration_ms.toFixed(2)} ms | ${formatDelta(latency.deltaPct)} | ${latency.status} | Time to discharge hardware and release pages |`);
-    console.log(`| • Active Page Cycles Completed | 🔺 Higher is better | ${baseline.active_io_cycles_completed} cycles | ${candidate.active_io_cycles_completed} cycles | +${candidate.active_io_cycles_completed - baseline.active_io_cycles_completed} cycles | 🟢 GAIN | Real dirty page writes across memory tiers |`);
-    console.log(`| **3. Pressure & Stalls** | | | | | | |`);
-    console.log(`| • Memory Pressure Index (PSI) | 🔺 Higher = Resilience | ${baseline.peak_pressure_index.toFixed(3)} | ${candidate.peak_pressure_index.toFixed(3)} | ${formatDelta(psiDelta)} | ${psiStatus} | Sustained pressure capacity without OS freeze |`);
-    console.log(`| • PSI Memory Stall Time | 🔻 Less is better | 0.0% stalls | 0.0% stalls | 0.0% | 🟢 GAIN | Zero CPU thread freezes during page paging |`);
-    console.log(`| • Major Page Faults Triggered | 🔻 Less is better | 0 / sec | 0 / sec | 0.0% | 🟢 GAIN | Zero blocking disk reads for hot memory |`);
-    console.log(`| **4. Integrity & Stability** | | | | | | |`);
-    console.log(`| • SHA-256 Bit-Exact Integrity | Mandatory 100% | 100% (0 bit flips) | 100% (0 bit flips) | 100% Match | 🟢 GAIN | Verified zero data corruption across DMA |`);
-    console.log(`| • Post-Test RAM Restored | 🔺 Higher = No Leaks | ${baseline.post_reclaim_free_ram_mb} MB free | ${candidate.post_reclaim_free_ram_mb} MB free | Clean Release | 🟢 GAIN | 100% memory restored with zero kernel leaks |`);
-    console.log(`| • Kernel OOM Kills | Mandatory 0 | 0 killed | 0 killed | 0 | 🟢 GAIN | Zero processes killed under memory load |`);
-    console.log(`| • Host Stability Verdict | Mandatory PASS | \`${baseline.status}\` | \`${candidate.status}\` | 100% | ${isPass ? '🟢 GAIN' : '🔴 ALARM'} | Zero panics, zero stalls, zero lockups |`);
+    console.log('| Metric | Baseline | Candidate | Assessment |');
+    console.log('| --- | ---: | ---: | --- |');
+    console.log(`| Allocated RAM | ${measured(baseline.total_allocated_mb, ' MB')} | ${measured(candidate.total_allocated_mb, ' MB')} | Matched workload |`);
+    console.log(`| Logical swap engaged | ${measured(baseline.peak_swap_mb, ' MB')} | ${measured(candidate.peak_swap_mb, ' MB')} | Logical occupancy only |`);
+    console.log(`| Physical GPU cache | ${measured(baseline.tier2_vram_mb, ' MB')} | ${measured(candidate.tier2_vram_mb, ' MB')} | Daemon cache telemetry, if sampled |`);
+    console.log(`| SSD swap | ${measured(baseline.tier3_ssd_mb, ' MB')} | ${measured(candidate.tier3_ssd_mb, ' MB')} | Active swap disk |`);
+    console.log(`| Measured reclaim speed | ${measured(baseline.reclaim_speed_gbs, ' GB/s')} | ${measured(candidate.reclaim_speed_gbs, ' GB/s')} | ${throughput.status} |`);
+    console.log(`| Measured reclaim duration | ${measured(baseline.reclaim_duration_ms, ' ms')} | ${measured(candidate.reclaim_duration_ms, ' ms')} | ${latency.status} |`);
+    console.log(`| P99 cycle latency | ${measured(baseline.p99_cycle_latency_ms, ' ms')} | ${measured(candidate.p99_cycle_latency_ms, ' ms')} | ${tailLatency.status} |`);
+    console.log(`| Integrity | ${baseline.integrity_status ?? 'N/A'} | ${candidate.integrity_status ?? 'N/A'} | Independent hash proof required |`);
+    console.log(`| Kernel stability | ${baseline.status} | ${candidate.status} | Independent log proof required |`);
   } else {
-    console.log(`Hardware Benchmark Comparison: ${baselinePath} -> ${candidatePath}`);
-    console.log(`Throughput: ${baseline.reclaim_speed_gbs.toFixed(2)} GB/s -> ${candidate.reclaim_speed_gbs.toFixed(2)} GB/s (${formatDelta(throughput.deltaPct)}) [${throughput.status}]`);
-    console.log(`Duration:   ${baseline.reclaim_duration_ms.toFixed(2)} ms -> ${candidate.reclaim_duration_ms.toFixed(2)} ms (${formatDelta(latency.deltaPct)}) [${latency.status}]`);
-    console.log(`P50 Lat:    ${baseP50} -> ${candP50}`);
-    console.log(`P99 Tail:   ${baseP99} -> ${candP99} (${formatDelta(tailLatency.deltaPct)}) [${tailLatency.status}]`);
-    console.log(`Fault Lat:  ${baseFaultLat} -> ${candFaultLat}`);
-    console.log(`Swap:       ${baseline.peak_swap_mb} MB -> ${candidate.peak_swap_mb} MB`);
-    console.log(`PSI Index:  ${baseline.peak_pressure_index.toFixed(3)} -> ${candidate.peak_pressure_index.toFixed(3)} (${formatDelta(psiDelta)}) [${psiStatus}]`);
-    console.log(`Status:     ${candidate.status} [${isPass ? 'OK' : 'FAIL'}]`);
-    if (alarms.length > 0) {
-      console.log('\n🔴 REGRESSION ALARMS DETECTED:');
-      alarms.forEach(a => console.log(`  - ${a}`));
-      console.log('See docs/reliability/HARDWARE-METRICS-TRIAGE.md for root-cause triage protocol.');
-    } else {
-      console.log('\n🟢 ALL METRICS PASS TOLERANCE (No regressions detected).');
-    }
+    console.log(`Benchmark comparison: ${baselinePath} -> ${candidatePath}`);
+    console.log(`Reclaim speed: ${measured(baseline.reclaim_speed_gbs, ' GB/s')} -> ${measured(candidate.reclaim_speed_gbs, ' GB/s')} [${throughput.status}]`);
+    console.log(`Reclaim duration: ${measured(baseline.reclaim_duration_ms, ' ms')} -> ${measured(candidate.reclaim_duration_ms, ' ms')} [${latency.status}]`);
+    console.log(`P99 cycle latency: ${measured(baseline.p99_cycle_latency_ms, ' ms')} -> ${measured(candidate.p99_cycle_latency_ms, ' ms')} [${tailLatency.status}]`);
+    console.log(`Status: ${candidate.status}; alarms: ${alarms.join('; ') || 'none'}`);
   }
 
   process.exit(alarms.length === 0 ? 0 : 1);

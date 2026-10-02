@@ -10,6 +10,8 @@ paths:
 
 # Governance rules — RamShared
 
+Production posture: source target v0.15.0; latest published stable v0.14.1.
+
 These rules exist so that every PR (Patch/Pull Request) carries reviewable context and so that changes in agent rules live synchronized between `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/*`.
 
 ## PR Template (canonical format)
@@ -44,6 +46,9 @@ The root `README.md` and its localized counterpart `README.pt-BR.md` are public-
 3. **Ephemeral Tooling & Maintainer Scripts**:
    - One-off dispatch scripts, temporary helpers, and maintenance utilities must NEVER be committed to the production tree. They belong exclusively in local scratch spaces (`scratch/` or agent data directories).
    - Enforced by CI via `.ci-ephemeral-blocklist` and `tools/ci/check-ephemeral-blocklist.mjs`.
+4. **External Host Telemetry**:
+   - Tracked files and local session memory must not name external host-monitor tooling or retain its operator-only telemetry and status output.
+   - The public-hygiene gate rejects the protected external label from candidate files and checks local session memory when present.
 
 ## Commit visibility rule
 
@@ -83,8 +88,8 @@ systems or other repositories.
 ## Release, Packaging & Reliability Gap Parity
 
 1. **Stable Release Alignment**:
-   - Production posture is strictly stable (`v0.14.0`). No beta or prerelease flags remain on public releases.
-   - Package build scripts (`scripts/package/build-deb-package.sh`, `build-rpm-package.sh`), documentation badges (`README.md`, `README.pt-BR.md`), and manifests (`docs/localization/manifest.json`) must stay synchronized with the active release tag.
+   - The current source/release candidate target is `v0.15.0`; the latest published stable release remains `v0.14.1` until the candidate is promoted. Do not label a target as published before its release exists.
+   - Package build scripts (`scripts/package/build-deb-package.sh`, `build-rpm-package.sh`), documentation badges (`README.md`, `README.pt-BR.md`), and manifests (`docs/localization/manifest.json`) must state the source target and published release accurately.
 2. **Semantic Gap Register Governance**:
    - `docs/reliability/GAP-REGISTER.md` must accurately reflect real CI and repository state.
    - Never retain phantom blockers (e.g. "await external Guard repair") when CI gates for that capability are passing.

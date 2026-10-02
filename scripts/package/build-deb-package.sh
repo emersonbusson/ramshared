@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Enforce reproducible builds
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --pretty=%ct 2>/dev/null || date +%s)}"
 
-VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.12.0}}"
+VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.15.0}}"
 VERSION_CLEAN="${VERSION#v}"
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
 ARCH="amd64"
@@ -68,9 +68,6 @@ if [[ -f "$ROOT/scripts/safety/nbd-benchmark-lib.sh" ]]; then
 fi
 if [[ -f "$ROOT/scripts/safety/cascade.conf.example" ]]; then
   install -m 0644 "$ROOT/scripts/safety/cascade.conf.example" "$STAGE_DIR/etc/ramshared/cascade.conf.example"
-fi
-if [[ -f "$ROOT/packaging/etc/ramshared/config.toml" ]]; then
-  install -m 0644 "$ROOT/packaging/etc/ramshared/config.toml" "$STAGE_DIR/etc/ramshared/config.toml"
 fi
 
 # Install systemd service and slice units

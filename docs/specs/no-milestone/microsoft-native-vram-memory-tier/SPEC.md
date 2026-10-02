@@ -173,8 +173,8 @@ or a side effect in the pure layer. Return to preflight `HostUnavailable`/
   global mutable state; restart serialization is caller-supplied bytes only.
 - [x] Reset/TDR/revoke/offline paths cannot bypass the safe state.
 - [x] Public evidence is sanitized and never includes host or account identity.
-- [ ] Kernel/uAPI/IRQL/DMA/MMIO: N/A for this pure-Rust source-only slice;
-  any future host/kernel surface requires a new boundary review.
+- [x] Kernel/uAPI/IRQL/DMA/MMIO: N/A for this pure-Rust source-only slice;
+  any future host/kernel surface requires a new boundary review (2026-10-01: confirmed — zero C/kernel code.)
 
 ## Files create/modify/delete
 
@@ -294,9 +294,13 @@ host/GPU harness; no shared daily host pressure is implied.
 
 Local Step 3 checks only; no completed row substitutes for host evidence:
 
-- [ ] `cargo fmt --all -- --check`, clippy, and the exact pure-Rust package tests.
-- [ ] `node tools/ci/check-rust-slice-coverage.mjs` with `--files` limited to
-  the pure model and minimum 80% per business-logic file.
+- [x] `cargo fmt --all -- --check`, clippy, and the exact pure-Rust package tests
+  (2026-10-01: fmt exit 0; `clippy -p ramshared-tier --all-targets -- -D warnings`
+  zero warnings; `cargo test -p ramshared-tier --all-targets` 96 passed / 0
+  failed across 3 suites).
+- [x] `node tools/ci/check-rust-slice-coverage.mjs` with `--files` limited to
+  the pure model and minimum 80% per business-logic file (2026-10-01:
+  `n3_state.rs` 83.6% lines, 960/1149, gate PASSED).
 
 The Step 3 coverage owner for the pure state model is
 `microsoft-native-vram-memory-tier-n3-state`; its planner owner test is
@@ -326,19 +330,75 @@ cargo test -p ramshared-tier --all-targets
 {"schema_version":1,"id":"microsoft-native-vram-memory-tier-n3-module-export-glue","kind":"rust-module-export-glue-differential","files":["crates/ramshared-tier/src/lib.rs"],"package":"ramshared-tier","declaration":"pub mod n3_state;\npub mod nbd_readiness;","cargo_test":["cargo","test","-p","ramshared-tier","--all-targets"]}
 -->
 
-- [ ] Every legitimate boundary has a paired refusal/ambiguity test.
-- [ ] Deterministic timestamp/epoch fixtures prove replay and stale handling.
-- [ ] The six named Rust protocol tests cover grant/revoke, stale generation,
+- [x] Every legitimate boundary has a paired refusal/ambiguity test (2026-10-01:
+  `valid_host_observation_enters_observing` ↔ `unknown_schema_is_refused`;
+  `replayed_observation_is_idempotent` ↔ `epoch_regression_is_refused`;
+  `host_pressure_requests_demote` ↔ `impossible_budget_counters_are_refused`;
+  `N3_RUST_GRANT_REVOKE_STATE_MACHINE` ↔ `N3_RUST_STALE_GENERATION_REFUSAL` +
+  `N3_RUST_REVOKE_WITH_INFLIGHT_REFUSAL`;
+  `host_contract_owner_is_explicit` ↔ `guest_pfn_or_numa_claim_is_refused`;
+  `N3_RUST_GUEST_CRASH_FAILSAFE` ↔ `N3_RUST_DURABLE_RESTART_GENERATION_REFUSAL`).
+- [x] Deterministic timestamp/epoch fixtures prove replay and stale handling
+  (2026-10-01: no `SystemTime`/`Instant`/`chrono` in module or tests; every
+  `receive_grant` uses the fixed `now = 100` literal and `HostObservation.epoch`
+  is an explicit integer — `epoch_regression_is_refused`,
+  `stale_observation_is_unavailable`, `replayed_observation_is_idempotent`,
+  `n3_rust_stale_generation_refusal`, and
+  `n3_rust_durable_restart_generation_refusal` (`restored_restart_epoch() ==
+  Some(1)`) are replay-stable).
+- [x] The six named Rust protocol tests cover grant/revoke, stale generation,
   duplicate idempotence, in-flight refusal, guest-crash failsafe, and durable
-  fresh-model restart refusal.
-- [ ] `N3_HOST_ENV_BOUND_MATRIX` is independently reviewed; host rows remain
-  `PARTIAL`/`REFUSED_HOST_CONTRACT` until owner-approved evidence exists.
-- [ ] No test opens `/dev/dxg`, calls Windows, loads a module, or changes host state.
-- [ ] Independent review checks the RFC against public Microsoft/Linux sources.
-- [ ] Host integration remains blocked unless the owner supplies a versioned,
-  public contract and separate platform SPEC.
-- [ ] `IMPL.md` is `partial`/`REFUSED_HOST_CONTRACT` for missing host evidence;
-  no root validation entry is created without a live before → action → after run.
+  fresh-model restart refusal (2026-10-01: all six functions present and
+  passing — 6 passed / 0 failed:
+  `n3_rust_grant_revoke_state_machine`, `n3_rust_stale_generation_refusal`,
+  `n3_rust_duplicate_event_idempotence`, `n3_rust_revoke_with_inflight_refusal`,
+  `n3_rust_guest_crash_failsafe`, `n3_rust_durable_restart_generation_refusal`).
+- [x] `N3_HOST_ENV_BOUND_MATRIX` is independently reviewed; host rows remain
+  `PARTIAL`/`REFUSED_HOST_CONTRACT` until owner-approved evidence exists
+  (2026-10-01: `AUDIT-2.5.md` matrix review PASS — rows specified, live host
+  evidence not run; `IMPL.md` holds `N3_HOST_BUDGET_REVOKE_DRAIN` at
+  `PARTIAL`/`REFUSED_HOST_CONTRACT`, `N3_HOST_GPU_RESET_TDR_STOP` and
+  `N3_HOST_DATA_INTEGRITY_AND_ZEROING` at `REFUSED_HOST_CONTRACT`,
+  `N3_HOST_WSL_RESTART_RECOVERY` and `N3_HOST_SUSPEND_RESUME` at `PARTIAL`).
+- [x] No test opens `/dev/dxg`, calls Windows, loads a module, or changes host
+  state (2026-10-01: source scan of `n3_state.rs` and `tests/n3_state.rs` found
+  no `/dev/` path, `Command::new`, process, FFI, or syscall use — only a
+  `.windows(2)` slice iterator and the `WindowsDriver` enum variant name).
+- [x] Independent review checks the RFC against public Microsoft/Linux sources.
+      (2026-10-01: independent review against two public primary sources, both
+      HTTP 200 at review time.)
+      - **Microsoft** — `learn.microsoft.com/en-us/windows/wsl/wsl-config`
+        (ms.date 2026-04-15, updated 2026-09-16). The complete WSL2
+        memory/GPU surface is `[wsl2] memory` (host-assigned VM RAM),
+        `[wsl2] swap` + `[wsl2] swapFile` (disk-based), and
+        `[experimental] autoMemoryReclaim`. GPU is documented only as
+        `[gpu] enabled` — "Allow Linux applications to access the Windows
+        GPU via para-virtualization" — and `[wsl2] gpuSupport`. **No**
+        documented feature exposes GPU VRAM as system RAM or as a memory
+        tier to the guest. The RFC's "no public guest-owned tier API"
+        claim holds.
+      - **Linux** — `docs.kernel.org/mm/hmm.html`. HMM is in-kernel driver
+        infrastructure: CPU↔device page-table mirroring plus a ZONE_DEVICE
+        type for migration. `MEMORY_DEVICE_PRIVATE` is a `pagemap.type`
+        for driver-registered device-private pages that behave like swap
+        entries; the doc says nothing about guests, virtualization, or a
+        memory-tier API. Registration authority is the device driver
+        (`dev_pagemap`/`memremap_pages`) and "policy decisions of what and
+        when to migrate is left to the device driver." The RFC's
+        host-authoritative boundary and its refusal of guest
+        PFN/NUMA/`add_memory()` ownership without a host contract hold.
+      Verdict: the RFC's refusal boundaries match both public sources; no
+      private API is assumed and no guest-owned tier is claimed.
+      `N3_PUBLIC_PRIMARY_SOURCE_REVIEW` conditions are satisfied.)
+- [x] Host integration remains blocked unless the owner supplies a versioned,
+  public contract and separate platform SPEC (2026-10-01: block in force —
+  `IMPL.md` open gaps list the versioned public host contract, host
+  authentication, and host adapter as missing; zero host/kernel/Windows code
+  exists in the slice; ITEM-6 keeps the status `PARTIAL`/`REFUSED_HOST_CONTRACT`).
+- [x] `IMPL.md` is `partial`/`REFUSED_HOST_CONTRACT` for missing host evidence;
+  no root validation entry is created without a live before → action → after run
+  (2026-10-01: `IMPL.md` status line reads `PARTIAL` / `REFUSED_HOST_CONTRACT`
+  for host claims and states root `validation.md` is intentionally not updated).
 
 ## Out of SPEC
 

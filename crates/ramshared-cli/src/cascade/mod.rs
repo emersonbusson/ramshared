@@ -12,6 +12,7 @@
 //! Mounts tiers by `swapon` priority and unmounts in reverse order.
 
 use ramshared_tier::TierPriorities;
+use ramshared_vram::GpuBudgetTelemetry;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -33,6 +34,7 @@ thread_local! {
         const { RefCell::new(VecDeque::new()) };
     static TEST_SWAPS_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
     static TEST_ORIGIN_CONFIG: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
+    static TEST_CASCADE_CONF: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
     static TEST_MEM_AVAILABLE: RefCell<Option<u64>> = const { RefCell::new(None) };
     static TEST_ENV_MB: RefCell<Option<(String, u64)>> = const { RefCell::new(None) };
 }
@@ -46,6 +48,10 @@ const PID_FILE: &str = "/run/ramshared/ramsharedd.pid";
 const DEMOTE_STATUS_FILE: &str = "/run/ramshared/demote-status.json";
 const CAPACITY_STATUS_FILE: &str = "/run/ramshared/capacity-guaranteed";
 const ORIGIN_CONFIG_FILE: &str = "/etc/ramshared/origin.conf";
+/// Host cascade sizing policy (DT-3), shared with `boot`.
+/// Test builds resolve the seam instead of reading this path.
+#[cfg_attr(test, allow(dead_code))]
+const CASCADE_CONF_FILE: &str = "/etc/ramshared/cascade.conf";
 const DEFAULT_PHYSICAL_CACHE_CAP_MIB: u64 = 1024;
 const CACHE_STATUS_FILE: &str = "/run/ramshared/cache-status.json";
 const SUPERVISOR_STATUS_FILE: &str = "/run/ramshared/supervisor-state.json";
@@ -643,19 +649,53 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
     }
 }
 
-/// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`).
-/// SPEC: docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md ITEM-4
-fn default_mb_from_env(var: &str, fallback: u64) -> u64 {
-    #[cfg(test)]
-    if let Some((ref k, n)) = TEST_ENV_MB.with(|c| c.borrow().clone())
-        && k == var
-    {
-        return n;
+/// Env reader for attended-`up` sizing.
+///
+/// Production is `std::env`. The test build routes `TEST_ENV_MB` through the
+/// same [`boot::Env`] trait the boot path uses, so one DT-3 chain serves both
+/// and the test seam cannot drift from the operator-facing resolver.
+struct UpEnv;
+
+impl boot::Env for UpEnv {
+    fn var(&self, key: &str) -> Option<String> {
+        #[cfg(test)]
+        if let Some((ref k, n)) = TEST_ENV_MB.with(|c| c.borrow().clone())
+            && k == key
+        {
+            return Some(n.to_string());
+        }
+        std::env::var(key).ok()
     }
-    std::env::var(var)
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .unwrap_or(fallback)
+}
+
+/// Attended-`up` zram default, resolved through the DT-3 chain.
+///
+/// `/etc/ramshared/cascade.conf` → `RAMSHARED_ZRAM_MIB` → 1024 MiB. This is the
+/// same authority `boot` resolves, so a bare `up` no longer starts half the
+/// configured cushion on a host whose policy says otherwise. Explicit `--zram`
+/// still wins. `vram_mb` is deliberately *not* taken from here: it stays bound
+/// to the sealed origin capacity, which is the size the NBD actually exposes.
+fn default_zram_mb() -> Result<u64, CascadeError> {
+    #[cfg(test)]
+    let text = match TEST_CASCADE_CONF.with(|cell| cell.borrow().clone()) {
+        Some(Ok(text)) => text,
+        Some(Err(message)) => return Err(CascadeError::Io(message)),
+        // Test mode never reads the host policy file.
+        None => String::new(),
+    };
+    #[cfg(not(test))]
+    let text = match fs::read_to_string(CASCADE_CONF_FILE) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(CascadeError::Io(format!(
+                "read {CASCADE_CONF_FILE}: {error}"
+            )));
+        }
+    };
+    let resolved = boot::resolve_boot_config_text(&text, &UpEnv)
+        .map_err(|error| CascadeError::Arg(error.to_string()))?;
+    Ok(resolved.config.zram_mib)
 }
 
 /// True when a healthy Day-1 cascade is already mounted (idempotent `up`).
@@ -695,6 +735,21 @@ fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
     if cascade_already_healthy(entries) {
         return Ok(());
     }
+    // Same test seam as `has_live_records` above: an injected `/proc/swaps`
+    // must not couple to live `/run` record paths. Without this, a unit test
+    // on a host whose daemon is running sees the operator's real half-state
+    // and cannot reach the ordering it is meant to prove. The injected
+    // entries still decide `has_vram` — only the hardcoded host paths are
+    // ignored.
+    #[cfg(test)]
+    let has_record = if TEST_SWAPS.with(|c| c.borrow().is_some()) {
+        false
+    } else {
+        Path::new(SWAP_DEV_FILE).exists()
+            || Path::new(ZRAM_DEV_FILE).exists()
+            || Path::new(PID_FILE).exists()
+    };
+    #[cfg(not(test))]
     let has_record = Path::new(SWAP_DEV_FILE).exists()
         || Path::new(ZRAM_DEV_FILE).exists()
         || Path::new(PID_FILE).exists();
@@ -714,9 +769,10 @@ fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
 
 fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, CascadeError> {
     let sealed = read_sealed_origin_config()?;
+    let sealed_capacity_mib = sealed.logical_capacity_mib;
     let mut a = UpArgs {
         vram_mb: sealed.logical_capacity_mib,
-        zram_mb: default_mb_from_env("RAMSHARED_ZRAM_MIB", 1024),
+        zram_mb: default_zram_mb()?,
         daemon,
         force: false,
         connections: 1,
@@ -829,6 +885,19 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
         return Err(CascadeError::Precondition(
             "physical cache cap must be between 1024 MiB and logical capacity".into(),
         ));
+    }
+    // The daemon already refuses a `--size` that leaves the sealed origin
+    // capacity (`validate_origin_manifest_identity`). Refusing here instead
+    // keeps `up`/`boot` from mutating devices first and only then watching the
+    // daemon die — the anti-hang contract is about half-states, and a late
+    // refusal leaves one.
+    if a.vram_mb != sealed_capacity_mib {
+        return Err(CascadeError::Precondition(format!(
+            "--vram {} MiB differs from the sealed origin capacity {} MiB; \
+             the daemon refuses a logical capacity that leaves the seal, \
+             so this is refused before any device is touched",
+            a.vram_mb, sealed_capacity_mib
+        )));
     }
     if !canonical_origin_uuid(&a.expected_swap_uuid) {
         return Err(CascadeError::Precondition(
@@ -1318,20 +1387,38 @@ fn supervisor_status_matches_current_daemon(
             })
 }
 
+#[cfg(test)]
 fn control_plane_status_is_current(
     cache_status: &serde_json::Value,
     supervisor_status: &serde_json::Value,
     daemon_instance_id: &str,
     now_unix_ms: u64,
 ) -> bool {
-    cache_status_shape_is_valid(cache_status)
-        && supervisor_status_shape_is_valid(supervisor_status)
-        && cache_status_matches_current_daemon(cache_status, daemon_instance_id, now_unix_ms)
-        && supervisor_status_matches_current_daemon(
-            supervisor_status,
-            daemon_instance_id,
-            now_unix_ms,
-        )
+    let (cache_current, supervisor_current) = control_plane_status_freshness(
+        Some(cache_status),
+        Some(supervisor_status),
+        daemon_instance_id,
+        now_unix_ms,
+    );
+    cache_current && supervisor_current
+}
+
+fn control_plane_status_freshness(
+    cache_status: Option<&serde_json::Value>,
+    supervisor_status: Option<&serde_json::Value>,
+    daemon_instance_id: &str,
+    now_unix_ms: u64,
+) -> (bool, bool) {
+    let cache_current = cache_status.is_some_and(|status| {
+        cache_status_shape_is_valid(status)
+            && cache_status_matches_current_daemon(status, daemon_instance_id, now_unix_ms)
+    });
+    let supervisor_current = supervisor_status.is_some_and(|status| {
+        supervisor_status_shape_is_valid(status)
+            && supervisor_status_matches_current_daemon(status, daemon_instance_id, now_unix_ms)
+    });
+
+    (cache_current, supervisor_current)
 }
 
 fn guardian_state_from_files(
@@ -1339,11 +1426,18 @@ fn guardian_state_from_files(
     health: &Path,
     max_age: Duration,
 ) -> (GuardianState, Option<String>) {
-    match fs::read_to_string(safe_mode) {
-        Ok(text) if serde_json::from_str::<serde_json::Value>(&text).is_ok() => {
-            return (GuardianState::SafeMode, None);
+    // Presence of the marker is the gate (Kahneman #9). Validate content only
+    // when readable; an unreadable marker is still a marker (fail-safe #16).
+    match fs::symlink_metadata(safe_mode) {
+        Ok(_) => {
+            return match fs::read_to_string(safe_mode) {
+                Ok(text) if serde_json::from_str::<serde_json::Value>(&text).is_ok() => {
+                    (GuardianState::SafeMode, None)
+                }
+                Ok(_) => (GuardianState::Blocked, Some("safe_mode_invalid".into())),
+                Err(_) => (GuardianState::SafeMode, None),
+            };
         }
-        Ok(_) => return (GuardianState::Blocked, Some("safe_mode_invalid".into())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => return (GuardianState::Blocked, Some("safe_mode_unreadable".into())),
     }
@@ -1392,12 +1486,67 @@ fn guardian_state_from_files(
 
 mod lifecycle;
 use lifecycle::{
-    CacheState, CascadeSnapshot, ControlState, DemoteSnapshot, GuardianState, OriginState,
-    TierSample, active_threshold_kib_from_env, derive_lifecycle, protection_reason,
-    protection_state, render_status_json,
+    CacheState, CascadeSnapshot, ControlState, DemoteSnapshot, GuardianState, LifecycleView,
+    OriginState, TierSample, active_threshold_kib_from_env, derive_lifecycle, overall_state,
+    protection_reason, protection_state, render_status_json, status_ok,
 };
 
+pub mod boot;
+
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
+fn trusted_gpu_budget_from_status(
+    status: &serde_json::Value,
+    now_unix_ms: Option<u64>,
+) -> Option<GpuBudgetTelemetry> {
+    let budget =
+        serde_json::from_value::<GpuBudgetTelemetry>(status.get("gpu_budget")?.clone()).ok()?;
+    let now = now_unix_ms?;
+    budget.trusted_available_at(now, 5_000).map(|_| budget)
+}
+
+/// True only when the daemon published a `gpu_budget` object that cannot be
+/// trusted right now.
+///
+/// A missing key or a JSON `null` is an honest "no budget bound" report (the
+/// daemon runs `gpu_budget_guard=allocator_only`). That is valid telemetry,
+/// not invalid or stale telemetry, so it must not alarm.
+fn gpu_budget_telemetry_invalid_or_stale(
+    cache_status: Option<&serde_json::Value>,
+    now_unix_ms: Option<u64>,
+) -> bool {
+    let Some(status) = cache_status else {
+        return false;
+    };
+    match status.get("gpu_budget") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(_) => trusted_gpu_budget_from_status(status, now_unix_ms).is_none(),
+    }
+}
+
+/// Map the daemon's published cache verdict onto the operator-facing state.
+///
+/// `ok` exists to stop a lying `"ACTIVE"` from being believed, not to erase the
+/// daemon's own verdict about a cache that is deliberately off. A released
+/// cache under control pressure (`"OFF"`) and a dead one (`"UNAVAILABLE"`) are
+/// different states for the operator and for recovery policy, so the named
+/// non-serving verdicts survive an `ok: false`.
+fn cache_state_from_status(
+    published: Option<&str>,
+    product_active: bool,
+    cache_status_ok: bool,
+) -> CacheState {
+    match published {
+        Some("OFF") => CacheState::Off,
+        Some("STUCK") => CacheState::Stuck,
+        Some("UNAVAILABLE") => CacheState::Unavailable,
+        Some("ACTIVE") if product_active && cache_status_ok => CacheState::Active,
+        Some("RESTRICTED") if product_active && cache_status_ok => CacheState::Restricted,
+        Some("ACTIVE") | Some("RESTRICTED") => CacheState::Unavailable,
+        _ if product_active => CacheState::Unavailable,
+        _ => CacheState::Off,
+    }
+}
+
 pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let pairs: Vec<(&str, u64, u64, i32)> = entries
         .iter()
@@ -1407,6 +1556,10 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
     let ghosts = ghost_vram_swaps(entries);
     let (daemon_alive, daemon_pid) = daemon_alive_pid();
+    let daemon_identity_unreadable = matches!(
+        fs::read_to_string(PID_FILE),
+        Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied
+    );
     let product_active = daemon_alive || vram.present;
     let cache_status = fs::read_to_string(CACHE_STATUS_FILE)
         .ok()
@@ -1415,23 +1568,21 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
     let daemon_instance_id = daemon_pid.and_then(daemon_instance_id_from_pid);
-    let control_plane_current = daemon_instance_id
+    let (cache_status_current, supervisor_status_current) = daemon_instance_id
         .as_deref()
         .zip(unix_time_ms())
-        .zip(cache_status.as_ref())
-        .zip(supervisor_status.as_ref())
-        .is_some_and(
-            |(((daemon_instance_id, now_unix_ms), cache_status), supervisor_status)| {
-                control_plane_status_is_current(
-                    cache_status,
-                    supervisor_status,
-                    daemon_instance_id,
-                    now_unix_ms,
-                )
-            },
-        );
-    let cache_status = control_plane_current.then_some(cache_status).flatten();
-    let supervisor_status = control_plane_current.then_some(supervisor_status).flatten();
+        .map_or((false, false), |(daemon_instance_id, now_unix_ms)| {
+            control_plane_status_freshness(
+                cache_status.as_ref(),
+                supervisor_status.as_ref(),
+                daemon_instance_id,
+                now_unix_ms,
+            )
+        });
+    let cache_status = cache_status_current.then_some(cache_status).flatten();
+    let supervisor_status = supervisor_status_current
+        .then_some(supervisor_status)
+        .flatten();
     let status_text = |key: &str| {
         cache_status
             .as_ref()
@@ -1444,6 +1595,14 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
             .and_then(|value| value.get(key))
             .and_then(serde_json::Value::as_u64)
     };
+    let gpu_budget = cache_status
+        .as_ref()
+        .and_then(|value| trusted_gpu_budget_from_status(value, unix_time_ms()));
+    let gpu_headroom_kib = gpu_budget.as_ref().and_then(|budget| {
+        unix_time_ms()
+            .and_then(|now| budget.trusted_available_at(now, 5_000))
+            .map(|available| available >> 10)
+    });
     let cache_status_ok = cache_status
         .as_ref()
         .and_then(|value| value.get("ok"))
@@ -1458,15 +1617,13 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         }
         _ => OriginState::Off,
     };
-    let cache_state = match status_text("cache_state") {
-        _ if product_active && !cache_status_ok => CacheState::Unavailable,
-        Some("ACTIVE") => CacheState::Active,
-        Some("RESTRICTED") => CacheState::Restricted,
-        Some("STUCK") => CacheState::Stuck,
-        Some("OFF") if !product_active => CacheState::Off,
-        _ if product_active => CacheState::Unavailable,
-        _ => CacheState::Off,
-    };
+    // `ok` exists to stop a lying "ACTIVE" from being believed, not to erase
+    // the daemon's own verdict about a cache that is deliberately off. A
+    // released cache under control pressure (`OFF`) and a dead one
+    // (`UNAVAILABLE`) are different states for the operator and for recovery
+    // policy, so the named non-serving verdicts survive an `ok: false`.
+    let cache_state =
+        cache_state_from_status(status_text("cache_state"), product_active, cache_status_ok);
     let control_state = supervisor_status
         .as_ref()
         .and_then(|value| value.get("control_state")?.as_str())
@@ -1484,10 +1641,18 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         Duration::from_secs(15),
     );
     let mut measurement_errors = Vec::new();
-    if product_active && !control_plane_current {
+    if vram.present && daemon_identity_unreadable {
+        measurement_errors.push("daemon_identity_unreadable".to_string());
+    }
+    if product_active && !cache_status_current {
         measurement_errors.push("cache_status_not_current".to_string());
     }
-    if product_active && !control_plane_current {
+    if product_active
+        && gpu_budget_telemetry_invalid_or_stale(cache_status.as_ref(), unix_time_ms())
+    {
+        measurement_errors.push("gpu_budget_telemetry_invalid_or_stale".to_string());
+    }
+    if product_active && !supervisor_status_current {
         measurement_errors.push("supervisor_status_not_current".to_string());
     }
     if let Some(error) = guardian_error {
@@ -1512,11 +1677,42 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         guardian_state,
         logical_capacity_kib: capacity_field_u64("logical_capacity_kib"),
         vram_cached_kib: status_number("vram_cached_kib"),
-        gpu_headroom_kib: status_number("gpu_headroom_kib"),
+        gpu_headroom_kib,
+        gpu_budget,
         ssd_origin_written_kib: status_number("ssd_origin_written_kib"),
         fallback_swap_used_kib: Some(fallback_swap_used_kib),
         measurement_errors,
     }
+}
+
+fn stress_readiness_from_snapshot(snapshot: &CascadeSnapshot) -> Result<(), String> {
+    let lifecycle = derive_lifecycle(snapshot);
+    if !lifecycle.ok
+        || snapshot.ghost
+        || !snapshot.order_ok
+        || !snapshot.zram.present
+        || !snapshot.vram.present
+        || !snapshot.disk.present
+        || !snapshot.daemon_alive
+        || !snapshot.capacity_guaranteed
+        || snapshot.control_state != ControlState::Healthy
+        || snapshot.origin_state != OriginState::Ready
+        || snapshot.cache_state != CacheState::Active
+        || snapshot.guardian_state != GuardianState::Healthy
+        || !snapshot.measurement_errors.is_empty()
+    {
+        return Err(format!(
+            "cascade stress requires healthy zram/NBD/disk, daemon, physical cache, supervisor, and host guardian (reasons: {:?}; measurement errors: {:?})",
+            lifecycle.reasons, snapshot.measurement_errors
+        ));
+    }
+    Ok(())
+}
+
+/// Read-only admission and continuation check for pressure workloads.
+pub fn stress_readiness() -> Result<(), String> {
+    let entries = read_swaps().map_err(|error| error.to_string())?;
+    stress_readiness_from_snapshot(&build_cascade_snapshot(&entries))
 }
 
 fn capacity_field(key: &str) -> Option<String> {
@@ -1661,8 +1857,21 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
     let protection_reason = protection_reason(&view, &snap);
     println!("phase: {} ({})", view.phase.as_str(), view.phase_reason);
     println!("protection: {} ({protection_reason})", protection.as_str());
-    println!("ok: {}", view.ok && protection.is_ok());
+    // Cache residency is a separate claim from tier protection. `protection:
+    // ACTIVE` means the VRAM tier is attached and serving swap pages; it does
+    // not mean the GPU cache is populated. Both lines are printed so the two
+    // cannot be read as one.
+    println!("{}", cache_line(&snap));
+    // The roll-up inputs are printed before the verdict they produce. `ok` is
+    // the same verdict the JSON reports and the monitor reads; if the human
+    // line stopped at the tier order it would call a guarded control plane or
+    // a released cache healthy while the product itself reports BLOCKED.
+    println!("{}", overall_line(&view, &snap));
+    println!("ok: {}", status_ok(&view, &snap));
     println!("topology_ok: {}", view.ok);
+    if !snap.measurement_errors.is_empty() {
+        println!("measurement_errors: {}", snap.measurement_errors.join(", "));
+    }
     if !view.reasons.is_empty() {
         println!("reasons: {}", view.reasons.join(", "));
     }
@@ -1731,7 +1940,43 @@ fn print_tier(name: &str, t: &TierSample) {
     );
 }
 
+/// One human-readable line for GPU cache residency.
+///
+/// Deliberately separate from `protection:`: a healthy cascade can have the
+/// VRAM tier serving swap with the cache released (`OFF`), and a populated
+/// cache is not what `protection: ACTIVE` claims. Rendering both is what stops
+/// the two being read as the same fact.
+fn cache_line(snap: &CascadeSnapshot) -> String {
+    let cached = snap
+        .vram_cached_kib
+        .map_or_else(|| "null".to_string(), |v| v.to_string());
+    let headroom = snap
+        .gpu_headroom_kib
+        .map_or_else(|| "null".to_string(), |v| v.to_string());
+    format!(
+        "cache: {} (vram_cached_kib={cached} gpu_headroom_kib={headroom}; separate claim from protection)",
+        snap.cache_state.as_str()
+    )
+}
+
+/// One human-readable line for the severity roll-up behind `ok`.
+///
+/// Lists every input `overall_state` weighs. Leaving one out is how a reader
+/// comes to treat the missing input as fine — the same conflation the `cache:`
+/// line exists to prevent, one level up.
+fn overall_line(view: &LifecycleView, snap: &CascadeSnapshot) -> String {
+    format!(
+        "overall: {} (control={} origin={} guardian={} cache={})",
+        overall_state(view, snap).as_str(),
+        snap.control_state.as_str(),
+        snap.origin_state.as_str(),
+        snap.guardian_state.as_str(),
+        snap.cache_state.as_str(),
+    )
+}
+
 mod cascade_io;
+pub use boot::{BootConfig, BootError};
 pub use cascade_io::{down, migrate_legacy_cascade, up_with_args};
 
 #[cfg(test)]
@@ -1739,6 +1984,345 @@ mod tests {
 
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    #[test]
+    fn released_cache_reports_off_not_unavailable() {
+        // A control-pressure release publishes `ok: false` beside an explicit
+        // `"OFF"`. That is a deliberate release, not a dead cache, and must
+        // stay distinguishable from `"UNAVAILABLE"`.
+        assert_eq!(
+            cache_state_from_status(Some("OFF"), true, false),
+            CacheState::Off
+        );
+        assert_eq!(
+            cache_state_from_status(Some("OFF"), true, true),
+            CacheState::Off
+        );
+        assert_eq!(
+            cache_state_from_status(Some("OFF"), false, false),
+            CacheState::Off
+        );
+    }
+
+    #[test]
+    fn stuck_verdict_survives_a_failed_ok_flag() {
+        // `STUCK` is a named death signature. `ok: false` must not demote it
+        // to the generic `UNAVAILABLE` bucket.
+        assert_eq!(
+            cache_state_from_status(Some("STUCK"), true, false),
+            CacheState::Stuck
+        );
+        assert_eq!(
+            cache_state_from_status(Some("UNAVAILABLE"), true, false),
+            CacheState::Unavailable
+        );
+    }
+
+    #[test]
+    fn ok_false_stops_a_lying_active_or_restricted() {
+        // This is what `ok` is for: a status that claims to be serving while
+        // reporting it is not healthy is not believed.
+        assert_eq!(
+            cache_state_from_status(Some("ACTIVE"), true, false),
+            CacheState::Unavailable
+        );
+        assert_eq!(
+            cache_state_from_status(Some("RESTRICTED"), true, false),
+            CacheState::Unavailable
+        );
+        assert_eq!(
+            cache_state_from_status(Some("ACTIVE"), true, true),
+            CacheState::Active
+        );
+        assert_eq!(
+            cache_state_from_status(Some("RESTRICTED"), true, true),
+            CacheState::Restricted
+        );
+    }
+
+    #[test]
+    fn missing_verdict_fails_closed_when_the_product_is_active() {
+        assert_eq!(
+            cache_state_from_status(None, true, false),
+            CacheState::Unavailable
+        );
+        assert_eq!(
+            cache_state_from_status(Some("NONSENSE"), true, true),
+            CacheState::Unavailable
+        );
+        assert_eq!(cache_state_from_status(None, false, false), CacheState::Off);
+    }
+
+    /// Minimal snapshot for rendering tests. Every field that `cache_line` does
+    /// not read is a healthy default, so a failure points at the field the test
+    /// is about.
+    fn snapshot_for_cache_line(
+        cache_state: CacheState,
+        vram_cached_kib: Option<u64>,
+        gpu_headroom_kib: Option<u64>,
+    ) -> CascadeSnapshot {
+        CascadeSnapshot {
+            zram: TierSample::default(),
+            vram: TierSample::default(),
+            disk: TierSample::default(),
+            ghost: false,
+            order_ok: true,
+            daemon_alive: true,
+            daemon_pid: Some(1),
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
+            demote: DemoteSnapshot::default(),
+            active_kib: 1024,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(1024),
+            vram_cached_kib,
+            gpu_headroom_kib,
+            gpu_budget: None,
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_released_cache_renders_off_with_zero_cached_kib() {
+        // This is the live shape after a control-pressure release: the tier is
+        // still serving swap while the GPU cache is empty. The line must say
+        // so in the same words the status JSON uses, or a reader will take
+        // `protection: ACTIVE` as a claim about the cache.
+        let snap = snapshot_for_cache_line(CacheState::Off, Some(0), Some(2853175296 / 1024));
+        assert_eq!(
+            cache_line(&snap),
+            "cache: OFF (vram_cached_kib=0 gpu_headroom_kib=2786304; \
+             separate claim from protection)"
+        );
+    }
+
+    #[test]
+    fn absent_residency_numbers_render_as_null_not_as_zero() {
+        // `null` and `0` mean different things: `0` is a measured empty cache,
+        // `null` is "no sample". Collapsing them would let a missing
+        // measurement read as a successful empty one.
+        let snap = snapshot_for_cache_line(CacheState::Unavailable, None, None);
+        assert_eq!(
+            cache_line(&snap),
+            "cache: UNAVAILABLE (vram_cached_kib=null gpu_headroom_kib=null; \
+             separate claim from protection)"
+        );
+    }
+
+    #[test]
+    fn every_cache_state_renders_its_own_label() {
+        // A reader must be able to tell ACTIVE from RESTRICTED from STUCK on
+        // one line. If these collapse, the status line cannot be the place a
+        // user learns the cache died.
+        for (state, label) in [
+            (CacheState::Off, "OFF"),
+            (CacheState::Active, "ACTIVE"),
+            (CacheState::Restricted, "RESTRICTED"),
+            (CacheState::Unavailable, "UNAVAILABLE"),
+            (CacheState::Stuck, "STUCK"),
+        ] {
+            let line = cache_line(&snapshot_for_cache_line(state, Some(1), Some(2)));
+            assert!(
+                line.starts_with(&format!("cache: {label} ")),
+                "state {state:?} rendered as {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cache_line_is_never_a_protection_claim() {
+        // The whole reason this line exists: `protection: ACTIVE` and
+        // `cache: ACTIVE` are two facts, and the status text must not let one
+        // stand in for the other. The cache line names its own subject and
+        // never emits a `protection:` label of its own.
+        let snap = snapshot_for_cache_line(CacheState::Off, Some(0), Some(1));
+        let line = cache_line(&snap);
+        assert!(line.starts_with("cache: "), "{line}");
+        assert!(!line.starts_with("protection"), "{line}");
+        assert!(
+            !line.contains("protection: "),
+            "cache line must not emit a protection label: {line}"
+        );
+        assert!(
+            line.contains("separate claim from protection"),
+            "the line has to say the two are different claims: {line}"
+        );
+    }
+
+    #[test]
+    fn the_overall_line_names_every_input_the_verdict_weighs() {
+        // A reader who sees `ok: false` has to be able to see which input
+        // drove it. Dropping one from the parenthetical is how a missing
+        // input starts to read as fine.
+        let mut snap = snapshot_for_cache_line(CacheState::Off, Some(0), None);
+        snap.control_state = ControlState::Guarded;
+        snap.origin_state = OriginState::Ready;
+        snap.guardian_state = GuardianState::Healthy;
+        let view = derive_lifecycle(&snap);
+        assert_eq!(
+            overall_line(&view, &snap),
+            "overall: BLOCKED (control=GUARDED origin=READY guardian=HEALTHY cache=OFF)"
+        );
+    }
+
+    #[test]
+    fn the_ok_line_states_the_same_verdict_the_json_does() {
+        // This is the snapshot the live host actually publishes: tiers in
+        // order, VRAM tier serving, control plane guarded, cache released,
+        // GPU budget unmeasured. The human line used to print `ok: true` here
+        // while `status --json` printed `ok: false` for the same read.
+        let mut snap = snapshot_for_cache_line(CacheState::Off, Some(0), None);
+        snap.control_state = ControlState::Guarded;
+        snap.zram = TierSample {
+            present: true,
+            prio: Some(200),
+            size_kib: 2_097_148,
+            used_kib: 1_722_644,
+        };
+        snap.vram = TierSample {
+            present: true,
+            prio: Some(100),
+            size_kib: 4_194_300,
+            used_kib: 132_500,
+        };
+        snap.disk = TierSample {
+            present: true,
+            prio: Some(-2),
+            size_kib: 4_194_304,
+            used_kib: 111_060,
+        };
+        snap.measurement_errors = vec!["gpu_budget_telemetry_invalid_or_stale".to_string()];
+        let view = derive_lifecycle(&snap);
+
+        let human = format!("ok: {}", status_ok(&view, &snap));
+        let json = render_status_json(&view, &snap, "2026-10-02T00:21:47-03:00");
+        assert_eq!(human, "ok: false");
+        assert!(json.contains("\"ok\":false"), "{json}");
+        assert!(json.contains("\"topology_ok\":true"), "{json}");
+    }
+
+    #[test]
+    fn gpu_budget_status_requires_fresh_driver_bound_telemetry() {
+        let status = serde_json::json!({
+            "gpu_budget": {
+                "schema_version": 1,
+                "adapter": {
+                    "backend": "vulkan",
+                    "key": "uuid:fixture",
+                    "luid": "aabbccdd:00001122"
+                },
+                "total_bytes": 8000,
+                "budget_bytes": 6000,
+                "used_bytes": 2000,
+                "available_bytes": 4000,
+                "source": "driver_reported",
+                "sampled_at_unix_ms": 1000
+            }
+        });
+        assert!(trusted_gpu_budget_from_status(&status, Some(5000)).is_some());
+        assert!(trusted_gpu_budget_from_status(&status, Some(6001)).is_none());
+        assert!(trusted_gpu_budget_from_status(&status, Some(999)).is_none());
+
+        let mut local_only = status.clone();
+        local_only["gpu_budget"]["source"] = serde_json::json!("provider_local_estimate");
+        assert!(trusted_gpu_budget_from_status(&local_only, Some(5000)).is_none());
+
+        let malformed = serde_json::json!({"gpu_budget": {"available_bytes": 4000}});
+        assert!(trusted_gpu_budget_from_status(&malformed, Some(5000)).is_none());
+    }
+
+    #[test]
+    fn gpu_budget_absent_or_null_is_honest_not_stale() {
+        // No status file at all: nothing was published, so there is nothing
+        // stale to alarm about.
+        assert!(!gpu_budget_telemetry_invalid_or_stale(None, Some(5000)));
+
+        // A status file with no `gpu_budget` key is also an honest "no budget
+        // bound" report.
+        let absent_key = serde_json::json!({
+            "schema_version": 1,
+            "ok": true,
+            "cache_state": "ACTIVE"
+        });
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&absent_key),
+            Some(5000)
+        ));
+
+        // Explicit `"gpu_budget": null` is the daemon's `allocator_only`
+        // guard with no budget bound. It is valid telemetry and must not be
+        // classified as invalid or stale.
+        let null_budget = serde_json::json!({
+            "schema_version": 1,
+            "ok": false,
+            "cache_state": "UNAVAILABLE",
+            "gpu_budget": null
+        });
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&null_budget),
+            Some(5000)
+        ));
+        // The same is true when the clock cannot be read: an honest "no
+        // budget bound" does not become stale just because time is unknown.
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&null_budget),
+            None
+        ));
+    }
+
+    #[test]
+    fn gpu_budget_published_but_untrustworthy_is_stale() {
+        let trusted = serde_json::json!({
+            "gpu_budget": {
+                "schema_version": 1,
+                "adapter": {
+                    "backend": "vulkan",
+                    "key": "uuid:fixture",
+                    "luid": "aabbccdd:00001122"
+                },
+                "total_bytes": 8000,
+                "budget_bytes": 6000,
+                "used_bytes": 2000,
+                "available_bytes": 4000,
+                "source": "driver_reported",
+                "sampled_at_unix_ms": 1000
+            }
+        });
+        // Fresh, driver-bound, parseable: valid telemetry.
+        assert!(!gpu_budget_telemetry_invalid_or_stale(
+            Some(&trusted),
+            Some(5000)
+        ));
+
+        // Outside the 5s trust window: stale.
+        assert!(gpu_budget_telemetry_invalid_or_stale(
+            Some(&trusted),
+            Some(6001)
+        ));
+
+        // Published but malformed: invalid.
+        let malformed = serde_json::json!({"gpu_budget": {"available_bytes": 4000}});
+        assert!(gpu_budget_telemetry_invalid_or_stale(
+            Some(&malformed),
+            Some(5000)
+        ));
+
+        // Published but not driver-bound: untrustworthy.
+        let mut local_only = trusted.clone();
+        local_only["gpu_budget"]["source"] = serde_json::json!("provider_local_estimate");
+        assert!(gpu_budget_telemetry_invalid_or_stale(
+            Some(&local_only),
+            Some(5000)
+        ));
+
+        // Published object with no clock reading: cannot be trusted.
+        assert!(gpu_budget_telemetry_invalid_or_stale(Some(&trusted), None));
+    }
 
     fn parse_proc_swaps(text: &str) -> Vec<SwapEntry> {
         super::parse_proc_swaps(text).expect("strict /proc/swaps fixture")
@@ -1769,6 +2353,60 @@ mod tests {
             },
             "written_at_unix_ms": 1_000,
         })
+    }
+
+    #[test]
+    fn stress_readiness_refuses_missing_control_plane_and_cache() {
+        let tier = TierSample {
+            present: true,
+            prio: Some(200),
+            size_kib: 1024,
+            used_kib: 0,
+        };
+        let mut snapshot = CascadeSnapshot {
+            zram: tier.clone(),
+            vram: TierSample {
+                prio: Some(100),
+                ..tier.clone()
+            },
+            disk: TierSample {
+                prio: Some(-2),
+                ..tier
+            },
+            ghost: false,
+            order_ok: true,
+            daemon_alive: true,
+            daemon_pid: Some(1),
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
+            demote: DemoteSnapshot::default(),
+            active_kib: 1024,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state: CacheState::Active,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(1024),
+            vram_cached_kib: Some(256),
+            gpu_headroom_kib: Some(768),
+            gpu_budget: None,
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
+        };
+        assert!(stress_readiness_from_snapshot(&snapshot).is_ok());
+        snapshot.control_state = ControlState::Guarded;
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
+        snapshot.control_state = ControlState::Healthy;
+        snapshot.cache_state = CacheState::Unavailable;
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
+        snapshot.cache_state = CacheState::Active;
+        snapshot.guardian_state = GuardianState::Blocked;
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
+        snapshot.guardian_state = GuardianState::Healthy;
+        snapshot
+            .measurement_errors
+            .push("cache_status_not_current".into());
+        assert!(stress_readiness_from_snapshot(&snapshot).is_err());
     }
 
     #[test]
@@ -2016,9 +2654,9 @@ Filename Type Size Used Priority
 
     #[test]
     fn zram_zero_is_parsed() {
-        let a = parse(&["--zram", "0", "--vram", "2048"]).unwrap();
+        let a = parse(&["--zram", "0", "--vram", "4096"]).unwrap();
         assert_eq!(a.zram_mb, 0);
-        assert_eq!(a.vram_mb, 2048);
+        assert_eq!(a.vram_mb, 4096);
     }
 
     #[test]
@@ -2076,11 +2714,16 @@ Filename Type Size Used Priority
         TEST_ENV_MB.with(|c| *c.borrow_mut() = v.map(|(k, n)| (k.to_string(), n)));
     }
 
+    fn set_test_cascade_conf(v: Option<Result<String, String>>) {
+        TEST_CASCADE_CONF.with(|c| *c.borrow_mut() = v);
+    }
+
     fn clear_test_seams() {
         clear_sh_script();
         set_test_swaps(None);
         TEST_SWAPS_SEQUENCE.with(|queue| queue.borrow_mut().clear());
         TEST_SWAPS_ERROR.with(|cell| *cell.borrow_mut() = None);
+        set_test_cascade_conf(None);
         set_test_mem(None);
         set_test_mb(None);
     }
@@ -2138,7 +2781,7 @@ Filename Type Size Used Priority
         assert!(parse(&["--unknown"]).is_err());
         let a = parse(&[
             "--vram",
-            "1024",
+            "4096",
             "--zram",
             "256",
             "--daemon",
@@ -2148,11 +2791,28 @@ Filename Type Size Used Priority
             "nbd",
         ])
         .unwrap();
-        assert_eq!(a.vram_mb, 1024);
+        assert_eq!(a.vram_mb, 4096);
         assert_eq!(a.zram_mb, 256);
         assert_eq!(a.daemon, "/tmp/d");
         assert!(a.force);
         assert_eq!(a.transport, Transport::Nbd);
+    }
+
+    #[test]
+    fn vram_leaving_the_sealed_capacity_is_refused_before_any_mutation() {
+        // The daemon already refuses this (`validate_origin_manifest_identity`).
+        // Doing it at parse time keeps `up`/`boot` from touching devices first
+        // and only then watching the daemon die on a capacity the seal forbids.
+        let err = parse(&["--vram", "2048"]).unwrap_err();
+        assert!(
+            err.to_string().contains("sealed origin capacity"),
+            "got: {err}"
+        );
+        let err = parse(&["--vram", "8192"]).unwrap_err();
+        assert!(
+            err.to_string().contains("sealed origin capacity"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -2169,9 +2829,15 @@ Filename Type Size Used Priority
             .unwrap_or_else(|error| panic!("default origin-cache arguments: {error}"));
         assert_eq!(default_capacity.cache_cap_mib, 1024);
 
+        // At the floor the cap must stay 1024, not equal the logical capacity.
+        TEST_ORIGIN_CONFIG.with(|cell| {
+            *cell.borrow_mut() = Some(Ok(sealed_origin_test_fixture()
+                .replace("logical_capacity_mib=4096", "logical_capacity_mib=1024")))
+        });
         let minimum_capacity = parse(&["--vram", "1024"])
             .unwrap_or_else(|error| panic!("minimum origin-cache arguments: {error}"));
         assert_eq!(minimum_capacity.cache_cap_mib, 1024);
+        TEST_ORIGIN_CONFIG.with(|cell| *cell.borrow_mut() = None);
     }
 
     #[test]
@@ -2200,6 +2866,56 @@ Filename Type Size Used Priority
             guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
             (GuardianState::SafeMode, None)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    // Kahneman #9/#16: the hard question is "is the safe-mode marker present?",
+    // not "can this uid read its bytes?". Presence is the gate; content is a
+    // secondary validation. An unreadable marker must still report SafeMode.
+    #[test]
+    fn safe_mode_marker_presence_is_the_gate_even_when_content_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-guardian-unreadable-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let safe = root.join("safe.json");
+        let health = root.join("health.json");
+        fs::write(
+            &health,
+            r#"{"schema_version":1,"distro":"Ubuntu-24.04","state":"HEALTHY"}"#,
+        )
+        .unwrap();
+
+        fs::write(&safe, "not-json").unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::Blocked, Some("safe_mode_invalid".into()))
+        );
+
+        // Deliberately invalid content: only presence-first semantics can yield
+        // SafeMode when the read is denied.
+        let mut perms = fs::metadata(&safe).unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&safe, perms).unwrap();
+        let denied = fs::read_to_string(&safe).is_err();
+        let observed = guardian_state_from_files(&safe, &health, Duration::from_secs(15));
+        let mut perms = fs::metadata(&safe).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&safe, perms).unwrap();
+
+        if denied {
+            assert_eq!(observed, (GuardianState::SafeMode, None));
+        } else {
+            // CAP_DAC_OVERRIDE can still read mode 0000 and must reject the
+            // invalid content rather than invent SafeMode from bytes it saw.
+            assert_eq!(
+                observed,
+                (GuardianState::Blocked, Some("safe_mode_invalid".into()))
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2289,6 +3005,30 @@ Filename Type Size Used Priority
                 "stale, foreign, or malformed status was accepted"
             );
         }
+    }
+
+    #[test]
+    fn cache_and_supervisor_freshness_are_reported_independently() {
+        let fresh_cache = serde_json::json!({
+            "schema_version": 1,
+            "daemon_instance_id": "daemon-1",
+            "written_at_unix_ms": 1_000,
+            "ok": true,
+            "origin_state": "READY",
+            "cache_state": "ACTIVE",
+        });
+        let fresh_supervisor = valid_supervisor_status_v3();
+
+        assert_eq!(
+            control_plane_status_freshness(Some(&fresh_cache), None, "daemon-1", 1_001,),
+            (true, false),
+            "fresh cache telemetry must remain visible when supervisor telemetry is absent",
+        );
+        assert_eq!(
+            control_plane_status_freshness(None, Some(&fresh_supervisor), "daemon-1", 1_001,),
+            (false, true),
+            "fresh supervisor telemetry must remain visible when cache telemetry is absent",
+        );
     }
 
     #[test]
@@ -2390,11 +3130,50 @@ Filename Type Size Used Priority
     }
 
     #[test]
-    fn default_mb_from_env_uses_injected_value_or_fallback() {
-        set_test_mb(Some(("RAMSHARED_TEST_MB", 333)));
-        assert_eq!(default_mb_from_env("RAMSHARED_TEST_MB", 1), 333);
+    fn bare_up_zram_follows_cascade_conf_before_env() {
+        // DT-3: the host policy file outranks the environment. A bare `up` on
+        // a host whose `cascade.conf` says 2048 must not silently start 1024.
+        clear_test_seams();
+        set_test_mb(Some(("RAMSHARED_ZRAM_MIB", 512)));
+        set_test_cascade_conf(Some(Ok("ZRAM_MIB=2048\n".to_string())));
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.zram_mb, 2048);
+        clear_test_seams();
+    }
+
+    #[test]
+    fn bare_up_zram_falls_back_to_env_then_builtin() {
+        clear_test_seams();
+        set_test_mb(Some(("RAMSHARED_ZRAM_MIB", 1536)));
+        set_test_cascade_conf(Some(Ok("# no sizing keys\n".to_string())));
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.zram_mb, 1536);
+
         set_test_mb(None);
-        assert_eq!(default_mb_from_env("RAMSHARED_TEST_MB_MISSING", 9), 9);
+        set_test_cascade_conf(Some(Ok(String::new())));
+        let a = parse(&[]).unwrap();
+        assert_eq!(a.zram_mb, 1024);
+        clear_test_seams();
+    }
+
+    #[test]
+    fn bare_up_zram_explicit_flag_still_outranks_the_policy_file() {
+        clear_test_seams();
+        set_test_cascade_conf(Some(Ok("ZRAM_MIB=2048\n".to_string())));
+        let a = parse(&["--zram", "0"]).unwrap();
+        assert_eq!(a.zram_mb, 0);
+        clear_test_seams();
+    }
+
+    #[test]
+    fn malformed_cascade_conf_refuses_a_bare_up() {
+        // Fail closed, same as `boot`: a policy file the chain cannot parse is
+        // a refusal, not a silent fall back to 1024.
+        clear_test_seams();
+        set_test_cascade_conf(Some(Ok("ZRAM_MIB=not-a-number\n".to_string())));
+        let err = parse(&[]).unwrap_err();
+        assert!(err.to_string().contains("ZRAM_MIB"), "got: {err}");
+        clear_test_seams();
     }
 
     #[test]

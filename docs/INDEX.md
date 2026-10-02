@@ -20,26 +20,31 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`cascade-vram-ondemand`](specs/no-milestone/cascade-vram-ondemand/) | Cascade VRAM on-demand — capacity without full CUDA pre-alloc; return under reclaim | — | — | UNQUALIFIED | — |
 | [`ci-trust-and-release-integrity`](specs/no-milestone/ci-trust-and-release-integrity/) | CI trust and release integrity | — | — | UNQUALIFIED | — |
 | [`comment-language-integrity`](specs/no-milestone/comment-language-integrity/) | Canonical English and comment-language integrity | — | — | SPEC | — |
-| [`cuda-rust-native-tiering`](specs/no-milestone/cuda-rust-native-tiering/) | Native CUDA-Rust acceleration, in-GPU page compression, and async cancellation | — | — | UNQUALIFIED | — |
+| [`cuda-rust-native-tiering`](specs/no-milestone/cuda-rust-native-tiering/) | Lossless compression for the revocable VRAM cache | — | — | UNQUALIFIED | — |
 | [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | UNQUALIFIED | — |
 | [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | PARTIAL | — |
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
 | [`elastic-vram-cooperative-tier`](specs/no-milestone/elastic-vram-cooperative-tier/) | Elastic cooperative VRAM tiering, dynamic host borrowing, and non-blocking SSD spillover | — | — | UNQUALIFIED | — |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED | — |
+| [`gpu-reserve-floor-authority`](specs/no-milestone/gpu-reserve-floor-authority/) | Single authoritative GPU reserve floor for shared-host VRAM admission | — | — | UNQUALIFIED | — |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD | — |
 | [`kernel-pci-bar-capacity-contract`](specs/no-milestone/kernel-pci-bar-capacity-contract/) | Exact PCI BAR capacity contract for the RamShared block driver | — | — | UNQUALIFIED | — |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD | — |
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD | — |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker | — | — | UNQUALIFIED | — |
 | [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | Microsoft-native N3 — Design | #196 | UNQUALIFIED | — |
+| [`native-vsock-host-guest-control-plane`](specs/no-milestone/native-vsock-host-guest-control-plane/) | Native vsock host-guest control plane (zero scripts) | — | — | UNQUALIFIED | — |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | PARTIAL | — |
 | [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195, #219, #221, #223, #225, #227, #229 | SPEC | — |
-| [`vram-host-safety-and-dynamic-tiering`](specs/no-milestone/vram-host-safety-and-dynamic-tiering/) | Host-aware VRAM safety ceiling, dynamic chunk tiering, and non-blocking spillover | — | — | SPEC | — |
+| [`resource-configuration-center`](specs/no-milestone/resource-configuration-center/) | Guided and auditable RamShared resource configuration | — | — | UNQUALIFIED | — |
+| [`vmbus-ring-buffer-upstream-v2`](specs/no-milestone/vmbus-ring-buffer-upstream-v2/) | Fragmentation-resilient VMBus rings across confidential guests | — | — | UNQUALIFIED | — |
+| [`vram-host-safety-and-dynamic-tiering`](specs/no-milestone/vram-host-safety-and-dynamic-tiering/) | Adapter-bound VRAM cache safety and fallback contract | — | — | SPEC | — |
 | [`vram-reclaim-pressure-matrix`](specs/no-milestone/vram-reclaim-pressure-matrix/) | PRD - VRAM reclaim pressure matrix | — | — | UNQUALIFIED | — |
 | [`windows-autonomous-broker-service`](specs/no-milestone/windows-autonomous-broker-service/) | Autonomous Windows broker service packaging and supervision | — | #156 | UNQUALIFIED | — |
 | [`windows-storport-cuda-vram`](specs/no-milestone/windows-storport-cuda-vram/) | Windows StorPort I/O backed by CUDA VRAM | — | #28 | UNQUALIFIED | — |
 | [`windows-swap-driver`](specs/no-milestone/windows-swap-driver/) | Swap-to-VRAM on Native Windows (StorPort virtual miniport) | P4 | — | UNQUALIFIED | — |
 | [`windows-task-manager-disk-counters`](specs/no-milestone/windows-task-manager-disk-counters/) | Windows virtual disk identity, counters, and performance matrix | — | — | UNQUALIFIED | — |
+| [`wsl2-autonomous-cascade-up`](specs/no-milestone/wsl2-autonomous-cascade-up/) | Autonomous WSL2 origin attachment and systemd scope envelopment | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-boot`](specs/no-milestone/wsl2-cascade-boot/) | WSL2 cascade auto-start on boot with fail-closed anti-hang | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-legacy-migration`](specs/no-milestone/wsl2-cascade-legacy-migration/) | Attended migration from a legacy WSL2 cascade | — | — | UNQUALIFIED | — |
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan detection and bound recovery | — | — | UNQUALIFIED | — |
@@ -47,6 +52,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-control-plane-pressure-incident`](specs/no-milestone/wsl2-control-plane-pressure-incident/) | WSL2 control-plane pressure containment | — | — | UNQUALIFIED | — |
 | [`wsl2-custom-kernel-p1`](specs/no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 kernel P1 — official-tree base + ublk + zram writeback | — | microsoft/WSL#41054 | UNQUALIFIED | — |
 | [`wsl2-freeze-elimination-campaign`](specs/no-milestone/wsl2-freeze-elimination-campaign/) | WSL2 freeze-elimination campaign evidence gate | — | — | UNQUALIFIED | — |
+| [`wsl2-isolated-gpu-cache-worker`](specs/no-milestone/wsl2-isolated-gpu-cache-worker/) | Process-isolated GPU cache worker for WSL2 origin swap | — | — | UNQUALIFIED | — |
 | [`wsl2-kernel-vmbus-headroom`](specs/no-milestone/wsl2-kernel-vmbus-headroom/) | Native Linux Kernel VMBus Atomic Headroom and Hyper-V Balloon Protection | — | microsoft/WSL#8768, microsoft/WSL#4166, microsoft/WSL#7254, microsoft/WSL#10495, microsoft/WSL#40795 | UNQUALIFIED | — |
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | UNQUALIFIED | — |
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD | — |

@@ -4,14 +4,19 @@
 //! Also hosts [`VramBackend`] (windows-swap-driver ITEM-2 / DT-6).
 //!
 //! Core **testable without root**: parse/encode of the NBD wire, the trait
-//! [`BlockBackend`] and the map of inflight blocks ([`Inflight`], §8.1). The wiring of
+//! [`BlockBackend`] and an unwired inflight range model ([`Inflight`], §8.1). The wiring of
 //! `/dev/nbdX` (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`) is a separate module (requires
 //! root + device) — this lib is only the protocol and logic.
 #![forbid(unsafe_code)]
 
+pub mod compressed_cache;
 pub mod elastic_cache;
+#[cfg(unix)]
+pub mod gpu_cache_worker;
 pub mod handshake;
 pub mod inflight;
+#[cfg(unix)]
+pub mod ipc_cache_client;
 pub mod isolated_origin;
 pub mod origin_cache;
 pub mod protocol;
@@ -22,8 +27,15 @@ pub mod vram_backend;
 pub use elastic_cache::{
     ELASTIC_CHUNK_BYTES, ElasticCacheConfig, ElasticExtentTable, ElasticVramCache,
 };
+#[cfg(unix)]
+pub use gpu_cache_worker::{
+    FRAME_HEADER_LEN, FrameHeader, GpuCacheWorker, GpuWorkerConfig, RUNTIME_FREE_BUFFER_BYTES,
+    WORKER_FRAME_READ_TIMEOUT, run_gpu_worker_loop, run_gpu_worker_loop_with_frame_read_timeout,
+};
 pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
+#[cfg(unix)]
+pub use ipc_cache_client::{DEFAULT_READ_TIMEOUT, IpcCacheClient};
 pub use isolated_origin::{
     AuthoritativeOriginBackend, BestEffortCache, BoundedCacheClient, CacheMutation, CacheRead,
     DisabledCache, IsolatedCacheControl, IsolatedCacheRequest, IsolatedCacheWorker,
@@ -41,8 +53,8 @@ pub use protocol::{
 pub use request::{BlockBackend, IoError, ServeOutcome, WriteOptions, serve};
 pub use sparse_vram::{
     CommitBudgetGate, DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env,
-    commit_cap_bytes_from_env, idle_free_secs_from_env, reserve_floor_bytes_from_env,
-    safe_commit_cap,
+    commit_cap_bytes_from_env, idle_free_secs_from_env, safe_commit_cap, sealed_reserve_policy,
+    sealed_reserve_policy_from_env,
 };
 pub use vram_backend::VramBackend;
 

@@ -13,7 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 ramshared-tier = { path = "../ramshared-tier" }
+ramshared-config = { path = "../ramshared-config" }
 ramshared-cuda = { path = "../ramshared-cuda" }
+ramshared-vram = { path = "../ramshared-vram" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"

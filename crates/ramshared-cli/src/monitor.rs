@@ -1,11 +1,12 @@
 //! Read-only RamShared observability stream and terminal dashboard.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -16,15 +17,29 @@ use ratatui::widgets::{Block, Borders, Paragraph, Sparkline, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
-use crate::{bounded_process, cascade, workload};
+use crate::{cascade, workload};
+use ramshared_vram::{
+    GpuBudgetSource, GpuBudgetTelemetry, TELEMETRY_MAX_AGE_MS, WorkerCacheTelemetry,
+};
 
 const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_HISTORY_SECONDS: u64 = 300;
 const MIN_INTERVAL_MS: u64 = 250;
 const MAX_HISTORY_SECONDS: u64 = 3_600;
-const GPU_QUERY_TIMEOUT: Duration = Duration::from_millis(2_500);
 const DEFAULT_MAX_LOG_BYTES: u64 = 50 * 1024 * 1024;
+const GPU_BUDGET_MAX_AGE_MS: u64 = 5_000;
+const MIB_BYTES: u64 = 1024 * 1024;
+const BENCHMARK_EVIDENCE_SCHEMA_V1: &str = "ramshared-evidence/v1";
+const BENCHMARK_MIN_SAMPLE_COUNT: usize = 3;
+const BUILD_GIT_SHA: &str = env!("RAMSHARED_BUILD_GIT_SHA");
+const BUILD_TREE_STATE: &str = env!("RAMSHARED_BUILD_TREE_STATE");
+const INSTALLED_PROVENANCE_V1: &str = "ramshared-installed-release-provenance/v1";
+const INSTALLED_PROVENANCE_V2: &str = "ramshared-installed-release-provenance/v2";
+#[cfg(test)]
+const DIRECT_INSTALL_METADATA_V1: &str = "ramshared-direct-install-metadata/v1";
+const DIRECT_INSTALL_METADATA_V2: &str = "ramshared-direct-install-metadata/v2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MonitorOptions {
@@ -50,6 +65,10 @@ impl Default for MonitorOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "monitor_pressure_tests.rs"]
+mod pressure_classification_tests;
 
 impl MonitorOptions {
     pub fn parse(args: &[String]) -> Result<Self, ()> {
@@ -121,11 +140,109 @@ impl fmt::Display for MonitorError {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct MemoryObservation {
+    pub required_counters_available: bool,
     pub total_kib: u64,
     pub available_kib: u64,
     pub swap_total_kib: u64,
     pub swap_free_kib: u64,
+    pub anon_pages_kib: Option<u64>,
+    pub shmem_kib: Option<u64>,
+    pub slab_kib: Option<u64>,
+    pub s_unreclaim_kib: Option<u64>,
+    pub dirty_kib: Option<u64>,
+    pub writeback_kib: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct HyperVBalloonObservation {
+    pub debugfs_status: String,
+    pub nr_balloon_pages: Option<u64>,
+    pub host_version: Option<String>,
+    pub capabilities: Option<String>,
+    pub state: Option<String>,
+    pub page_size: Option<u64>,
+    pub pages_added: Option<u64>,
+    pub pages_onlined: Option<u64>,
+    pub pages_ballooned: Option<u64>,
+    pub total_pages_committed: Option<u64>,
+    pub max_dynamic_page_count: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ProcessMemoryTotals {
+    pub visible_processes: u64,
+    pub rss_kib: u64,
+    pub swap_kib: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CgroupMemoryObservation {
+    pub status: String,
+    pub current_bytes: Option<u64>,
+    pub events: Option<MemoryEvents>,
+    pub subgroup_current_bytes: Option<u64>,
+    pub subgroups_with_memory: u64,
+    pub root_direct_processes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScope {
+    LinuxHost,
+    Wsl,
+    Wsl2,
+}
+
+impl MemoryScope {
+    fn ram_label(self) -> &'static str {
+        match self {
+            Self::LinuxHost => "Host RAM",
+            Self::Wsl => "WSL Guest RAM",
+            Self::Wsl2 => "WSL2 Guest RAM",
+        }
+    }
+
+    fn panel_title(self) -> &'static str {
+        match self {
+            Self::LinuxHost => "Host RAM & Swap",
+            Self::Wsl => "WSL Guest RAM & Swap",
+            Self::Wsl2 => "WSL2 Guest RAM & Swap",
+        }
+    }
+
+    fn history_title(self) -> &'static str {
+        match self {
+            Self::LinuxHost => "Host RAM History",
+            Self::Wsl => "WSL Guest RAM History",
+            Self::Wsl2 => "WSL2 Guest RAM History",
+        }
+    }
+}
+
+fn detect_memory_scope(osrelease: &str, wsl_interop_available: bool) -> MemoryScope {
+    let normalized = osrelease.to_ascii_lowercase();
+    if normalized.contains("microsoft-standard-wsl2")
+        || (normalized.contains("microsoft") && normalized.contains("wsl2"))
+    {
+        MemoryScope::Wsl2
+    } else if (normalized.contains("microsoft") && normalized.contains("wsl"))
+        || wsl_interop_available
+    {
+        MemoryScope::Wsl
+    } else {
+        MemoryScope::LinuxHost
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatencySource {
+    #[default]
+    Unavailable,
+    Estimated,
+    Measured,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -143,10 +260,14 @@ pub struct TierIoStats {
     pub min_lat_us: f64,
     pub avg_lat_us: f64,
     pub max_lat_us: f64,
+    #[serde(default)]
+    pub latency_source: LatencySource,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ControlPlaneObservation {
+    #[serde(default)]
+    pub memory_psi_available: bool,
     pub memory_psi_some_avg10: f64,
     pub memory_psi_some_avg60: f64,
     pub memory_psi_some_avg300: f64,
@@ -179,8 +300,12 @@ pub struct ControlPlaneObservation {
     pub docker_memory_current_bytes: u64,
     pub managed_reservations: u64,
     pub managed_reserved_bytes: u64,
-    pub unmanaged_pressure_state: String,
-    pub unmanaged_pressure_kib: u64,
+    /// The v4 JSON key is retained for compatibility; the value describes
+    /// unmanaged process memory use, not measured system pressure.
+    #[serde(rename = "unmanaged_pressure_state")]
+    pub unmanaged_memory_state: String,
+    #[serde(rename = "unmanaged_pressure_kib")]
+    pub unmanaged_memory_kib: u64,
     pub unmanaged_processes: u64,
     pub reclaim_speed_gbs: f64,
     pub reclaim_duration_ms: f64,
@@ -211,12 +336,75 @@ pub struct ProcessObservation {
     pub managed: bool,
 }
 
+/// DT-10: one observation of the GPU budget plus the enforced VRAM-reserve
+/// floor. Every reserve field is named `vram_reserve_*` so a reader can never
+/// confuse the GPU free floor with a system-RAM or swap threshold.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct GpuObservation {
-    pub name: String,
-    pub total_mib: u64,
+    pub adapter: ramshared_vram::GpuAdapterIdentity,
+    pub source: GpuBudgetSource,
+    pub total_mib: Option<u64>,
+    pub budget_mib: u64,
     pub used_mib: u64,
     pub free_mib: u64,
+    /// Enforced VRAM free floor the admission path must leave untouched,
+    /// in MiB. Three-term maximum plus runtime headroom.
+    pub vram_reserve_enforced_mib: u64,
+    /// Where that floor came from: `sealed-manifest` or `lab-override-raise`.
+    pub vram_reserve_source: String,
+    /// Sealed configured minimum from the manifest, in MiB.
+    pub vram_reserve_sealed_min_mib: u64,
+    /// Sealed percentage share. Never overridable (DT-8).
+    pub vram_reserve_sealed_percent: u64,
+    /// Runtime headroom added on top of the configured reserve, in MiB.
+    pub vram_reserve_runtime_buffer_mib: u64,
+}
+
+/// The runtime headroom the worker and broker add on top of the configured
+/// reserve. Mirrors `ramshared_block::gpu_cache_worker::RUNTIME_FREE_BUFFER_BYTES`;
+/// `ramshared-cli` does not depend on that crate.
+const VRAM_RESERVE_RUNTIME_BUFFER_MIB: u64 = 640;
+
+/// The sealed percentage share the monitor can prove without a daemon
+/// handshake. A daemon override raises the floor; it never lowers this share,
+/// so reporting the sealed share is never optimistic (DT-8).
+const VRAM_RESERVE_SEALED_PERCENT: u64 = 20;
+
+/// Builds the DT-10 reserve block from one budget observation.
+///
+/// The monitor is a reader: it reports the sealed authority and the formula it
+/// can recompute. It never claims `lab-override-raise`, because an override
+/// lives in the daemon process and is not observable from here.
+fn vram_reserve_fields(
+    total_bytes: Option<u64>,
+    budget_bytes: u64,
+) -> (
+    u64,    // enforced MiB
+    String, // source
+    u64,    // sealed min MiB
+    u64,    // sealed percent
+    u64,    // runtime buffer MiB
+) {
+    use ramshared_vram::{ReserveFloorPolicy, enforced_free_floor_from_configured};
+    let policy = ReserveFloorPolicy::from_manifest(2048, VRAM_RESERVE_SEALED_PERCENT).unwrap_or(
+        ReserveFloorPolicy {
+            min_floor_bytes: u64::MAX,
+            sealed_percent: VRAM_RESERVE_SEALED_PERCENT,
+        },
+    );
+    let capacity = total_bytes.unwrap_or(budget_bytes).min(budget_bytes);
+    let enforced = enforced_free_floor_from_configured(
+        policy.configured_reserve_bytes(capacity),
+        capacity,
+        VRAM_RESERVE_RUNTIME_BUFFER_MIB * 1024 * 1024,
+    );
+    (
+        enforced / (1024 * 1024),
+        "sealed-manifest".to_string(),
+        policy.min_floor_bytes / (1024 * 1024),
+        policy.sealed_percent,
+        VRAM_RESERVE_RUNTIME_BUFFER_MIB,
+    )
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -225,7 +413,11 @@ pub struct Observation {
     pub status: BTreeMap<String, Value>,
     pub epoch_ms: u64,
     pub sample_age_ms: u64,
+    pub memory_scope: MemoryScope,
     pub mem: MemoryObservation,
+    pub cgroup_memory: CgroupMemoryObservation,
+    pub hyperv_balloon: HyperVBalloonObservation,
+    pub process_totals: ProcessMemoryTotals,
     pub control_plane: ControlPlaneObservation,
     pub gpu: Option<GpuObservation>,
     pub top_processes: Vec<ProcessObservation>,
@@ -247,58 +439,157 @@ impl Observation {
 }
 
 fn read_benchmark_qualification(path: &Path) -> (f64, f64, f64, f64, String) {
-    if let Ok(content) = fs::read_to_string(path)
-        && let Ok(json) = serde_json::from_str::<Value>(&content)
-    {
-        let speed = json
-            .get("reclaim_speed_gbs")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let duration = json
-            .get("reclaim_duration_ms")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let p50 = json
-            .get("p50_cycle_latency_ms")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let p99 = json
-            .get("p99_cycle_latency_ms")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-        let status = json
-            .get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("UNKNOWN")
-            .to_string();
-        (speed, duration, p50, p99, status)
-    } else {
-        (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+    let awaiting = || (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string());
+    let Ok(content) = fs::read_to_string(path) else {
+        return awaiting();
+    };
+    let Ok(json) = serde_json::from_str::<Value>(&content) else {
+        return awaiting();
+    };
+    if !is_promotable_benchmark_evidence(&json) {
+        return awaiting();
     }
+
+    let Some(speed) = benchmark_metric_summary(&json, "reclaim_speed_gbs", "GB/s", "median") else {
+        return awaiting();
+    };
+    let Some(duration) = benchmark_metric_summary(&json, "reclaim_duration_ms", "ms", "median")
+    else {
+        return awaiting();
+    };
+    let Some(p50) = benchmark_metric_summary(&json, "p50_cycle_latency_ms", "ms", "median") else {
+        return awaiting();
+    };
+    let Some(p99) =
+        benchmark_metric_summary(&json, "p99_cycle_latency_ms", "ms", "p99_nearest_rank")
+    else {
+        return awaiting();
+    };
+
+    (speed, duration, p50, p99, "PASS".to_string())
+}
+
+fn is_promotable_benchmark_evidence(json: &Value) -> bool {
+    let source = &json["source"];
+    let workload = &json["workload"];
+    let comparison = &json["comparison"];
+    let lifecycle = &json["lifecycle"];
+    let decision = &json["decision"];
+    let artifacts = json["artifacts"].as_array();
+    let refusals = lifecycle["refusals"].as_array();
+
+    json["schema_version"].as_str() == Some(BENCHMARK_EVIDENCE_SCHEMA_V1)
+        && json["run_id"]
+            .as_str()
+            .is_some_and(|run_id| !run_id.is_empty())
+        && source["commit"]
+            .as_str()
+            .is_some_and(|commit| !commit.is_empty())
+        && source["dirty"].as_bool() == Some(false)
+        && source["dirty_entry_count"].as_u64() == Some(0)
+        && json["candidate"]
+            .as_object()
+            .is_some_and(|candidate| !candidate.is_empty())
+        && workload["runs"].as_u64().is_some_and(|runs| runs >= 3)
+        && comparison["qualified"].as_bool() == Some(true)
+        && lifecycle["binary_match"].as_bool() == Some(true)
+        && lifecycle["legitimate"]["verdict"].as_str() == Some("PASS")
+        && refusals.is_some_and(|entries| {
+            !entries.is_empty()
+                && entries
+                    .iter()
+                    .all(|entry| entry["verdict"].as_str() == Some("PASS"))
+        })
+        && lifecycle["cleanup"]["complete"].as_bool() == Some(true)
+        && lifecycle["residue"].as_u64() == Some(0)
+        && artifacts.is_some_and(|entries| !entries.is_empty())
+        && decision["verdict"].as_str() == Some("PASS")
+        && decision["promotable"].as_bool() == Some(true)
+}
+
+fn benchmark_metric_summary(
+    json: &Value,
+    metric_name: &str,
+    expected_unit: &str,
+    summary_key: &str,
+) -> Option<f64> {
+    let metric = json.get("metrics")?.get(metric_name)?;
+    if metric.get("unit")?.as_str()? != expected_unit {
+        return None;
+    }
+    let samples = metric.get("samples")?.as_array()?;
+    if samples.len() < BENCHMARK_MIN_SAMPLE_COUNT
+        || metric.get("n")?.as_u64()? != u64::try_from(samples.len()).ok()?
+    {
+        return None;
+    }
+
+    let mut values = samples
+        .iter()
+        .map(Value::as_f64)
+        .collect::<Option<Vec<_>>>()?;
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return None;
+    }
+    values.sort_by(f64::total_cmp);
+
+    let recomputed = match summary_key {
+        "median" => {
+            let middle = values.len() / 2;
+            if values.len() % 2 == 0 {
+                (values[middle - 1] + values[middle]) / 2.0
+            } else {
+                values[middle]
+            }
+        }
+        "p99_nearest_rank" => {
+            let rank = ((values.len() as f64) * 0.99).ceil() as usize;
+            values[rank.max(1).min(values.len()) - 1]
+        }
+        _ => return None,
+    };
+    let recorded = metric.get(summary_key)?.as_f64()?;
+    let tolerance = recomputed.abs().max(1.0) * 1.0e-9;
+    if !recorded.is_finite() || (recorded - recomputed).abs() > tolerance {
+        return None;
+    }
+
+    Some(recomputed)
 }
 
 pub fn collect_observation() -> Result<Observation, MonitorError> {
     let status_json =
         cascade::status_json_document().map_err(|error| MonitorError::Io(error.to_string()))?;
-    let mut status_map = serde_json::from_str::<Map<String, Value>>(&status_json)
+    let status_map = serde_json::from_str::<Map<String, Value>>(&status_json)
         .map_err(|error| MonitorError::Json(error.to_string()))?;
+    let osrelease = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let memory_scope = detect_memory_scope(
+        &osrelease,
+        Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+            || std::env::var_os("WSL_INTEROP").is_some(),
+    );
     let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let pressure = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
     let vmstat = fs::read_to_string("/proc/vmstat").unwrap_or_default();
     let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
     let uptime = fs::read_to_string("/proc/uptime").unwrap_or_default();
+    let (balloon_debugfs, balloon_debugfs_status) =
+        read_hyperv_balloon_file(Path::new("/sys/kernel/debug/hv-balloon"));
     let events = fs::read_to_string("/sys/fs/cgroup/ramshared-workloads.slice/memory.events")
         .unwrap_or_default();
-    let mut errors = Vec::new();
-    let gpu = match query_gpu_bounded(GPU_QUERY_TIMEOUT) {
-        Ok(sample) => sample,
-        Err(error) => {
-            errors.push(error.clone());
-            apply_measurement_failure(&mut status_map, &error);
-            None
-        }
-    };
+    let gpu = gpu_observation_from_status(&status_map, unix_epoch_ms());
     let mut control_plane = parse_memory_pressure(&pressure);
+    let mem = parse_meminfo(&meminfo);
+    let mut errors = Vec::new();
+    if !control_plane.memory_psi_available {
+        errors.push("memory_psi_unavailable".to_string());
+    }
+    if !mem.required_counters_available {
+        errors.push("memory_telemetry_unavailable".to_string());
+    }
     let (swap_in_pages, swap_out_pages, pgfault_total, pgmajfault_total) = parse_vmstat(&vmstat);
     let (swap_read_bytes, swap_write_bytes) = parse_swap_diskstats(&diskstats);
     let (zram_io, vram_io, disk_io) = parse_per_tier_diskstats(&diskstats);
@@ -330,18 +621,26 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     control_plane.benchmark_p50_lat_ms = bench_p50;
     control_plane.benchmark_p99_lat_ms = bench_p99;
     control_plane.benchmark_status = bench_status;
-    let top_processes = collect_top_processes(Path::new("/proc"), 10);
+    let (top_processes, process_totals) = collect_process_snapshot(Path::new("/proc"), 10);
     let (unmanaged_state, unmanaged_kib, unmanaged_count) =
-        classify_unmanaged_pressure(&top_processes);
-    control_plane.unmanaged_pressure_state = unmanaged_state.into();
-    control_plane.unmanaged_pressure_kib = unmanaged_kib;
+        classify_unmanaged_memory_usage(&top_processes);
+    control_plane.unmanaged_memory_state = unmanaged_state.into();
+    control_plane.unmanaged_memory_kib = unmanaged_kib;
     control_plane.unmanaged_processes = unmanaged_count;
 
     Ok(Observation {
         status: status_map.into_iter().collect(),
         epoch_ms: unix_epoch_ms(),
         sample_age_ms: 0,
-        mem: parse_meminfo(&meminfo),
+        memory_scope,
+        mem,
+        cgroup_memory: collect_cgroup_memory(Path::new("/sys/fs/cgroup")),
+        hyperv_balloon: parse_hyperv_balloon(
+            &balloon_debugfs,
+            parse_vmstat_value(&vmstat, "nr_balloon_pages"),
+            balloon_debugfs_status,
+        ),
+        process_totals,
         control_plane,
         gpu,
         top_processes,
@@ -357,45 +656,212 @@ fn unix_epoch_ms() -> u64 {
 }
 
 fn parse_meminfo(text: &str) -> MemoryObservation {
-    let value = |name: &str| {
-        text.lines()
-            .find_map(|line| {
-                let (key, rest) = line.split_once(':')?;
-                (key == name)
-                    .then(|| rest.split_whitespace().next()?.parse::<u64>().ok())
-                    .flatten()
-            })
-            .unwrap_or(0)
-    };
+    let optional_value = |name: &str| parse_meminfo_value(text, name);
+    let total_kib = optional_value("MemTotal");
+    let available_kib = optional_value("MemAvailable");
+    let swap_total_kib = optional_value("SwapTotal");
+    let swap_free_kib = optional_value("SwapFree");
+    let required_counters_available =
+        match (total_kib, available_kib, swap_total_kib, swap_free_kib) {
+            (Some(total), Some(available), Some(swap_total), Some(swap_free)) => {
+                total > 0 && available <= total && swap_free <= swap_total
+            }
+            _ => false,
+        };
     MemoryObservation {
-        total_kib: value("MemTotal"),
-        available_kib: value("MemAvailable"),
-        swap_total_kib: value("SwapTotal"),
-        swap_free_kib: value("SwapFree"),
+        required_counters_available,
+        total_kib: total_kib.unwrap_or(0),
+        available_kib: available_kib.unwrap_or(0),
+        swap_total_kib: swap_total_kib.unwrap_or(0),
+        swap_free_kib: swap_free_kib.unwrap_or(0),
+        anon_pages_kib: optional_value("AnonPages"),
+        shmem_kib: optional_value("Shmem"),
+        slab_kib: optional_value("Slab"),
+        s_unreclaim_kib: optional_value("SUnreclaim"),
+        dirty_kib: optional_value("Dirty"),
+        writeback_kib: optional_value("Writeback"),
+    }
+}
+
+fn parse_meminfo_value(text: &str, name: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        let (key, rest) = line.split_once(':')?;
+        (key == name)
+            .then(|| rest.split_whitespace().next()?.parse::<u64>().ok())
+            .flatten()
+    })
+}
+
+fn parse_vmstat_value(text: &str, name: &str) -> Option<u64> {
+    text.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        (fields.next()? == name)
+            .then(|| fields.next()?.parse::<u64>().ok())
+            .flatten()
+    })
+}
+
+fn parse_hyperv_balloon(
+    debugfs: &str,
+    nr_balloon_pages: Option<u64>,
+    debugfs_status: &str,
+) -> HyperVBalloonObservation {
+    let mut balloon = HyperVBalloonObservation {
+        debugfs_status: debugfs_status.to_owned(),
+        nr_balloon_pages,
+        ..HyperVBalloonObservation::default()
+    };
+    for line in debugfs.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "host_version" => balloon.host_version = nonempty(value),
+            "capabilities" => balloon.capabilities = nonempty(value),
+            "state" => balloon.state = nonempty(value),
+            "page_size" => balloon.page_size = value.parse().ok(),
+            "pages_added" => balloon.pages_added = value.parse().ok(),
+            "pages_onlined" => balloon.pages_onlined = value.parse().ok(),
+            "pages_ballooned" => balloon.pages_ballooned = value.parse().ok(),
+            "total_pages_committed" => balloon.total_pages_committed = value.parse().ok(),
+            "max_dynamic_page_count" => balloon.max_dynamic_page_count = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    balloon
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn read_hyperv_balloon_file(path: &Path) -> (String, &'static str) {
+    match fs::read_to_string(path) {
+        Ok(contents) => (contents, "readable"),
+        Err(error) => {
+            let reason = match error.kind() {
+                std::io::ErrorKind::PermissionDenied => "permission_denied",
+                std::io::ErrorKind::NotFound => "not_found",
+                _ => "read_error",
+            };
+            (String::new(), reason)
+        }
+    }
+}
+
+fn collect_cgroup_memory(root: &Path) -> CgroupMemoryObservation {
+    let current_bytes = read_optional_u64_file(&root.join("memory.current"));
+    let events = fs::read_to_string(root.join("memory.events"))
+        .ok()
+        .map(|text| parse_memory_events(&text));
+    let root_direct_processes = fs::read_to_string(root.join("cgroup.procs"))
+        .ok()
+        .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count() as u64);
+
+    let mut subgroup_current_bytes = 0u64;
+    let mut subgroups_with_memory = 0u64;
+    if current_bytes.is_none() {
+        for entry in fs::read_dir(root)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+        {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
+                continue;
+            }
+            if let Some(current) = read_optional_u64_file(&entry.path().join("memory.current")) {
+                subgroup_current_bytes = subgroup_current_bytes.saturating_add(current);
+                subgroups_with_memory = subgroups_with_memory.saturating_add(1);
+            }
+        }
+    }
+
+    let status = if current_bytes.is_some() {
+        "root"
+    } else if subgroups_with_memory > 0 {
+        "partial"
+    } else {
+        "unavailable"
+    };
+    CgroupMemoryObservation {
+        status: status.to_owned(),
+        current_bytes,
+        events,
+        subgroup_current_bytes: (subgroups_with_memory > 0).then_some(subgroup_current_bytes),
+        subgroups_with_memory,
+        root_direct_processes,
     }
 }
 
 fn parse_memory_pressure(text: &str) -> ControlPlaneObservation {
-    fn average(line: Option<&str>, name: &str) -> f64 {
-        line.and_then(|line| {
-            line.split_whitespace().find_map(|field| {
-                field
-                    .strip_prefix(name)
-                    .and_then(|value| value.parse::<f64>().ok())
-            })
-        })
-        .unwrap_or(0.0)
+    fn averages(line: Option<&str>) -> Option<[f64; 3]> {
+        let line = line?;
+        let mut values = [None; 3];
+        for field in line.split_whitespace().skip(1) {
+            for (index, name) in ["avg10=", "avg60=", "avg300="].iter().enumerate() {
+                if let Some(raw) = field.strip_prefix(name) {
+                    if values[index].is_some() {
+                        return None;
+                    }
+                    let value = raw.parse::<f64>().ok()?;
+                    if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                        return None;
+                    }
+                    values[index] = Some(value);
+                }
+            }
+        }
+        Some([values[0]?, values[1]?, values[2]?])
     }
-    let some = text.lines().find(|line| line.starts_with("some "));
-    let full = text.lines().find(|line| line.starts_with("full "));
+
+    let some = averages(text.lines().find(|line| line.starts_with("some ")));
+    let full = averages(text.lines().find(|line| line.starts_with("full ")));
+    let some_values = some.unwrap_or([0.0; 3]);
+    let full_values = full.unwrap_or([0.0; 3]);
     ControlPlaneObservation {
-        memory_psi_some_avg10: average(some, "avg10="),
-        memory_psi_some_avg60: average(some, "avg60="),
-        memory_psi_some_avg300: average(some, "avg300="),
-        memory_psi_full_avg10: average(full, "avg10="),
-        memory_psi_full_avg60: average(full, "avg60="),
-        memory_psi_full_avg300: average(full, "avg300="),
+        memory_psi_available: some.is_some() && full.is_some(),
+        memory_psi_some_avg10: some_values[0],
+        memory_psi_some_avg60: some_values[1],
+        memory_psi_some_avg300: some_values[2],
+        memory_psi_full_avg10: full_values[0],
+        memory_psi_full_avg60: full_values[1],
+        memory_psi_full_avg300: full_values[2],
         ..ControlPlaneObservation::default()
+    }
+}
+
+fn observation_sample_is_stale(observation: &Observation) -> bool {
+    observation
+        .errors
+        .iter()
+        .any(|error| error == "sample_refresh_failed")
+}
+
+fn format_memory_pressure(control_plane: &ControlPlaneObservation, sample_stale: bool) -> String {
+    if sample_stale {
+        return "Pressure: sample stale".to_string();
+    }
+    if !control_plane.memory_psi_available {
+        return "Pressure: PSI unavailable".to_string();
+    }
+    format!(
+        "Pressure: PSI some={:.2}% full={:.2}%",
+        control_plane.memory_psi_some_avg10, control_plane.memory_psi_full_avg10
+    )
+}
+
+fn mark_observation_refresh_failed(observation: &mut Observation, age: Duration) {
+    observation.sample_age_ms = age.as_millis().min(u128::from(u64::MAX)) as u64;
+    if !observation
+        .errors
+        .iter()
+        .any(|error| error == "sample_refresh_failed")
+    {
+        observation.errors.push("sample_refresh_failed".to_string());
     }
 }
 
@@ -552,6 +1018,12 @@ fn read_u64_file(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+fn read_optional_u64_file(path: &Path) -> Option<u64> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+}
+
 fn count_scope_dirs(path: &Path) -> u64 {
     fs::read_dir(path)
         .ok()
@@ -575,99 +1047,92 @@ fn read_reservation_totals(path: &Path) -> (u64, u64) {
     )
 }
 
-fn apply_measurement_failure(status: &mut Map<String, Value>, error: &str) {
-    status.insert("ok".into(), Value::Bool(false));
-    status.insert("overall_state".into(), Value::String("BLOCKED".into()));
-    status.insert(
-        "measurement_state".into(),
-        serde_json::json!({"state":"FAILED","error":error}),
-    );
-}
-
-fn gpu_query_candidates() -> [&'static str; 2] {
-    ["nvidia-smi", "/usr/lib/wsl/lib/nvidia-smi"]
-}
-
-fn query_gpu_bounded(timeout: Duration) -> Result<Option<GpuObservation>, String> {
-    if let Ok(cuda) = ramshared_cuda::Cuda::load() {
-        let dev_opt = cuda.device(0).ok();
-        if let Some(dev) = dev_opt {
-            let res = cuda.create_context(&dev).and_then(|ctx| ctx.mem_info());
-            if let Ok((free_b, total_b)) = res {
-                let total_mib = (total_b / 1_048_576) as u64;
-                let free_mib = (free_b / 1_048_576) as u64;
-                let used_mib = total_mib.saturating_sub(free_mib);
-                let name = dev.name().to_string();
-                return Ok(Some(GpuObservation {
-                    name,
-                    total_mib,
-                    used_mib,
-                    free_mib,
-                }));
-            }
-        }
+fn gpu_observation_from_status(
+    status: &Map<String, Value>,
+    now_unix_ms: u64,
+) -> Option<GpuObservation> {
+    let telemetry =
+        serde_json::from_value::<GpuBudgetTelemetry>(status.get("gpu_budget")?.clone()).ok()?;
+    let available_bytes = telemetry.trusted_available_at(now_unix_ms, GPU_BUDGET_MAX_AGE_MS)?;
+    let adapter = telemetry.adapter.as_ref()?;
+    if adapter.backend.trim().is_empty()
+        || adapter.key.trim().is_empty()
+        || telemetry.budget_bytes == 0
+        || telemetry.total_bytes == Some(0)
+    {
+        return None;
     }
 
-    let mut last_error = "gpu_query_unavailable".to_string();
-    for candidate in gpu_query_candidates() {
-        match query_gpu_command(candidate, timeout) {
-            Ok(sample) => return Ok(Some(sample)),
-            Err(error) => last_error = error,
-        }
-    }
-    Err(last_error)
-}
+    let (
+        vram_reserve_enforced_mib,
+        vram_reserve_source,
+        vram_reserve_sealed_min_mib,
+        vram_reserve_sealed_percent,
+        vram_reserve_runtime_buffer_mib,
+    ) = vram_reserve_fields(telemetry.total_bytes, telemetry.budget_bytes);
 
-fn query_gpu_command(command: &str, timeout: Duration) -> Result<GpuObservation, String> {
-    let mut query = Command::new(command);
-    query.args([
-        "--query-gpu=name,memory.total,memory.used,memory.free",
-        "--format=csv,noheader,nounits",
-    ]);
-    let output = match bounded_process::run_capture_command(
-        &mut query,
-        &format!("GPU query {command}"),
-        timeout,
-        bounded_process::DEFAULT_OUTPUT_LIMIT,
-        |_| {},
-    ) {
-        Ok(output) => output,
-        Err(error) if error.is_not_found() => {
-            return Err(format!("gpu_query_not_found:{command}"));
-        }
-        Err(error) => return Err(format!("gpu_query_output:{error}")),
-    };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gpu_query_failed:{}", one_line(&stderr)));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(line) = stdout.lines().next().filter(|line| !line.trim().is_empty()) else {
-        return Err("gpu_query_empty".into());
-    };
-    let fields: Vec<&str> = line.split(',').map(str::trim).collect();
-    if fields.len() != 4 {
-        return Err("gpu_query_invalid_field_count".to_string());
-    }
-    Ok(GpuObservation {
-        name: fields[0].to_string(),
-        total_mib: parse_gpu_number(fields[1])?,
-        used_mib: parse_gpu_number(fields[2])?,
-        free_mib: parse_gpu_number(fields[3])?,
+    Some(GpuObservation {
+        adapter: adapter.clone(),
+        source: telemetry.source,
+        total_mib: telemetry.total_bytes.map(|bytes| bytes / MIB_BYTES),
+        budget_mib: telemetry.budget_bytes / MIB_BYTES,
+        used_mib: telemetry.used_bytes / MIB_BYTES,
+        free_mib: available_bytes / MIB_BYTES,
+        vram_reserve_enforced_mib,
+        vram_reserve_source,
+        vram_reserve_sealed_min_mib,
+        vram_reserve_sealed_percent,
+        vram_reserve_runtime_buffer_mib,
     })
 }
 
-fn parse_gpu_number(value: &str) -> Result<u64, String> {
-    value
-        .parse::<u64>()
-        .map_err(|_| "gpu_query_invalid_number".to_string())
+/// Parses the published cache telemetry and drops anything malformed or stale
+/// (DT-8). A stale sample is omitted, never rendered as if it were live.
+fn cache_telemetry_from_value(
+    value: Option<&Value>,
+    now_unix_ms: u64,
+) -> Option<WorkerCacheTelemetry> {
+    let cache = serde_json::from_value::<WorkerCacheTelemetry>(value?.clone()).ok()?;
+    (cache.schema_version == 1 && cache.is_fresh_at(now_unix_ms, TELEMETRY_MAX_AGE_MS))
+        .then_some(cache)
 }
 
-fn one_line(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Formats cache occupancy with explicit VRAM-cache labels (DT-8).
+///
+/// Every figure here is cache occupancy in the worker's logical address space
+/// or in provider VRAM. None of them is guest or host RAM, and no label may
+/// suggest otherwise: the logical figure is always rendered as "VRAM cache
+/// logical", never as memory available to the host.
+fn format_cache_telemetry_labels(cache: &WorkerCacheTelemetry) -> String {
+    let mib = |bytes: u64| format!("{} MiB", bytes / (1024 * 1024));
+    let refusal = cache
+        .codec
+        .refusal_reason
+        .as_deref()
+        .map(|reason| format!(" ({reason})"))
+        .unwrap_or_default();
+    format!(
+        "VRAM cache logical: {} | VRAM cache slabs: {} | codec workspace: {} | compressed payload: {} | raw payload: {} | raw bypass: {} | metadata: {} | codec: {}/{}{} | codec errors: integrity={} decode={} timeout={}",
+        mib(cache.logical_cached_bytes),
+        mib(cache.physical_cache_slab_bytes),
+        mib(cache.codec_workspace_bytes),
+        mib(cache.compressed_payload_bytes),
+        mib(cache.raw_payload_bytes),
+        mib(cache.raw_bypass_bytes),
+        mib(cache.metadata_bytes),
+        cache.codec.capability.as_str(),
+        cache.codec.state.as_str(),
+        refusal,
+        cache.codec_integrity_errors,
+        cache.codec_decode_errors,
+        cache.codec_timeouts,
+    )
 }
 
-fn collect_top_processes(proc_root: &Path, limit: usize) -> Vec<ProcessObservation> {
+fn collect_process_snapshot(
+    proc_root: &Path,
+    limit: usize,
+) -> (Vec<ProcessObservation>, ProcessMemoryTotals) {
     let mut processes = fs::read_dir(proc_root)
         .ok()
         .into_iter()
@@ -682,13 +1147,21 @@ fn collect_top_processes(proc_root: &Path, limit: usize) -> Vec<ProcessObservati
         })
         .filter_map(|entry| process_observation(&entry.path()))
         .collect::<Vec<_>>();
+    let totals = processes
+        .iter()
+        .fold(ProcessMemoryTotals::default(), |mut totals, process| {
+            totals.visible_processes = totals.visible_processes.saturating_add(1);
+            totals.rss_kib = totals.rss_kib.saturating_add(process.rss_kib);
+            totals.swap_kib = totals.swap_kib.saturating_add(process.swap_kib);
+            totals
+        });
     processes
         .sort_by_key(|process| std::cmp::Reverse(process.rss_kib.saturating_add(process.swap_kib)));
     processes.truncate(limit);
-    processes
+    (processes, totals)
 }
 
-fn classify_unmanaged_pressure(processes: &[ProcessObservation]) -> (&'static str, u64, u64) {
+fn classify_unmanaged_memory_usage(processes: &[ProcessObservation]) -> (&'static str, u64, u64) {
     let mut count = 0u64;
     let mut kib = 0u64;
     for process in processes {
@@ -701,7 +1174,7 @@ fn classify_unmanaged_pressure(processes: &[ProcessObservation]) -> (&'static st
     if count == 0 {
         ("NONE", 0, 0)
     } else {
-        ("UNMANAGED_PRESSURE", kib, count)
+        ("UNMANAGED_MEMORY", kib, count)
     }
 }
 
@@ -809,14 +1282,25 @@ fn run_compact(options: &MonitorOptions) -> Result<(), MonitorError> {
                 .and_then(Value::as_u64)
                 .map_or_else(|| "unknown".into(), |value| format!("{} MiB", value / 1024))
         };
+        let memory_pressure = if observation.control_plane.memory_psi_available {
+            format!("{:.2}%", observation.control_plane.memory_psi_full_avg10)
+        } else {
+            "unavailable".to_string()
+        };
         println!(
-            "VRAM cached: {} | GPU reserve: {} | SSD authoritative: {} | memory pressure: {:.2}% | state: {}",
+            "VRAM cached: {} | GPU reserve: {} | SSD authoritative: {} | memory pressure: {} | state: {}",
             number("vram_cached_kib"),
             number("gpu_headroom_kib"),
             number("ssd_origin_written_kib"),
-            observation.control_plane.memory_psi_full_avg10,
+            memory_pressure,
             observation.string("overall_state")
         );
+        // DT-8: cache occupancy is rendered on its own line with explicit
+        // VRAM-cache labels, never merged into the guest/host memory figures.
+        match cache_telemetry_from_value(observation.value("gpu_cache"), unix_epoch_ms()) {
+            Some(cache) => println!("{}", format_cache_telemetry_labels(&cache)),
+            None => println!("VRAM cache codec telemetry: omitted (stale or malformed)"),
+        }
         if options.once {
             return Ok(());
         }
@@ -954,6 +1438,7 @@ fn update_tier_latencies(
     vram_count: u64,
     disk_count: u64,
 ) {
+    cp.zram_io.latency_source = LatencySource::Estimated;
     cp.zram_io.min_lat_us = 0.04;
     cp.zram_io.avg_lat_us = if zram_count > 0 {
         0.04 + (cp.zram_io.avg_mbs / 2000.0) * 0.08
@@ -966,6 +1451,7 @@ fn update_tier_latencies(
         0.15
     };
 
+    cp.vram_io.latency_source = LatencySource::Estimated;
     cp.vram_io.min_lat_us = 0.85;
     cp.vram_io.avg_lat_us = if vram_count > 0 {
         0.85 + (cp.vram_io.avg_mbs / 1000.0) * 1.20
@@ -978,6 +1464,7 @@ fn update_tier_latencies(
         3.20
     };
 
+    cp.disk_io.latency_source = LatencySource::Estimated;
     cp.disk_io.min_lat_us = 85.0;
     cp.disk_io.avg_lat_us = if disk_count > 0 {
         85.0 + (cp.disk_io.avg_mbs / 100.0) * 120.0
@@ -1013,19 +1500,65 @@ fn should_exit_tui(event_opt: Option<Event>) -> bool {
 }
 
 fn run_tui(options: &MonitorOptions) -> Result<(), MonitorError> {
-    let mut terminal = ratatui::init();
-    let result = tui_loop(&mut terminal, options);
-    ratatui::restore();
-    result
+    let process_origin = current_process_install_origin();
+    let mut identity_cache = InstallationIdentityCache::default();
+    let mut allow_reexec = true;
+    let mut runtime_notice = None;
+
+    loop {
+        let mut terminal = ratatui::init();
+        let result = tui_loop(
+            &mut terminal,
+            options,
+            process_origin,
+            allow_reexec,
+            runtime_notice.as_deref(),
+            &mut identity_cache,
+        );
+        ratatui::restore();
+
+        match result? {
+            TuiExit::UserRequested => return Ok(()),
+            TuiExit::Restart(executable) => match exec_restarted_process(&executable) {
+                Ok(()) => unreachable!("exec replaces the process on success"),
+                Err(error) => {
+                    allow_reexec = false;
+                    runtime_notice = Some(format!(
+                        "Update restart failed; continuing this process: {error}"
+                    ));
+                }
+            },
+        }
+    }
 }
 
-fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TuiExit {
+    UserRequested,
+    Restart(PathBuf),
+}
+
+fn tui_loop(
+    terminal: &mut DefaultTerminal,
+    options: &MonitorOptions,
+    process_origin: ProcessInstallOrigin,
+    allow_reexec: bool,
+    runtime_notice: Option<&str>,
+    identity_cache: &mut InstallationIdentityCache,
+) -> Result<TuiExit, MonitorError> {
+    let mut dashboard_metadata =
+        DashboardMetadata::current(identity_cache, process_origin, allow_reexec, runtime_notice);
+    if let Some(executable) = dashboard_metadata.restart_executable.clone() {
+        return Ok(TuiExit::Restart(executable));
+    }
+    let mut next_identity_refresh = Instant::now() + Duration::from_secs(1);
     let history_limit =
         ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
     let mut history = VecDeque::with_capacity(history_limit);
     let interval = Duration::from_millis(options.interval_ms);
     let mut next_sample = Instant::now();
     let mut observation = collect_observation()?;
+    let mut last_successful_sample = Instant::now();
     let mut last_io_sample = Some((
         observation.control_plane.swap_read_bytes,
         observation.control_plane.swap_write_bytes,
@@ -1054,122 +1587,152 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
 
     loop {
         if Instant::now() >= next_sample {
-            if let Ok(new_obs) = collect_observation() {
-                observation = new_obs;
-            }
-            let now = Instant::now();
-            if let Some((
-                last_rb,
-                last_wb,
-                last_z_rb,
-                last_z_wb,
-                last_v_rb,
-                last_v_wb,
-                last_d_rb,
-                last_d_wb,
-                last_t,
-            )) = last_io_sample
-            {
-                let dt = now.duration_since(last_t).as_secs_f64();
-                if (0.05..=10.0).contains(&dt) {
-                    let divisor = dt * 1_048_576.0;
-                    let cp = &mut observation.control_plane;
-                    cp.swap_read_mbs =
-                        (cp.swap_read_bytes.saturating_sub(last_rb) as f64) / divisor;
-                    cp.swap_write_mbs =
-                        (cp.swap_write_bytes.saturating_sub(last_wb) as f64) / divisor;
+            let refreshed = match collect_observation() {
+                Ok(new_observation) => {
+                    observation = new_observation;
+                    last_successful_sample = Instant::now();
+                    true
+                }
+                Err(_) => false,
+            };
+            if refreshed {
+                let now = Instant::now();
+                if let Some((
+                    last_rb,
+                    last_wb,
+                    last_z_rb,
+                    last_z_wb,
+                    last_v_rb,
+                    last_v_wb,
+                    last_d_rb,
+                    last_d_wb,
+                    last_t,
+                )) = last_io_sample
+                {
+                    let dt = now.duration_since(last_t).as_secs_f64();
+                    if (0.05..=10.0).contains(&dt) {
+                        let divisor = dt * 1_048_576.0;
+                        let cp = &mut observation.control_plane;
+                        cp.swap_read_mbs =
+                            (cp.swap_read_bytes.saturating_sub(last_rb) as f64) / divisor;
+                        cp.swap_write_mbs =
+                            (cp.swap_write_bytes.saturating_sub(last_wb) as f64) / divisor;
 
-                    cp.zram_io.read_mbs =
-                        (cp.zram_io.read_bytes.saturating_sub(last_z_rb) as f64) / divisor;
-                    cp.zram_io.write_mbs =
-                        (cp.zram_io.write_bytes.saturating_sub(last_z_wb) as f64) / divisor;
+                        cp.zram_io.read_mbs =
+                            (cp.zram_io.read_bytes.saturating_sub(last_z_rb) as f64) / divisor;
+                        cp.zram_io.write_mbs =
+                            (cp.zram_io.write_bytes.saturating_sub(last_z_wb) as f64) / divisor;
 
-                    cp.vram_io.read_mbs =
-                        (cp.vram_io.read_bytes.saturating_sub(last_v_rb) as f64) / divisor;
-                    cp.vram_io.write_mbs =
-                        (cp.vram_io.write_bytes.saturating_sub(last_v_wb) as f64) / divisor;
+                        cp.vram_io.read_mbs =
+                            (cp.vram_io.read_bytes.saturating_sub(last_v_rb) as f64) / divisor;
+                        cp.vram_io.write_mbs =
+                            (cp.vram_io.write_bytes.saturating_sub(last_v_wb) as f64) / divisor;
 
-                    cp.disk_io.read_mbs =
-                        (cp.disk_io.read_bytes.saturating_sub(last_d_rb) as f64) / divisor;
-                    cp.disk_io.write_mbs =
-                        (cp.disk_io.write_bytes.saturating_sub(last_d_wb) as f64) / divisor;
+                        cp.disk_io.read_mbs =
+                            (cp.disk_io.read_bytes.saturating_sub(last_d_rb) as f64) / divisor;
+                        cp.disk_io.write_mbs =
+                            (cp.disk_io.write_bytes.saturating_sub(last_d_wb) as f64) / divisor;
 
-                    let total_swap_speed = cp.swap_read_mbs + cp.swap_write_mbs;
-                    swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
-                    swap_read_peak_mbs = swap_read_peak_mbs.max(cp.swap_read_mbs);
-                    swap_write_peak_mbs = swap_write_peak_mbs.max(cp.swap_write_mbs);
-                    cp.swap_peak_mbs = swap_peak_mbs;
-                    cp.swap_read_peak_mbs = swap_read_peak_mbs;
-                    cp.swap_write_peak_mbs = swap_write_peak_mbs;
+                        let total_swap_speed = cp.swap_read_mbs + cp.swap_write_mbs;
+                        swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
+                        swap_read_peak_mbs = swap_read_peak_mbs.max(cp.swap_read_mbs);
+                        swap_write_peak_mbs = swap_write_peak_mbs.max(cp.swap_write_mbs);
+                        cp.swap_peak_mbs = swap_peak_mbs;
+                        cp.swap_read_peak_mbs = swap_read_peak_mbs;
+                        cp.swap_write_peak_mbs = swap_write_peak_mbs;
 
-                    zram_acc.record(cp.zram_io.read_mbs, cp.zram_io.write_mbs);
-                    zram_acc.apply_to_plane_io(&mut cp.zram_io);
+                        zram_acc.record(cp.zram_io.read_mbs, cp.zram_io.write_mbs);
+                        zram_acc.apply_to_plane_io(&mut cp.zram_io);
 
-                    vram_acc.record(cp.vram_io.read_mbs, cp.vram_io.write_mbs);
-                    vram_acc.apply_to_plane_io(&mut cp.vram_io);
+                        vram_acc.record(cp.vram_io.read_mbs, cp.vram_io.write_mbs);
+                        vram_acc.apply_to_plane_io(&mut cp.vram_io);
 
-                    disk_acc.record(cp.disk_io.read_mbs, cp.disk_io.write_mbs);
-                    disk_acc.apply_to_plane_io(&mut cp.disk_io);
+                        disk_acc.record(cp.disk_io.read_mbs, cp.disk_io.write_mbs);
+                        disk_acc.apply_to_plane_io(&mut cp.disk_io);
 
-                    if let Some((last_pf, last_mpf)) = last_faults_sample {
-                        cp.pgfault_per_sec =
-                            (cp.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
-                        cp.pgmajfault_per_sec =
-                            (cp.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
+                        if let Some((last_pf, last_mpf)) = last_faults_sample {
+                            cp.pgfault_per_sec =
+                                (cp.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
+                            cp.pgmajfault_per_sec =
+                                (cp.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
+                        }
                     }
                 }
-            }
 
-            if let Some(tiers) = observation.value("tiers").and_then(Value::as_object) {
-                if let Some(t) = tiers.get("zram").and_then(Value::as_object) {
-                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
-                    zram_peak_used_mb = zram_peak_used_mb.max((u + 512) / 1024);
+                if let Some(tiers) = observation.value("tiers").and_then(Value::as_object) {
+                    if let Some(t) = tiers.get("zram").and_then(Value::as_object) {
+                        let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                        zram_peak_used_mb = zram_peak_used_mb.max((u + 512) / 1024);
+                    }
+                    if let Some(t) = tiers.get("vram").and_then(Value::as_object) {
+                        let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                        vram_peak_used_mb = vram_peak_used_mb.max((u + 512) / 1024);
+                    }
+                    if let Some(t) = tiers.get("disk").and_then(Value::as_object) {
+                        let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
+                        disk_peak_used_mb = disk_peak_used_mb.max((u + 512) / 1024);
+                    }
                 }
-                if let Some(t) = tiers.get("vram").and_then(Value::as_object) {
-                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
-                    vram_peak_used_mb = vram_peak_used_mb.max((u + 512) / 1024);
+
+                let cp = &mut observation.control_plane;
+                cp.swap_peak_mbs = swap_peak_mbs;
+                cp.swap_read_peak_mbs = swap_read_peak_mbs;
+                cp.swap_write_peak_mbs = swap_write_peak_mbs;
+                cp.zram_peak_used_mb = zram_peak_used_mb;
+                cp.vram_peak_used_mb = vram_peak_used_mb;
+                cp.disk_peak_used_mb = disk_peak_used_mb;
+                zram_acc.apply_to_plane_io(&mut cp.zram_io);
+                vram_acc.apply_to_plane_io(&mut cp.vram_io);
+                disk_acc.apply_to_plane_io(&mut cp.disk_io);
+
+                update_tier_latencies(cp, zram_acc.count, vram_acc.count, disk_acc.count);
+
+                last_io_sample = Some((
+                    cp.swap_read_bytes,
+                    cp.swap_write_bytes,
+                    cp.zram_io.read_bytes,
+                    cp.zram_io.write_bytes,
+                    cp.vram_io.read_bytes,
+                    cp.vram_io.write_bytes,
+                    cp.disk_io.read_bytes,
+                    cp.disk_io.write_bytes,
+                    now,
+                ));
+                last_faults_sample = Some((cp.pgfault_total, cp.pgmajfault_total));
+                if let Ok(flight_line) = serde_json::to_string(&observation) {
+                    let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
                 }
-                if let Some(t) = tiers.get("disk").and_then(Value::as_object) {
-                    let u = t.get("used_kib").and_then(Value::as_u64).unwrap_or(0);
-                    disk_peak_used_mb = disk_peak_used_mb.max((u + 512) / 1024);
+                if observation.mem.required_counters_available {
+                    history.push_back(memory_used_pct(&observation.mem));
+                    while history.len() > history_limit {
+                        history.pop_front();
+                    }
                 }
+                next_sample = Instant::now() + interval;
+            } else {
+                mark_observation_refresh_failed(&mut observation, last_successful_sample.elapsed());
+                next_sample = Instant::now() + interval;
             }
-
-            let cp = &mut observation.control_plane;
-            cp.swap_peak_mbs = swap_peak_mbs;
-            cp.swap_read_peak_mbs = swap_read_peak_mbs;
-            cp.swap_write_peak_mbs = swap_write_peak_mbs;
-            cp.zram_peak_used_mb = zram_peak_used_mb;
-            cp.vram_peak_used_mb = vram_peak_used_mb;
-            cp.disk_peak_used_mb = disk_peak_used_mb;
-            zram_acc.apply_to_plane_io(&mut cp.zram_io);
-            vram_acc.apply_to_plane_io(&mut cp.vram_io);
-            disk_acc.apply_to_plane_io(&mut cp.disk_io);
-
-            update_tier_latencies(cp, zram_acc.count, vram_acc.count, disk_acc.count);
-
-            last_io_sample = Some((
-                cp.swap_read_bytes,
-                cp.swap_write_bytes,
-                cp.zram_io.read_bytes,
-                cp.zram_io.write_bytes,
-                cp.vram_io.read_bytes,
-                cp.vram_io.write_bytes,
-                cp.disk_io.read_bytes,
-                cp.disk_io.write_bytes,
-                now,
-            ));
-            last_faults_sample = Some((cp.pgfault_total, cp.pgmajfault_total));
-            if let Ok(flight_line) = serde_json::to_string(&observation) {
-                let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
-            }
-            history.push_back(memory_used_pct(&observation.mem));
-            while history.len() > history_limit {
-                history.pop_front();
-            }
-            next_sample = Instant::now() + interval;
         }
-        let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
+        observation.sample_age_ms = last_successful_sample
+            .elapsed()
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64;
+        if Instant::now() >= next_identity_refresh {
+            dashboard_metadata = DashboardMetadata::current(
+                identity_cache,
+                process_origin,
+                allow_reexec,
+                runtime_notice,
+            );
+            if let Some(executable) = dashboard_metadata.restart_executable.clone() {
+                return Ok(TuiExit::Restart(executable));
+            }
+            next_identity_refresh = Instant::now() + Duration::from_secs(1);
+        }
+        let _ = terminal.draw(|frame| {
+            draw_dashboard_with_metadata(frame, &observation, &history, &dashboard_metadata)
+        });
 
         let wait = next_sample
             .saturating_duration_since(Instant::now())
@@ -1180,9 +1743,42 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             None
         };
         if should_exit_tui(event_opt) {
-            return Ok(());
+            return Ok(TuiExit::UserRequested);
         }
     }
+}
+
+#[cfg(unix)]
+fn reexec_command(
+    executable: &Path,
+    argv0: &std::ffi::OsStr,
+    args: &[std::ffi::OsString],
+) -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new(executable);
+    command.arg0(argv0).args(args);
+    command
+}
+
+#[cfg(unix)]
+fn exec_restarted_process(executable: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::process::CommandExt;
+
+    let mut arguments = std::env::args_os();
+    let argv0 = arguments
+        .next()
+        .unwrap_or_else(|| executable.as_os_str().to_os_string());
+    let args = arguments.collect::<Vec<_>>();
+    Err(reexec_command(executable, &argv0, &args).exec())
+}
+
+#[cfg(not(unix))]
+fn exec_restarted_process(_executable: &Path) -> Result<(), std::io::Error> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "automatic re-exec is supported only on Unix hosts",
+    ))
 }
 
 fn memory_used_pct(memory: &MemoryObservation) -> u64 {
@@ -1196,11 +1792,968 @@ fn memory_used_pct(memory: &MemoryObservation) -> u64 {
         / memory.total_kib
 }
 
+fn format_grouped_number(value: u64) -> String {
+    let mut grouped = String::new();
+    for (index, digit) in value.to_string().bytes().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(char::from(digit));
+    }
+    grouped.chars().rev().collect()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DashboardMetadata {
+    version_line: String,
+    running_line: String,
+    direct_install_line: String,
+    active_install_line: String,
+    restart_executable: Option<PathBuf>,
+    runtime_notice: Option<String>,
+}
+
+impl DashboardMetadata {
+    fn current(
+        identity_cache: &mut InstallationIdentityCache,
+        process_origin: ProcessInstallOrigin,
+        allow_reexec: bool,
+        runtime_notice: Option<&str>,
+    ) -> Self {
+        let direct_executable = Path::new("/usr/local/bin/ramshared");
+        let active_release_executable = Path::new("/opt/ramshared/current/bin/ramshared");
+        let direct_install = identity_cache.read(direct_executable, InstallKind::Direct);
+        let active_install =
+            identity_cache.read(active_release_executable, InstallKind::ActiveRelease);
+        let running_metadata = current_running_executable_metadata();
+        let running_sha256 = current_running_executable_sha256();
+        let running = running_install_status_from_metadata(
+            running_metadata.as_ref(),
+            process_origin,
+            direct_executable,
+            active_release_executable,
+        );
+        let restart_executable = restart_target(
+            process_origin,
+            running_metadata.as_ref(),
+            running_sha256.as_deref(),
+            allow_reexec,
+            direct_install.as_ref(),
+            active_install.as_ref(),
+        );
+        Self {
+            version_line: format_build_identity(
+                env!("CARGO_PKG_VERSION"),
+                BUILD_GIT_SHA,
+                BUILD_TREE_STATE,
+            ),
+            running_line: format_running_identity_line(
+                env!("CARGO_PKG_VERSION"),
+                BUILD_GIT_SHA,
+                BUILD_TREE_STATE,
+                running,
+            ),
+            direct_install_line: format_installed_identity_line(
+                "direct /usr/local",
+                direct_install.as_ref(),
+            ),
+            active_install_line: format_installed_identity_line(
+                "active /opt/ramshared/current",
+                active_install.as_ref(),
+            ),
+            restart_executable,
+            runtime_notice: runtime_notice.map(str::to_string),
+        }
+    }
+}
+
+pub(crate) fn version_status_lines() -> String {
+    let mut identity_cache = InstallationIdentityCache::default();
+    let metadata = DashboardMetadata::current(
+        &mut identity_cache,
+        current_process_install_origin(),
+        false,
+        None,
+    );
+    format!(
+        "{}\n{}\n{}\n{}{}",
+        metadata.version_line,
+        metadata.running_line,
+        metadata.direct_install_line,
+        metadata.active_install_line,
+        metadata
+            .runtime_notice
+            .as_deref()
+            .map(|notice| format!("\n{notice}"))
+            .unwrap_or_default()
+    )
+}
+
+fn format_build_identity(version: &str, commit: &str, tree_state: &str) -> String {
+    format!(
+        "RamShared CLI {}",
+        format_identity(version, commit, tree_state)
+    )
+}
+
+pub(crate) fn build_info_lines() -> String {
+    let commit = full_commit_sha(BUILD_GIT_SHA).unwrap_or_else(|| "unavailable".to_string());
+    let tree_state = normalized_tree_state(BUILD_TREE_STATE);
+    format!(
+        "version={}\nsource_commit={commit}\nsource_tree_state={tree_state}",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+fn full_commit_sha(commit: &str) -> Option<String> {
+    if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(commit.to_ascii_lowercase())
+}
+
+fn normalized_tree_state(tree_state: &str) -> &'static str {
+    match tree_state {
+        "clean" => "clean",
+        "dirty" => "dirty",
+        _ => "unavailable",
+    }
+}
+
+fn format_identity(version: &str, commit: &str, tree_state: &str) -> String {
+    let Some(commit) = short_commit_sha(commit) else {
+        return format!("v{version} · source unavailable");
+    };
+    let state = match normalized_tree_state(tree_state) {
+        "clean" => "clean",
+        "dirty" => "dirty",
+        _ => "state unavailable",
+    };
+    format!("v{version} · {commit} ({state})")
+}
+
+fn short_commit_sha(commit: &str) -> Option<String> {
+    if commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(commit[..8].to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum InstallKind {
+    Direct,
+    ActiveRelease,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessInstallOrigin {
+    Direct,
+    ActiveRelease,
+    Both,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FileStamp {
+    device: Option<u64>,
+    inode: Option<u64>,
+    length: u64,
+    modified_ns: Option<u128>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InstallFingerprint(Vec<Option<FileStamp>>);
+
+#[derive(Clone, Debug)]
+struct CachedInstallIdentity {
+    fingerprint: InstallFingerprint,
+    identity: Option<InstalledIdentity>,
+}
+
+#[derive(Default)]
+struct InstallationIdentityCache {
+    direct: Option<CachedInstallIdentity>,
+    active_release: Option<CachedInstallIdentity>,
+}
+
+impl InstallationIdentityCache {
+    fn read(&mut self, executable: &Path, kind: InstallKind) -> Option<InstalledIdentity> {
+        let fingerprint = install_fingerprint(executable, kind);
+        let cached = match kind {
+            InstallKind::Direct => &mut self.direct,
+            InstallKind::ActiveRelease => &mut self.active_release,
+        };
+        if let Some(entry) = cached
+            .as_ref()
+            .filter(|entry| entry.fingerprint == fingerprint)
+        {
+            return entry.identity.clone();
+        }
+
+        let identity = read_installed_identity_uncached(executable, kind);
+        *cached = Some(CachedInstallIdentity {
+            fingerprint,
+            identity: identity.clone(),
+        });
+        identity
+    }
+}
+
+fn install_fingerprint(executable: &Path, kind: InstallKind) -> InstallFingerprint {
+    let mut paths = vec![executable.to_path_buf()];
+    match kind {
+        InstallKind::Direct => {
+            if let Some(daemon) = executable.parent().map(|parent| parent.join("ramsharedd")) {
+                paths.push(daemon);
+            }
+            paths.extend(direct_install_metadata_path(executable));
+            paths.extend(direct_install_timestamp_path(executable));
+        }
+        InstallKind::ActiveRelease => {
+            if let Some(root) = executable.parent().and_then(Path::parent) {
+                paths.push(root.join("bin/ramsharedd"));
+                for name in [
+                    "RELEASE_VERSION",
+                    "SOURCE_COMMIT",
+                    "SOURCE_TREE_STATE",
+                    "INSTALL_PROVENANCE.json",
+                    "SHA256SUMS",
+                    "INSTALLED_MANIFEST_SHA256",
+                ] {
+                    paths.push(root.join(name));
+                }
+            }
+        }
+    }
+    InstallFingerprint(paths.iter().map(|path| file_stamp(path)).collect())
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let metadata = fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())?;
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    #[cfg(unix)]
+    let (device, inode) = {
+        use std::os::unix::fs::MetadataExt;
+        (Some(metadata.dev()), Some(metadata.ino()))
+    };
+    #[cfg(not(unix))]
+    let (device, inode) = (None, None);
+    Some(FileStamp {
+        device,
+        inode,
+        length: metadata.len(),
+        modified_ns,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct InstalledIdentity {
+    executable: PathBuf,
+    version: Option<String>,
+    source_commit: Option<String>,
+    source_tree_state: Option<String>,
+    installed_at_utc: Option<String>,
+    executable_sha256: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunningInstallStatus {
+    InstalledDirect,
+    InstalledActiveRelease,
+    InstalledBoth,
+    UpdatePendingDirect,
+    UpdatePendingActiveRelease,
+    UpdatePendingBoth,
+    NotInstalled,
+    Unknown,
+}
+
+fn format_running_identity_line(
+    version: &str,
+    commit: &str,
+    tree_state: &str,
+    status: RunningInstallStatus,
+) -> String {
+    let value = match status {
+        RunningInstallStatus::InstalledDirect => "installed (direct)",
+        RunningInstallStatus::InstalledActiveRelease => "installed (active release)",
+        RunningInstallStatus::InstalledBoth => "installed (both)",
+        RunningInstallStatus::UpdatePendingDirect => "updated on disk; restart pending (direct)",
+        RunningInstallStatus::UpdatePendingActiveRelease => {
+            "updated on disk; restart pending (active release)"
+        }
+        RunningInstallStatus::UpdatePendingBoth => "updated on disk; restart pending",
+        RunningInstallStatus::NotInstalled => "not installed",
+        RunningInstallStatus::Unknown => "unknown",
+    };
+    format!(
+        "Running: {} · {value}",
+        format_identity(version, commit, tree_state)
+    )
+}
+
+#[cfg(test)]
+fn running_install_status(
+    executable: Option<&Path>,
+    direct_install_executable: &Path,
+    active_release_executable: &Path,
+) -> RunningInstallStatus {
+    let running_metadata = executable
+        .and_then(|path| fs::metadata(path).ok())
+        .filter(|metadata| metadata.is_file());
+    let origin = executable.map_or(ProcessInstallOrigin::Unknown, |path| {
+        process_install_origin_for_path(path, direct_install_executable, active_release_executable)
+    });
+    running_install_status_from_metadata(
+        running_metadata.as_ref(),
+        origin,
+        direct_install_executable,
+        active_release_executable,
+    )
+}
+
+fn running_install_status_from_metadata(
+    running_metadata: Option<&fs::Metadata>,
+    origin: ProcessInstallOrigin,
+    direct_install_executable: &Path,
+    active_release_executable: &Path,
+) -> RunningInstallStatus {
+    let Some(running_metadata) = running_metadata else {
+        return RunningInstallStatus::Unknown;
+    };
+    let direct_metadata = fs::metadata(direct_install_executable)
+        .ok()
+        .filter(|metadata| metadata.is_file());
+    let active_metadata = fs::metadata(active_release_executable)
+        .ok()
+        .filter(|metadata| metadata.is_file());
+    let direct_match = direct_metadata
+        .as_ref()
+        .is_some_and(|candidate| same_file_identity(running_metadata, candidate));
+    let active_match = active_metadata
+        .as_ref()
+        .is_some_and(|candidate| same_file_identity(running_metadata, candidate));
+    match (direct_match, active_match) {
+        (true, true) => RunningInstallStatus::InstalledBoth,
+        (true, false) => RunningInstallStatus::InstalledDirect,
+        (false, true) => RunningInstallStatus::InstalledActiveRelease,
+        (false, false) if origin == ProcessInstallOrigin::Direct => {
+            RunningInstallStatus::UpdatePendingDirect
+        }
+        (false, false) if origin == ProcessInstallOrigin::ActiveRelease => {
+            RunningInstallStatus::UpdatePendingActiveRelease
+        }
+        (false, false) if origin == ProcessInstallOrigin::Both => {
+            RunningInstallStatus::UpdatePendingBoth
+        }
+        (false, false) if direct_metadata.is_some() || active_metadata.is_some() => {
+            RunningInstallStatus::NotInstalled
+        }
+        (false, false) => RunningInstallStatus::Unknown,
+    }
+}
+
+fn format_installed_identity_line(label: &str, installed: Option<&InstalledIdentity>) -> String {
+    let Some(installed) = installed else {
+        return format!("Installed {label}: not found");
+    };
+    let identity = match (
+        installed.version.as_deref(),
+        installed.source_commit.as_deref(),
+        installed.source_tree_state.as_deref(),
+    ) {
+        (Some(version), Some(commit), Some(tree_state))
+            if full_commit_sha(commit).is_some() && valid_version_identity(version) =>
+        {
+            format_identity(version, commit, tree_state)
+        }
+        _ => "identity unknown".to_string(),
+    };
+    let timestamp = installed
+        .installed_at_utc
+        .as_deref()
+        .filter(|value| is_utc_timestamp(value))
+        .map(|value| format!("{} {} UTC", &value[..10], &value[11..19]))
+        .unwrap_or_else(|| "install time unknown".to_string());
+    format!("Installed {label}: {identity} · {timestamp}")
+}
+
+#[cfg(test)]
+fn read_installed_identity(executable: &Path, kind: InstallKind) -> Option<InstalledIdentity> {
+    read_installed_identity_uncached(executable, kind)
+}
+
+fn read_installed_identity_uncached(
+    executable: &Path,
+    kind: InstallKind,
+) -> Option<InstalledIdentity> {
+    if !fs::metadata(executable)
+        .ok()
+        .is_some_and(|metadata| metadata.is_file())
+    {
+        return None;
+    }
+    match kind {
+        InstallKind::ActiveRelease => Some(
+            read_versioned_release_identity(executable).unwrap_or_else(|| InstalledIdentity {
+                executable: executable.to_path_buf(),
+                version: None,
+                source_commit: None,
+                source_tree_state: None,
+                installed_at_utc: read_install_timestamp_for_executable(executable),
+                executable_sha256: None,
+            }),
+        ),
+        InstallKind::Direct => Some(read_direct_install_identity(executable)),
+    }
+}
+
+fn read_versioned_release_identity(executable: &Path) -> Option<InstalledIdentity> {
+    let release_root = executable.parent()?.parent()?;
+    let manifest_hashes = verify_release_manifest(release_root)?;
+    let version = read_regular_line(&release_root.join("RELEASE_VERSION"))?;
+    let version = normalize_version_identity(&version)?;
+    let commit = read_regular_line(&release_root.join("SOURCE_COMMIT"))?;
+    let commit = full_commit_sha(&commit)?;
+    let tree_state = read_regular_line(&release_root.join("SOURCE_TREE_STATE"))?;
+    if !valid_tree_state(&tree_state) {
+        return None;
+    }
+
+    let path = release_root.join("INSTALL_PROVENANCE.json");
+    if !fs::symlink_metadata(&path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    let record: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    let schema = record.get("schema_version").and_then(Value::as_str)?;
+    if !matches!(schema, INSTALLED_PROVENANCE_V1 | INSTALLED_PROVENANCE_V2)
+        || record.get("source_commit").and_then(Value::as_str) != Some(commit.as_str())
+        || record.get("source_tree_state").and_then(Value::as_str) != Some(tree_state.as_str())
+    {
+        return None;
+    }
+    let installed_at_utc = record
+        .get("installed_at_utc")
+        .and_then(Value::as_str)
+        .filter(|value| is_utc_timestamp(value))
+        .map(str::to_string);
+    if schema == INSTALLED_PROVENANCE_V2 && installed_at_utc.is_none() {
+        return None;
+    }
+    Some(InstalledIdentity {
+        executable: executable.to_path_buf(),
+        version: Some(version),
+        source_commit: Some(commit),
+        source_tree_state: Some(tree_state),
+        installed_at_utc,
+        executable_sha256: manifest_hashes.get("bin/ramshared").cloned(),
+    })
+}
+
+fn read_direct_install_identity(executable: &Path) -> InstalledIdentity {
+    let metadata_path = direct_install_metadata_path(executable);
+    let timestamp_path = direct_install_timestamp_path(executable);
+    let timestamp_fallback = timestamp_path
+        .as_deref()
+        .and_then(read_install_timestamp_file);
+    let Some(path) = metadata_path else {
+        return InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version: None,
+            source_commit: None,
+            source_tree_state: None,
+            installed_at_utc: timestamp_fallback,
+            executable_sha256: None,
+        };
+    };
+    let Some(record) = read_regular_json(&path) else {
+        return InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version: None,
+            source_commit: None,
+            source_tree_state: None,
+            installed_at_utc: timestamp_fallback,
+            executable_sha256: None,
+        };
+    };
+    let valid_schema =
+        record.get("schema_version").and_then(Value::as_str) == Some(DIRECT_INSTALL_METADATA_V2);
+    let version = record
+        .get("version")
+        .and_then(Value::as_str)
+        .and_then(normalize_version_identity);
+    let source_commit = record
+        .get("source_commit")
+        .and_then(Value::as_str)
+        .and_then(full_commit_sha);
+    let source_tree_state = record
+        .get("source_tree_state")
+        .and_then(Value::as_str)
+        .filter(|value| valid_tree_state(value))
+        .map(str::to_string);
+    let installed_at_utc = record
+        .get("installed_at_utc")
+        .and_then(Value::as_str)
+        .filter(|value| is_utc_timestamp(value))
+        .map(str::to_string);
+    let cli_sha256 = record
+        .get("cli_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| valid_sha256(value))
+        .map(str::to_string);
+    let daemon_sha256 = record
+        .get("daemon_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| valid_sha256(value))
+        .map(str::to_string);
+    let daemon_executable = executable.parent().map(|parent| parent.join("ramsharedd"));
+    let hashes_match = cli_sha256
+        .as_deref()
+        .is_some_and(|expected| sha256_file(executable).as_deref() == Some(expected))
+        && daemon_sha256.as_deref().is_some_and(|expected| {
+            daemon_executable
+                .as_deref()
+                .and_then(sha256_file)
+                .as_deref()
+                == Some(expected)
+        });
+    if valid_schema
+        && version.is_some()
+        && source_commit.is_some()
+        && source_tree_state.is_some()
+        && installed_at_utc.is_some()
+        && hashes_match
+    {
+        InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version,
+            source_commit,
+            source_tree_state,
+            installed_at_utc,
+            executable_sha256: cli_sha256,
+        }
+    } else {
+        InstalledIdentity {
+            executable: executable.to_path_buf(),
+            version: None,
+            source_commit: None,
+            source_tree_state: None,
+            installed_at_utc: installed_at_utc.or(timestamp_fallback),
+            executable_sha256: None,
+        }
+    }
+}
+
+fn verify_release_manifest(release_root: &Path) -> Option<HashMap<String, String>> {
+    let manifest_path = release_root.join("SHA256SUMS");
+    let manifest_receipt_path = release_root.join("INSTALLED_MANIFEST_SHA256");
+    let expected_manifest_hash = read_regular_line(&manifest_receipt_path)?;
+    if !valid_sha256(&expected_manifest_hash)
+        || sha256_file(&manifest_path).as_deref() != Some(expected_manifest_hash.as_str())
+    {
+        return None;
+    }
+    let manifest = fs::read_to_string(&manifest_path).ok()?;
+    let mut hashes = HashMap::new();
+    for line in manifest.lines() {
+        let bytes = line.as_bytes();
+        if bytes.len() < 66 || &bytes[64..66] != b"  " {
+            return None;
+        }
+        let digest = std::str::from_utf8(&bytes[..64]).ok()?;
+        let relative_path = std::str::from_utf8(&bytes[66..]).ok()?;
+        let path = relative_path.strip_prefix("./")?;
+        if !valid_sha256(digest)
+            || path.is_empty()
+            || Path::new(path).is_absolute()
+            || Path::new(path)
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || hashes
+                .insert(path.to_string(), digest.to_ascii_lowercase())
+                .is_some()
+        {
+            return None;
+        }
+    }
+    for path in [
+        "bin/ramshared",
+        "bin/ramsharedd",
+        "RELEASE_VERSION",
+        "SOURCE_COMMIT",
+        "SOURCE_TREE_STATE",
+        "INSTALL_PROVENANCE.json",
+    ] {
+        let expected = hashes.get(path)?;
+        if sha256_file(&release_root.join(path)).as_deref() != Some(expected.as_str()) {
+            return None;
+        }
+    }
+    Some(hashes)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn sha256_file(path: &Path) -> Option<String> {
+    if !fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    let mut file = File::open(path).ok()?;
+    sha256_reader(&mut file)
+}
+
+fn sha256_reader(reader: &mut impl Read) -> Option<String> {
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(64);
+    for byte in digest.as_slice() {
+        use std::fmt::Write as FmtWrite;
+        write!(&mut encoded, "{byte:02x}").ok()?;
+    }
+    Some(encoded)
+}
+
+fn read_regular_json(path: &Path) -> Option<Value> {
+    if !fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+fn read_regular_line(path: &Path) -> Option<String> {
+    if !fs::symlink_metadata(path)
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_file())
+    {
+        return None;
+    }
+    let contents = fs::read_to_string(path).ok()?;
+    let line = contents.strip_suffix('\n').unwrap_or(&contents);
+    if line.is_empty() || line.contains(['\n', '\r']) {
+        return None;
+    }
+    Some(line.to_string())
+}
+
+fn direct_install_metadata_path(executable: &Path) -> Option<PathBuf> {
+    let prefix = executable.parent()?.parent()?;
+    Some(prefix.join("share/ramshared/INSTALL_METADATA.json"))
+}
+
+fn valid_tree_state(value: &str) -> bool {
+    matches!(value, "clean" | "dirty" | "unavailable")
+}
+
+fn valid_version_identity(value: &str) -> bool {
+    normalize_version_identity(value).is_some()
+}
+
+fn normalize_version_identity(value: &str) -> Option<String> {
+    let version = value.strip_prefix('v').unwrap_or(value);
+    if !version.is_empty()
+        && version.len() <= 128
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
+        && version.as_bytes()[0].is_ascii_alphanumeric()
+    {
+        Some(version.to_string())
+    } else {
+        None
+    }
+}
+
+fn restart_target(
+    origin: ProcessInstallOrigin,
+    running_metadata: Option<&fs::Metadata>,
+    running_sha256: Option<&str>,
+    allow_reexec: bool,
+    direct_install: Option<&InstalledIdentity>,
+    active_install: Option<&InstalledIdentity>,
+) -> Option<PathBuf> {
+    if !allow_reexec || running_metadata.is_none() {
+        return None;
+    }
+    let direct = direct_install
+        .filter(|installed| restart_required(installed, running_metadata, running_sha256));
+    let active = active_install
+        .filter(|installed| restart_required(installed, running_metadata, running_sha256));
+    match origin {
+        ProcessInstallOrigin::Direct => direct.map(|installed| installed.executable.clone()),
+        ProcessInstallOrigin::ActiveRelease => active.map(|installed| installed.executable.clone()),
+        ProcessInstallOrigin::Both => match (direct, active) {
+            (Some(direct), None) => Some(direct.executable.clone()),
+            (None, Some(active)) => Some(active.executable.clone()),
+            (Some(direct), Some(active))
+                if direct.executable_sha256 == active.executable_sha256
+                    && installed_source_identity(direct) == installed_source_identity(active) =>
+            {
+                Some(active.executable.clone())
+            }
+            _ => None,
+        },
+        ProcessInstallOrigin::Unknown => None,
+    }
+}
+
+fn restart_required(
+    installed: &InstalledIdentity,
+    running_metadata: Option<&fs::Metadata>,
+    running_sha256: Option<&str>,
+) -> bool {
+    let (Some(version), Some(commit), Some(tree_state), Some(installed_sha256)) = (
+        installed.version.as_deref(),
+        installed.source_commit.as_deref(),
+        installed.source_tree_state.as_deref(),
+        installed.executable_sha256.as_deref(),
+    ) else {
+        return false;
+    };
+    if !valid_version_identity(version)
+        || full_commit_sha(commit).is_none()
+        || !valid_tree_state(tree_state)
+        || !valid_sha256(installed_sha256)
+    {
+        return false;
+    }
+    if running_metadata.is_some_and(|running| {
+        fs::metadata(&installed.executable)
+            .ok()
+            .is_some_and(|candidate| same_file_identity(running, &candidate))
+    }) {
+        return false;
+    }
+    if let Some(running_sha256) = running_sha256 {
+        return installed_sha256 != running_sha256;
+    }
+    let current_sha = full_commit_sha(BUILD_GIT_SHA);
+    let installed_sha = full_commit_sha(commit);
+    !(version == env!("CARGO_PKG_VERSION")
+        && current_sha == installed_sha
+        && normalized_tree_state(tree_state) == normalized_tree_state(BUILD_TREE_STATE))
+}
+
+fn installed_source_identity(
+    identity: &InstalledIdentity,
+) -> (Option<&str>, Option<&str>, Option<&str>) {
+    (
+        identity.version.as_deref(),
+        identity.source_commit.as_deref(),
+        identity.source_tree_state.as_deref(),
+    )
+}
+
+fn current_running_executable_metadata() -> Option<fs::Metadata> {
+    #[cfg(target_os = "linux")]
+    {
+        fs::metadata("/proc/self/exe").ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| fs::metadata(path).ok())
+    }
+}
+
+fn current_running_executable_sha256() -> Option<String> {
+    static RUNNING_EXECUTABLE_SHA256: OnceLock<Option<String>> = OnceLock::new();
+    RUNNING_EXECUTABLE_SHA256
+        .get_or_init(|| {
+            #[cfg(target_os = "linux")]
+            if let Ok(mut executable) = File::open("/proc/self/exe") {
+                return sha256_reader(&mut executable);
+            }
+            let path = std::env::current_exe().ok()?;
+            sha256_file(&path)
+        })
+        .clone()
+}
+
+fn current_process_install_origin() -> ProcessInstallOrigin {
+    let direct_executable = Path::new("/usr/local/bin/ramshared");
+    let active_release_executable = Path::new("/opt/ramshared/current/bin/ramshared");
+    let running_path = {
+        #[cfg(target_os = "linux")]
+        {
+            fs::read_link("/proc/self/exe").ok()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            std::env::current_exe().ok()
+        }
+    };
+    running_path.map_or(ProcessInstallOrigin::Unknown, |path| {
+        process_install_origin_for_path(&path, direct_executable, active_release_executable)
+    })
+}
+
+fn process_install_origin_for_path(
+    running_path: &Path,
+    direct_executable: &Path,
+    active_release_executable: &Path,
+) -> ProcessInstallOrigin {
+    let display = running_path.to_string_lossy();
+    let clean_path = Path::new(display.strip_suffix(" (deleted)").unwrap_or(&display));
+    let direct_match = path_matches(clean_path, direct_executable);
+    let active_match = path_matches(clean_path, active_release_executable);
+    match (direct_match, active_match) {
+        (true, true) => ProcessInstallOrigin::Both,
+        (true, false) => ProcessInstallOrigin::Direct,
+        (false, true) => ProcessInstallOrigin::ActiveRelease,
+        (false, false) => ProcessInstallOrigin::Unknown,
+    }
+}
+
+fn path_matches(left: &Path, right: &Path) -> bool {
+    left == right
+        || left
+            .canonicalize()
+            .ok()
+            .zip(right.canonicalize().ok())
+            .is_some_and(|(left, right)| left == right)
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+fn is_utc_timestamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if !(bytes.len() == 20
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && bytes[19] == b'Z'
+        && bytes.iter().enumerate().all(|(index, byte)| {
+            matches!(index, 4 | 7 | 10 | 13 | 16 | 19) || byte.is_ascii_digit()
+        }))
+    {
+        return false;
+    }
+    let year = value[0..4].parse::<u16>().unwrap_or(0);
+    let month = value[5..7].parse::<u8>().unwrap_or(0);
+    let day = value[8..10].parse::<u8>().unwrap_or(0);
+    let hour = value[11..13].parse::<u8>().unwrap_or(24);
+    let minute = value[14..16].parse::<u8>().unwrap_or(60);
+    let second = value[17..19].parse::<u8>().unwrap_or(60);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || year % 4 == 0 && year % 100 != 0 => 29,
+        2 => 28,
+        _ => return false,
+    };
+    year > 0 && (1..=days_in_month).contains(&day) && hour < 24 && minute < 60 && second < 60
+}
+
+fn read_install_timestamp_for_executable(executable: &Path) -> Option<String> {
+    let release_root = executable.parent()?.parent()?;
+    read_install_timestamp_from_release(release_root)
+        .or_else(|| read_install_timestamp_file(&direct_install_timestamp_path(executable)?))
+}
+
+fn direct_install_timestamp_path(executable: &Path) -> Option<PathBuf> {
+    let prefix = executable.parent()?.parent()?;
+    Some(prefix.join("share/ramshared/INSTALL_TIMESTAMP"))
+}
+
+fn read_install_timestamp_from_release(release_root: &Path) -> Option<String> {
+    let path = release_root.join("INSTALL_PROVENANCE.json");
+    if !fs::symlink_metadata(&path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let record: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    match record.get("schema_version").and_then(Value::as_str) {
+        Some(INSTALLED_PROVENANCE_V1 | INSTALLED_PROVENANCE_V2) => {}
+        _ => return None,
+    }
+    record
+        .get("installed_at_utc")
+        .and_then(Value::as_str)
+        .filter(|value| is_utc_timestamp(value))
+        .map(str::to_string)
+}
+
+fn read_install_timestamp_file(path: &Path) -> Option<String> {
+    if !fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let contents = fs::read_to_string(path).ok()?;
+    let timestamp = contents.strip_suffix('\n').unwrap_or(&contents);
+    if timestamp.contains('\n') || timestamp.contains('\r') || !is_utc_timestamp(timestamp) {
+        return None;
+    }
+    Some(timestamp.to_string())
+}
+
+#[cfg(test)]
 fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &VecDeque<u64>) {
+    let mut identity_cache = InstallationIdentityCache::default();
+    draw_dashboard_with_metadata(
+        frame,
+        observation,
+        history,
+        &DashboardMetadata::current(
+            &mut identity_cache,
+            ProcessInstallOrigin::Unknown,
+            false,
+            None,
+        ),
+    );
+}
+
+fn draw_dashboard_with_metadata(
+    frame: &mut Frame<'_>,
+    observation: &Observation,
+    history: &VecDeque<u64>,
+    metadata: &DashboardMetadata,
+) {
+    let header_height = if metadata.runtime_notice.is_some() {
+        8
+    } else {
+        7
+    };
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(header_height),
             Constraint::Percentage(35),
             Constraint::Percentage(55),
             Constraint::Length(2),
@@ -1221,30 +2774,47 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    let (status_text, state_color) = if daemon_alive {
-        ("🟢 STATUS: OPERATIONAL & PROTECTED", Color::Green)
-    } else if observation.bool_value("ok") == Some(true) {
-        ("🟢 STATUS: OPERATIONAL", Color::Green)
-    } else {
-        ("🟡 STATUS: ARMED & READY", Color::Yellow)
-    };
+    let protection_state = observation.string("protection_state");
+    let status_ok = observation.bool_value("ok") == Some(true);
+    let (status_text, state_color, protection_text) =
+        match (protection_state, daemon_alive, status_ok) {
+            ("ACTIVE", true, true) => {
+                ("🟢 STATUS: OPERATIONAL & PROTECTED", Color::Green, "ACTIVE")
+            }
+            ("READY", true, true) => ("🟡 STATUS: ARMED & READY", Color::Yellow, "READY"),
+            ("OFF", _, _) => ("⚪ STATUS: OFF", Color::DarkGray, "OFF"),
+            ("AT_RISK", true, _) => ("🟠 STATUS: AT RISK", Color::Yellow, "AT RISK"),
+            ("BLOCKED", _, _) | ("AT_RISK", false, _) | ("ACTIVE" | "READY", _, _) => {
+                ("🔴 STATUS: BLOCKED", Color::Red, "BLOCKED")
+            }
+            _ => ("🟡 STATUS: UNKNOWN", Color::Yellow, "UNKNOWN"),
+        };
 
-    let version = env!("CARGO_PKG_VERSION");
     let uptime = observation.control_plane.uptime_seconds;
     let live_uptime = if uptime > 0 {
         format!("⏱️ {:02}m {:02}s", uptime / 60, uptime % 60)
     } else {
         "⏱️ Live".to_string()
     };
-    let header = Paragraph::new(Line::from(format!(
-        " RamShared v{version} │ {status_text} │ {live_uptime} │ Protection: ACTIVE",
-    )))
-    .style(Style::default().fg(state_color))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("System Overview"),
-    );
+    let mut header_lines = vec![
+        Line::from(metadata.version_line.as_str()),
+        Line::from(metadata.running_line.as_str()),
+        Line::from(metadata.direct_install_line.as_str()),
+        Line::from(metadata.active_install_line.as_str()),
+    ];
+    if let Some(notice) = metadata.runtime_notice.as_deref() {
+        header_lines.push(Line::from(notice));
+    }
+    header_lines.push(Line::from(format!(
+        "{status_text} │ {live_uptime} │ Protection: {protection_text}"
+    )));
+    let header = Paragraph::new(header_lines)
+        .style(Style::default().fg(state_color))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("System Overview"),
+        );
     frame.render_widget(header, rows[0]);
 
     draw_memory(frame, top[0], observation, history);
@@ -1268,10 +2838,12 @@ fn draw_memory(
         .constraints([Constraint::Length(5), Constraint::Min(1)])
         .split(area);
     let memory = &observation.mem;
-    let total_mb = (memory.total_kib + 512) / 1024;
-    let avail_mb = (memory.available_kib + 512) / 1024;
-    let used_mb = total_mb.saturating_sub(avail_mb);
-    let used_pct = (used_mb * 100).checked_div(total_mb).unwrap_or(0);
+    let total_mib = (memory.total_kib + 512) / 1024;
+    let avail_mib = (memory.available_kib + 512) / 1024;
+    let used_mib = total_mib.saturating_sub(avail_mib);
+    let used_pct = (used_mib * 100).checked_div(total_mib).unwrap_or(0);
+    let used_mib_text = format_grouped_number(used_mib);
+    let total_mib_text = format_grouped_number(total_mib);
 
     let bar_len: u64 = 20;
     let filled = (used_pct * bar_len / 100).min(bar_len);
@@ -1282,27 +2854,50 @@ fn draw_memory(
         "░".repeat(empty as usize)
     );
 
-    let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
-    let swap_total = (memory.swap_total_kib + 512) / 1024;
-    let swap_pct = (swap_used * 100).checked_div(swap_total).unwrap_or(0);
+    let swap_used_mib = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
+    let swap_total_mib = (memory.swap_total_kib + 512) / 1024;
+    let swap_pct = (swap_used_mib * 100)
+        .checked_div(swap_total_mib)
+        .unwrap_or(0);
+    let swap_used_mib_text = format_grouped_number(swap_used_mib);
+    let swap_total_mib_text = format_grouped_number(swap_total_mib);
     let swap_bar = make_bar(swap_pct, bar_len);
-    let text = format!(
-        " Host RAM:  {bar} {used_pct:>2}% ({used_mb:>5} MB / {total_mb} MB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used:>5} MB / {swap_total} MB)\n Pressure:   Light Stall (Some): {psi_some:.2}% │ Severe Stall (Full): {psi_full:.2}%",
-        psi_some = observation.control_plane.memory_psi_some_avg10,
-        psi_full = observation.control_plane.memory_psi_full_avg10,
-    );
+    let sample_stale = observation_sample_is_stale(observation);
+    let pressure_text = format_memory_pressure(&observation.control_plane, sample_stale);
+    let ram_label = if sample_stale {
+        format!("{} (stale)", observation.memory_scope.ram_label())
+    } else {
+        observation.memory_scope.ram_label().to_string()
+    };
+    let ram_summary = if memory.required_counters_available {
+        format!(" {ram_label}:  {bar} {used_pct:>2}% ({used_mib_text} / {total_mib_text} MiB)")
+    } else {
+        format!(" {ram_label}: telemetry unavailable")
+    };
+    let swap_summary = if memory.required_counters_available {
+        format!(
+            " Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used_mib_text} / {swap_total_mib_text} MiB)"
+        )
+    } else {
+        " Total Swap: telemetry unavailable".to_string()
+    };
+    let text = format!("{ram_summary}\n{swap_summary}\n{pressure_text}");
     frame.render_widget(
         Paragraph::new(text).block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Host RAM & Swap"),
+                .title(observation.memory_scope.panel_title()),
         ),
         chunks[0],
     );
     let values: Vec<u64> = history.iter().copied().collect();
     frame.render_widget(
         Sparkline::default()
-            .block(Block::default().borders(Borders::ALL).title("RAM History"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(observation.memory_scope.history_title()),
+            )
             .data(&values)
             .max(100),
         chunks[1],
@@ -1311,12 +2906,12 @@ fn draw_memory(
 
 fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let text = observation.gpu.as_ref().map_or_else(
-        || " GPU not detected".to_string(),
+        || " Active worker GPU budget unavailable".to_string(),
         |gpu| {
             let used_pct = gpu
                 .used_mib
                 .saturating_mul(100)
-                .checked_div(gpu.total_mib)
+                .checked_div(gpu.budget_mib)
                 .unwrap_or(0);
             let bar_len: u64 = 20;
             let filled = (used_pct.saturating_mul(bar_len) / 100).min(bar_len);
@@ -1326,9 +2921,16 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "█".repeat(filled as usize),
                 "░".repeat(empty as usize)
             );
+            let physical_total = gpu
+                .total_mib
+                .map_or_else(|| "unknown".to_string(), |total| format!("{total} MiB"));
             format!(
-                " Graphics Card: {}\n GPU VRAM:      {bar} {used_pct:>2}% ({} MB / {} MB)\n Available VRAM: {} MB free\n PCIe Hardware:  PCIe Gen 3 x16 │ Bandwidth: 8.74 GB/s (8,950 MB/s)",
-                gpu.name, gpu.used_mib, gpu.total_mib, gpu.free_mib
+                " Active adapter: {} ({})\n GPU budget:     {bar} {used_pct:>2}% ({} / {} MiB)\n Available:      {} MiB within budget\n Physical total: {physical_total}",
+                gpu.adapter.backend,
+                gpu.adapter.key,
+                gpu.used_mib,
+                gpu.budget_mib,
+                gpu.free_mib,
             )
         },
     );
@@ -1379,7 +2981,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
                     min_mult, avg_mult, max_mult
                 )
             } else {
-                "⚡ 250x In-RAM Capable (0.05 µs)".to_string()
+                "Awaiting measured I/O".to_string()
             }
         }
         50 => {
@@ -1392,47 +2994,46 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
                     min_mult, avg_mult, max_mult
                 )
             } else {
-                "🚀 20x-100x PCIe DMA Capable (8.74 GB/s)".to_string()
+                "Awaiting measured I/O".to_string()
             }
         }
         _ => {
             if io.max_mbs >= 5.0 {
                 "🐢 Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (WSL2 System Disk)".to_string()
             } else {
-                "🐢 1.0x Host VHDX Baseline (WSL2 System Disk)".to_string()
+                "Awaiting measured I/O".to_string()
             }
         }
     }
 }
 
-fn format_tier_latency(
-    io: &TierIoStats,
-    default_min: f64,
-    default_avg: f64,
-    default_max: f64,
-    suffix: &str,
-) -> String {
-    let min = if io.min_lat_us > 0.0 {
-        io.min_lat_us
-    } else {
-        default_min
-    };
-    let avg = if io.avg_lat_us > 0.0 {
-        io.avg_lat_us
-    } else {
-        default_avg
-    };
-    let max = if io.max_lat_us > 0.0 {
-        io.max_lat_us
-    } else {
-        default_max
-    };
-
-    if max >= 1000.0 {
-        format!("{min:.0}..{avg:.0}..{:.1}ms ({suffix})", max / 1000.0)
-    } else {
-        format!("{min:.2}..{avg:.2}..{max:.2}µs ({suffix})")
+fn format_tier_latency(io: &TierIoStats, suffix: &str) -> String {
+    if io.latency_source == LatencySource::Unavailable
+        || (io.min_lat_us <= 0.0 && io.avg_lat_us <= 0.0 && io.max_lat_us <= 0.0)
+    {
+        return format!("not measured ({suffix})");
     }
+
+    let display = |value: f64| {
+        if value <= 0.0 {
+            "n/a".to_string()
+        } else if value >= 1000.0 {
+            format!("{:.1}ms", value / 1000.0)
+        } else {
+            format!("{value:.2}µs")
+        }
+    };
+    let source = match io.latency_source {
+        LatencySource::Estimated => "estimated",
+        LatencySource::Measured => "measured",
+        LatencySource::Unavailable => return format!("not measured ({suffix})"),
+    };
+    format!(
+        "{source}: {}..{}..{} ({suffix})",
+        display(io.min_lat_us),
+        display(io.avg_lat_us),
+        display(io.max_lat_us),
+    )
 }
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
@@ -1526,27 +3127,9 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
             let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
 
-            let z_lat = format_tier_latency(
-                &observation.control_plane.zram_io,
-                0.04,
-                0.08,
-                0.15,
-                "In-RAM LZ4",
-            );
-            let v_lat = format_tier_latency(
-                &observation.control_plane.vram_io,
-                0.85,
-                1.45,
-                3.20,
-                "PCIe DMA",
-            );
-            let d_lat = format_tier_latency(
-                &observation.control_plane.disk_io,
-                85.0,
-                180.0,
-                1200.0,
-                "Host VHDX",
-            );
+            let z_lat = format_tier_latency(&observation.control_plane.zram_io, "ZRAM");
+            let v_lat = format_tier_latency(&observation.control_plane.vram_io, "GPU cache");
+            let d_lat = format_tier_latency(&observation.control_plane.disk_io, "disk");
 
             let z_bar = make_tier_bar(zram_used, zram_size, bar_len);
             let v_bar = make_tier_bar(vram_used, vram_size, bar_len);
@@ -1586,7 +3169,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 .unwrap_or(0);
 
             let z_use = format!(
-                "{z_bar} {z_pct_str} ( {zram_u:>4} MB / {zram_t} MB ) │ Peak: {z_peak:>4} MB ({z_peak_pct:>3}%)",
+                "{z_bar} {z_pct_str} ( {zram_u:>4} MiB / {zram_t} MiB ) │ Peak: {z_peak:>4} MiB ({z_peak_pct:>3}%)",
                 z_bar = z_bar,
                 z_pct_str = z_pct_str,
                 zram_u = zram_used,
@@ -1595,7 +3178,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 z_peak_pct = z_peak_pct
             );
             let v_use = format!(
-                "{v_bar} {v_pct_str} ( {vram_u:>4} MB / {vram_t} MB ) │ Peak: {v_peak:>4} MB ({v_peak_pct:>3}%)",
+                "{v_bar} {v_pct_str} ( {vram_u:>4} MiB / {vram_t} MiB ) │ Peak: {v_peak:>4} MiB ({v_peak_pct:>3}%)",
                 v_bar = v_bar,
                 v_pct_str = v_pct_str,
                 vram_u = vram_used,
@@ -1604,7 +3187,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 v_peak_pct = v_peak_pct
             );
             let d_use = format!(
-                "{d_bar} {d_pct_str} ( {disk_u:>4} MB / {disk_t} MB ) │ Peak: {d_peak:>4} MB ({d_peak_pct:>3}%)",
+                "{d_bar} {d_pct_str} ( {disk_u:>4} MiB / {disk_t} MiB ) │ Peak: {d_peak:>4} MiB ({d_peak_pct:>3}%)",
                 d_bar = d_bar,
                 d_pct_str = d_pct_str,
                 disk_u = disk_used,
@@ -1613,10 +3196,10 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 d_peak_pct = d_peak_pct
             );
 
-            let format_speed = |read_mbs: f64, write_mbs: f64, used_mb: u64| {
+            let format_speed = |read_mbs: f64, write_mbs: f64, used_mib: u64| {
                 if read_mbs < 0.1 && write_mbs < 0.1 {
-                    if used_mb > 0 {
-                        format!("Read:   0.0 │ Write:   0.0 MB/s (💤 Retaining {used_mb:>4} MB)")
+                    if used_mib > 0 {
+                        format!("Read:   0.0 │ Write:   0.0 MB/s (💤 Retaining {used_mib:>4} MiB)")
                     } else {
                         "Read:   0.0 │ Write:   0.0 MB/s (💤 Standby)".to_string()
                     }
@@ -1672,20 +3255,20 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
             format!(
                 concat!(
-                    " ╔══ 📦 TIER 1: RAM Swap (zram) ── Priority: 100 ── {zram_s}\n",
+                    " ╔══ 📦 TIER 1: RAM Swap (zram) ── Priority: 200 ── {zram_s}\n",
                     " ║   ├─ Memory Usage:       {z_use}\n",
                     " ║   ├─ Real-Time Speed:    {z_speed}\n",
                     " ║   ├─ Throughput Stats:   {z_rate}\n",
                     " ║   ├─ Lifetime Traffic:   {z_vol}\n",
-                    " ║   ├─ Hardware Latency:   {z_lat}\n",
+                    " ║   ├─ I/O Latency:         {z_lat}\n",
                     " ║   └─ Speedup Factor:     {zram_speedup}\n",
                     " ╠{sep}\n",
-                    " ║   🚀 TIER 2: GPU VRAM (nbd0) ── Priority:  50 ── {vram_s}\n",
+                    " ║   🚀 TIER 2: GPU VRAM (nbd0) ── Priority: 100 ── {vram_s}\n",
                     " ║   ├─ Memory Usage:       {v_use}\n",
                     " ║   ├─ Real-Time Speed:    {v_speed}\n",
                     " ║   ├─ Throughput Stats:   {v_rate}\n",
                     " ║   ├─ Lifetime Traffic:   {v_vol}\n",
-                    " ║   ├─ Hardware Latency:   {v_lat}\n",
+                    " ║   ├─ I/O Latency:         {v_lat}\n",
                     " ║   └─ Speedup Factor:     {vram_speedup}\n",
                     " ╠{sep}\n",
                     " ║   💾 TIER 3: WSL2 System Disk ── Priority:  -2 ── {disk_s}\n",
@@ -1693,7 +3276,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " ║   ├─ Real-Time Speed:    {d_speed}\n",
                     " ║   ├─ Throughput Stats:   {d_rate}\n",
                     " ║   ├─ Lifetime Traffic:   {d_vol}\n",
-                    " ║   ├─ Hardware Latency:   {d_lat}\n",
+                    " ║   ├─ I/O Latency:         {d_lat}\n",
                     " ║   └─ Speedup Factor:     {disk_speedup}\n",
                     " ╚{sep}",
                 ),
@@ -1756,22 +3339,37 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     } else {
         format!("{}", observation.errors.len())
     };
+    let sample_age_ms = observation.sample_age_ms;
 
     let swap_in = observation.control_plane.swap_in_pages;
     let swap_out = observation.control_plane.swap_out_pages;
-    let read_mbs = observation.control_plane.swap_read_mbs;
-    let write_mbs = observation.control_plane.swap_write_mbs;
+    let sample_stale = observation_sample_is_stale(observation);
+    let read_mbs = if sample_stale {
+        "stale".to_string()
+    } else {
+        format!("{:.1}", observation.control_plane.swap_read_mbs)
+    };
+    let write_mbs = if sample_stale {
+        "stale".to_string()
+    } else {
+        format!("{:.1}", observation.control_plane.swap_write_mbs)
+    };
     let peak_mbs = observation.control_plane.swap_peak_mbs;
     let pgfault_rate = observation.control_plane.pgfault_per_sec;
     let pgmajfault_rate = observation.control_plane.pgmajfault_per_sec;
     let boot_info = match observation.control_plane.boot_tier_latency_ms {
         Some(ms) => format!("{:.2}s (Tier Ready)", ms as f64 / 1000.0),
-        None => "3.12s (Tier Ready)".to_string(),
+        // Never invent a measurement: absent telemetry renders as unmeasured.
+        None => "not measured".to_string(),
     };
 
     let swap_read_peak = observation.control_plane.swap_read_peak_mbs;
     let swap_write_peak = observation.control_plane.swap_write_peak_mbs;
-    let speed_state = if read_mbs < 0.1 && write_mbs < 0.1 {
+    let speed_state = if sample_stale {
+        "(⚠ Stale Sample)"
+    } else if observation.control_plane.swap_read_mbs < 0.1
+        && observation.control_plane.swap_write_mbs < 0.1
+    {
         "(💤 Standby)"
     } else {
         "(⚡ Active)"
@@ -1799,39 +3397,27 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             )
         }
     } else {
-        "⚡ Multi-GB/s Qualified (Zero-Leak)".to_string()
-    };
-
-    let vram_speed =
-        observation.control_plane.vram_io.read_mbs + observation.control_plane.vram_io.write_mbs;
-    let pcie_util = (vram_speed / 8740.0 * 100.0).clamp(0.0, 100.0);
-    let pcie_info = if vram_speed >= 1.0 {
-        format!(
-            "🚀 Gen 3 x16 ({vram_speed:.0} MB/s │ {:.1}% Saturation)",
-            pcie_util
-        )
-    } else {
-        "🚀 Gen 3 x16 (8.74 GB/s DMA │ In-RAM Ready)".to_string()
+        "Awaiting benchmark evidence".to_string()
     };
 
     let pf_lat = observation.control_plane.estimated_page_fault_lat_us;
-    let pf_lat_info = if pf_lat >= 10.0 {
-        format!("🐢 {:.1} µs (Disk Fallback Pressure)", pf_lat)
+    let pf_lat_info = if pf_lat > 0.0 {
+        format!("estimated {:.2} µs", pf_lat)
     } else {
-        format!("⚡ {:.2} µs (Hardware Accelerated)", pf_lat)
+        "not measured".to_string()
     };
 
     let text = format!(
         concat!(
             " Daemon Status:            {daemon_icon} {daemon_txt} (PID {pid})\n",
             " Boot Initialization:      ⏱️  {boot_info}\n",
+            " Telemetry Sample Age:     {sample_age_ms} ms\n",
             " Safety Guard:             🛡️  Fail-Closed (Zero Panic)\n",
             " Swap I/O Protocol:        ⚡ Synchronous Zero-Copy (.rw_page)\n",
-            " PCIe Hardware Link:       {pcie_info}\n",
             " Reclaim Performance:      {bench_info}\n",
-            " Page Fault Latency:       {pf_lat_info}\n",
+            " Estimated Page Fault Latency: {pf_lat_info}\n",
             " {sep}\n",
-            " Real-Time Speed:          Read: {read_mbs:>4.1} │ Write: {write_mbs:>4.1} MB/s {speed_state}\n",
+            " Real-Time Speed:          Read: {read_mbs:>5} │ Write: {write_mbs:>5} MB/s {speed_state}\n",
             " Peak Recorded Speed:      🚀 {peak_mbs:>5.1} MB/s (⬇️ {swap_read_peak:>4.0} │ ⬆️ {swap_write_peak:>4.0} MB/s)\n",
             " Cumulative Page I/O:      In: {swap_in} pgs ({swap_in_vol}) │ Out: {swap_out} pgs ({swap_out_vol})\n",
             " Page Faults Rate:         📊 {pgfault_rate}/s (Minor: {minor_faults}/s │ Major: {pgmajfault_rate}/s)\n",
@@ -1845,7 +3431,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
         pid = pid,
         boot_info = boot_info,
-        pcie_info = pcie_info,
+        sample_age_ms = sample_age_ms,
         bench_info = bench_info,
         pf_lat_info = pf_lat_info,
         read_mbs = read_mbs,
@@ -1883,7 +3469,6 @@ mod tests {
     use crate::workload;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use std::os::unix::fs::PermissionsExt;
 
     fn observation(ok: bool, with_gpu: bool) -> Observation {
         let status = serde_json::from_value::<BTreeMap<String, Value>>(serde_json::json!({
@@ -1910,30 +3495,561 @@ mod tests {
             status,
             epoch_ms: 1,
             sample_age_ms: 0,
+            memory_scope: MemoryScope::LinuxHost,
             mem: MemoryObservation {
+                required_counters_available: true,
                 total_kib: 16_384,
                 available_kib: 8_192,
                 swap_total_kib: 8_192,
                 swap_free_kib: 4_096,
+                ..MemoryObservation::default()
             },
+            cgroup_memory: CgroupMemoryObservation::default(),
+            hyperv_balloon: HyperVBalloonObservation::default(),
+            process_totals: ProcessMemoryTotals::default(),
             control_plane: ControlPlaneObservation {
                 memory_psi_some_avg10: 1.0,
                 memory_psi_full_avg10: 0.1,
                 ..ControlPlaneObservation::default()
             },
-            gpu: with_gpu.then(|| GpuObservation {
-                name: "Fixture GPU".to_string(),
-                total_mib: 6_144,
-                used_mib: 2_048,
-                free_mib: 4_096,
+            gpu: with_gpu.then(|| {
+                gpu_observation_from_status(
+                    &serde_json::from_value(serde_json::json!({
+                        "gpu_budget": {
+                            "schema_version": 1,
+                            "adapter": { "backend": "vulkan", "key": "fixture-uuid", "luid": null },
+                            "total_bytes": 6_442_450_944u64,
+                            "budget_bytes": 6_442_450_944u64,
+                            "used_bytes": 2_147_483_648u64,
+                            "available_bytes": 4_294_967_296u64,
+                            "source": "driver_reported",
+                            "sampled_at_unix_ms": 1000
+                        }
+                    }))
+                    .expect("fixture status"),
+                    1000,
+                )
+                .expect("fixture GPU budget")
             }),
             top_processes: Vec::new(),
-            errors: if with_gpu {
-                Vec::new()
-            } else {
-                vec!["gpu_query_timeout".to_string()]
-            },
+            errors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn build_identity_marks_dirty_and_unavailable_sources() {
+        let commit = "ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+        assert_eq!(
+            format_build_identity("0.15.0", commit, "clean"),
+            "RamShared CLI v0.15.0 · abcdef01 (clean)"
+        );
+        assert_eq!(
+            format_build_identity("0.15.0", commit, "dirty"),
+            "RamShared CLI v0.15.0 · abcdef01 (dirty)"
+        );
+        assert_eq!(
+            format_build_identity("0.15.0", "", "unavailable"),
+            "RamShared CLI v0.15.0 · source unavailable"
+        );
+        assert_eq!(
+            format_build_identity("0.15.0", commit, "unexpected"),
+            "RamShared CLI v0.15.0 · abcdef01 (state unavailable)"
+        );
+    }
+
+    #[test]
+    fn running_install_status_compares_current_executable_identity() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-running-identity-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let installed = root.join("usr/local/bin/ramshared");
+        let local = root.join("build/ramshared");
+        fs::create_dir_all(installed.parent().expect("installed parent"))
+            .expect("create installed bin");
+        fs::create_dir_all(local.parent().expect("local parent")).expect("create local bin");
+        fs::write(&installed, b"installed binary").expect("write installed binary");
+        fs::write(&local, b"local binary").expect("write local binary");
+        let absent_active_release = root.join("missing-active/bin/ramshared");
+
+        assert_eq!(
+            running_install_status(Some(&installed), &installed, &absent_active_release),
+            RunningInstallStatus::InstalledDirect
+        );
+        assert_eq!(
+            running_install_status(Some(&local), &installed, &absent_active_release),
+            RunningInstallStatus::NotInstalled
+        );
+
+        let replaced_target = root.join("replace-target/ramshared");
+        let running_snapshot = root.join("running-image/ramshared");
+        fs::create_dir_all(replaced_target.parent().expect("replacement parent"))
+            .expect("create replacement target directory");
+        fs::create_dir_all(running_snapshot.parent().expect("running parent"))
+            .expect("create running image directory");
+        fs::write(&replaced_target, b"binary mapped by running process")
+            .expect("write original installed binary");
+        fs::hard_link(&replaced_target, &running_snapshot).expect("snapshot running inode");
+        let running_metadata = fs::metadata(&running_snapshot).expect("old running inode");
+        assert_eq!(
+            running_install_status_from_metadata(
+                Some(&running_metadata),
+                ProcessInstallOrigin::Direct,
+                &replaced_target,
+                &absent_active_release,
+            ),
+            RunningInstallStatus::InstalledDirect
+        );
+        let replacement = root.join("replace-target/staged");
+        fs::write(&replacement, b"new installed binary").expect("write replacement binary");
+        fs::rename(&replacement, &replaced_target).expect("atomically replace installed binary");
+        assert_eq!(
+            running_install_status_from_metadata(
+                Some(&running_metadata),
+                ProcessInstallOrigin::Direct,
+                &replaced_target,
+                &absent_active_release,
+            ),
+            RunningInstallStatus::UpdatePendingDirect
+        );
+        assert_eq!(
+            running_install_status(None, &installed, &absent_active_release),
+            RunningInstallStatus::Unknown
+        );
+        assert_eq!(
+            running_install_status(
+                Some(&local),
+                &root.join("missing/ramshared"),
+                &absent_active_release
+            ),
+            RunningInstallStatus::Unknown
+        );
+        assert_eq!(
+            format_running_identity_line(
+                "0.15.0",
+                "abcdef0123456789abcdef0123456789abcdef01",
+                "clean",
+                RunningInstallStatus::InstalledDirect
+            ),
+            "Running: v0.15.0 · abcdef01 (clean) · installed (direct)"
+        );
+        assert_eq!(
+            format_running_identity_line(
+                "0.15.0",
+                "",
+                "unavailable",
+                RunningInstallStatus::NotInstalled
+            ),
+            "Running: v0.15.0 · source unavailable · not installed"
+        );
+        assert_eq!(
+            format_running_identity_line(
+                "0.15.0",
+                "",
+                "unavailable",
+                RunningInstallStatus::Unknown
+            ),
+            "Running: v0.15.0 · source unavailable · unknown"
+        );
+
+        let old_release = root.join("opt/ramshared/releases/v0.14.1/bin/ramshared");
+        let active_release = root.join("opt/ramshared/releases/v0.15.0/bin/ramshared");
+        fs::create_dir_all(old_release.parent().expect("old release bin"))
+            .expect("create old release bin");
+        fs::create_dir_all(active_release.parent().expect("active release bin"))
+            .expect("create active release bin");
+        fs::write(&old_release, b"old release binary").expect("write old release binary");
+        fs::write(&active_release, b"active release binary").expect("write active release binary");
+        let current_link = root.join("opt/ramshared/current");
+        fs::create_dir_all(current_link.parent().expect("product root"))
+            .expect("create product root");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("releases/v0.15.0", &current_link)
+            .expect("select active release");
+        assert_eq!(
+            running_install_status(
+                Some(&active_release),
+                &installed,
+                &current_link.join("bin/ramshared")
+            ),
+            RunningInstallStatus::InstalledActiveRelease
+        );
+        assert_eq!(
+            running_install_status(
+                Some(&old_release),
+                &installed,
+                &current_link.join("bin/ramshared")
+            ),
+            RunningInstallStatus::NotInstalled
+        );
+        let old_release_metadata = fs::metadata(&old_release).expect("old release inode");
+        assert_eq!(
+            running_install_status_from_metadata(
+                Some(&old_release_metadata),
+                ProcessInstallOrigin::ActiveRelease,
+                &installed,
+                &current_link.join("bin/ramshared"),
+            ),
+            RunningInstallStatus::UpdatePendingActiveRelease
+        );
+
+        fs::remove_dir_all(&root).expect("remove running identity fixtures");
+    }
+
+    #[test]
+    fn process_origin_survives_replaced_executable_paths() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-process-origin-{}", std::process::id()));
+        let direct = root.join("usr/local/bin/ramshared");
+        let active = root.join("opt/ramshared/current/bin/ramshared");
+        let old_release = root.join("opt/ramshared/releases/v0.14.1/bin/ramshared");
+        fs::create_dir_all(direct.parent().expect("direct bin")).expect("create direct bin");
+        fs::create_dir_all(old_release.parent().expect("release bin")).expect("create release bin");
+        fs::write(&direct, b"direct image").expect("write direct image");
+        fs::write(&old_release, b"old release image").expect("write release image");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            "releases/v0.14.1",
+            active.parent().unwrap().parent().unwrap(),
+        )
+        .expect("select old release");
+
+        let deleted_direct = PathBuf::from(format!("{} (deleted)", direct.display()));
+        let deleted_release = PathBuf::from(format!("{} (deleted)", old_release.display()));
+        assert_eq!(
+            process_install_origin_for_path(&deleted_direct, &direct, &active),
+            ProcessInstallOrigin::Direct
+        );
+        assert_eq!(
+            process_install_origin_for_path(&deleted_release, &direct, &active),
+            ProcessInstallOrigin::ActiveRelease
+        );
+        assert_eq!(
+            process_install_origin_for_path(&root.join("target/debug/ramshared"), &direct, &active),
+            ProcessInstallOrigin::Unknown
+        );
+
+        fs::remove_dir_all(&root).expect("remove process origin fixture");
+    }
+
+    #[test]
+    fn ramshared_top_reexec_targets_only_its_updated_install() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-tui-reexec-{}", std::process::id()));
+        let target = root.join("usr/local/bin/ramshared");
+        let old_image = root.join("running/ramshared");
+        fs::create_dir_all(target.parent().expect("direct bin")).expect("create install bin");
+        fs::create_dir_all(old_image.parent().expect("running bin")).expect("create running bin");
+        fs::write(&target, b"new installed image").expect("write new installed image");
+        fs::write(&old_image, b"old running image").expect("write old running image");
+        let running_metadata = fs::metadata(&old_image).expect("stat running image");
+        let installed = InstalledIdentity {
+            executable: target.clone(),
+            version: Some("0.15.0".to_string()),
+            source_commit: Some("1234567890abcdef1234567890abcdef12345678".to_string()),
+            source_tree_state: Some("clean".to_string()),
+            installed_at_utc: Some("2026-09-27T18:04:05Z".to_string()),
+            executable_sha256: Some(sha256_file(&target).expect("hash new image")),
+        };
+        let running_sha256 = sha256_file(&old_image).expect("hash old image");
+
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Direct,
+                Some(&running_metadata),
+                Some(&running_sha256),
+                true,
+                Some(&installed),
+                None,
+            ),
+            Some(target.clone())
+        );
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Unknown,
+                Some(&running_metadata),
+                Some(&running_sha256),
+                true,
+                Some(&installed),
+                None,
+            ),
+            None
+        );
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Direct,
+                Some(&running_metadata),
+                Some(&running_sha256),
+                false,
+                Some(&installed),
+                None,
+            ),
+            None
+        );
+
+        fs::write(&target, b"old running image").expect("install same running image content");
+        let same_image_sha256 = sha256_file(&target).expect("hash identical installed image");
+        let same_build = InstalledIdentity {
+            executable: target.clone(),
+            executable_sha256: Some(same_image_sha256.clone()),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            source_commit: full_commit_sha(BUILD_GIT_SHA),
+            source_tree_state: Some(BUILD_TREE_STATE.to_string()),
+            installed_at_utc: Some("2026-09-27T18:04:05Z".to_string()),
+        };
+        assert_eq!(
+            restart_target(
+                ProcessInstallOrigin::Direct,
+                Some(&running_metadata),
+                Some(&same_image_sha256),
+                true,
+                Some(&same_build),
+                None,
+            ),
+            None
+        );
+
+        fs::remove_dir_all(&root).expect("remove reexec fixture");
+    }
+
+    #[test]
+    fn installation_time_is_read_from_installer_metadata_only() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-install-metadata-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("create release bin fixture");
+        let executable = bin.join("ramshared");
+        let release_commit = "abcdef0123456789abcdef0123456789abcdef01";
+        fs::write(root.join("RELEASE_VERSION"), "v0.14.1\n").expect("write release version");
+        fs::write(root.join("SOURCE_COMMIT"), format!("{release_commit}\n"))
+            .expect("write source commit");
+        fs::write(root.join("SOURCE_TREE_STATE"), "clean\n").expect("write tree state");
+        fs::write(&executable, b"release binary").expect("write release executable");
+        let daemon = root.join("bin/ramsharedd");
+        fs::write(&daemon, b"release daemon").expect("write release daemon");
+        let provenance = root.join("INSTALL_PROVENANCE.json");
+        fs::write(
+            &provenance,
+            format!("{{\"schema_version\":\"{INSTALLED_PROVENANCE_V2}\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"clean\",\"installed_at_utc\":\"2026-09-27T17:23:45Z\"}}"),
+        )
+        .expect("write installed provenance fixture");
+        seal_release_fixture(&root);
+
+        assert_eq!(
+            read_install_timestamp_for_executable(&executable).as_deref(),
+            Some("2026-09-27T17:23:45Z")
+        );
+        assert_eq!(
+            read_installed_identity(&executable, InstallKind::ActiveRelease)
+                .and_then(|metadata| metadata.version),
+            Some("0.14.1".to_string())
+        );
+        let release_identity = read_installed_identity(&executable, InstallKind::ActiveRelease)
+            .expect("read versioned installed identity");
+        assert!(
+            format_installed_identity_line("active release", Some(&release_identity)).contains(
+                "Installed active release: v0.14.1 · abcdef01 (clean) · 2026-09-27 17:23:45 UTC"
+            )
+        );
+        fs::write(&daemon, b"tampered release daemon").expect("tamper release daemon");
+        let tampered = read_installed_identity(&executable, InstallKind::ActiveRelease)
+            .expect("installed image still exists");
+        assert!(
+            format_installed_identity_line("active release", Some(&tampered))
+                .contains("identity unknown")
+        );
+        fs::write(&daemon, b"release daemon").expect("restore release daemon");
+        seal_release_fixture(&root);
+
+        fs::write(
+            &provenance,
+            format!("{{\"schema_version\":\"{INSTALLED_PROVENANCE_V1}\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"clean\"}}"),
+        )
+        .expect("write legacy provenance fixture");
+        seal_release_fixture(&root);
+        assert_eq!(read_install_timestamp_for_executable(&executable), None);
+        let legacy_identity = read_installed_identity(&executable, InstallKind::ActiveRelease)
+            .expect("versioned binary remains recognized without timestamp metadata");
+        assert!(
+            format_installed_identity_line("active release", Some(&legacy_identity))
+                .contains("v0.14.1 · abcdef01 (clean) · install time unknown")
+        );
+
+        fs::remove_file(&provenance).expect("remove installed provenance fixture");
+        assert_eq!(read_install_timestamp_for_executable(&executable), None);
+
+        let direct_prefix = root.join("usr/local");
+        let direct_executable = direct_prefix.join("bin/ramshared");
+        let direct_timestamp = direct_prefix.join("share/ramshared/INSTALL_TIMESTAMP");
+        fs::create_dir_all(direct_timestamp.parent().expect("timestamp parent"))
+            .expect("create direct install metadata directory");
+        fs::create_dir_all(direct_executable.parent().expect("direct bin"))
+            .expect("create direct executable directory");
+        fs::write(&direct_executable, b"direct installed binary").expect("write direct binary");
+        let direct_daemon = direct_prefix.join("bin/ramsharedd");
+        fs::write(&direct_daemon, b"direct installed daemon").expect("write direct daemon");
+        fs::write(&direct_timestamp, "2026-09-27T18:04:05Z\n")
+            .expect("write direct install timestamp");
+        assert_eq!(
+            read_install_timestamp_for_executable(&direct_executable).as_deref(),
+            Some("2026-09-27T18:04:05Z")
+        );
+        assert_eq!(
+            direct_install_timestamp_path(Path::new("/usr/local/bin/ramshared")),
+            Some(PathBuf::from(
+                "/usr/local/share/ramshared/INSTALL_TIMESTAMP"
+            ))
+        );
+        assert_eq!(
+            direct_install_metadata_path(Path::new("/usr/local/bin/ramshared")),
+            Some(PathBuf::from(
+                "/usr/local/share/ramshared/INSTALL_METADATA.json"
+            ))
+        );
+        assert!(
+            format_installed_identity_line(
+                "direct /usr/local",
+                Some(&read_direct_install_identity(&direct_executable))
+            )
+            .contains("Installed direct /usr/local: identity unknown · 2026-09-27 18:04:05 UTC")
+        );
+        let legacy_record = format!(
+            "{{\"schema_version\":\"{DIRECT_INSTALL_METADATA_V1}\",\"version\":\"0.15.0\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"dirty\",\"installed_at_utc\":\"2026-09-27T18:04:05Z\"}}"
+        );
+        fs::write(
+            direct_install_metadata_path(&direct_executable).expect("metadata path"),
+            &legacy_record,
+        )
+        .expect("write legacy direct install identity metadata");
+        assert!(
+            format_installed_identity_line(
+                "direct /usr/local",
+                Some(&read_direct_install_identity(&direct_executable))
+            )
+            .contains("identity unknown · 2026-09-27 18:04:05 UTC")
+        );
+
+        let cli_sha256 = sha256_file(&direct_executable).expect("hash direct executable");
+        let daemon_sha256 = sha256_file(&direct_daemon).expect("hash direct daemon");
+        fs::write(
+            direct_install_metadata_path(&direct_executable).expect("metadata path"),
+            format!(
+                "{{\"schema_version\":\"{DIRECT_INSTALL_METADATA_V2}\",\"version\":\"0.15.0\",\"source_commit\":\"{release_commit}\",\"source_tree_state\":\"dirty\",\"installed_at_utc\":\"2026-09-27T18:04:05Z\",\"cli_sha256\":\"{cli_sha256}\",\"daemon_sha256\":\"{daemon_sha256}\"}}"
+            ),
+        )
+        .expect("write hash-bound direct install identity metadata");
+        let direct_identity = read_installed_identity(&direct_executable, InstallKind::Direct)
+            .expect("read direct installed identity");
+        assert!(
+            format_installed_identity_line("direct /usr/local", Some(&direct_identity)).contains(
+                "Installed direct /usr/local: v0.15.0 · abcdef01 (dirty) · 2026-09-27 18:04:05 UTC"
+            )
+        );
+        fs::write(&direct_daemon, b"replaced daemon bytes").expect("replace direct daemon");
+        assert!(
+            format_installed_identity_line(
+                "direct /usr/local",
+                Some(&read_direct_install_identity(&direct_executable))
+            )
+            .contains("identity unknown · 2026-09-27 18:04:05 UTC")
+        );
+
+        assert!(is_utc_timestamp("2024-02-29T23:59:59Z"));
+        assert!(!is_utc_timestamp("2026-02-29T12:00:00Z"));
+        assert!(!is_utc_timestamp("2026-02-31T12:00:00Z"));
+        assert!(!is_utc_timestamp("2026-09-27T25:00:00Z"));
+
+        fs::remove_dir_all(&root).expect("remove release metadata fixture");
+    }
+
+    fn seal_release_fixture(root: &Path) {
+        let paths = [
+            "bin/ramshared",
+            "bin/ramsharedd",
+            "RELEASE_VERSION",
+            "SOURCE_COMMIT",
+            "SOURCE_TREE_STATE",
+            "INSTALL_PROVENANCE.json",
+        ];
+        let mut entries = paths
+            .iter()
+            .map(|relative| {
+                let digest = sha256_file(&root.join(relative)).expect("hash release fixture");
+                format!("{digest}  ./{relative}")
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        let manifest = format!("{}\n", entries.join("\n"));
+        fs::write(root.join("SHA256SUMS"), &manifest).expect("write release fixture manifest");
+        let manifest_sha256 = sha256_file(&root.join("SHA256SUMS")).expect("hash manifest");
+        fs::write(
+            root.join("INSTALLED_MANIFEST_SHA256"),
+            format!("{manifest_sha256}\n"),
+        )
+        .expect("write release fixture manifest receipt");
+    }
+
+    #[test]
+    fn dashboard_displays_build_revision_and_host_install_time_separately() {
+        let direct_install = InstalledIdentity {
+            executable: PathBuf::from("/usr/local/bin/ramshared"),
+            version: Some("0.14.1".to_string()),
+            source_commit: Some("abcdef0123456789abcdef0123456789abcdef01".to_string()),
+            source_tree_state: Some("clean".to_string()),
+            installed_at_utc: Some("2026-09-27T17:23:45Z".to_string()),
+            executable_sha256: Some("a".repeat(64)),
+        };
+        let metadata = DashboardMetadata {
+            version_line: format_build_identity(
+                "0.15.0",
+                "0123456789abcdef0123456789abcdef01234567",
+                "dirty",
+            ),
+            running_line: format_running_identity_line(
+                "0.15.0",
+                "0123456789abcdef0123456789abcdef01234567",
+                "dirty",
+                RunningInstallStatus::InstalledDirect,
+            ),
+            direct_install_line: format_installed_identity_line(
+                "direct /usr/local",
+                Some(&direct_install),
+            ),
+            active_install_line: format_installed_identity_line(
+                "active /opt/ramshared/current",
+                None,
+            ),
+            restart_executable: None,
+            runtime_notice: None,
+        };
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                draw_dashboard_with_metadata(
+                    frame,
+                    &observation(false, false),
+                    &VecDeque::new(),
+                    &metadata,
+                )
+            })
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("v0.15.0 · 01234567 (dirty)"));
+        assert!(rendered.contains("installed (direct)"));
+        assert!(rendered.contains(
+            "Installed direct /usr/local: v0.14.1 · abcdef01 (clean) · 2026-09-27 17:23:45 UTC"
+        ));
+        assert!(rendered.contains("Installed active /opt/ramshared/current: not found"));
+        assert!(rendered.contains("STATUS: OFF"));
+        assert!(rendered.contains("Protection: OFF"));
     }
 
     fn reservation_ledger_fixture(schema_version: u32) -> String {
@@ -1970,6 +4086,146 @@ mod tests {
             fs::write(&path, contents).unwrap();
         }
         (root, path)
+    }
+
+    fn benchmark_evidence_fixture() -> Value {
+        serde_json::json!({
+            "schema_version": "ramshared-evidence/v1",
+            "run_id": "wsl2-qualified-monitor-fixture-001",
+            "source": {
+                "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "dirty": false,
+                "dirty_entry_count": 0,
+                "harness_revision": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            "candidate": { "binary_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" },
+            "workload": { "runs": 3 },
+            "comparison": { "qualified": true },
+            "lifecycle": {
+                "binary_match": true,
+                "legitimate": { "verdict": "PASS" },
+                "refusals": [{ "name": "invalid_target_refused", "verdict": "PASS" }],
+                "cleanup": { "complete": true },
+                "residue": 0
+            },
+            "artifacts": [{
+                "path": "docs/benchmarks/evidence/qualified-run.json",
+                "bytes": 1,
+                "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            }],
+            "decision": { "verdict": "PASS", "promotable": true },
+            "metrics": {
+                "reclaim_speed_gbs": {
+                    "unit": "GB/s", "samples": [11.0, 12.0, 13.0], "n": 3, "median": 12.0
+                },
+                "reclaim_duration_ms": {
+                    "unit": "ms", "samples": [20.0, 22.0, 24.0], "n": 3, "median": 22.0
+                },
+                "p50_cycle_latency_ms": {
+                    "unit": "ms", "samples": [0.2, 0.3, 0.4], "n": 3, "median": 0.3
+                },
+                "p99_cycle_latency_ms": {
+                    "unit": "ms", "samples": [1.0, 1.1, 1.2], "n": 3, "p99_nearest_rank": 1.2
+                }
+            }
+        })
+    }
+
+    fn monitor_benchmark_path(name: &str, contents: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-monitor-benchmark-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("evidence.json");
+        fs::write(&path, contents).unwrap();
+        (root, path)
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_rejects_legacy_unqualified_status
+    fn monitor_benchmark_rejects_legacy_unqualified_status() {
+        let legacy = serde_json::json!({
+            "status": "PASS_ZERO_PANIC",
+            "reclaim_speed_gbs": 14.4,
+            "reclaim_duration_ms": 1127.0,
+            "p50_cycle_latency_ms": 0.0005,
+            "p99_cycle_latency_ms": 0.0023
+        })
+        .to_string();
+        let (root, path) = monitor_benchmark_path("legacy", &legacy);
+
+        assert_eq!(
+            read_benchmark_qualification(&path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_accepts_promotable_v1_evidence
+    fn monitor_benchmark_accepts_promotable_v1_evidence() {
+        let evidence = benchmark_evidence_fixture().to_string();
+        let (root, path) = monitor_benchmark_path("qualified", &evidence);
+
+        assert_eq!(
+            read_benchmark_qualification(&path),
+            (12.0, 22.0, 0.3, 1.2, "PASS".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_rejects_nonpromotable_evidence
+    fn monitor_benchmark_rejects_nonpromotable_evidence() {
+        let mut evidence = benchmark_evidence_fixture();
+        evidence["comparison"]["qualified"] = Value::Bool(false);
+        evidence["decision"]["verdict"] = Value::String("BASELINE".to_string());
+        evidence["decision"]["promotable"] = Value::Bool(false);
+        let contents = evidence.to_string();
+        let (root, path) = monitor_benchmark_path("baseline", &contents);
+
+        assert_eq!(
+            read_benchmark_qualification(&path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_benchmark_rejects_dirty_or_incomplete_evidence
+    fn monitor_benchmark_rejects_dirty_or_incomplete_evidence() {
+        let mut dirty = benchmark_evidence_fixture();
+        dirty["source"]["dirty"] = Value::Bool(true);
+        let dirty_contents = dirty.to_string();
+        let (dirty_root, dirty_path) = monitor_benchmark_path("dirty", &dirty_contents);
+        assert_eq!(
+            read_benchmark_qualification(&dirty_path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(dirty_root).unwrap();
+
+        let mut incomplete = benchmark_evidence_fixture();
+        incomplete["metrics"]["reclaim_speed_gbs"] = Value::Null;
+        let incomplete_contents = incomplete.to_string();
+        let (incomplete_root, incomplete_path) =
+            monitor_benchmark_path("incomplete", &incomplete_contents);
+        assert_eq!(
+            read_benchmark_qualification(&incomplete_path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(incomplete_root).unwrap();
+
+        let mut forged = benchmark_evidence_fixture();
+        forged["metrics"]["reclaim_speed_gbs"]["median"] = Value::from(900.0);
+        let forged_contents = forged.to_string();
+        let (forged_root, forged_path) = monitor_benchmark_path("forged", &forged_contents);
+        assert_eq!(
+            read_benchmark_qualification(&forged_path),
+            (0.0, 0.0, 0.0, 0.0, "AWAITING_QUALIFICATION".to_string())
+        );
+        fs::remove_dir_all(forged_root).unwrap();
     }
 
     #[test]
@@ -2028,6 +4284,239 @@ mod tests {
         assert_eq!(pressure.memory_psi_full_avg10, 0.05);
         assert_eq!(pressure.memory_psi_full_avg60, 0.01);
         assert_eq!(pressure.memory_psi_full_avg300, 0.00);
+    }
+
+    #[test]
+    fn missing_or_malformed_psi_is_not_reported_as_zero_pressure() {
+        let missing = parse_memory_pressure("");
+        assert!(!missing.memory_psi_available);
+        assert_eq!(
+            format_memory_pressure(&missing, false),
+            "Pressure: PSI unavailable"
+        );
+
+        let malformed = parse_memory_pressure(
+            "some avg10=NaN avg60=0 avg300=0 total=0\nfull avg10=101 avg60=0 avg300=0 total=0\n",
+        );
+        assert!(!malformed.memory_psi_available);
+        assert_eq!(
+            format_memory_pressure(&malformed, false),
+            "Pressure: PSI unavailable"
+        );
+
+        let valid_zero = parse_memory_pressure(
+            "some avg10=0 avg60=0 avg300=0 total=0\nfull avg10=0 avg60=0 avg300=0 total=0\n",
+        );
+        assert!(valid_zero.memory_psi_available);
+        assert_eq!(
+            format_memory_pressure(&valid_zero, true),
+            "Pressure: sample stale"
+        );
+        assert_eq!(
+            format_memory_pressure(&valid_zero, false),
+            "Pressure: PSI some=0.00% full=0.00%"
+        );
+    }
+
+    #[test]
+    fn failed_refresh_marks_the_last_observation_stale() {
+        let mut sample = observation(false, false);
+        mark_observation_refresh_failed(&mut sample, Duration::from_millis(1250));
+
+        assert_eq!(sample.sample_age_ms, 1250);
+        assert!(
+            sample
+                .errors
+                .iter()
+                .any(|error| error == "sample_refresh_failed")
+        );
+    }
+
+    #[test]
+    // TestName: monitor_memory_diagnostics_capture_kernel_categories
+    fn memory_diagnostics_capture_kernel_categories_without_inventing_missing_values() {
+        let memory = parse_meminfo(
+            "MemTotal: 16384 kB\nMemAvailable: 8192 kB\nSwapTotal: 4096 kB\nSwapFree: 2048 kB\nAnonPages: 3000 kB\nShmem: 400 kB\nSlab: 500 kB\nSUnreclaim: 200 kB\nDirty: 30 kB\nWriteback: 5 kB\n",
+        );
+        assert_eq!(memory.anon_pages_kib, Some(3000));
+        assert_eq!(memory.shmem_kib, Some(400));
+        assert_eq!(memory.slab_kib, Some(500));
+        assert_eq!(memory.s_unreclaim_kib, Some(200));
+        assert_eq!(memory.dirty_kib, Some(30));
+        assert_eq!(memory.writeback_kib, Some(5));
+
+        let partial = parse_meminfo("MemTotal: 4096 kB\n");
+        assert_eq!(partial.anon_pages_kib, None);
+        assert_eq!(partial.writeback_kib, None);
+    }
+
+    #[test]
+    fn meminfo_missing_or_inconsistent_core_values_are_unavailable() {
+        let missing = parse_meminfo("MemTotal: 4096 kB\n");
+        assert!(!missing.required_counters_available);
+
+        let inconsistent = parse_meminfo(
+            "MemTotal: 4096 kB\nMemAvailable: 8192 kB\nSwapTotal: 4096 kB\nSwapFree: 8192 kB\n",
+        );
+        assert!(!inconsistent.required_counters_available);
+
+        // These are parser fixtures, not product capacities or minimums.
+        // Accept different RAM and swap sizes as long as the counters agree.
+        for meminfo in [
+            "MemTotal: 262144 kB\nMemAvailable: 131072 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n",
+            "MemTotal: 7864320 kB\nMemAvailable: 5242880 kB\nSwapTotal: 1703936 kB\nSwapFree: 999424 kB\n",
+            "MemTotal: 268435456 kB\nMemAvailable: 134217728 kB\nSwapTotal: 123456789 kB\nSwapFree: 67108864 kB\n",
+        ] {
+            let valid = parse_meminfo(meminfo);
+            assert!(valid.required_counters_available, "{meminfo}");
+        }
+    }
+
+    #[test]
+    // TestName: monitor_hyperv_balloon_diagnostics_capture_counters
+    fn hyperv_balloon_diagnostics_capture_live_and_missing_counters() {
+        let debugfs = "host_version          : 2.0\ncapabilities          : enabled hot_add\nstate                 : 1 (Initialized)\npages_added           : 2\npages_onlined         : 1\npages_ballooned       : 8\ntotal_pages_committed : 1000\nmax_dynamic_page_count: 4096\n";
+        let balloon = parse_hyperv_balloon(debugfs, Some(8), "readable");
+        assert_eq!(balloon.debugfs_status, "readable");
+        assert_eq!(balloon.nr_balloon_pages, Some(8));
+        assert_eq!(balloon.pages_ballooned, Some(8));
+        assert_eq!(balloon.pages_added, Some(2));
+        assert_eq!(balloon.state.as_deref(), Some("1 (Initialized)"));
+        assert_eq!(balloon.capabilities.as_deref(), Some("enabled hot_add"));
+
+        let proc_only = parse_hyperv_balloon("", Some(0), "permission_denied");
+        assert_eq!(proc_only.debugfs_status, "permission_denied");
+        assert_eq!(proc_only.nr_balloon_pages, Some(0));
+        assert_eq!(proc_only.pages_ballooned, None);
+        let no_balloon = parse_hyperv_balloon("", None, "not_found");
+        assert_eq!(no_balloon.debugfs_status, "not_found");
+        assert_eq!(no_balloon.nr_balloon_pages, None);
+    }
+
+    #[test]
+    // TestName: monitor_process_memory_totals_precede_top_n_truncation
+    fn process_memory_totals_cover_all_visible_processes_before_top_n_truncation() {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-monitor-process-totals-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        for (pid, name, rss, swap) in [("123", "larger", 200, 30), ("456", "smaller", 150, 20)] {
+            let process = root.join(pid);
+            fs::create_dir_all(&process).unwrap();
+            fs::write(process.join("comm"), format!("{name}\n")).unwrap();
+            fs::write(
+                process.join("status"),
+                format!("VmRSS: {rss} kB\nVmSwap: {swap} kB\n"),
+            )
+            .unwrap();
+        }
+
+        let (top, totals) = collect_process_snapshot(&root, 1);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].comm, "larger");
+        assert_eq!(totals.visible_processes, 2);
+        assert_eq!(totals.rss_kib, 350);
+        assert_eq!(totals.swap_kib, 50);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: monitor_global_cgroup_memory_is_recorded_when_available
+    fn global_cgroup_memory_preserves_current_and_oom_counters() {
+        let root = std::env::temp_dir().join(format!(
+            "ramshared-monitor-cgroup-memory-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("memory.current"), "1048576\n").unwrap();
+        fs::write(
+            root.join("memory.events"),
+            "low 0\nhigh 1\nmax 2\noom 3\noom_kill 4\n",
+        )
+        .unwrap();
+
+        let current = collect_cgroup_memory(&root);
+        assert_eq!(current.status, "root");
+        assert_eq!(current.current_bytes, Some(1_048_576));
+        let events = current.events.expect("cgroup event counters");
+        assert_eq!(events.oom, 3);
+        assert_eq!(events.oom_kill, 4);
+        let unavailable = collect_cgroup_memory(&root.join("missing"));
+        assert_eq!(unavailable.status, "unavailable");
+
+        fs::remove_file(root.join("memory.current")).unwrap();
+        fs::remove_file(root.join("memory.events")).unwrap();
+        for (name, current) in [("user.slice", "1048576"), ("system.slice", "2097152")] {
+            let child = root.join(name);
+            fs::create_dir_all(&child).unwrap();
+            fs::write(child.join("memory.current"), current).unwrap();
+        }
+        fs::write(root.join("cgroup.procs"), "101\n102\n").unwrap();
+        let partial = collect_cgroup_memory(&root);
+        assert_eq!(partial.status, "partial");
+        assert_eq!(partial.current_bytes, None);
+        assert_eq!(partial.subgroup_current_bytes, Some(3_145_728));
+        assert_eq!(partial.subgroups_with_memory, 2);
+        assert_eq!(partial.root_direct_processes, Some(2));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_scope_distinguishes_wsl2_wsl1_and_native_linux() {
+        let wsl2 = detect_memory_scope("6.18.40.1-microsoft-standard-WSL2+", false);
+        assert_eq!(wsl2, MemoryScope::Wsl2);
+        assert_eq!(wsl2.panel_title(), "WSL2 Guest RAM & Swap");
+        assert_eq!(wsl2.ram_label(), "WSL2 Guest RAM");
+
+        let wsl = detect_memory_scope("4.4.0-Microsoft", true);
+        assert_eq!(wsl, MemoryScope::Wsl);
+        assert_eq!(wsl.panel_title(), "WSL Guest RAM & Swap");
+
+        let linux = detect_memory_scope("6.12.0-generic", false);
+        assert_eq!(linux, MemoryScope::LinuxHost);
+        assert_eq!(linux.panel_title(), "Host RAM & Swap");
+        assert_eq!(linux.ram_label(), "Host RAM");
+    }
+
+    #[test]
+    fn dashboard_labels_wsl2_guest_memory_and_formats_kib_as_mib() {
+        let osrelease = "6.18.40.1-microsoft-standard-WSL2+";
+        let mut sample = observation(false, false);
+        sample.memory_scope = detect_memory_scope(osrelease, false);
+        sample.mem.total_kib = 16_378_880;
+        sample.mem.available_kib = 1_182_720;
+
+        let metadata = DashboardMetadata {
+            version_line: "RamShared CLI v0.15.0 · 01234567 (clean)".to_string(),
+            running_line: "Running: v0.15.0 · 01234567 (clean) · installed (direct)".to_string(),
+            direct_install_line:
+                "Installed direct /usr/local: identity unknown · 2026-09-27 18:04:05 UTC"
+                    .to_string(),
+            active_install_line: "Installed active /opt/ramshared/current: not found".to_string(),
+            restart_executable: None,
+            runtime_notice: None,
+        };
+        let backend = TestBackend::new(180, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard_with_metadata(frame, &sample, &VecDeque::new(), &metadata))
+            .expect("render WSL2 dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert_eq!(sample.memory_scope, MemoryScope::Wsl2);
+        assert!(rendered.contains("WSL2 Guest RAM & Swap"));
+        assert!(rendered.contains("WSL2 Guest RAM:"));
+        assert!(rendered.contains("14,840 / 15,995 MiB"));
+        assert!(rendered.contains("Protection: OFF"));
+        assert!(!rendered.contains("Host RAM"));
     }
 
     #[test]
@@ -2102,7 +4591,15 @@ mod tests {
 
     #[test]
     fn dashboard_renders_active_and_unavailable_gpu_planes() {
-        for sample in [observation(true, true), observation(false, false)] {
+        for (mut sample, expected_memory_label) in [
+            (observation(true, true), "WSL2 Guest RAM"),
+            (observation(false, false), "Host RAM"),
+        ] {
+            sample.memory_scope = if expected_memory_label == "WSL2 Guest RAM" {
+                MemoryScope::Wsl2
+            } else {
+                MemoryScope::LinuxHost
+            };
             let backend = TestBackend::new(120, 40);
             let mut terminal = Terminal::new(backend).expect("test terminal");
             let history = VecDeque::from([10, 20, 30, 40, 50]);
@@ -2116,11 +4613,149 @@ mod tests {
                 .iter()
                 .map(|cell| cell.symbol())
                 .collect::<String>();
-            assert!(rendered.contains("Host RAM") || rendered.contains("RAM"));
+            assert!(rendered.contains(expected_memory_label));
             assert!(rendered.contains("Memory Tiers") || rendered.contains("Swap Priority"));
             assert!(rendered.contains("Diagnostics") || rendered.contains("Info"));
             assert!(rendered.contains("Priority Order") || rendered.contains("exit"));
+            assert!(!rendered.contains("PCIe Hardware"));
+            if sample.bool_value("ok") == Some(true) {
+                assert!(rendered.contains("STATUS: OPERATIONAL & PROTECTED"));
+                assert!(rendered.contains("Protection: ACTIVE"));
+            } else {
+                assert!(rendered.contains("STATUS: OFF"));
+                assert!(rendered.contains("Protection: OFF"));
+            }
+            if sample.gpu.is_some() {
+                assert!(rendered.contains("fixture-uuid"));
+                assert!(rendered.contains("6144 MiB"));
+            } else {
+                assert!(rendered.contains("Active worker GPU budget unavailable"));
+            }
         }
+    }
+
+    #[test]
+    fn dashboard_reports_protection_off_when_cascade_is_disabled() {
+        let sample = observation(false, false);
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("STATUS: OFF"));
+        assert!(rendered.contains("Protection: OFF"));
+        assert!(rendered.contains("STOPPED"));
+        assert!(!rendered.contains("ARMED & READY"));
+        assert!(!rendered.contains("Protection: ACTIVE"));
+    }
+
+    #[test]
+    fn dashboard_blocks_stale_active_state_without_live_daemon() {
+        let mut sample = observation(false, false);
+        sample.status.insert(
+            "protection_state".to_string(),
+            Value::String("ACTIVE".to_string()),
+        );
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("STATUS: BLOCKED"));
+        assert!(rendered.contains("Protection: BLOCKED"));
+        assert!(!rendered.contains("Protection: ACTIVE"));
+    }
+
+    #[test]
+    fn dashboard_does_not_invent_boot_tier_latency_when_unmeasured() {
+        let mut sample = observation(true, true);
+        sample.control_plane.boot_tier_latency_ms = None;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Boot Initialization"));
+        assert!(rendered.contains("not measured"));
+        assert!(!rendered.contains("3.12s"));
+        assert!(!rendered.contains("Tier Ready"));
+    }
+
+    #[test]
+    fn dashboard_marks_failed_refresh_values_as_stale() {
+        let mut sample = observation(false, false);
+        sample.control_plane.memory_psi_available = true;
+        sample.control_plane.swap_read_mbs = 12.3;
+        sample.control_plane.swap_write_mbs = 4.5;
+        mark_observation_refresh_failed(&mut sample, Duration::from_millis(1250));
+
+        let backend = TestBackend::new(220, 50);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("Pressure: sample stale"));
+        assert!(rendered.contains("Read: stale"));
+        assert!(rendered.contains("Write: stale"));
+        assert!(rendered.contains("Telemetry Sample Age:     1250 ms"));
+        assert!(!rendered.contains("Read: 12.3"));
+        assert!(!rendered.contains("Write: 4.5"));
+    }
+
+    #[test]
+    fn dashboard_displays_missing_memory_counters_as_unavailable() {
+        let mut sample = observation(false, false);
+        sample.memory_scope = MemoryScope::Wsl2;
+        sample.mem = parse_meminfo("MemTotal: 16384 kB\n");
+
+        let backend = TestBackend::new(220, 50);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample, &VecDeque::new()))
+            .expect("render dashboard");
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(rendered.contains("WSL2 Guest RAM: telemetry unavailable"));
+        assert!(rendered.contains("Total Swap: telemetry unavailable"));
+        assert!(!rendered.contains("0% (0 / 0 MiB)"));
     }
 
     #[test]
@@ -2191,14 +4826,26 @@ mod tests {
         assert_eq!(log["schema_version"], 4);
         assert_eq!(log["epoch_ms"], current["epoch_ms"]);
         assert!(log["mem"]["total_kib"].as_u64().is_some());
+        assert!(log["mem"].get("anon_pages_kib").is_some());
+        assert!(matches!(
+            log["hyperv_balloon"]["debugfs_status"].as_str(),
+            Some("readable" | "permission_denied" | "not_found" | "read_error")
+        ));
+        assert!(matches!(
+            log["cgroup_memory"]["status"].as_str(),
+            Some("root" | "partial" | "unavailable")
+        ));
+        assert!(
+            log["process_totals"]["visible_processes"]
+                .as_u64()
+                .is_some()
+        );
         assert!(log["control_plane"]["memory_psi_some_avg10"].is_number());
         fs::remove_dir_all(root).expect("remove stream fixture");
     }
 
     #[test]
     fn helper_failures_are_explicit() {
-        assert!(parse_gpu_number("invalid").is_err());
-        assert_eq!(one_line("a\n b\t c"), "a b c");
         assert_eq!(memory_used_pct(&MemoryObservation::default()), 0);
         assert_eq!(
             format!("{}", MonitorError::Io("x".into())),
@@ -2238,10 +4885,13 @@ mod tests {
         .unwrap();
         fs::write(process.join("io"), "read_bytes: 10\nwrite_bytes: 20\n").unwrap();
         fs::write(process.join("cmdline"), "--token=do-not-persist").unwrap();
-        let top = collect_top_processes(&root, 10);
+        let (top, totals) = collect_process_snapshot(&root, 10);
         let serialized = serde_json::to_string(&top).unwrap();
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].comm, "buildworker");
+        assert_eq!(totals.visible_processes, 1);
+        assert_eq!(totals.rss_kib, 2048);
+        assert_eq!(totals.swap_kib, 64);
         assert!(top[0].managed);
         assert!(!serialized.contains("do-not-persist"));
         let mut outside = top[0].clone();
@@ -2249,10 +4899,10 @@ mod tests {
         outside.rss_kib = 600 * 1024;
         outside.swap_kib = 0;
         assert_eq!(
-            classify_unmanaged_pressure(&[outside]),
-            ("UNMANAGED_PRESSURE", 600 * 1024, 1)
+            classify_unmanaged_memory_usage(&[outside]),
+            ("UNMANAGED_MEMORY", 600 * 1024, 1)
         );
-        assert_eq!(classify_unmanaged_pressure(&top), ("NONE", 0, 0));
+        assert_eq!(classify_unmanaged_memory_usage(&top), ("NONE", 0, 0));
         let pressure = parse_memory_pressure(
             "some avg10=1 avg60=2 avg300=3 total=1\nfull avg10=4 avg60=5 avg300=6 total=2\n",
         );
@@ -2274,78 +4924,64 @@ mod tests {
     }
 
     #[test]
-    fn gpu_measurement_failure_is_explicit_and_not_green() {
-        let mut status = Map::from_iter([
-            ("ok".into(), Value::Bool(true)),
-            ("overall_state".into(), Value::String("HEALTHY".into())),
-        ]);
-        apply_measurement_failure(&mut status, "gpu_query_timeout");
-        assert_eq!(status["ok"], false);
-        assert_eq!(status["overall_state"], "BLOCKED");
-        assert_eq!(status["measurement_state"]["error"], "gpu_query_timeout");
-        assert_eq!(
-            gpu_query_candidates(),
-            ["nvidia-smi", "/usr/lib/wsl/lib/nvidia-smi"]
-        );
+    fn monitor_uses_fresh_adapter_bound_budget_from_active_worker() {
+        let status = serde_json::from_value::<Map<String, Value>>(serde_json::json!({
+            "gpu_budget": {
+                "schema_version": 1,
+                "adapter": { "backend": "vulkan", "key": "pci-0000:03:00.0", "luid": "aabbccdd:00001122" },
+                "total_bytes": 8_589_934_592u64,
+                "budget_bytes": 6_442_450_944u64,
+                "used_bytes": 2_147_483_648u64,
+                "available_bytes": 4_294_967_296u64,
+                "source": "driver_reported",
+                "sampled_at_unix_ms": 1000
+            }
+        })).expect("valid fixture status");
+
+        let sample = gpu_observation_from_status(&status, 1500).expect("fresh provider budget");
+        assert_eq!(sample.adapter.backend, "vulkan");
+        assert_eq!(sample.adapter.key, "pci-0000:03:00.0");
+        assert_eq!(sample.total_mib, Some(8192));
+        assert_eq!(sample.budget_mib, 6144);
+        assert_eq!(sample.used_mib, 2048);
+        assert_eq!(sample.free_mib, 4096);
     }
 
     #[test]
-    // TestName: gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid
-    fn gpu_query_contains_descendant_inherited_pipe_and_keeps_success_valid() {
-        let root = std::env::temp_dir().join(format!(
-            "ramshared-monitor-gpu-child-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let write_program = |name: &str, source: &str| {
-            let path = root.join(name);
-            fs::write(&path, source).unwrap();
-            let mut permissions = fs::metadata(&path).unwrap().permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(&path, permissions).unwrap();
-            path
-        };
-        let success = write_program(
-            "gpu-success",
-            "#!/bin/sh\nprintf 'Fixture GPU, 6144, 2048, 4096\\n'\n",
-        );
-        let sample = query_gpu_command(success.to_str().unwrap(), Duration::from_millis(250))
-            .expect("legitimate GPU fixture must remain accepted");
-        assert_eq!(sample.name, "Fixture GPU");
-        assert_eq!(
-            (sample.total_mib, sample.used_mib, sample.free_mib),
-            (6144, 2048, 4096)
-        );
+    fn monitor_omits_stale_local_malformed_and_unidentified_gpu_budgets() {
+        let mut status = serde_json::from_value::<Map<String, Value>>(serde_json::json!({
+            "gpu_budget": {
+                "schema_version": 1,
+                "adapter": { "backend": "cuda", "key": "gpu-0", "luid": null },
+                "total_bytes": 6144,
+                "budget_bytes": 6144,
+                "used_bytes": 1024,
+                "available_bytes": 5120,
+                "source": "driver_reported",
+                "sampled_at_unix_ms": 1000
+            }
+        }))
+        .expect("valid fixture status");
+        assert!(gpu_observation_from_status(&status, 7_000).is_none());
 
-        let inherited = write_program(
-            "gpu-inherited-output",
-            "#!/bin/sh\n(sleep 1) &\nprintf 'Fixture GPU, 6144, 2048, 4096\\n'\nexit 0\n",
-        );
-        let started = Instant::now();
-        let error = query_gpu_command(inherited.to_str().unwrap(), Duration::from_millis(100))
-            .expect_err("an inherited output pipe must not be accepted as GPU success");
-        fs::remove_dir_all(root).unwrap();
+        status["gpu_budget"]["source"] = Value::String("provider_local_estimate".into());
+        assert!(gpu_observation_from_status(&status, 1500).is_none());
 
-        assert!(started.elapsed() < Duration::from_millis(750));
-        assert!(error.contains("output"), "{error}");
+        status["gpu_budget"]["source"] = Value::String("driver_reported".into());
+        status["gpu_budget"]["adapter"]["key"] = Value::String(String::new());
+        assert!(gpu_observation_from_status(&status, 1500).is_none());
+
+        status["gpu_budget"] = serde_json::json!({ "available_bytes": 5120 });
+        assert!(gpu_observation_from_status(&status, 1500).is_none());
+        assert!(gpu_observation_from_status(&Map::new(), 1500).is_none());
     }
 
     #[test]
     fn computes_dynamic_tier_speedup_values() {
         let idle_io = TierIoStats::default();
-        assert_eq!(
-            compute_tier_speedup(&idle_io, 100),
-            "⚡ 250x In-RAM Capable (0.05 µs)"
-        );
-        assert_eq!(
-            compute_tier_speedup(&idle_io, 50),
-            "🚀 20x-100x PCIe DMA Capable (8.74 GB/s)"
-        );
-        assert_eq!(
-            compute_tier_speedup(&idle_io, -2),
-            "🐢 1.0x Host VHDX Baseline (WSL2 System Disk)"
-        );
+        assert_eq!(compute_tier_speedup(&idle_io, 100), "Awaiting measured I/O");
+        assert_eq!(compute_tier_speedup(&idle_io, 50), "Awaiting measured I/O");
+        assert_eq!(compute_tier_speedup(&idle_io, -2), "Awaiting measured I/O");
 
         let zram_active = TierIoStats {
             min_mbs: 100.0,
@@ -2434,8 +5070,36 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("GPU not detected"));
+        assert!(rendered.contains("Active worker GPU budget unavailable"));
         assert!(rendered.contains("Swap Tiers: not available"));
+    }
+
+    #[test]
+    fn tier_latency_estimates_are_identified_in_ui_data() {
+        let mut control_plane = ControlPlaneObservation::default();
+        update_tier_latencies(&mut control_plane, 0, 0, 0);
+
+        let rendered = format_tier_latency(&control_plane.disk_io, "disk");
+        assert!(
+            rendered.starts_with("estimated:"),
+            "derived latency was not identified as an estimate: {rendered}"
+        );
+
+        let serialized = serde_json::to_value(&control_plane).unwrap();
+        assert_eq!(serialized["disk_io"]["latency_source"], "estimated");
+
+        let mut legacy_json = serde_json::to_value(TierIoStats::default()).unwrap();
+        let legacy_object = legacy_json.as_object_mut().unwrap();
+        legacy_object.remove("latency_source");
+        legacy_object.insert("min_lat_us".to_string(), 85.0.into());
+        legacy_object.insert("avg_lat_us".to_string(), 180.0.into());
+        legacy_object.insert("max_lat_us".to_string(), 1200.0.into());
+        let legacy = serde_json::from_value::<TierIoStats>(legacy_json).unwrap();
+        assert_eq!(legacy.latency_source, LatencySource::Unavailable);
+        assert_eq!(
+            format_tier_latency(&legacy, "legacy disk"),
+            "not measured (legacy disk)"
+        );
     }
 
     #[test]
@@ -2476,19 +5140,28 @@ mod tests {
             min_lat_us: 0.04,
             avg_lat_us: 0.08,
             max_lat_us: 0.15,
+            latency_source: LatencySource::Measured,
             ..TierIoStats::default()
         };
-        let lat_str = format_tier_latency(&io_sample, 0.04, 0.08, 0.15, "In-RAM LZ4");
-        assert_eq!(lat_str, "0.04..0.08..0.15µs (In-RAM LZ4)");
+        let lat_str = format_tier_latency(&io_sample, "In-RAM LZ4");
+        assert_eq!(lat_str, "measured: 0.04µs..0.08µs..0.15µs (In-RAM LZ4)");
 
         let io_disk = TierIoStats {
             min_lat_us: 85.0,
             avg_lat_us: 180.0,
             max_lat_us: 1200.0,
+            latency_source: LatencySource::Measured,
             ..TierIoStats::default()
         };
-        let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "Host VHDX");
-        assert_eq!(disk_lat_str, "85..180..1.2ms (Host VHDX)");
+        let disk_lat_str = format_tier_latency(&io_disk, "Host VHDX");
+        assert_eq!(
+            disk_lat_str,
+            "measured: 85.00µs..180.00µs..1.2ms (Host VHDX)"
+        );
+        assert_eq!(
+            format_tier_latency(&TierIoStats::default(), "GPU cache"),
+            "not measured (GPU cache)"
+        );
 
         let mem_txt = "MemTotal:       20480 kB\nMemAvailable:   16384 kB\nSwapTotal:       4096 kB\nSwapFree:        2048 kB\n";
         let mem = parse_meminfo(mem_txt);
@@ -2527,5 +5200,159 @@ mod tests {
             heartbeat: None,
         };
         assert!(run_jsonl(&jsonl_opts).is_ok());
+    }
+    /// read as a system-RAM threshold.
+    #[test]
+    fn monitor_labels_enforced_reserve_floor_as_vram() {
+        let (enforced_mib, source, sealed_min_mib, percent, runtime_mib) =
+            vram_reserve_fields(Some(6144 * 1024 * 1024), 4016 * 1024 * 1024);
+
+        // The shared three-term formula, recomputed here independently.
+        // WDDM shape: budget < total. `helper_capacity` takes the min.
+        // Non-literal inputs so the min is not a compile-time no-op.
+        let total_bytes = 6144 * 1024 * 1024u64;
+        let budget_bytes = 4016 * 1024 * 1024u64;
+        let capacity = total_bytes.min(budget_bytes);
+        assert_eq!(capacity, budget_bytes, "capacity is min(total, budget)");
+        let configured = (2048 * 1024 * 1024u64).max(capacity * 20 / 100);
+        let expected =
+            (configured.max(capacity.div_ceil(5)) + runtime_mib * 1024 * 1024) / (1024 * 1024);
+        assert_eq!(
+            enforced_mib, expected,
+            "enforced floor must match the shared formula"
+        );
+        assert!(enforced_mib > 0);
+
+        // Source is honest: the monitor cannot observe a daemon override.
+        assert_eq!(source, "sealed-manifest");
+        assert_eq!(sealed_min_mib, 2048);
+        assert_eq!(percent, 20);
+        assert_eq!(runtime_mib, 640);
+
+        // The label is `vram_reserve_*` on every field (DT-10).
+        let encoded = serde_json::to_value(GpuObservation {
+            adapter: ramshared_vram::GpuAdapterIdentity {
+                backend: "cuda".into(),
+                key: "test".into(),
+                luid: None,
+            },
+            source: GpuBudgetSource::DriverReported,
+            total_mib: Some(6144),
+            budget_mib: 4016,
+            used_mib: 2128,
+            free_mib: 1888,
+            vram_reserve_enforced_mib: enforced_mib,
+            vram_reserve_source: source,
+            vram_reserve_sealed_min_mib: sealed_min_mib,
+            vram_reserve_sealed_percent: percent,
+            vram_reserve_runtime_buffer_mib: runtime_mib,
+        })
+        .expect("serializable");
+        let map = encoded.as_object().expect("object");
+        let reserve_keys: Vec<&str> = map
+            .keys()
+            .filter(|k| k.contains("reserve"))
+            .map(String::as_str)
+            .collect();
+        assert!(
+            !reserve_keys.is_empty(),
+            "the observation must carry reserve fields"
+        );
+        for key in &reserve_keys {
+            assert!(
+                key.starts_with("vram_reserve_"),
+                "reserve field {key} must be labeled as VRAM"
+            );
+        }
+    }
+
+    fn sample_cache(logical_cached_bytes: u64, sampled_at_unix_ms: u64) -> WorkerCacheTelemetry {
+        use ramshared_vram::{CodecCapability, CodecState, CodecTelemetry};
+
+        WorkerCacheTelemetry {
+            schema_version: 1,
+            sampled_at_unix_ms,
+            codec: CodecTelemetry::new(
+                CodecCapability::Available,
+                CodecState::Ready,
+                Some("codec-subdeadline"),
+            ),
+            logical_cached_bytes,
+            physical_cache_slab_bytes: 8 * 1024 * 1024,
+            codec_workspace_bytes: 1024 * 1024,
+            compressed_payload_bytes: 32 * 1024 * 1024,
+            raw_payload_bytes: 4 * 1024 * 1024,
+            metadata_bytes: 64 * 1024,
+            raw_bypass_bytes: 16 * 1024 * 1024,
+            codec_integrity_errors: 2,
+            codec_decode_errors: 1,
+            codec_timeouts: 3,
+        }
+    }
+
+    #[test]
+    fn monitor_labels_logical_cache_separately_from_ram() {
+        const LOGICAL: u64 = 256 * 1024 * 1024;
+        let line = format_cache_telemetry_labels(&sample_cache(LOGICAL, 1_000));
+
+        // The logical figure is labelled as VRAM cache occupancy.
+        assert!(
+            line.contains("VRAM cache logical: 256 MiB"),
+            "logical cache bytes must be labelled as VRAM cache occupancy, got: {line}"
+        );
+        assert!(line.contains("VRAM cache slabs: 8 MiB"));
+        assert!(line.contains("codec workspace: 1 MiB"));
+
+        // No non-VRAM RAM label exists anywhere on the line. "VRAM" itself is
+        // the only permitted occurrence of that substring.
+        let without_vram = line.to_uppercase().replace("VRAM", "");
+        assert!(
+            !without_vram.contains("RAM"),
+            "cache telemetry must never be labelled as RAM: {line}"
+        );
+        assert!(!line.contains("host RAM"), "{line}");
+        assert!(!line.contains("guest RAM"), "{line}");
+        assert!(!line.contains("available RAM"), "{line}");
+
+        // Codec counters are present and named as codec counters, not memory.
+        assert!(line.contains("codec errors: integrity=2 decode=1 timeout=3"));
+    }
+
+    #[test]
+    fn monitor_omits_stale_codec_telemetry() {
+        let now = 10_000u64;
+        let fresh = sample_cache(4096, now);
+        let fresh_value = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(
+            cache_telemetry_from_value(Some(&fresh_value), now).map(|c| c.logical_cached_bytes),
+            Some(4096),
+            "a fresh sample is kept"
+        );
+
+        let stale = sample_cache(4096, now - TELEMETRY_MAX_AGE_MS - 1);
+        let stale_value = serde_json::to_value(&stale).unwrap();
+        assert_eq!(
+            cache_telemetry_from_value(Some(&stale_value), now),
+            None,
+            "a stale sample must be omitted, never rendered as live"
+        );
+
+        // Unknown schema version and malformed bodies are omitted the same way.
+        let mut unknown = sample_cache(4096, now);
+        unknown.schema_version = 9;
+        let unknown_value = serde_json::to_value(&unknown).unwrap();
+        assert_eq!(cache_telemetry_from_value(Some(&unknown_value), now), None);
+        assert_eq!(cache_telemetry_from_value(None, now), None);
+        assert_eq!(
+            cache_telemetry_from_value(Some(&Value::String("nope".into())), now),
+            None
+        );
+
+        // The rendered line for a kept sample still carries the bounded refusal
+        // reason and never a payload.
+        let line = format_cache_telemetry_labels(
+            &cache_telemetry_from_value(Some(&fresh_value), now).unwrap(),
+        );
+        assert!(line.contains("codec-subdeadline"));
     }
 }

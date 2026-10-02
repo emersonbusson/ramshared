@@ -4,30 +4,55 @@
 
 RamShared enforces strict, fail-closed operational boundaries across host and virtualized environments. All active memory tiering operates via on-demand revocable chunks backed by an authoritative SSD origin, prioritizing system stability and data integrity.
 
-The legacy full-VRAM NBD backend composition and `RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source and are no longer available, supported, or selectable. All operations utilize the modern dual-tier device architecture (`ublk`/`io_uring` and page-locked DMA).
+The legacy full-VRAM NBD backend composition and `RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source and are no longer available, supported, or selectable. Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is qualified on native Linux or WSL2 with a compatible custom kernel, not as a universal stock-WSL2 default.
 
 ## What is RamShared intended to model?
 
 RamShared models compressed RAM (ZRAM) first, an SSD-authoritative logical device with a clean revocable VRAM cache second, and host disk swap as the final fallback. Acknowledged data belongs to the origin, not VRAM. If GPU measurement or allocation fails, cache capacity safely falls back to zero while the origin path remains the authoritative correctness boundary.
 
-## Will it freeze my PC?
+## Can it freeze or stall my PC?
 
-No. RamShared's hardened safety contract enforces identity-checked, swapoff-first origin detachment: it never detaches a daemon while its block device is active in the swap table. Additionally, automatic GPU headroom reservation ensures that 3D and gaming workloads reclaim VRAM instantly without desktop stalls or freezes.
+Any swap or GPU path can stall when the host, driver, storage, or teardown path
+is unhealthy. RamShared reduces that risk with identity checks, swapoff-first
+origin detachment, bounded admission, and fail-closed health evaluation. Open
+live-host qualifications remain listed in the gap register; the software does
+not claim zero stall risk on unqualified machines.
 
 ## Is this free RAM for games?
 
 No. A game or other external workload has priority for the GPU budget. The
-system reserves `max(2 GiB, 20% of total VRAM)` and treats unknown WDDM/GPU
-measurement as zero cache target. It neither promises a fixed amount of VRAM
-nor identifies applications by name.
+broker/NBD path reserves `max(1536 MiB, 20% of total VRAM)` as a capacity
+boundary and separately retains `768 MiB` of reported free VRAM as a runtime
+buffer. Unknown WDDM/GPU measurement yields a zero cache target. The origin
+cache and StorPort use their own policies described below.
 
 ## Can I run 3D games, rendering software, or GPU workloads while RamShared is active?
 
-Yes. RamShared continuously monitors GPU budget headroom via WDDM/VidMm and NVML/Vulkan APIs. It dynamically reserves `max(2 GiB, 20% of total VRAM)` strictly for 3D graphics, display compositing, and user applications. When an external 3D application or CUDA workload requests memory, RamShared evicts clean cache chunks in milliseconds, yielding GPU memory immediately without stalls or frame drops.
+Concurrent GPU workloads are supported only within the measured budget and
+remain hardware- and driver-dependent. The governor can stop admission and
+evict clean chunks, but it does not promise a particular reclaim latency or
+frame-rate outcome.
+
+The three current reserve policies serve different consumers:
+
+- **Broker/NBD:** capacity reserve `max(1536 MiB, 20%)`, plus a separate
+  `768 MiB` runtime free buffer.
+- **Origin cache:** `max(configured floor, 20% of measured capacity)`, with a
+  separate `640 MiB` runtime buffer. The current production floor defaults to
+  `512 MiB` and is configurable within `128–4096 MiB`; the qualification gate
+  tracks a mismatch with the `1536 MiB` default stated in the active PRD/SPEC.
+- **Windows StorPort:** `max(configured reserve, 512 MiB, 10%)`.
+
+The reserve bounds cache capacity. The runtime buffer protects a future
+allocation against live external GPU use; it is not an additional advertised
+cache capacity.
 
 ## Does RamShared increase SSD wear (TBW)?
 
-On the contrary, RamShared significantly **reduces** SSD wear. In conventional systems under memory pressure, swap thrashing continuously writes 4KB pages directly to NAND flash, burning through Drive Writes Per Day (DWPD) and Terabytes Written (TBW). RamShared absorbs burst memory churn across compressed ZRAM and revocable VRAM (GDDR6/HBM, which has infinite write endurance), dramatically cutting down unnecessary SSD flash fatigue.
+RamShared can change the amount and shape of SSD traffic, but its
+authoritative write-through origin still performs storage writes. No current
+evidence supports a universal TBW reduction claim. Measure the workload's
+origin writes and cache hit rate before drawing an endurance conclusion.
 
 
 ## What do the status terms mean?
@@ -58,8 +83,8 @@ to ensure reliable, predictable operation across environments.
 
 ## What happens under external GPU pressure?
 
-The dynamic governor immediately stops new cache allocations, drops clean chunks over PCIe, and
-routes I/O directly through the authoritative SSD origin without interrupting active workloads. It has no
+The dynamic governor stops new cache allocations after the configured pressure signal, drops eligible clean chunks, and
+routes cache misses through the authoritative SSD origin. Timing and application impact depend on pressure and driver behaviour. It has no
 broad WSL shutdown or uncoordinated host reboot path.
 
 ## Can the Windows driver be installed on a physical host?
@@ -71,20 +96,29 @@ The Windows StorPort driver is designed for high-performance hardware storage ac
 No. GPU and system memory are managed by different controllers; data crosses
 PCIe. Transport observations reflect high-throughput DMA transfers across the physical bus.
 
-## Does RamShared only work with NVIDIA GPUs?
+## Does RamShared work with every GPU that has VRAM?
 
-No. While NVIDIA CUDA (`cuMemHostAlloc` pinned host memory) was the initial
-qualified MVP path because of mature GPU-PV under WSL2, RamShared is
-hardware-agnostic:
+No. The cache has a provider interface and currently enumerates CUDA and
+Vulkan adapters, but that does not make every VRAM device compatible. CUDA
+requires a working CUDA driver. The Vulkan path requires a usable transfer
+queue, a stable adapter identity, and a fresh, positive driver-reported budget
+from `VK_EXT_memory_budget`; a local estimate cannot authorize cache
+allocation. Adapters that fail those checks keep the cache target at zero and
+use the authoritative origin instead.
 
-- **AMD Radeon and Intel Arc**: Supported via `crates/ramshared-vulkan` using
-  the Vulkan Memory Allocator (VMA) and cross-process external memory handles.
-- **Linux block driver and ublk**: Native Linux block drivers
-  (`drivers/block/ramshared/`) and `ublk` (`io_uring`) operate upstream
-  independently of GPU vendors.
-- **Headless or GPU-less systems**: If no GPU is detected or if GPU headroom is
-  exhausted, the memory cascade falls back gracefully across Host RAM, ZRAM,
-  and the authoritative SSD origin with zero GPU requirement.
+AMD and Intel adapters are possible Vulkan candidates, but the current
+multi-vendor physical cache lifecycle has not been qualified. The Vulkan
+backend uses Vulkan allocations and a host-visible staging buffer; it does not
+use VMA or cross-process external-memory handles. Read the current hardware
+qualification boundary in the [reliability gap register](reliability/GAP-REGISTER.md)
+before treating a specific adapter as supported.
+
+The Linux block and `ublk` transports do not depend on a GPU vendor. That
+transport independence does not qualify every GPU cache backend.
+
+On headless systems or when no adapter passes the budget checks, the GPU cache
+target is zero. The origin path remains authoritative; whether the requested
+topology can start still depends on its other preflight checks.
 
 ## Why use GPU memory when NVMe striped arrays reach 28 GB/s and DDR5 reaches 70 GB/s?
 
@@ -95,14 +129,13 @@ paging dynamics:
   array achieves peak bandwidth on large sequential blocks (128 KB–1 MB) at high
   queue depths (QD=32–128). Virtual memory swap operates in **4KB pages
   synchronously at QD=1** on page faults (`.rw_page`). At 4KB QD=1, physical
-  flash drives drop to 30–80 MB/s. Inside virtualized environments like WSL2,
-  traversing `ext4` ➔ `virtio-scsi` ➔ `Hyper-V` ➔ `NTFS` inflates 4KB latency to
-  ~30,000 µs (30 ms), causing desktop lockups. Pinned PCIe DMA transfers bypass
-  the storage stack entirely, moving 4KB pages in 231 µs down to 0.05 µs.
+  flash drives can be much slower at low queue depth. The registered EVD-0039
+  run on an RTX 2060, PCIe Gen3 x16, and a compatible WSL2 custom kernel
+  measured 231 µs median for its `ublk` 4 KiB workload. That result does not
+  describe standard WSL2 NBD or other hardware.
 - **Flash endurance and TBW exhaustion**: NAND flash has physical write limits
-  (TBW). Intensive swap thrashing writes tens of gigabytes per hour, rapidly
-  degrading SSD flash cells. VRAM (GDDR6/GDDR6X/HBM) has infinite write
-  durability and does not wear out silicon.
+  (TBW). The effect of RamShared on SSD writes depends on workload, cache hits,
+  and the authoritative-origin policy and must be measured per deployment.
 - **CPU compression offload**: ZRAM runs in DDR5 but consumes host CPU cores for
   LZ4/ZSTD compression. Pinned PCIe DMA offloads pages asynchronously without
   burning CPU compute cycles needed by compilers or applications.
@@ -114,8 +147,8 @@ PyTorch training. It is an operating system memory hierarchy tiering engine. In
 typical developer workstations, dedicated GPUs sit idle with 6–16 GB of unused
 VRAM. RamShared opportunistically leases that dormant silicon as a revocable L1
 cache for host virtual memory. When a real GPU workload requests VRAM,
-RamShared evicts clean cache chunks in milliseconds, leaving GPU compute
-unaffected.
+RamShared can evict clean cache chunks, but the latency and effect on concurrent
+GPU compute depend on the driver, hardware, and active workload.
 
 ## Can I use RamShared inside Docker or containerized environments?
 
@@ -130,4 +163,3 @@ The operator deactivates the cascade via `ramshared down` (or using `sudo script
 [validation.md](../validation.md) is the append-only empirical log and
 [reliability evidence](reliability/) records open gates. If a number is not
 recorded there with context and a verdict, treat it as unverified.
-

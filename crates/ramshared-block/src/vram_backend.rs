@@ -196,4 +196,21 @@ mod tests {
         let mem = be.into_inner();
         assert_eq!(mem.len(), 4096);
     }
+
+    #[test]
+    fn vram_backend_accessors_expose_the_underlying_memory() {
+        let mut be = VramBackend::new(FakeVram::new(4096), 4096);
+        assert_eq!(be.mem().len(), 4096);
+
+        be.mem_mut().write_at(0, &[0xA5; 4096]).unwrap();
+        let mut data = [0u8; 4096];
+        be.mem().read_at(0, &mut data).unwrap();
+        assert_eq!(data, [0xA5; 4096]);
+    }
+
+    #[test]
+    fn vram_backend_flush_is_synchronous_noop() {
+        let mut be = VramBackend::new(FakeVram::new(4096), 4096);
+        be.flush().unwrap();
+    }
 }

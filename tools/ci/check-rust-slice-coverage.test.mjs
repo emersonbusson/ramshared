@@ -10,6 +10,13 @@ import * as coverageChecker from "./check-rust-slice-coverage.mjs";
 const TOOL_PATH = resolve(fileURLToPath(new URL("./check-rust-slice-coverage.mjs", import.meta.url)));
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const COVERED_FILE = "crates/ramshared-cli/src/cascade/cascade_io.rs";
+// Uncovered-line chunking needs a file whose production denominator is not
+// adjusted by `#[cfg(test)]` / `#[cfg(not(test))]` exclusion. `cascade_io.rs`
+// carries those gates throughout its first 340 lines, so a synthetic region
+// list on it is either rewritten by the exclusion or rejected as an
+// inconsistent export. This file has no cfg gates at all, so the fixture's 170
+// zero-count regions are exactly the 170 reported uncovered entries.
+const CFG_FREE_FILE = "crates/ramshared-config/src/resource_profile.rs";
 
 function runChecker(env) {
   return new Promise((resolveRun, rejectRun) => {
@@ -81,6 +88,63 @@ function writeLockOwner(lockDir, owner) {
   mkdirSync(lockDir, { recursive: true });
   writeFileSync(join(lockDir, "owner.json"), `${JSON.stringify(owner)}\n`);
 }
+
+test("line_coverage_excludes_cfg_test_module_from_production_file_summary", () => {
+  const parseLlvmCovJson = checkerApi("parseLlvmCovJson");
+  const root = mkdtempSync(join(tmpdir(), "ramshared-cov-cfg-test-"));
+  try {
+    const file = join(root, "src", "lib.rs");
+    const source = [
+      "pub fn production() { consume(); }",
+      "pub fn production_uncovered() { panic!(); }",
+      "#[cfg(test)]",
+      "mod tests {",
+      '    const BRACES: &str = "} { #[cfg(test)] mod fake {";',
+      "    // }",
+      "    /* outer /* { } */ { } */",
+      "    #[test] fn helper() { assert!(true); }",
+      "}",
+    ].join("\n");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(file, source);
+    const report = {
+      data: [
+        {
+          files: [
+            {
+              filename: file,
+              summary: { lines: { count: 3, covered: 1, percent: 33.33 } },
+            },
+          ],
+          functions: [
+            {
+              name: "fixture::production",
+              filenames: [file],
+              regions: [[1, 1, 1, 35, 1, 0, 0, 0]],
+            },
+            {
+              name: "fixture::production_uncovered",
+              filenames: [file],
+              regions: [[2, 1, 2, 45, 0, 0, 0, 0]],
+            },
+            {
+              name: "_RNvNtCsave46upGGgk_7fixture5testss_9unit_test",
+              filenames: [file],
+              regions: [[8, 5, 8, 41, 0, 0, 0, 0]],
+            },
+          ],
+        },
+      ],
+    };
+
+    const stats = parseLlvmCovJson(JSON.stringify(report), "lines", root);
+    assert.deepEqual(stats.get("src/lib.rs"), { count: 2, covered: 1, percent: 50 });
+    const uncovered = checkerApi("parseUncoveredLlvmCovLines")(JSON.stringify(report), root);
+    assert.deepEqual(uncovered.get("src/lib.rs"), ["2"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("overlapping_checker_invocations_isolate_llvm_cov_target_state", async () => {
   const root = mkdtempSync(join(tmpdir(), "ramshared-cov-overlap-"));
@@ -355,6 +419,47 @@ test("coverage_cli_report_only_preserves_per_file_threshold_and_allow_missing_co
       ),
       1,
     );
+
+    // Uncovered-line reporting is chunked 80 entries at a time. Build a
+    // self-consistent export on a cfg-free file: the line summary must survive
+    // cfg(test) exclusion unchanged, and every region line must be reported,
+    // otherwise the chunk bounds drift off the asserted 170.
+    writeFileSync(
+      reportPath,
+      `${JSON.stringify({
+        data: [
+          {
+            files: [
+              {
+                filename: join(REPO_ROOT, CFG_FREE_FILE),
+                summary: { lines: { count: 10, covered: 8, percent: 80 } },
+              },
+            ],
+            functions: [
+              {
+                filenames: [join(REPO_ROOT, CFG_FREE_FILE)],
+                regions: Array.from({ length: 170 }, (_, index) => {
+                  const line = index * 2 + 1;
+                  return [line, 1, line, 2, 0, 0, 0, 0];
+                }),
+              },
+            ],
+          },
+        ],
+      })}\n`,
+    );
+    const failureOutput = [];
+    assert.equal(
+      coverageChecker.main(
+        ["node", "checker", "--report-only", reportPath, "--files", CFG_FREE_FILE, "--min", "81"],
+        { print: () => {}, error: (line) => failureOutput.push(line) },
+      ),
+      1,
+    );
+    assert.equal(failureOutput.some((line) => line.includes("Uncovered source lines (1-80 of 170)")), true);
+    assert.equal(failureOutput.some((line) => line.includes("Uncovered source lines (81-160 of 170)")), true);
+    assert.equal(failureOutput.some((line) => line.includes("Uncovered source lines (161-170 of 170)")), true);
+
     assert.equal(
       coverageChecker.main(
         ["node", "checker", "--report-only", reportPath, "--files", "crates/no-such-production-file.rs"],
@@ -405,6 +510,7 @@ test("coverage_cli_refuses_invalid_arguments_and_malformed_report", () => {
 
 test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs", () => {
   const parseLlvmCovJson = checkerApi("parseLlvmCovJson");
+  const parseUncoveredLlvmCovLines = checkerApi("parseUncoveredLlvmCovLines");
   const loadFilesFrom = checkerApi("loadFilesFrom");
   const normRepoPath = checkerApi("normRepoPath");
   const root = mkdtempSync(join(tmpdir(), "ramshared-cov-parser-"));
@@ -439,6 +545,37 @@ test("coverage_parsers_normalize_paths_merge_summaries_and_refuse_invalid_inputs
       "lines",
     );
     assert.equal(zero.get(COVERED_FILE).percent, 100);
+    const uncovered = parseUncoveredLlvmCovLines(
+      JSON.stringify({
+        data: [
+          {
+            files: [
+              { filename: join(REPO_ROOT, COVERED_FILE) },
+            ],
+            functions: [
+              {
+                filenames: [join(REPO_ROOT, COVERED_FILE)],
+                regions: [
+                  [12, 3, 12, 9, 0, 0, 0, 0],
+                  [14, 5, 18, 2, 0, 0, 0, 0],
+                  [19, 1, 19, 7, 4, 0, 0, 0],
+                ],
+              },
+              {
+                filenames: [join(REPO_ROOT, COVERED_FILE)],
+                regions: [[17, 1, 17, 7, 1, 0, 0, 0]],
+              },
+              {
+                filenames: ["crates/ramshared-cli/tests/ignored.rs"],
+                regions: [[1, 1, 2, 1, 0, 0, 0, 0]],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    assert.deepEqual(uncovered.get(COVERED_FILE), ["12", "14-16", "18"]);
+    assert.equal(uncovered.has("crates/ramshared-cli/tests/ignored.rs"), false);
     assert.throws(() => parseLlvmCovJson("not-json", "lines"), (error) => error?.code === "COVERAGE_REPORT_INVALID");
     assert.throws(() => parseLlvmCovJson(JSON.stringify({ data: [] }), "lines"), (error) => error?.code === "COVERAGE_REPORT_INVALID");
   } finally {
@@ -501,6 +638,8 @@ test("coverage_child_runner_uses_private_target_without_shell_and_propagates_fai
           "cargo",
         ]);
         assert.equal(args.includes("--output-path"), true);
+        assert.equal(args.includes("--summary-only"), false);
+        assert.equal(args.includes("--json"), true);
         assert.deepEqual(args.slice(-2), ["--", "--test-threads=1"]);
         assert.equal(options.env.CARGO_TARGET_DIR, targetPath);
         assert.equal(options.env.SAFE, "yes");
@@ -533,6 +672,30 @@ test("coverage_child_runner_uses_private_target_without_shell_and_propagates_fai
       () => runLlvmCov(["ramshared-cli"], reportPath, targetPath, { repoRoot: join(root, "missing") }),
       (error) => error?.code === "COVERAGE_TOOL_ROOT_INVALID",
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("coverage_child_runner_can_include_ignored_tests_for_an_explicit_hardware_free_slice", () => {
+  const runLlvmCov = checkerApi("runLlvmCov");
+  const root = mkdtempSync(join(tmpdir(), "ramshared-cov-ignored-"));
+  try {
+    const cargoRoot = join(root, "cargo-root");
+    mkdirSync(cargoRoot);
+    writeFileSync(join(cargoRoot, "Cargo.toml"), "[workspace]\n");
+    const reportPath = join(root, "result.json");
+    const targetPath = join(root, "private-target");
+    runLlvmCov(["ramshared-vulkan"], reportPath, targetPath, {
+      repoRoot: cargoRoot,
+      includeIgnored: true,
+      spawnCommand: (command, args) => {
+        assert.equal(command, "timeout");
+        assert.deepEqual(args.slice(args.indexOf("--")), ["--", "--test-threads=1", "--include-ignored"]);
+        writeFileSync(reportPath, "{}\n");
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

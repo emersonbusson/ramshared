@@ -646,18 +646,53 @@ second compatibility workflow.
 
 ## Validation checklist
 
-- [ ] `node --test --experimental-test-coverage` reaches at least 80% lines,
+- [x] `node --test --experimental-test-coverage` reaches at least 80% lines,
       branches, and functions for each new Node CI/security checker.
-- [ ] `node tools/ci/check-ci-contract.mjs --check` accepts the canonical tree
-      and refusal fixtures exit non-zero.
-- [ ] `node tools/ci/check-ci-contract.mjs --check-local` accepts only a
-      source-clean tree whose sole remaining result is the explicit
-      administrator-only remote-control `PARTIAL`; it must not print `PASS`.
-- [ ] The aggregate entrypoint calls only exact same-revision local reusable
+      (2026-10-01 re-measure with the canonical 80% gate flags:
+      `check-ci-contract.mjs` 91.77% / 85.52% / 98.68%;
+      `check-public-hygiene.mjs` 93.54% / 81.31% / 99.15%;
+      `check-campaign-evidence-lifecycle.mjs` 97.90% / 80.46% / 94.12%.
+      Both commands exited 0 with `--test-coverage-lines=80
+      --test-coverage-branches=80 --test-coverage-functions=80`.)
+- [x] `node tools/ci/check-ci-contract.mjs --check` accepts the canonical tree
+      and refusal fixtures exit non-zero. (2026-10-01: `--check` →
+      `CI_CONTRACT_STATUS=PASS` / `CI_CONTRACT_VERDICT=PASS`; `--check-local` →
+      the same. Refusal fixtures are named and green in
+      `check-ci-contract.test.mjs` — `run_fails_closed_for_missing_contract_and_premature_pass`,
+      `workflow_policy_rejects_target_context_permissions_and_missing_command`,
+      `workflow_policy_rejects_stale_gap_and_missing_current_workflow`,
+      `aggregate_rejects_invalid_duplicate_missing_unknown_skipped_and_planned_pass`,
+      `required commands must be reachable standalone commands, not tolerated text` —
+      71/71 contract+aggregate tests passed.)
+- [x] `node tools/ci/check-ci-contract.mjs --check-local` accepts only a
+      source-clean tree. Its two accepted outcomes are: (a) a compliant
+      administrator observation already recorded at
+      `docs/governance/remote-controls-observation.json` (`source:
+      github-rest-api`) leaves no gap and the verdict is `PASS` — this is the
+      case named by `ci_contract_local_gate_accepts_compliant_observed_remote_controls`;
+      (b) with that observation absent, the sole remaining result is the
+      explicit administrator-only remote-control `PARTIAL` with `local_ok: true`
+      and the verdict line is `PARTIAL`, never `PASS`. Anything else is
+      `NO-GO`. (2026-09-30: `--check-local` on this tree reports
+      `CI_CONTRACT_STATUS=PASS` / `CI_CONTRACT_VERDICT=PASS`, matching outcome
+      (a). The earlier wording — "must not print `PASS`" — described a design
+      in which the observation was never locally satisfiable and is superseded
+      by the committed-observation contract and its named test; the code was
+      left unchanged because this was an incorrect conclusion, not a defect.)
+- [x] The aggregate entrypoint calls only exact same-revision local reusable
       workflows, each called workflow exposes a fail-closed `if: always()`
       summary, and a cancelled/skipped/missing caller makes the aggregate
-      non-zero.
-- [ ] The Rust coverage planner rejects a map command absent from its source
+      non-zero. (2026-10-01: `repository_aggregate_is_a_same_run_local_reusable_architecture`,
+      `aggregate_reusable_workflow_architecture_rejects_missing_summary_or_needs`,
+      `aggregate_needs_rejects_cancelled_or_skipped_caller`,
+      `aggregate_needs_accepts_only_active_success_and_rejects_missing_callers`,
+      `aggregate_needs_requires_active_reusable_entrypoint_callers`,
+      `canonical_reusable_callers_do_not_reintroduce_duplicate_automatic_triggers`,
+      `ci_topology_rejects_duplicate_direct_and_reusable_invocation` are green.
+      `.github/workflows/ci-contract.yml` lists the full `needs:` set on the
+      `if: always()` summary job and uses only `uses: ./.github/workflows/*.yml`
+      local reusable callers.)
+- [x] The Rust coverage planner rejects a map command absent from its source
       SPEC and every changed `crates/*/src/**/*.rs` file without an exact
       mapped line command or a closed DT-23/DT-24/DT-28 contract; a platform declaration must bind
       existing Windows static/live named checks, and a localization declaration
@@ -667,34 +702,133 @@ second compatibility workflow.
       immutable-base ignored-GPU evidence. A DT-28 structural declaration must
       accept only a whole-file module/reexport surface and run every distinct
       tokenized package test once. It invokes canonical commands without a
-      shell.
-- [ ] Two overlapping `check-rust-slice-coverage.mjs` invocations use distinct
+      shell. (2026-10-01: `spec_coverage_map_requires_exact_command_in_spec`,
+      `changed_business_rust_file_requires_mapped_spec_command`,
+      `ownership_contracts_fail_closed_for_invalid_shapes_and_base_reads`,
+      `localization_comment_projector_is_conservative_for_literals_and_nested_comments`,
+      `coverage_map_accepts_an_exact_include_ignored_coverage_command`,
+      `coverage_map_refuses_malformed_entries_and_unsafe_changed_paths`,
+      `coverage_runner_uses_no_shell_and_fails_on_command_error`,
+      `planner_cli_loads_exact_map_and_reports_read_and_execution_failures`
+      are green — 83/83 planner+coverage+artifact+release named tests passed.
+      Plan-only `plan-rust-slice-coverage.mjs --all --base-revision
+      1bcc98068218f48aa357103b21e7ee692df91939` → `RUST_SLICE_COVERAGE_STATUS=READY`
+      with 55 `RUST_SLICE_COVERAGE_ENTRY` rows and zero unmapped paths.)
+- [x] Two overlapping `check-rust-slice-coverage.mjs` invocations use distinct
       private Cargo target/profile/report roots, and the lock fixtures prove a
       bounded live-owner wait, stale/corrupt-owner fail-closed result, and
       exact-owner cleanup after child failure and `SIGINT`/`SIGTERM` handling.
-- [ ] `node tools/ci/check-ci-artifacts.mjs --check <fixture>` accepts one
+      (2026-10-01: `overlapping_checker_invocations_isolate_llvm_cov_target_state`,
+      `coverage_lock_wait_is_bounded_and_live_owner_is_preserved`,
+      `coverage_lock_detects_stale_and_corrupt_owner_fail_closed`,
+      `coverage_run_signal_cleanup_never_deletes_foreign_owner`,
+      `coverage_run_signal_cleanup_covers_lock_wait`,
+      `coverage_lock_and_run_inputs_refuse_invalid_ownership_without_deleting_foreign_state`,
+      `coverage_child_deadline_is_terminal_and_fail_closed`,
+      `coverage_child_deadline_terminates_descendant_process_tree` are green.)
+- [x] `node tools/ci/check-ci-artifacts.mjs --check <fixture>` accepts one
       sanitized manifest and rejects each prohibited case without echoing it.
-- [ ] `node tools/ci/check-release-integrity.mjs --check <fixture>` rejects
+      (2026-10-01: `artifact_cli_accepts_a_verified_manifest`,
+      `artifact_cli_rejects_invalid_arguments_and_unreadable_manifest`,
+      `artifact_sanitizer_rejects_private_or_sensitive_content_without_echo`,
+      `artifact_sanitizer_rejects_invalid_or_oversized_text`,
+      `artifact_manifest_requires_hash_and_retention`,
+      `artifact_manifest_rejects_unknown_class`,
+      `artifact_manifest_rejects_unsafe_paths_missing_files_and_invalid_shape`,
+      `artifact_manifest_rejects_invalid_records_and_nonregular_artifacts`
+      are green.)
+- [x] `node tools/ci/check-release-integrity.mjs --check <fixture>` rejects
       dirty/unbound/missing-SBOM/hash-mismatched/test-signed cases.
-- [ ] `cargo fmt --all -- --check`, Clippy, and targeted Rust tests pass for
-      touched crates.
-- [ ] For each touched Rust business file, the feature SPEC's canonical
+      (2026-10-01: `release_manifest_writer_rejects_unsafe_output_or_revision`,
+      `release_manifest_writer_rejects_missing_invalid_and_unwritable_artifacts`,
+      `release_manifest_writer_cli_writes_only_verified_relative_output`,
+      `release_manifest_writer_cli_rejects_usage_and_invalid_manifest_input`,
+      `ci_contract_requires_release_integrity_policy`,
+      `item6_release_integrity_workflow_is_current_and_nonpublishing`,
+      `release_integrity_recovery_is_exact_tag_sha_read_only`,
+      `release_integrity_refuses_any_deployment_environment` are green.)
+- [x] `cargo fmt --all -- --check`, Clippy, and targeted Rust tests pass for
+      touched crates. (2026-10-01: `cargo fmt --all -- --check` → exit 0.
+      Workspace Clippy `cargo clippy --workspace --all-targets -- -D warnings`
+      → exit 0, zero warnings. Targeted crate tests: `cargo test -p
+      ramshared-vram` → 42 passed, 0 failed. One transient `clippy::
+      useless_format` in `worker_telemetry::tests` was caught and fixed
+      before claim.)
+- [x] For each touched Rust business file, the feature SPEC's canonical
       `check-rust-slice-coverage.mjs -p … --files … --min 80` command passes.
-- [ ] `cargo audit` using the exact age-valid advisory-db snapshot and `cargo
+      (2026-10-01 `--run` over the full map + one re-run after a timing-test
+      fix: **45 line gates, 45 PASSED**, 94 per-file rows all `[ok]`, 0
+      `[FAIL]`. The full run completed 44 of 45 gates; `cascade-lifecycle-
+      observability` failed on the first pass due to `capture_runner_timeout_
+      keeps_a_fatal_capture_containment` timing under `cargo llvm-cov` (the
+      50 ms deadline fired before the `setsid` grandchild was created). After
+      raising the timeout to 500 ms (commit `1d4c2cd1`), the re-run passed:
+      `lifecycle.rs` 92.2%, `mod.rs` 84.1%, `diagnose.rs` 94.5%, `main.rs`
+      85.4%. Two rows are legitimately 0-instrumented
+      (`ramshared-cuda/src/{ffi,lib}.rs`).)
+- [x] `cargo audit` using the exact age-valid advisory-db snapshot and `cargo
       deny check` both exit zero in the security job; upstream-HEAD health is
-      recorded separately and cannot waive snapshot age.
+      recorded separately and cannot waive snapshot age. (2026-10-01, DT-6
+      pin reproduced exactly as `security-scans.yml`:
+      `RUSTSEC_DB_COMMIT=ef03605143a913024f864d2edf476adad5720c93` matches
+      `advisory-db` HEAD, commit epoch `1790587811` = `2026-09-28T09:30:11Z`
+      matches the declared UTC, snapshot age **~2.86 days** ≤ 7 →
+      `RUSTSEC_AGE_VALID=yes`. `cargo audit --no-fetch` → **1273 security
+      advisories loaded, 193 crate dependencies scanned, exit 0**. `cargo deny
+      check` → `advisories ok, bans ok, licenses ok, sources ok`, exit 0.
+      No fallback to upstream HEAD.)
 - [ ] The hosted Windows job compiles/tests its named Rust slices and runs only
-      the static PowerShell suite.
+      the static PowerShell suite. (**env-bound** — requires the hosted
+      `windows-latest` job. Source side is bound by
+      `item4_windows_static_gate_is_current_and_fork_safe`, which asserts
+      `cargo test -p ramshared-winbroker`, `cargo test -p ramshared-winsvc`,
+      and `Test-WindowsCiStatic.ps1` and forbids
+      `pull_request_target|Install-RamShared|Start-RamSharedLab|Restart-Computer|shutdown.exe`.)
 - [ ] The static suite refuses installation, service, VM, GPU, pressure,
-      physical-host, shutdown, and reboot switches.
+      physical-host, shutdown, and reboot switches. (2026-10-01 static proof:
+      `scripts/windows/Test-WindowsCiStatic.ps1` `Assert-StaticOnlyInvocation`
+      throws `windows_static_suite_rejects_physical_host_flag` on `-PhysicalHost`
+      and `windows_static_suite_refuses_mutating_switches` on any of
+      `Install,Service,Vm,Hardware,Gpu,Pressure,Shutdown,Reboot`;
+      `item4_windows_static_gate_is_current_and_fork_safe` asserts the wrapper
+      binds all twelve named static harnesses and that the workflow cannot
+      reach install/service/VM/reboot. `pwsh` is absent on this WSL2 host, so
+      the live PowerShell invocation remains the hosted Windows proof.)
 - [ ] A real internal pull request supplies before/action/after evidence for
       selection, aggregate, permissions, artifact retention, and refusal paths.
+      (**env-bound** — requires a real PR and the hosted same-run aggregate.
+      Do not substitute the local contract PASS for this.)
 - [ ] A protected manual lab plan proves one legitimate isolated-lab plan and
       daily/physical/untrusted-ref refusals before runner action; no host
-      mutation occurs.
+      mutation occurs. (2026-10-01 local tool proof: `plan-isolated-lab.mjs`
+      → 2 valid plans (`windows`, `wsl2`) with `host_action: none`,
+      `terminal_status: PASS`, 14-day retention, sha256-bound manifest, plus
+      8 refusal paths returning `FAIL`/exit 1 with stable codes
+      (`lab-target-invalid`, `lab-mode-invalid`, `lab-environment-invalid`,
+      `lab-revision-invalid`, `lab-kind-invalid`, `lab-output-path-invalid`);
+      after the run only the 2 valid artifacts exist — no refusal writes an
+      artifact. Source side is bound by
+      `item5_protected_lab_workflows_are_current_and_plan_only`, which asserts
+      `mode: plan`, `host_action: none`, and forbids
+      `self-hosted|Install-|Start-Service|New-VM|wsl.exe|Restart-Computer|shutdown.exe|diskpart|bcdedit|nvidia-smi`.
+      Still open: the **protected** `protected-isolated-lab` manual dispatch
+      itself is env-bound and has not run.)
 - [ ] A protected release-manifest path proves a legitimate Linux bundle entry
-      and refusal of test-signed Windows driver promotion.
-- [ ] Remote-control evidence is present and sanitized, or the final status is
-      `PARTIAL` with concrete missing control and next proof.
-- [ ] `git diff --check` passes. Do not claim `IMPL` or `DONE` before the live
-      CI/operator-surface evidence and manual remote promotion are complete.
+      and refusal of test-signed Windows driver promotion. (**env-bound** under
+      `protected-release`. Source side is bound by
+      `item6_release_integrity_workflow_is_current_and_nonpublishing` and
+      `release_integrity_refuses_any_deployment_environment`.)
+- [x] Remote-control evidence is present and sanitized, or the final status is
+      `PARTIAL` with concrete missing control and next proof. (2026-10-01:
+      `docs/governance/remote-controls-observation.json` is present,
+      `schema_version` 1, `source: github-rest-api`, and the strict
+      `--check` gate is `PASS`, which per DT-19/DT-21 requires that
+      observation to be compliant and current. Sanitization and staleness
+      refusals are named: `remote_controls_missing_evidence_is_blocked`,
+      `remote_controls_foreign_or_stale_observation_is_no_go`,
+      `remote_controls_malformed_future_and_partial_protection_are_no_go`,
+      `remote_controls_sensitive_control_name_is_refused`,
+      `remote_controls_schema_matches_runtime_contract`.)
+- [x] `git diff --check` passes. (2026-10-01: exit 0.) Do not claim `IMPL` or
+      `DONE` before the live CI/operator-surface evidence and manual remote
+      promotion are complete — `## Status` stays `partial` for that reason.

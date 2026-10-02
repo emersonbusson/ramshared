@@ -10,6 +10,7 @@ import { inflateSync } from 'node:zlib'
 
 const MAX_FILES = 20_000
 const MAX_FILE_BYTES = 512 * 1024
+const MAX_VALIDATION_LOG_BYTES = 1024 * 1024
 const MAX_PUBLIC_BINARY_BYTES = 8 * 1024 * 1024
 const MAX_PNG_DECODED_BYTES = 64 * 1024 * 1024
 const MAX_PNG_TEXT_BYTES = 64 * 1024
@@ -347,7 +348,7 @@ const rules = [
   ['PRIVATE_UNIX_PATH', /\/home\/(?!<|\$|user(?:\/|>))[A-Za-z0-9._-]+\//i, 'private-unix-path'],
   ['PRIVATE_WINDOWS_PATH', /\b[A-Za-z]:\\Users\\(?!<|Public\\|Default\\|%)[^\\\s"']+\\/i, 'private-windows-profile-path'],
   ['PRIVATE_WSL_PATH', /\\\\wsl(?:\.localhost)?\\[^\\\s]+\\(?:home\\)?[^\\\s]+\\/i, 'private-wsl-path'],
-  ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i, 'personal-email-address'],
+  ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?!service\b|socket\b|target\b|timer\b|mount\b|swap\b|path\b|device\b|slice\b|scope\b)[A-Z]{2,}\b/i, 'personal-email-address'],
   ['TOKEN', /\b(?:gh[opusr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b/, 'credential-token'],
   ['PRIVATE_KEY', new RegExp(['-{5}BEGIN ', '(?:RSA |OPENSSH |EC |DSA )?', 'PRIVATE KEY-{5}'].join('')), 'private-key-material'],
   ['KERNEL_ADDRESS', /\bffff[0-9a-f]{8,}\b/i, 'raw-kernel-address'],
@@ -1144,6 +1145,10 @@ function publicJpegPath(file) {
   return isPublicArtifact(file) && /^\.jpe?g$/i.test(path.posix.extname(file))
 }
 
+export function fileSizeLimitFor(file) {
+  return file === 'validation.md' ? MAX_VALIDATION_LOG_BYTES : MAX_FILE_BYTES
+}
+
 function publicJpegManifestFinding(reason) {
   return {
     path: PUBLIC_BINARY_DIGESTS_FILE,
@@ -1162,7 +1167,7 @@ function strictJsonCandidate(root, mode, files, snapshot, file, missingReason, n
     return { value: null, reason: invalidReason }
   }
   if (candidate.kind !== 'file') return { value: null, reason: notRegularReason }
-  if (candidate.buffer.length > MAX_FILE_BYTES) return { value: null, reason: invalidReason }
+  if (candidate.buffer.length > fileSizeLimitFor(file)) return { value: null, reason: invalidReason }
   let text
   try {
     text = UTF8.decode(candidate.buffer)
@@ -1632,7 +1637,7 @@ function scanSnapshot(root, mode, asOf, snapshot, files, changedArtifacts) {
         }
         continue
       }
-      if (buffer.length > MAX_FILE_BYTES) throw new HygieneError('file-size-limit')
+      if (buffer.length > fileSizeLimitFor(file)) throw new HygieneError('file-size-limit')
       let text
       try {
         text = UTF8.decode(buffer)
@@ -1664,7 +1669,7 @@ function scanSnapshot(root, mode, asOf, snapshot, files, changedArtifacts) {
       continue
     }
     if (!classifyText(buffer, file)) continue
-    if (buffer.length > MAX_FILE_BYTES) throw new HygieneError('file-size-limit')
+    if (buffer.length > fileSizeLimitFor(file)) throw new HygieneError('file-size-limit')
     const text = UTF8.decode(buffer)
     if (file === ALLOWLIST_FILE) continue
     findings.push(...scanRuleMatches(file, file, allowlist, rules), ...scanRuleMatches(file, text, allowlist, rules))

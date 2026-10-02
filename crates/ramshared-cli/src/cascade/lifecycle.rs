@@ -4,6 +4,8 @@
 
 use std::env;
 
+use ramshared_vram::GpuBudgetTelemetry;
+
 use super::{is_nbd_device_path, is_ublk_device_path, is_zram_device_path};
 
 /// Default active-use threshold (KiB). Residual nbd under this still counts as Armed.
@@ -186,6 +188,7 @@ pub struct CascadeSnapshot {
     pub logical_capacity_kib: Option<u64>,
     pub vram_cached_kib: Option<u64>,
     pub gpu_headroom_kib: Option<u64>,
+    pub gpu_budget: Option<GpuBudgetTelemetry>,
     pub ssd_origin_written_kib: Option<u64>,
     pub fallback_swap_used_kib: Option<u64>,
     pub measurement_errors: Vec<String>,
@@ -244,6 +247,17 @@ pub fn overall_state(view: &LifecycleView, snap: &CascadeSnapshot) -> OverallSta
         .unwrap_or(OverallState::Blocked)
 }
 
+/// The single `ok` verdict both status surfaces report.
+///
+/// The human text and `status --json` used to compute this independently, and
+/// the human line stopped at `view.ok && protection.is_ok()`. A guarded control
+/// plane or a released cache therefore printed `ok: true` while the JSON — the
+/// one the monitor reads — printed `ok: false`. One function, called from both
+/// renderers, is what keeps the two from drifting apart again.
+pub fn status_ok(view: &LifecycleView, snap: &CascadeSnapshot) -> bool {
+    view.ok && protection_state(view, snap).is_ok() && overall_state(view, snap).is_ok()
+}
+
 /// Parse `RAMSHARED_STATUS_ACTIVE_KIB`; invalid or missing → default.
 pub fn active_threshold_kib_from_env() -> u64 {
     match env::var("RAMSHARED_STATUS_ACTIVE_KIB") {
@@ -267,17 +281,30 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
     if !s.order_ok {
         reasons.push("priority_order_bad".into());
     }
-    let hot_vram_no_daemon = s.vram.present && !s.daemon_alive && s.vram.used_kib >= thr;
+    let daemon_identity_unreadable = s.vram.present
+        && s.measurement_errors
+            .iter()
+            .any(|error| error == "daemon_identity_unreadable");
+    if daemon_identity_unreadable {
+        reasons.push("daemon_identity_unreadable".into());
+    }
+    let hot_vram_no_daemon =
+        s.vram.present && !s.daemon_alive && !daemon_identity_unreadable && s.vram.used_kib >= thr;
     if hot_vram_no_daemon {
         reasons.push("daemon_dead_hot_vram".into());
     }
-    let vram_present_no_daemon = s.vram.present && !s.daemon_alive && s.vram.used_kib < thr;
+    let vram_present_no_daemon =
+        s.vram.present && !s.daemon_alive && !daemon_identity_unreadable && s.vram.used_kib < thr;
     // Half-state: vram swapon without daemon even if used low (degraded safety).
     if vram_present_no_daemon {
         reasons.push("vram_tier_without_daemon".into());
     }
 
-    let degraded = s.ghost || !s.order_ok || hot_vram_no_daemon || vram_present_no_daemon;
+    let degraded = s.ghost
+        || !s.order_ok
+        || daemon_identity_unreadable
+        || hot_vram_no_daemon
+        || vram_present_no_daemon;
     if degraded {
         return LifecycleView {
             phase: CascadePhase::Degraded,
@@ -285,6 +312,8 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
                 "ghost"
             } else if !s.order_ok {
                 "priority_order_bad"
+            } else if daemon_identity_unreadable {
+                "daemon_identity_unreadable"
             } else if hot_vram_no_daemon {
                 "daemon_dead_hot_vram"
             } else {
@@ -492,7 +521,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
     let protection = protection_state(view, snap);
     let protection_reason = protection_reason(view, snap);
     let overall = overall_state(view, snap);
-    let status_ok = view.ok && protection.is_ok() && overall.is_ok();
+    let ok = status_ok(view, snap);
     let guaranteed_kib = if snap.daemon_alive && snap.vram.present && snap.capacity_guaranteed {
         snap.vram.size_kib.to_string()
     } else {
@@ -533,6 +562,11 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
             .collect::<Vec<_>>()
             .join(",")
     );
+    let gpu_budget_json = snap
+        .gpu_budget
+        .as_ref()
+        .and_then(|budget| serde_json::to_string(budget).ok())
+        .unwrap_or_else(|| "null".to_string());
     format!(
         "{{\"schema_version\":4,\"phase\":{phase},\"phase_reason\":{reason},\
 \"protection_state\":{protection},\"protection_reason\":{protection_reason},\
@@ -549,6 +583,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
 \"daemon\":{{\"alive\":{alive},\"pid\":{pid}}},\
 \"demote\":{{\"total\":{dt},\"last_reason\":{dr},\"in_progress\":{di}}},\
 \"thresholds_kib\":{{\"active\":{thr}}},\
+\"gpu_budget\":{gpu_budget},\
 \"ts\":{ts}}}",
         phase = json_escape(view.phase.as_str()),
         reason = json_escape(view.phase_reason),
@@ -559,7 +594,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
         origin_state = json_escape(snap.origin_state.as_str()),
         guardian_state = json_escape(snap.guardian_state.as_str()),
         overall_state = json_escape(overall.as_str()),
-        ok = if status_ok { "true" } else { "false" },
+        ok = if ok { "true" } else { "false" },
         topology_ok = if view.ok { "true" } else { "false" },
         reasons = reasons,
         z = tier_json(&snap.zram),
@@ -569,6 +604,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
         logical_capacity_kib = number_or_null(snap.logical_capacity_kib),
         vram_cached_kib = number_or_null(snap.vram_cached_kib),
         gpu_headroom_kib = number_or_null(snap.gpu_headroom_kib),
+        gpu_budget = gpu_budget_json,
         ssd_origin_written_kib = number_or_null(snap.ssd_origin_written_kib),
         fallback_swap_used_kib = number_or_null(snap.fallback_swap_used_kib),
         activation_active = if activation_active { "true" } else { "false" },
@@ -633,6 +669,7 @@ mod tests {
             logical_capacity_kib: Some(2_097_148),
             vram_cached_kib: Some(0),
             gpu_headroom_kib: Some(2_097_152),
+            gpu_budget: None,
             ssd_origin_written_kib: Some(0),
             fallback_swap_used_kib: Some(0),
             measurement_errors: Vec::new(),
@@ -660,6 +697,7 @@ mod tests {
             logical_capacity_kib: None,
             vram_cached_kib: None,
             gpu_headroom_kib: None,
+            gpu_budget: None,
             ssd_origin_written_kib: None,
             fallback_swap_used_kib: Some(5_000),
             measurement_errors: Vec::new(),
@@ -771,6 +809,26 @@ mod tests {
     }
 
     #[test]
+    fn unreadable_daemon_identity_does_not_claim_daemon_death() {
+        let mut s = base();
+        s.daemon_alive = false;
+        s.daemon_pid = None;
+        s.vram.used_kib = 50_000;
+        s.measurement_errors
+            .push("daemon_identity_unreadable".to_string());
+        let view = derive_lifecycle(&s);
+        assert_eq!(view.phase, CascadePhase::Degraded);
+        assert_eq!(view.phase_reason, "daemon_identity_unreadable");
+        assert!(
+            !view
+                .reasons
+                .iter()
+                .any(|reason| reason == "daemon_dead_hot_vram")
+        );
+        assert_eq!(overall_state(&view, &s), OverallState::Blocked);
+    }
+
+    #[test]
     fn phase_demoting_only_when_flag() {
         let mut s = base();
         s.demote.in_progress = true;
@@ -825,6 +883,43 @@ mod tests {
         assert!(j.contains("\"thresholds_kib\":{\"active\":1024}"));
         assert!(j.contains("\"in_progress\":false"));
         assert!(j.starts_with('{') && j.ends_with('}'));
+    }
+
+    #[test]
+    fn status_ok_includes_the_rollup_the_json_reports() {
+        // The human `ok:` line and the JSON `ok` field used to be computed
+        // separately. The human one stopped at `view.ok && protection.is_ok()`
+        // and so called a guarded control plane healthy while the JSON — the
+        // surface the monitor reads — said false. Both now call `status_ok`.
+        let mut snapshot = base();
+        snapshot.control_state = ControlState::Guarded;
+        let view = derive_lifecycle(&snapshot);
+        assert!(
+            view.ok,
+            "tier order is fine here; that is topology_ok, not the verdict"
+        );
+        assert!(!status_ok(&view, &snapshot));
+        let json = render_status_json(&view, &snapshot, "2026-10-02T00:00:00Z");
+        assert!(json.contains("\"ok\":false"), "{json}");
+        assert!(json.contains("\"topology_ok\":true"), "{json}");
+    }
+
+    #[test]
+    fn a_released_cache_or_a_measurement_error_is_not_ok() {
+        // Both are the live shape on this host: `cache: OFF` beside
+        // `protection: ACTIVE`, and a stale GPU-budget sample. Neither is a
+        // healthy product, so neither may print `ok: true`.
+        let mut released = base();
+        released.cache_state = CacheState::Off;
+        let view = derive_lifecycle(&released);
+        assert!(view.ok);
+        assert!(!status_ok(&view, &released));
+
+        let mut unmeasured = base();
+        unmeasured.measurement_errors = vec!["gpu_budget_telemetry_invalid_or_stale".to_string()];
+        let view = derive_lifecycle(&unmeasured);
+        assert!(view.ok);
+        assert!(!status_ok(&view, &unmeasured));
     }
 
     #[test]
@@ -898,6 +993,34 @@ mod tests {
     }
 
     #[test]
+    fn status_json_publishes_adapter_bound_gpu_budget() {
+        let mut snapshot = base();
+        snapshot.gpu_budget = Some(GpuBudgetTelemetry {
+            schema_version: 1,
+            adapter: Some(ramshared_vram::GpuAdapterIdentity {
+                backend: "vulkan".into(),
+                key: "uuid:fixture".into(),
+                luid: Some("aabbccdd:00001122".into()),
+            }),
+            total_bytes: Some(8_000),
+            budget_bytes: 6_000,
+            used_bytes: 2_000,
+            available_bytes: 4_000,
+            source: ramshared_vram::GpuBudgetSource::DriverReported,
+            sampled_at_unix_ms: 1_000,
+        });
+        let json = render_status_json(
+            &derive_lifecycle(&snapshot),
+            &snapshot,
+            "2026-08-20T00:00:00Z",
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid status JSON");
+        assert_eq!(parsed["gpu_budget"]["adapter"]["backend"], "vulkan");
+        assert_eq!(parsed["gpu_budget"]["adapter"]["luid"], "aabbccdd:00001122");
+        assert_eq!(parsed["gpu_budget"]["available_bytes"], 4_000);
+    }
+
+    #[test]
     fn using_vram_never_masks_critical_pressure() {
         let mut snapshot = base();
         snapshot.vram.used_kib = 32_768;
@@ -934,5 +1057,100 @@ mod tests {
         ] {
             assert!(json.contains(field), "missing {field}: {json}");
         }
+    }
+
+    // ── RF-10 display honesty (DT-6) ────────────────────────────────────
+
+    #[test]
+    fn status_text_reports_off_and_blocked_without_live_daemon() {
+        // Kahneman #1: the dashboard describes reality. Without a live daemon
+        // the text surface must report `off` / `blocked` — never `active`.
+        //
+        // Case 1: clean off (no tiers, no daemon) → phase Off, protection Off.
+        let clean = CascadeSnapshot {
+            zram: TierSample::default(),
+            vram: TierSample::default(),
+            disk: TierSample::default(),
+            ghost: false,
+            order_ok: true,
+            daemon_alive: false,
+            daemon_pid: None,
+            capacity_guaranteed: false,
+            disk_baseline_kib: None,
+            demote: DemoteSnapshot::default(),
+            active_kib: DEFAULT_ACTIVE_KIB,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Off,
+            cache_state: CacheState::Off,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: None,
+            vram_cached_kib: None,
+            gpu_headroom_kib: None,
+            gpu_budget: None,
+            ssd_origin_written_kib: None,
+            fallback_swap_used_kib: None,
+            measurement_errors: Vec::new(),
+        };
+        let view = derive_lifecycle(&clean);
+        assert_eq!(view.phase, CascadePhase::Off);
+        let prot = protection_state(&view, &clean);
+        assert_eq!(prot, ProtectionState::Off);
+        assert_eq!(prot.as_str(), "OFF");
+
+        // Case 2: half cascade (vram swap still mounted, daemon dead) →
+        // protection Blocked. This is the state that must never read Active.
+        let mut half = clean.clone();
+        half.vram.present = true;
+        half.vram.prio = Some(100);
+        half.vram.size_kib = 2_097_148;
+        half.capacity_guaranteed = false;
+        half.cache_state = CacheState::Off;
+        let view = derive_lifecycle(&half);
+        let prot = protection_state(&view, &half);
+        assert_eq!(prot, ProtectionState::Blocked);
+        assert_eq!(prot.as_str(), "BLOCKED");
+        let overall = overall_state(&view, &half);
+        assert!(!overall.is_ok(), "half cascade without daemon is not ok");
+    }
+
+    #[test]
+    fn status_json_never_publishes_active_without_live_daemon() {
+        // Kahneman #1 / DT-6: the `--json` surface must never claim
+        // `"activation":{"active":true}` or `"cache_state":"ACTIVE"` when the
+        // daemon is not alive. A stale green is worse than a red.
+        let snap = CascadeSnapshot {
+            zram: TierSample::default(),
+            vram: TierSample::default(),
+            disk: TierSample::default(),
+            ghost: false,
+            order_ok: true,
+            daemon_alive: false,
+            daemon_pid: None,
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
+            demote: DemoteSnapshot::default(),
+            active_kib: DEFAULT_ACTIVE_KIB,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state: CacheState::Active,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(2_097_148),
+            vram_cached_kib: Some(0),
+            gpu_headroom_kib: Some(2_097_152),
+            gpu_budget: None,
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
+        };
+        let view = derive_lifecycle(&snap);
+        let json = render_status_json(&view, &snap, "2026-09-30T00:00:00Z");
+        assert!(
+            json.contains("\"activation\":{\"active\":false"),
+            "activation must be false without a live daemon: {json}"
+        );
+        assert!(
+            !json.contains("\"activation\":{\"active\":true"),
+            "activation must never be true without a live daemon: {json}"
+        );
     }
 }

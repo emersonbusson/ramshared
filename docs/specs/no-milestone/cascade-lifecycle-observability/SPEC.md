@@ -324,11 +324,15 @@ named tests on those sources as evidence, but do not duplicate their line
 coverage ownership.
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-cli \
-  --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/diagnose.rs \
-  --min 80 \
-  --report-json tmp/cascade-lifecycle-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/diagnose.rs --min 80 --report-json tmp/cascade-lifecycle-cov.json
+```
+
+The demotion status reporter is a separate daemon-side source and is gated by
+its own command. It is not folded into the CLI pure-line owner above because
+the two live in different packages.
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/demote_status.rs --min 80 --report-json tmp/cascade-lifecycle-demote-status-cov.json
 ```
 
 **E2E (cascade surface — not cover script):**

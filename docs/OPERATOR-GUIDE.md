@@ -9,13 +9,22 @@ This guide is the authoritative operations manual for installing, running, monit
 | Component | Minimum Requirement | Recommended |
 | :--- | :--- | :--- |
 | **Operating System** | Linux Kernel ≥ 5.15 or WSL2 (Windows 10 Build 19044+ / Windows 11) | WSL2 on Windows 11 23H2+ or native Linux 6.x |
-| **GPU / Acceleration** | Any NVIDIA GPU (Pascal+) or AMD/Intel with Vulkan 1.2+ support | NVIDIA RTX 30/40/50 series with CUDA 12+ |
+| **GPU / Acceleration** | A working CUDA provider or a Vulkan 1.1+ adapter with a transfer queue, stable identity, and fresh `VK_EXT_memory_budget` data | Use only an adapter whose exact driver and workload have passed the documented physical qualification |
 | **Host System RAM** | 8 GiB physical DDR4/DDR5 | 16 GiB+ DDR5 |
 | **Host Storage** | NVMe PCIe Gen3 SSD with at least 16 GiB free space | NVMe PCIe Gen4/Gen5 SSD |
-| **Kernel Subsystems** | `ublk` (`CONFIG_BLK_DEV_UBLK`), `io_uring`, or standard `nbd` | `ublk` with ZRAM enabled |
+| **Kernel Subsystems** | Standard WSL2: `nbd`; native Linux or compatible WSL2 custom kernel: `ublk`/`io_uring` | Use the transport qualified for the exact kernel surface |
 
 > [!NOTE]
-> RamShared also operates in **GPU-less / headless mode**. If no compatible GPU is detected or if GPU headroom is fully consumed by external 3D workloads, RamShared safely cascades between compressed host RAM (ZRAM) and the SSD origin store without downtime or errors.
+> In **GPU-less / headless mode**, the GPU cache target is zero. Whether the
+> remaining ZRAM and SSD-origin topology can start depends on the preflight and
+> configured transport; no uninterrupted-service guarantee is implied.
+>
+> Having VRAM alone does not make an adapter compatible. CUDA/Vulkan discovery
+> is implemented, but physical multi-vendor cache qualification is still open;
+> an unqualified or unmeasurable adapter must remain origin-only.
+
+Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is
+qualified on native Linux or WSL2 with a compatible custom kernel.
 
 ---
 
@@ -58,19 +67,32 @@ RamShared provides declarative commands to control the tiered memory cascade:
 ### Starting the Cascade (`up`)
 
 ```bash
-# Start dual-tier cascade with automatic hardware detection
+# Start the 3-tier cascade with automatic hardware detection
 $ ramshared up
 
-# Start with a specific maximum cache limit (e.g., 4 GiB)
-$ ramshared up --max-cache 4G
+# Start with explicit tier sizes (MiB). This host's working example:
+$ ramshared up --vram 4096 --zram 2048
+
+# Flags: --vram <MiB>  VRAM/NBD logical capacity (prio 100)
+#        --zram <MiB>  zram tier (prio 200); `--zram 0` skips zram
+#        --daemon PATH daemon binary (default `ramsharedd`)
+# Defaults are 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB.
 ```
 
 What happens on `ramshared up`:
-1. Validates host GPU headroom, reserving `max(2 GiB, 20% total VRAM)` for host graphics.
+1. Validates the surface-specific GPU headroom policy described below.
 2. Formats or maps the authoritative SSD origin backing store.
-3. Initializes the userspace block device daemon (`ublk` or NBD) with SHA-256 block integrity checks.
+3. Initializes NBD on standard WSL2, or `ublk` only on a qualified compatible-kernel surface, with block integrity checks.
 4. Mounts the RamShared block device as intermediate priority swap in `/proc/swaps`.
-5. Establishes the 3-tier cascade: Hot (ZRAM, pri 100) ➔ Accelerated (RamShared VRAM/SSD, pri 50) ➔ Fallback (Disk, pri -2).
+5. Establishes the 3-tier cascade: **zram (prio 200) ➔ RamShared VRAM/SSD (prio 100) ➔ WSL fallback disk (prio −2)**. Higher priority is used first; the SSD origin remains the correctness boundary.
+
+> **Windows Administrator token:** attaching the origin VHDX (`wsl.exe --mount --vhd`)
+> requires a Windows Administrator token. Linux `sudo` does **not** elevate a
+> Windows process. From WSL2, elevate with `Start-Process -Verb RunAs`, and take
+> the origin approval token from the script's `PLAN` output (it is size-derived).
+> Full recipe: [`runbooks/windows-elevation.md`](runbooks/windows-elevation.md).
+> Normal `ramshared up` never runs `mkswap`; the sealed swap header is provisioned
+> once by `scripts/safety/provision-origin-swap.sh`.
 
 ### Checking Operational Status (`status`)
 
@@ -92,7 +114,22 @@ When you plan to launch a heavy GPU application (e.g., local LLM inference, 3D r
 $ ramshared demote
 ```
 
-`demote` frees all clean cached chunks across PCIe back to the GPU driver without dropping swapped pages; data remains safely persisted on the authoritative SSD origin.
+`demote` requests release of clean cached chunks while the authoritative SSD origin remains the correctness boundary. Completion time and available headroom are reported rather than guaranteed.
+
+### Reserve policies
+
+- Broker/NBD capacity reserve: `max(1536 MiB, 20% of physical VRAM)`.
+- Broker/NBD runtime free buffer: a separate `768 MiB` held back from reported
+  free VRAM before admitting new allocations.
+- Origin-cache reserve: `max(configured floor, 20% of measured capacity)`;
+  production currently defaults the configured floor to `512 MiB` (clamped to
+  `128–4096 MiB`) and keeps a separate `640 MiB` runtime buffer. The active
+  qualification gate tracks the mismatch with the `1536 MiB` PRD/SPEC default.
+- Windows StorPort reserve: `max(configured reserve, 512 MiB, 10%)`.
+
+The capacity reserve limits the cache target. The runtime buffer protects a
+new allocation against changing external GPU use and is not a fourth reserve
+formula.
 
 ### Stopping the Cascade (`down`)
 
@@ -102,7 +139,8 @@ $ ramshared down
 
 > [!IMPORTANT]
 > **Swapoff-First Ordering:** `ramshared down` executes a strict, ordered teardown:
-> 1. Removes `/dev/ramshared0` from the active kernel swap table (`swapoff`).
+> 1. Removes the managed tier devices (`/dev/nbd0` on WSL2, `/dev/ublkN` on a
+>    qualified kernel, `/dev/zram0`) from the active kernel swap table (`swapoff`).
 > 2. Synchronizes pending disk blocks to the authoritative origin SSD.
 > 3. Detaches the userspace block device and stops daemon threads.
 > 4. Frees allocated GPU VRAM buffers cleanly.
@@ -137,23 +175,73 @@ ramshared monitor --format json --interval 1s
 
 ## 5. WSL2 & Systemd Boot Autostart
 
-To automatically configure the multi-tier cascade whenever WSL2 or your Linux workstation boots:
+To bring the multi-tier cascade up automatically whenever WSL2 or your Linux
+workstation boots, enable the boot-path units. This is an opt-in lifecycle
+decision (RF-1): a sealed install deliberately leaves them **disabled**, so an
+installed product that is not yet set to autostart is expected behaviour and
+not a fault.
+
+### Prerequisites
+
+Before enabling, confirm all of the following. If any is missing, the boot
+gate will fail closed and the cascade will not start.
+
+1. The installed release selector points at the release you intend to boot
+   (the `current` symlink under the product root).
+2. The sealed origin is attached and its config is present at
+   `/etc/ramshared/origin.conf`.
+3. The Windows guardian is publishing a fresh health proof (age under
+   `stale_after_seconds`) and `safe-mode/` is empty. The boot gate consumes
+   that proof and mints `/run/ramshared/host-resume-lease.json` from it.
+4. `scripts/safety/install-cascade-boot.sh` has completed an attended install
+   for this release version.
 
 ### Enabling Boot Integration
 
-```bash
-sudo scripts/safety/install-cascade-boot.sh --enable
-```
+Enable the three boot-path units with `systemctl enable` for
+`ramshared-host-gate.service`, `ramshared-cascade.service` and
+`ramshared-supervisor.service`, run under `sudo`.
 
-This installs:
-- `/etc/systemd/system/ramshared-cascade.service`: Manages the lifecycle of the block daemon and swap priority tables.
-- Resource slice controls (`ramshared-control.slice` and `ramshared-workloads.slice`) to protect supervisor memory.
+`systemctl enable` only links the units into `multi-user.target`. Nothing runs
+until the next boot. Confirm that by checking `systemctl is-active` on the
+gate and the cascade reports `inactive`, and that `systemctl show
+ramshared-cascade.service -p ExecMainStartTimestamp` is empty.
+
+What each unit does at boot:
+
+| Unit | Role |
+| --- | --- |
+| `ramshared-host-gate.service` | Verifies the Windows guardian proof and mints the boot-bound host-resume lease. `Before=ramshared-cascade.service`. |
+| `ramshared-cascade.service` | Runs `ramshared boot`, which walks the fail-closed gate chain (identity → approval → lease → dirty) and then activates the cascade. `Requires=ramshared-host-gate.service`. |
+| `ramshared-supervisor.service` | Control-plane supervisor. |
+| `ramshared-control.slice`, `ramshared-workloads.slice` | Resource slices that protect supervisor memory. Already `static`; nothing to enable. |
 
 ### Disabling Boot Integration
 
-```bash
-sudo scripts/safety/install-cascade-boot.sh --disable
-```
+The revert is `systemctl disable` for those same three units. It takes effect
+at the next boot; to stop a running cascade in the current boot use
+`ramshared down`.
+
+### Why `install-cascade-boot.sh --enable` is not the command
+
+`scripts/safety/install-cascade-boot.sh` installs the units **disabled** on
+purpose and refuses `--enable` with
+`BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL`. It has no `--disable` flag at all.
+The installer never touches unit enablement; that is a separate operator
+decision, made with `systemctl` as described above. See
+`docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md` (RF-1) and
+`validation.md` EVD-0167/EVD-0168.
+
+### Fail-closed behaviour to expect at boot
+
+`ramshared-host-gate.sh` deletes `/etc/ramshared/origin.conf` and the lease
+**before** parsing any host-controlled data, then re-mints from a fresh proof.
+If the Windows guardian proof is stale, the Windows mount is not ready, or the
+identity does not match, it exits without minting and the cascade stays down.
+That is deliberate: a failed or foreign proof must never retain authority
+minted by an earlier invocation. Recover by making the guardian proof fresh,
+then starting `ramshared-host-gate.service` followed by
+`ramshared-cascade.service`.
 
 ---
 
@@ -216,7 +304,8 @@ If the workstation experienced a power failure or sudden reboot while the cascad
    ```bash
    $ cat /proc/swaps
    ```
-2. If `/dev/ramshared0` or an orphaned NBD device is listed with `(deleted)` status, deactivate it immediately:
+2. If a managed tier device (`/dev/nbd0`, `/dev/ublkN`, `/dev/zram0`) is listed
+   with `(deleted)` status, deactivate it immediately:
    ```bash
    $ sudo swapoff -a
    ```
@@ -229,9 +318,9 @@ If the workstation experienced a power failure or sudden reboot while the cascad
 
 If the cascade start reports `INSUFFICIENT_HEADROOM`:
 - An external 3D game, AI model, or compute task is consuming the GPU budget.
-- RamShared automatically reserves `max(2 GiB, 20% VRAM)`. Close heavy GPU tasks or run with a smaller cache:
+- For broker/NBD, RamShared applies the capacity reserve plus runtime buffer described above. Close heavy GPU tasks or run with smaller tiers:
   ```bash
-  $ ramshared up --max-cache 1G
+  $ ramshared up --vram 1024 --zram 1024
   ```
 
 ### Issue: Generating Support Diagnostics

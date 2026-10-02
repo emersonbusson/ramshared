@@ -19,6 +19,12 @@ of host disk space) while preserving complete cryptographic integrity, fixed-ext
 allocation performance, and strict backward compatibility with existing 25 GiB
 deployments.
 
+For a new origin, the host manager prefers the storage volume containing the
+registered WSL distro, provided that the fixed VHDX plus a 10 GiB free-space
+reserve fit. It then tries C: under the same bound. If neither fits, it refuses
+before writing. Once sealed, the manifest's origin path remains authoritative;
+moving the distro does not silently move or replace the origin.
+
 ## 2. Technical context
 
 - **`crates/ramshared-wsl2d/src/main.rs`**: Daemon manifest validation
@@ -39,6 +45,16 @@ deployments.
   the data/swap partition (partition 2) created via `New-Partition -UseMaximumSize`.
   For a 4096 MiB (4 GiB) swap partition, a 5 GiB fixed VHDX yields ~4.98 GiB for
   partition 2, providing ample headroom for alignment and metadata (`Confirmed in codebase`).
+- **Origin placement (pre-slice baseline)**: `Get-WslDistroStorageRoot` read the
+  distro's registered WSL `BasePath` volume, but did not check free space or
+  fall back to C:. It recomputed the origin path on each invocation, so an
+  existing sealed manifest at a different path failed the exact-path comparison
+  (`Confirmed in codebase at discovery`). The new policy uses C: when the
+  registry does not provide a usable distro `BasePath`; it does not infer the
+  distro's volume from the independent WSL fallback swap path.
+- **WSL fallback swap**: `wslconfig-lib.sh` preserves an existing `swapFile` and
+  otherwise leaves path selection to WSL; this feature does not rewrite that
+  independent fallback path (`Confirmed in codebase`).
 
 ## 3. Recommended option
 
@@ -60,6 +76,11 @@ deployments.
 - **Dynamic VHDX**: Dynamic expansion creates NTFS block allocation latency,
   severe fragmentation, and host out-of-space pause hazards during kernel memory
   pressure spikes. Fixed allocation must remain mandatory.
+- **Always use C:** This ignores a valid distro volume and can force origin I/O
+  onto a separate device even when the user has one suitable volume. C: remains
+  a deterministic fallback.
+- **Scan arbitrary volumes:** This can select removable, network, or unrelated
+  storage. Only the distro volume and C: participate in automatic selection.
 
 ## 4. Functional requirements (RF-N)
 
@@ -78,6 +99,18 @@ deployments.
   `fixed_size_bytes >= (logical_capacity_mib + 1024) * 1024^2`.
 - **`RF-5`**: Existing 25 GiB origin containers and manifests remain fully valid
   and accepted without requiring migration or recreation.
+- **`RF-6`**: For a new default origin, the manager selects the registered WSL
+  distro's volume when it has at least `OriginSizeBytes + 10 GiB` free; otherwise
+  it selects C: only when that volume meets the same bound. If the registered
+  `BasePath` cannot be resolved, C: is the sole automatic candidate. The manager
+  never infers distro placement from the separate WSL fallback swap path. If no
+  allowed volume qualifies, it refuses before VHDX creation and reports required
+  and observed free bytes. An explicit `-OriginVhdxPath` is honored only when
+  its volume has the same reserve.
+- **`RF-7`**: When a sealed schema-3 manifest already exists, its validated
+  `origin_vhdx` path remains the selected path when the distro's `BasePath`
+  changes. A conflicting explicit path is refused; no automatic migration,
+  recreation, or cleanup is permitted.
 
 ## 5. Non-functional requirements (NFR-N)
 
@@ -89,6 +122,10 @@ deployments.
   bound into `configuration_sha256`; any external modification fails closed.
 - **`NFR-4` (Safety & fail-closed)**: Insufficient container size relative to
   logical swap capacity fails validation immediately before disk mounting or swapoff/swapon.
+- **`NFR-5` (Host free space)**: New fixed allocation preserves at least 10 GiB
+  free on the selected volume after allocation. The manager checks before
+  creation and again after creating the staging VHDX; a lost reserve rolls back
+  only the current run's staging file.
 
 ## 6. Flows
 
@@ -103,6 +140,12 @@ deployments.
 ### Alternate flow: 25 GiB legacy deployment
 1. Operator provisions with `-OriginSizeBytes 25GB` and approval token `RAMSHARED_ORIGIN_25GIB_PARTUUID`.
 2. Gate and daemon accept `fixed_size_bytes = 26843545600`.
+
+### Alternate flow: distro volume lacks reserve
+1. The registered distro volume has less than `OriginSizeBytes + 10 GiB` free.
+2. The manager checks C:; if it meets the same bound, the plan selects C:.
+3. Install seals that one selected path, and later actions read it from the
+   existing manifest rather than recomputing it from the distro location.
 
 ### Error flow: Insufficient physical container capacity
 1. Manifest indicates `fixed_size_bytes = 5 * 1024^3` but `logical_capacity_mib = 8192`.
@@ -120,7 +163,8 @@ deployments.
 
 ## 8. Interfaces
 
-- PowerShell: `Manage-RamSharedOrigin.ps1` with parameter `-OriginSizeBytes`.
+- PowerShell: `Manage-RamSharedOrigin.ps1` with `-OriginSizeBytes` and optional
+  explicit `-OriginVhdxPath`; default placement is distro volume, then C:.
 - Shell: `ramshared-host-gate.sh` manifest parser.
 - Rust: `validate_host_origin_manifest_bytes` in `crates/ramshared-wsl2d/src/main.rs`.
 
@@ -128,16 +172,23 @@ deployments.
 
 - **Risk**: User specifies container smaller than MSR + swap partition.
   **Mitigation**: Enforce mathematical floor `(logical_capacity_mib + 1024) * 1024^2`.
-- **Numeric rollback trigger**: Any failure in manifest hashing, PARTUUID validation,
-  or swap activation immediately terminates execution and keeps existing storage untouched.
+- **Risk**: Free space changes between plan and fixed allocation.
+  **Mitigation**: Check the exact selected volume immediately before creation and
+  after staging allocation; never retry a deterministic low-space refusal.
+- **Numeric rollback trigger**: A failed identity/hash check, or less than 10 GiB
+  free after staging allocation, aborts and removes only the current-run staging
+  VHDX. Any existing sealed VHDX or manifest remains untouched.
 
 ## 10. Implementation strategy
 
 1. Define PRD and SPEC with formal technical decisions.
 2. Complete Step 2.5 safety audit.
-3. Implement TDD: add unit tests verifying 5 GiB acceptance and under-capacity rejection.
-4. Update daemon and gate logic.
-5. Verify 80%+ slice coverage, pass `./scripts/docs-check.sh`, build release bundle.
+3. Implement TDD: add unit tests for size boundaries, volume priority/reserve,
+   sealed-path replay, and fail-closed refusal.
+4. Preserve the existing daemon and gate capacity contract; change only host
+   provisioning path selection and pre-allocation checks.
+5. Run PowerShell and docs checks. Host-path creation remains attended and
+   environment-bound; do not recreate a sealed origin for this slice.
 
 ## 11. Documents to update
 
@@ -147,12 +198,17 @@ deployments.
 ## 12. Out of scope
 
 - Dynamic VHDX conversion or runtime compacting.
-- Altering the WSL2 root disk or fallback swap device.
+- Altering the WSL2 root disk or fallback swap device / `.wslconfig` path.
 - Live in-place resizing of an attached origin VHDX without re-provisioning.
+- Automatically relocating, resizing, deleting, or replacing any sealed origin.
 
 ## 13. Acceptance criteria
 
 - `Manage-RamSharedOrigin.ps1` successfully creates and validates a 5 GiB fixed VHDX.
+- Plan selection prefers the distro volume with sufficient reserve, falls back
+  to C: with sufficient reserve, accepts a single C: volume when the distro is
+  stored there, and refuses if no allowed volume qualifies; existing manifest
+  paths remain stable after the distro volume changes.
 - `ramshared-host-gate.sh` and `ramshared-wsl2d` accept 5 GiB and 25 GiB manifests, and reject <5 GiB or under-sized manifests.
 - Slice coverage on modified code >= 80%.
 - `./scripts/docs-check.sh` passes with zero findings.

@@ -62,5 +62,12 @@ if [[ -x "$CLI" ]]; then
   "$CLI" down 2>/dev/null || true
 fi
 
+# RF-9 / DT-4: remove all approval tokens so a stale activate:<v> cannot
+# authorize a future boot of a release that is no longer installed.
+if [[ -d /var/lib/ramshared/approvals ]]; then
+  rm -rf -- /var/lib/ramshared/approvals
+  echo "  [ok] approval tokens removed"
+fi
+
 echo "  [note] /etc/ramshared/cascade.conf left in place (your sizes)."
 echo "Done."

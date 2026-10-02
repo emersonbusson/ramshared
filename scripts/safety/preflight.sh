@@ -16,7 +16,6 @@ set -uo pipefail
 REPO="${RAMSHARED_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="${1:-$REPO/target/debug/ramsharedd}"
 FIX_MARKER='MCL_CURRENT-only no caminho ublk+vram'   # string do fix anti-dxgkrnl-BUG (#1)
-MIN_VRAM_FREE_MIB="${RAMSHARED_MIN_VRAM_FREE_MIB:-256}"
 
 # nvidia-smi in WSL2 is located in /usr/lib/wsl/lib, which is NOT in systemd's minimal PATH.
 # Resolves the full path so the gate works both in the shell and via ExecStartPre.
@@ -24,6 +23,26 @@ NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"
 [ -x "$NVSMI" ] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
 
 fail() { echo "PREFLIGHT: RECUSADO — $1" >&2; exit 1; }
+
+# Sealed reserve authority (DT-3 / DT-8 of gpu-reserve-floor-authority).
+# The host-origin seal accepts gpu_reserve_min_mib = 2048. An environment
+# override may only RAISE that floor. A value below the seal is refused — the
+# old `${RAMSHARED_MIN_VRAM_FREE_MIB:-256}` default silently accepted a 256 MiB
+# floor on a shared host and never applied the sealed percentage share.
+SEALED_RESERVE_MIN_MIB=2048
+SEALED_RESERVE_PERCENT=20
+_RESERVE_OVERRIDE="${RAMSHARED_MIN_VRAM_FREE_MIB:-${MIN_VRAM_HEADROOM_MIB:-}}"
+if [ -n "$_RESERVE_OVERRIDE" ]; then
+  case "$_RESERVE_OVERRIDE" in
+    ''|*[!0-9]*) fail "reserve floor override is not numeric: $_RESERVE_OVERRIDE" ;;
+  esac
+  if [ "$_RESERVE_OVERRIDE" -lt "$SEALED_RESERVE_MIN_MIB" ]; then
+    fail "reserve floor override ${_RESERVE_OVERRIDE} MiB is below the sealed authority ${SEALED_RESERVE_MIN_MIB} MiB (raise-only, DT-8)"
+  fi
+  MIN_VRAM_FREE_MIB="$_RESERVE_OVERRIDE"
+else
+  MIN_VRAM_FREE_MIB="$SEALED_RESERVE_MIN_MIB"
+fi
 
 echo "== RamShared preflight (falha-seguro) =="
 

@@ -9,7 +9,7 @@ The project is intended for people who want to study or operate GPU-backed memor
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.0"><img alt="Release v0.14.0" src="https://img.shields.io/badge/release-v0.14.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1"><img alt="Latest published stable v0.14.1" src="https://img.shields.io/badge/release-v0.14.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux and WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-stable-2f855a?style=flat-square">
 </p>
@@ -37,7 +37,11 @@ The project is intended for people who want to study or operate GPU-backed memor
 
 ## Current Status
 
-Latest published release: **[v0.14.0](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.0)**. This checkout builds **0.14.0**, the current stable maintenance release.
+Release v0.15.0 is the source target built by this checkout. The latest published stable remains **[v0.14.1](https://github.com/emersonbusson/ramshared/releases/tag/v0.14.1)**; v0.15.0 has not been published yet.
+
+Standard WSL2 uses **NBD as its baseline transport**. `ublk`/`io_uring` is
+qualified on native Linux or WSL2 with a compatible custom kernel; it is not a
+universal baseline for stock WSL2 kernels.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -45,7 +49,7 @@ Latest published release: **[v0.14.0](https://github.com/emersonbusson/ramshared
 | GPU cache | **Stable on qualified hardware** | CUDA and Vulkan backends exist, while usable capacity and behaviour still depend on the driver, GPU, display workload, and current host pressure. |
 | Disk origin and integrity | **Stable and tested** | The software has integrity and teardown checks; every deployment still needs its own before/after validation. |
 | Windows StorPort driver | **Not publicly distributable yet** | The driver remains a supervised lab surface until a production-trusted signing and qualification path is complete. |
-| Custom kernel and ublk transport | **Deferred** | These are development and lab surfaces, not the default day-one WSL2 transport. |
+| Custom kernel and `ublk` transport | **Qualified on a bounded surface; product promotion deferred** | EVD-0039 covers native Linux and one compatible WSL2 custom-kernel surface. Standard WSL2 continues to use NBD while lifecycle qualification remains open. |
 
 
 Historical measurements are retained in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md). Entries without a public evidence envelope are historical records, not current release baselines. Open limits and qualification work are tracked in [`docs/reliability/`](docs/reliability/).
@@ -57,7 +61,7 @@ The v0.13 qualification reached **19,777 MB** across Tier 0 (ZRAM), Tier 1 (GPU 
 ## Run it safely
 <a id="safe-operation"></a><a id="quick-start"></a>
 
-RamShared is designed with strict safety defaults. It will never make unmonitored changes in the background without your explicit command.
+RamShared uses strict safety defaults and does not activate the cascade without an explicit operator command.
 
 Build once with the commands above, then use `./target/release/ramshared check`. Do not activate a tier when the check reports a blocker. Starting and stopping memory offload always requires an explicit operator command (`sudo ./target/release/ramshared up` / `sudo ./target/release/ramshared down`).
 
@@ -95,13 +99,8 @@ Memory tiering uses on-demand, revocable chunks backed by a durable origin. It r
                                      │
                                      ▼
       ┌─────────────────────────────────────────────────────────────┐
-      │ Tier 1: RamShared GPU VRAM Direct DMA Cache                 │ (Priority 50 - 0.85 µs access)
-      │                                                             │
-      │   ┌──────────────────────────┐   ┌───────────────────────┐  │
-      │   │ GPU VRAM (Cache Tier)    │   │ Hot Spillway / Direct │  │
-      │   │ 4 GiB Active on GPU      │──►│ 15.6x - 21.5x Speedup │  │
-      │   │ (Up to 429.6 MB/s DMA)   │   │ Zero Kernel Lockup    │  │
-      │   └──────────────────────────┘   └───────────────────────┘  │
+      │ Tier 1: RamShared logical device (Priority 50)              │
+      │   clean, revocable VRAM cache + authoritative SSD origin    │
       └──────────────────────────────┬──────────────────────────────┘
                                      │
                                      ▼
@@ -113,19 +112,28 @@ Memory tiering uses on-demand, revocable chunks backed by a durable origin. It r
 
 How the tiers work together:
 
-- **Tier 0: ZRAM (CPU Tier, 1024 MiB):** Ultra-fast memory compression handled directly by the host CPU.
-- **Tier 1: GPU VRAM Cache (4 GiB Active on GPU):** Blazing-fast memory cache over PCIe for active pages, configured with 4,096 MB capacity while preserving host display safety.
-- **Tier 3: Host SSD Origin Store:** Safe, durable backing storage that absorbs overflow memory traffic so your system never crashes.
-- **Always Safe (Write-Through):** Every write acknowledged by RamShared is safely stored in the backing store. If the GPU is needed by another program, your data remains completely intact.
+- **Tier 0: ZRAM:** Compressed host memory is the first pressure cushion.
+- **Tier 1: RamShared logical device:** A clean, revocable VRAM cache can accelerate pages whose authoritative copy is held by the SSD origin.
+- **Tier 3: Host SSD and WSL swap:** Lower storage tiers absorb traffic when the cache cannot admit or retain a page.
+- **Write-through contract:** An acknowledged origin-cache write is persisted to the authoritative origin before the cache mutation. Operational failures remain possible and are tracked in the gap register.
+
+The reserve is deliberately surface-specific. Broker/NBD sizing retains
+`max(1536 MiB, 20% of physical VRAM)` as capacity reserve and separately keeps
+`768 MiB` of reported free VRAM as a runtime allocation buffer. The origin
+cache uses `max(configured reserve floor, 20% of measured capacity)` and keeps
+a separate `640 MiB` runtime buffer; Windows StorPort uses
+`max(configured reserve, 512 MiB, 10%)`. These values are not interchangeable:
+a capacity reserve bounds the cache target, while the runtime buffer protects
+new allocations against changing external GPU use.
 
 ### Automatic GPU Protection for Windows & Gaming
 
-When Windows, games, or 3D rendering workloads request GPU memory, RamShared steps aside immediately:
+When Windows, games, or 3D rendering workloads request GPU memory, RamShared's governor attempts to reduce cache pressure:
 
-1. Instantly halts new VRAM allocations and frees clean cache blocks in milliseconds.
-2. Continues memory I/O smoothly through the backing store without interrupting active apps.
-3. Automatically reserves at least `max(1.5 GiB, 20% of physical VRAM)` exclusively for Windows and display tasks (SSDV3 Principle 11), ensuring Desktop Window Manager (DWM) stability while granting a full 4 GiB slice on 6GB+ GPUs.
-4. Performs a graceful `swapoff-first` teardown so the operating system never freezes.
+1. Stops new cache admission when the measured budget crosses the configured guard.
+2. Drops clean chunks and routes cache misses through the authoritative origin.
+3. Applies the broker/NBD capacity reserve and separate runtime buffer described above.
+4. Uses ordered `swapoff-first` teardown; timeouts or uncertain state fail closed and remain visible to the operator.
 
 ### Evidence, without marketing shortcuts
 
@@ -161,8 +169,8 @@ ramshared top
 ### Operational Guardrails & Stability Rules
 
 - **Always use `ramshared down` for graceful shutdown:** Never forcefully kill the background daemon (`ramsharedd`) while swap is active. An orderly unmount (`swapoff`) keeps Linux stable and prevents filesystem corruption.
-- **Dynamic memory allocation:** RamShared only claims GPU memory when needed by active swap traffic. If games, browsers, or AI apps request VRAM, RamShared yields it immediately.
-- **Desktop Window Manager protection:** At least 1.5 GB (or 20% of VRAM) is always preserved for Windows display rendering, ensuring your screen, mouse, and monitors never freeze.
+- **Dynamic memory allocation:** RamShared claims cache chunks on demand and releases clean chunks when measured pressure requires it; release latency depends on the active workload and driver.
+- **Desktop headroom:** Broker/NBD capacity is bounded by `max(1536 MiB, 20%)`, with a separate `768 MiB` runtime free buffer when live telemetry is available.
 - **Strict storage safety:** Storage operations bind strictly to authoritative volume UUIDs, never ambiguous or transient drive letters.
 - **Attended legacy handoff:** `migrate-cascade --from-legacy` is the only supported path from an unbound earlier cascade; it is not automatic recovery.
 
@@ -186,7 +194,7 @@ scripts, systemd service templates, documentation, and `SHA256SUMS` cryptographi
 Build caches, credentials, and transient environment artifacts are excluded by policy. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-Official Linux release distributions (including v0.14.0 and prior milestones) and
+Official Linux release distributions (including v0.14.1 and prior milestones) and
 their detached checksums are qualified through the automated release promotion workflow.
 
 ## Windows StorPort Driver Architecture
@@ -212,6 +220,15 @@ Empirical performance measurements and latency distributions are recorded under 
 
 For raw sample bundles, hardware execution traces, latency histograms, and exact reproduction steps for EVD-0037 and EVD-0038, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
+New measurements run through the registered harness [`scripts/p0/bench.sh`](scripts/p0/bench.sh), which captures context, runs a wrapped `scripts/p0/measure-*.sh` for at least three rounds, and writes both machine (`docs/benchmarks/results.jsonl`) and human (`docs/BENCHMARKS.md`) records:
+
+```bash
+scripts/p0/bench.sh --tool scripts/p0/measure-<name>.sh --run-id <id> \
+  --condition idle|loaded --title '<human title>' -- [tool args...]
+```
+
+Records without a current public evidence envelope are `legacy-unqualified` and cannot serve as a release baseline or a regression claim.
+
 ## Architecture
 
 | Component | Responsibility |
@@ -220,7 +237,7 @@ For raw sample bundles, hardware execution traces, latency histograms, and exact
 | `ramsharedd` | GPU-backed block service (multi-tier ublk/NBD cascade engine) |
 | `ramshared-tier` | Tier policy, hysteresis, and demotion safety |
 | `ramshared-cuda` | Safe wrapper and direct in-process C-FFI for NVIDIA CUDA driver |
-| `ramshared-vulkan` | Multi-vendor GPU memory engine for AMD Radeon and Intel Arc via VMA |
+| `ramshared-vulkan` | Vulkan VRAM provider for compatible adapters; AMD/Intel physical qualification remains open |
 | `ramshared-dxg` | Windows D3D12 and WSL2 dxgkrnl paravirtualization abstraction |
 | `ramshared-vram` | Page-locked DMA allocation and memory management |
 | `ramshared-wsl2d` | WSL2 host-pressure coordination and telemetry |

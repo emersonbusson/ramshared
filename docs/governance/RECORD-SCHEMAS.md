@@ -44,6 +44,11 @@ applicable, re-execution pointer for effect categories, and verdict fields.
 This keeps empirical claims tied to a reproducible command and a known time
 window rather than treating a historical success as current state.
 
+Because this evidence log is append-only, documentation governance allows
+`validation.md` up to 1 MiB; other governed files retain the 512 KiB ceiling.
+The separate bound keeps historical evidence intact while ensuring the log
+cannot grow without limit.
+
 Run:
 
 ```bash

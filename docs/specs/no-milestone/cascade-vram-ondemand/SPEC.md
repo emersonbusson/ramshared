@@ -85,6 +85,14 @@ integer arguments.
 
 - Offsets must be handled across chunk boundaries (split I/O like a normal striped backend).  
 - Unit tests: cross-chunk write/read, read-empty, write-fail injection with Fake provider.
+- A zero block size is invalid and must be refused at construction without a
+  panic. Before every Live-chunk read or write, the backend checks the actual
+  `VramMemory::len()` against the relative transfer range; it must refuse a
+  shortened or inconsistent physical allocation before invoking provider I/O.
+  This guard is independent of the logical capacity and chunk-table checks.
+- Named refusal tests: `zero_block_size_is_rejected_without_panic` and
+  `physical_bounds_refuse_provider_io`. The existing
+  `write_then_read_roundtrip_one_chunk` remains the legitimate-path pair.
 
 ## ITEM-2 — Reclaim / demote free
 

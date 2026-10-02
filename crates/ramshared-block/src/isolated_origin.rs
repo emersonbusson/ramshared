@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crate::origin_cache::{CacheState, CacheTelemetry, OriginState, OriginStorage};
 use crate::{BlockBackend, IoError, WriteOptions};
+use ramshared_vram::{GpuBudgetTelemetry, WorkerCacheTelemetry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheRead {
@@ -19,6 +20,10 @@ pub enum CacheRead {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheMutation {
+    /// The cache implementation accepted the mutation. For the process-isolated
+    /// GPU cache this means the complete frame was queued to the worker; it does
+    /// not prove that the worker applied it or allocated VRAM. Origin data stays
+    /// authoritative regardless of this result.
     Accepted,
     Skipped,
     Failed,
@@ -56,6 +61,30 @@ pub struct IsolatedCacheWorker {
     pub control: Receiver<IsolatedCacheControl>,
 }
 
+/// Largest payload a single `BestEffortCache::update` / `promote` call carries.
+///
+/// The GPU cache transport frames each mutation as one nonblocking send, so the
+/// origin write path must split any larger write into consecutive slices of at
+/// most this size. A block-layer request can be far larger (the NBD queue on
+/// this surface admits up to 4 MiB), and forwarding one of those whole would
+/// permanently revoke the cache on the first frame that does not fit.
+pub const MAX_CACHE_MUTATION_BYTES: usize = 64 * 1024;
+
+/// Split a logical cache mutation into consecutive transport-sized frames.
+///
+/// Yields `(offset, slice)` pairs covering `data` exactly, each slice at most
+/// `MAX_CACHE_MUTATION_BYTES`. Empty `data` yields nothing: a zero-length
+/// mutation is a no-op and must not occupy a frame.
+fn mutation_frames(offset: u64, data: &[u8]) -> impl Iterator<Item = (u64, &[u8])> {
+    data.chunks(MAX_CACHE_MUTATION_BYTES)
+        .enumerate()
+        .map(move |(index, slice)| {
+            let slice_offset = offset
+                .saturating_add((index as u64).saturating_mul(MAX_CACHE_MUTATION_BYTES as u64));
+            (slice_offset, slice)
+        })
+}
+
 pub trait BestEffortCache {
     fn read(&mut self, offset: u64, destination: &mut [u8]) -> CacheRead;
     fn update(&mut self, offset: u64, data: &[u8]) -> CacheMutation;
@@ -67,8 +96,24 @@ pub trait BestEffortCache {
         0
     }
 
+    fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
+        Ok(self.cached_bytes())
+    }
+
     fn target_bytes(&self) -> u64 {
         0
+    }
+
+    fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        None
+    }
+
+    /// Cache occupancy and codec health from the last heartbeat (DT-8).
+    ///
+    /// Logical cache bytes are cache occupancy in the worker's address space —
+    /// never guest or host RAM.
+    fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
+        None
     }
 }
 
@@ -257,24 +302,65 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
         self.cache.state()
     }
 
+    /// Swap in a fresh best-effort cache after the backing worker was replaced.
+    ///
+    /// The origin stays authoritative and its telemetry is untouched: the new
+    /// cache starts empty and warms from origin reads, so a respawn can never
+    /// serve pre-death bytes and never loses the `fallback_reads` /
+    /// `invalidations` accounting that documents the fall back.
+    pub fn replace_cache(&mut self, cache: C) {
+        self.cache = cache;
+    }
+
     pub fn cached_bytes(&self) -> u64 {
         self.cache.cached_bytes()
+    }
+
+    pub fn refresh_cached_bytes(&mut self) -> Result<u64, &'static str> {
+        self.cache.refresh_cached_bytes()
     }
 
     pub fn target_bytes(&self) -> u64 {
         self.cache.target_bytes()
     }
 
+    pub fn gpu_budget_telemetry(&self) -> Option<&GpuBudgetTelemetry> {
+        self.cache.gpu_budget_telemetry()
+    }
+
+    /// Cache occupancy and codec health from the underlying cache client.
+    pub fn cache_telemetry(&self) -> Option<&WorkerCacheTelemetry> {
+        self.cache.cache_telemetry()
+    }
+
     pub fn telemetry(&self) -> CacheTelemetry {
         self.telemetry
     }
 
+    /// Revokes the best-effort cache and reports a successful control outcome.
+    ///
+    /// The returned byte count is `0` by contract: the isolated cache is revoked
+    /// wholesale and the client never reports how much it held
+    /// (`release_cache_returns_zero_only_after_dedicated_control_acknowledgement`).
+    ///
+    /// `telemetry.releases` counts only a cache that was actually revoked.
+    /// `Skipped` means the cache was already `Off`/`Unavailable` and
+    /// [`revoke_cache`] sent nothing, so counting it would publish a release
+    /// for a no-op. That is not academic: the control plane keeps a
+    /// `control_pressure` request live under memory pressure, this runs on the
+    /// per-job serving path, and an ungated counter therefore grows with I/O
+    /// while `cache_state` is `OFF` and `vram_cached_kib` is `0`. The sibling
+    /// `invalidations` counter is gated the same way in [`revoke_cache`] and
+    /// reported 1 beside 1.5M of these.
     pub fn release_cache(&mut self) -> Result<u64, IoError> {
         match self.revoke_cache() {
-            CacheMutation::Accepted | CacheMutation::Skipped => {
+            CacheMutation::Accepted => {
                 self.telemetry.releases = self.telemetry.releases.saturating_add(1);
                 Ok(0)
             }
+            // Already released: still a successful control outcome, but there
+            // was no cache to release and nothing to acknowledge.
+            CacheMutation::Skipped => Ok(0),
             CacheMutation::Failed => Err(IoError(
                 "cache release acknowledgement was unavailable".into(),
             )),
@@ -368,11 +454,18 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
         Ok(())
     }
 
+    /// Mirror an already-authorized origin write into the cache, one
+    /// `MAX_CACHE_MUTATION_BYTES` frame at a time. The origin is already
+    /// committed, so a mid-write failure revokes the cache and leaves reads
+    /// falling back to origin — correctness never depends on the mirror.
     fn update_cache(&mut self, offset: u64, data: &[u8]) {
-        if self.cache.update(offset, data) == CacheMutation::Failed {
-            self.telemetry.cache_write_failures =
-                self.telemetry.cache_write_failures.saturating_add(1);
-            let _ = self.revoke_cache();
+        for (offset, slice) in mutation_frames(offset, data) {
+            if self.cache.update(offset, slice) == CacheMutation::Failed {
+                self.telemetry.cache_write_failures =
+                    self.telemetry.cache_write_failures.saturating_add(1);
+                let _ = self.revoke_cache();
+                return;
+            }
         }
     }
 }
@@ -412,9 +505,13 @@ impl<O: OriginStorage, C: BestEffortCache> BlockBackend for AuthoritativeOriginB
             return Err(error);
         }
         self.telemetry.fallback_reads = self.telemetry.fallback_reads.saturating_add(1);
-        if self.cache.promote(offset, destination) == CacheMutation::Failed {
-            self.telemetry.promotion_refusals = self.telemetry.promotion_refusals.saturating_add(1);
-            let _ = self.revoke_cache();
+        for (offset, slice) in mutation_frames(offset, destination) {
+            if self.cache.promote(offset, slice) == CacheMutation::Failed {
+                self.telemetry.promotion_refusals =
+                    self.telemetry.promotion_refusals.saturating_add(1);
+                let _ = self.revoke_cache();
+                break;
+            }
         }
         Ok(())
     }
@@ -520,6 +617,63 @@ mod tests {
         assert_eq!(backend.telemetry().fallback_reads, 1);
     }
 
+    /// A codec/decode fault inside the compressed cache must serve the SSD
+    /// origin bytes, never the refused payload and never a fabricated one
+    /// (RF-1, DT-1, DT-7, DT-11).
+    ///
+    /// Unlike a transport timeout or a disconnect, a codec integrity failure
+    /// surfaces as a cache **miss** with the corrupt payload left unread. The
+    /// origin stays authoritative and the cache client is not revoked (DT-11).
+    #[test]
+    fn compressed_cache_fault_falls_back_to_origin() {
+        let counters = Rc::new(CacheCounters::default());
+        let mut codec_fault_cache = ScriptedCache::active(Rc::clone(&counters));
+        // The worker refused this entry before decode (stored-checksum
+        // mismatch), so the read is a miss. The payload the slab still holds
+        // is deliberately wrong: it must never reach the reader.
+        codec_fault_cache.read = CacheRead::Miss;
+        codec_fault_cache.hit = b"corrupt!".to_vec();
+
+        let bytes = Rc::new(RefCell::new(b"origin!!".to_vec()));
+        let mut backend = AuthoritativeOriginBackend::new(
+            MemoryOrigin(Rc::clone(&bytes)),
+            codec_fault_cache,
+            8,
+            4,
+        )
+        .unwrap();
+
+        let mut destination = [0; 8];
+        backend.read_at(0, &mut destination).unwrap();
+
+        // The origin is authoritative: the durable bytes are what the reader
+        // gets, not the refused compressed payload.
+        assert_eq!(&destination, b"origin!!");
+        assert_ne!(&destination, b"corrupt!");
+        assert_eq!(backend.telemetry().fallback_reads, 1);
+        assert_eq!(
+            backend.telemetry().cache_read_failures,
+            0,
+            "a codec integrity miss is not a transport failure"
+        );
+        assert_eq!(
+            backend.cache_state(),
+            CacheState::Active,
+            "a codec fault must not revoke the cache client (DT-11)"
+        );
+
+        // A later real hit is still served from the cache, proving the client
+        // survived the codec fault and the raw path keeps working.
+        let mut hit_cache = ScriptedCache::active(counters);
+        hit_cache.read = CacheRead::Hit;
+        hit_cache.hit = b"cache!!!".to_vec();
+        let mut after =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), hit_cache, 8, 4).unwrap();
+        after.read_at(0, &mut destination).unwrap();
+        assert_eq!(&destination, b"cache!!!");
+        assert_eq!(after.telemetry().fallback_reads, 0);
+    }
+
     #[test]
     fn disabled_cache_never_changes_origin_durability_order() {
         let bytes = Rc::new(RefCell::new(vec![0; 8]));
@@ -534,6 +688,42 @@ mod tests {
         assert_eq!(&bytes.borrow()[..4], b"safe");
         assert_eq!(backend.telemetry().origin_syncs, 1);
         assert_eq!(backend.cache_state(), CacheState::Unavailable);
+    }
+
+    #[test]
+    fn replace_cache_swaps_the_mirror_without_touching_origin_telemetry() {
+        let bytes = Rc::new(RefCell::new(vec![b'o'; 8]));
+        let counters = Rc::new(CacheCounters::default());
+        let mut dead = ScriptedCache::active(Rc::clone(&counters));
+        dead.state = CacheState::Unavailable;
+        dead.read = CacheRead::Failed;
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(Rc::clone(&bytes)), dead, 8, 4).unwrap();
+
+        // A failed mirror already forced a fall back. That counter documents
+        // origin service, so it must survive the swap — a respawn is a mirror
+        // replacement, not a new origin lifetime.
+        let mut scratch = [0; 8];
+        backend.read_at(0, &mut scratch).unwrap();
+        assert_eq!(&scratch, b"oooooooo");
+        let fallback_reads_before = backend.telemetry().fallback_reads;
+        assert_eq!(fallback_reads_before, 1);
+
+        let mut fresh = ScriptedCache::active(Rc::clone(&counters));
+        fresh.read = CacheRead::Hit;
+        fresh.hit = b"cache!!!".to_vec();
+        backend.replace_cache(fresh);
+        assert_eq!(backend.cache_state(), CacheState::Active);
+
+        let mut hit = [0; 8];
+        backend.read_at(0, &mut hit).unwrap();
+        assert_eq!(&hit, b"cache!!!");
+        assert_eq!(
+            backend.telemetry().fallback_reads,
+            fallback_reads_before,
+            "replace_cache must not reset origin fall-back accounting"
+        );
+        assert_eq!(bytes.borrow().as_slice(), b"oooooooo");
     }
 
     #[derive(Default)]
@@ -789,6 +979,50 @@ mod tests {
         assert_eq!(unacknowledged.cache_state(), CacheState::Stuck);
     }
 
+    /// A release that finds nothing to release is a successful control outcome
+    /// and is not a cache release.
+    ///
+    /// Counting `Skipped` made `cache_releases` grow with the serving-loop rate
+    /// under a live `control_pressure` request while the cache was already `Off`
+    /// and `vram_cached_kib` was `0`. The sibling `invalidations` counter never
+    /// had that problem: `revoke_cache` gates it on there being something to
+    /// invalidate. Both counters must describe cache work, not request traffic.
+    #[test]
+    // TestName: a_release_that_finds_nothing_to_release_is_not_counted
+    fn a_release_that_finds_nothing_to_release_is_not_counted() {
+        let bytes = Rc::new(RefCell::new(b"durable!".to_vec()));
+        let (cache, worker) = isolated_cache_channel(1, Duration::from_millis(100));
+        let control = std::thread::spawn(move || {
+            let IsolatedCacheControl::Disable { reply } = worker.control.recv().unwrap();
+            reply.send(Ok(())).unwrap();
+        });
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, 8, 4).unwrap();
+        assert_eq!(backend.cache_state(), CacheState::Active);
+
+        // First release: a real revoke, acknowledged by the worker.
+        assert_eq!(backend.release_cache().unwrap(), 0);
+        control.join().unwrap();
+        assert_eq!(backend.cache_state(), CacheState::Off);
+        assert_eq!(backend.telemetry().releases, 1);
+
+        // Second release: the cache is already `Off`, so `disable` reports
+        // `Skipped` and no control frame is sent. Still a successful outcome —
+        // and still not a second cache release.
+        for _ in 0..8 {
+            assert_eq!(backend.release_cache().unwrap(), 0);
+        }
+        assert_eq!(backend.cache_state(), CacheState::Off);
+        assert_eq!(
+            backend.telemetry().releases,
+            1,
+            "a no-op release must not publish a cache release"
+        );
+        // `revoke_cache` gates `invalidations` on there being something to
+        // invalidate, so it cannot absorb the no-ops either.
+        assert_eq!(backend.telemetry().invalidations, 1);
+    }
+
     #[test]
     fn backend_geometry_range_and_empty_io_are_bounded() {
         let bytes = Rc::new(RefCell::new(vec![0; 8]));
@@ -871,6 +1105,117 @@ mod tests {
         assert_eq!(update.telemetry().batched_writes, 1);
         assert_eq!(update.telemetry().cache_write_failures, 1);
         assert_eq!(update.cache_state(), CacheState::Unavailable);
+    }
+
+    /// Records every cache mutation frame so tests can assert the framing.
+    struct RecordingCache {
+        updates: RefCell<Vec<(u64, usize)>>,
+        promotes: RefCell<Vec<(u64, usize)>>,
+    }
+
+    impl RecordingCache {
+        fn new() -> Self {
+            Self {
+                updates: RefCell::new(Vec::new()),
+                promotes: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl BestEffortCache for RecordingCache {
+        fn read(&mut self, _offset: u64, destination: &mut [u8]) -> CacheRead {
+            destination.fill(0);
+            CacheRead::Miss
+        }
+
+        fn update(&mut self, offset: u64, data: &[u8]) -> CacheMutation {
+            self.updates.borrow_mut().push((offset, data.len()));
+            CacheMutation::Accepted
+        }
+
+        fn promote(&mut self, offset: u64, data: &[u8]) -> CacheMutation {
+            self.promotes.borrow_mut().push((offset, data.len()));
+            CacheMutation::Accepted
+        }
+
+        fn disable(&mut self) -> CacheMutation {
+            CacheMutation::Accepted
+        }
+
+        fn state(&self) -> CacheState {
+            CacheState::Active
+        }
+    }
+
+    /// A block-layer write can be far larger than one mutation frame (the NBD
+    /// queue on this surface admits up to 4 MiB). Each frame must stay within
+    /// `MAX_CACHE_MUTATION_BYTES` or the transport fails closed and revokes the
+    /// cache, which is what used to leave `cache_state: UNAVAILABLE`.
+    #[test]
+    fn large_write_is_framed_to_the_cache_mutation_limit() {
+        let capacity = 4 * 1024 * 1024;
+        let bytes = Rc::new(RefCell::new(vec![0u8; capacity]));
+        let cache = RecordingCache::new();
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, capacity as u64, 512)
+                .unwrap();
+
+        let payload = vec![0xA5u8; capacity];
+        backend.write_at(0, &payload).unwrap();
+
+        let frames = backend.cache.updates.borrow();
+        assert_eq!(
+            frames.len(),
+            capacity / MAX_CACHE_MUTATION_BYTES,
+            "one frame per MAX_CACHE_MUTATION_BYTES slice"
+        );
+        let mut expected_offset = 0u64;
+        for (offset, len) in frames.iter() {
+            assert_eq!(*offset, expected_offset, "frames must be consecutive");
+            assert!(
+                *len <= MAX_CACHE_MUTATION_BYTES,
+                "frame of {len} bytes exceeds the mutation limit"
+            );
+            expected_offset += *len as u64;
+        }
+        assert_eq!(
+            expected_offset, capacity as u64,
+            "frames must cover the write"
+        );
+        assert_eq!(backend.cache_state(), CacheState::Active);
+        assert_eq!(backend.telemetry().cache_write_failures, 0);
+    }
+
+    /// The read-miss fallback promotes origin data back into the cache with the
+    /// same framing constraint as `update`.
+    #[test]
+    fn large_promote_is_framed_to_the_cache_mutation_limit() {
+        let capacity = MAX_CACHE_MUTATION_BYTES * 3 + 512;
+        let bytes = Rc::new(RefCell::new(vec![0x5Au8; capacity]));
+        let cache = RecordingCache::new();
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, capacity as u64, 512)
+                .unwrap();
+
+        let mut destination = vec![0u8; capacity];
+        backend.read_at(0, &mut destination).unwrap();
+
+        let frames = backend.cache.promotes.borrow();
+        assert_eq!(frames.len(), 4, "three full frames plus a 512-byte tail");
+        assert_eq!(frames[0], (0, MAX_CACHE_MUTATION_BYTES));
+        assert_eq!(
+            frames[1],
+            (MAX_CACHE_MUTATION_BYTES as u64, MAX_CACHE_MUTATION_BYTES)
+        );
+        assert_eq!(
+            frames[2],
+            (
+                2 * MAX_CACHE_MUTATION_BYTES as u64,
+                MAX_CACHE_MUTATION_BYTES
+            )
+        );
+        assert_eq!(frames[3], (3 * MAX_CACHE_MUTATION_BYTES as u64, 512));
+        assert_eq!(backend.telemetry().promotion_refusals, 0);
     }
 
     #[test]

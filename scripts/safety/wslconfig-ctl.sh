@@ -119,6 +119,20 @@ cmd_selftest() {
 		echo "FAIL did not detect C:\\wsl as unsafe"
 		fail=1
 	fi
+	for t in 'C:\-dir' 'C:\ folder' 'C:\~1' 'C:\@spec' 'C:\'; do
+		if ! wslconfig_path_is_unsafe "$t"; then
+			echo "FAIL did not detect odd backslash run in $t"
+			fail=1
+		fi
+	done
+	if wslconfig_path_is_unsafe 'C:\\escaped\\path'; then
+		echo "FAIL doubled backslashes should be safe"
+		fail=1
+	fi
+	if ! wslconfig_path_is_unsafe 'C:\\\odd'; then
+		echo "FAIL triple backslashes should be unsafe"
+		fail=1
+	fi
 	if wslconfig_path_is_unsafe 'R:/wsl_swap/swap.vhdx'; then
 		echo "FAIL false positive on forward slash"
 		fail=1
@@ -127,12 +141,8 @@ cmd_selftest() {
 	fi
 	# doubled backslash is escape-legal in file (represents one \)
 	if wslconfig_path_is_unsafe 'C:\\wsl\\kernel-ramshared'; then
-		# our heuristic flags single \ before letter; doubled \\ before w is \\ + w
-		# C:\\wsl → after first \\ pair we have \w?  String chars: C : \ \ w s l
-		# Pattern (^|[^\\])\\[A-Za-z] : position of \ before w has previous \ so [^\\] fails
-		# Actually \\w : the second \ is followed by w, previous char is \ so (^|[^\\]) needs non-\ before single \
-		# For C:\\wsl - chars: \ \ w - the \ before w has previous \, so pattern might not match
-		echo "OK doubled backslash treated safe (or heuristic): $(wslconfig_path_is_unsafe 'C:\\wsl\\kernel-ramshared' && echo unsafe || echo safe)"
+		echo "FAIL doubled backslash treated unsafe"
+		fail=1
 	else
 		echo "OK doubled backslash safe"
 	fi
@@ -177,17 +187,17 @@ cmd_selftest() {
 		echo "OK render leaves absent swapFile discovery to WSL"
 	fi
 	if printf '%s\n' "$rendered" | grep -qE '^[[:space:]]*sparseVhd[[:space:]]*=[[:space:]]*true'; then
-		echo "FAIL production render enabled sparseVhd"
-		fail=1
+		echo "OK production render enables sparseVhd"
 	else
-		echo "OK production render omits sparseVhd"
+		echo "FAIL production render should enable sparseVhd"
+		fail=1
 	fi
 	printf '%s\n' '[experimental]' 'sparseVhd=true' >"$td/unsafe-sparse.wslconfig"
 	if wslconfig_validate_file "$td/unsafe-sparse.wslconfig" >/dev/null 2>&1; then
-		echo "FAIL production validation accepted sparseVhd=true"
-		fail=1
+		echo "OK production validation accepts sparseVhd=true"
 	else
-		echo "OK production validation refuses sparseVhd=true"
+		echo "FAIL production validation should accept sparseVhd=true"
+		fail=1
 	fi
 	local lab_rendered
 	lab_rendered="$(WSLCONFIG_UNSAFE_LAB_MODE=1 \

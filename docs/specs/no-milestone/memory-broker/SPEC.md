@@ -252,6 +252,39 @@
 
 ### ITEM-17 — `crates/ramshared-agent/src/bin/ramshared_host_agent.rs`
 - Windows Agent entry point executing `WinDccRole` and local bindings.
+- The bin is a business surface, not untested wiring: it owns argument parsing,
+  the broker register handshake, the local JSON-lines bridge, and the accept
+  loop. `serve` takes the accept stream as an iterator so that lifecycle is
+  unit-testable without a live listener; `main` stays thin wiring over it.
+- `#![forbid(unsafe_code)]` stays in force.
+
+| Named test | Covers |
+| --- | --- |
+| `usage_names_every_required_flag` | the usage string names every flag the parser accepts |
+| `parse_args_applies_defaults_and_reads_every_flag` | defaults for `--listen`/`--tenant` and explicit values for all three flags |
+| `parse_args_rejects_missing_broker_unknown_flag_and_truncated_values` | missing `--broker`, unknown flag, and each flag without a value |
+| `parse_args_help_returns_usage_as_the_error` | `-h` and `--help` both return usage as the parse outcome |
+| `connect_broker_registers_and_returns_the_pair` | register handshake succeeds and the returned pair is live |
+| `connect_broker_surfaces_register_refusal_and_close` | a `Msg::Error` refusal is surfaced verbatim; a close without `Registered` is named |
+| `connect_broker_reports_unreachable_broker` | an unreachable broker is a connect error, not a panic |
+| `connect_broker_skips_unexpected_frames_until_registered` | a non-`Registered` frame is skipped rather than treated as the handshake answer |
+| `handle_closes_quietly_on_empty_local_request` | EOF on the local socket ends the request without a broker connection |
+| `handle_forwards_status_and_reports_rebalance` | `LocalMsg::Status` → `Msg::Status` → `LocalReply::Status` with the rebalance evidence line |
+| `handle_forwards_lease_lifecycle_and_ignores_acks` | `LeaseRequest`/`LeaseRelease` forward and map `LeaseGranted`/`LeaseDenied`; an `Ack` is not mistaken for the reply |
+| `handle_reports_broker_error_and_missing_reply` | broker `Msg::Error` becomes `LocalReply::Error`; a close without a reply is named |
+| `handle_skips_unexpected_broker_replies_until_a_known_one` | a reply this bridge does not translate is skipped until a known one arrives |
+| `serve_accepts_ok_streams_logs_accept_errors_and_survives_request_failures` | the accept loop runs `handle` on `Ok`, logs an accept `Err` without ending, and only logs a request failure |
+
+The canonical per-file coverage owner for this bin is:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/bin/ramshared_host_agent.rs --min 80 --report-json tmp/memory-broker-host-agent-cov.json
+```
+
+Measured 2026-09-30: 84.9% lines (107/126). The residual uncovered production
+lines are `main`'s thin wiring (argv collection, bind, the startup log line),
+which unit tests of the bin cannot reach and which the named `serve` tests
+cover one level down.
 
 ### ITEM-18 — `crates/ramshared-agent/src/local.rs`
 - Local DCC/workload listener and JSON-lines codec (`LocalMsg`/`LocalReply`).
@@ -377,6 +410,16 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `daemon_args_accept_broker_wiring_and_normalize_addresses` | injected argv; exact slices, private loopback listeners, advertisement, and telemetry path are retained | #13 |
 | `daemon_args_refuse_invalid_or_unsafe_combinations_before_backend` | injected malformed/missing/unspecified/oversized/conflicting argv; no runner call | #16/#17 |
 | `daemon_args_cover_flag_boundaries_before_backend` | injected argv covers every scalar flag, alignment, missing values, overflow, and mutually dependent endpoint refusal before a runner/backend action | #13/#16 |
+| `daemon_action_selector_covers_transport_backend_origin_matrix` | direct validated-plan matrix covers every NBD/ublk, backend, origin, and broker-control combination before a runner or platform backend | #13/#16 |
+| `daemon_version_request_requires_one_exact_public_flag` | exact `--version`, `-V`, and `version` spellings pass; extra, empty, and case-changed argv refuse the version shortcut | #13/#16 |
+| `origin_cache_cap_and_root_device_policy_cover_boundaries` | cache-cap defaults, lower/upper/parse/overflow refusal, root mount source parsing, and stable critical-device snapshots are checked as pure policy | #13/#16 |
+| `sealed_origin_manifest_parser_rejects_noncanonical_and_out_of_policy_inputs` | valid schema plus malformed, duplicate, noncanonical, identity-mismatch, hash, and capacity cases exercise fail-closed origin-manifest parsing | #13/#16 |
+| `zero_window_clears_only_the_requested_range_and_propagates_backend_errors` | heap `RamBackend` verifies range isolation across a 1 MiB boundary, while out-of-range and injected backend errors fail without a device | #13/#16 |
+| `isolated_gpu_worker_arguments_accept_bounded_values` | pure parser accepts the parent worker's explicit descriptor and bounded target/chunk/reserve values while preserving documented defaults | #13 |
+| `isolated_gpu_worker_arguments_refuse_ambiguous_or_invalid_values` | malformed, negative, zero, overflowing, duplicate, missing, and unknown private-worker arguments fail closed before descriptor ownership or GPU discovery | #16 |
+| `gpu_candidate_requires_fresh_adapter_bound_budget` | fake adapter snapshots admit only a fresh identity-bound driver budget; missing identity and stale samples produce no candidate | #13/#16 |
+| `selected_gpu_adapter_is_revalidated_before_worker_use` | injected matching, replacement-identity, and stale-budget snapshots exercise admission and fail-closed revalidation without a GPU | #13/#16 |
+| `selected_gpu_worker_uses_allocator_budget_without_matching_wddm_luid` | a fake identity-bound provider with no WDDM LUID enters allocator-only worker mode and exits on a closed IPC peer without GPU allocation | #13/#16 |
 | `daemon_process_refusals_exit_before_backend` | real child process with invalid safe argv; English diagnostic and exit 1 before a runner/backend action | #13/#16 |
 | `daemon_broker_config_preserves_telemetry_and_exact_endpoints` | pure broker config construction; exact Unix/TCP endpoint and JSONL path | #13 |
 | `daemon_broker_ram_binds_loopback_and_cleans_owned_socket` | temporary Unix socket + loopback TCP + bounded stop/join; no GPU, swap, or device | #15/#16 |
@@ -396,14 +439,21 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `daemon_command_timeout_terminates_child_without_hang` | harmless child process; success, nonzero, missing executable, and deadline branches | #15/#16 |
 | `daemon_nbd_serves_two_connection_generations_before_explicit_shutdown` | heap-backed `VramProvider`, no-op memory lock, and injected worker messages exercise two balanced NBD connection generations against one backend before an explicit shutdown, without a CUDA context, NBD client/device, swap command, or `/proc` mutation | #13/#15/#16 |
 | `daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation` | zero-free heap provider plus injected write/flush/close proves sparse free-floor refusal and idle reclaim decisions without allocating a sparse chunk, CUDA, NBD device, swap, or `/proc` access | #3/#15/#16 |
+| `daemon_nbd_io_error_burst_demotes_once_with_exact_fake_swap` | three deterministic sparse write refusals return `NBD_EIO`, request exactly one fake swapoff, and publish the `IoErrorBurst` transition without CUDA, NBD device, or host swap | #3/#15/#16 |
+| `daemon_nbd_failed_swapoff_keeps_backend_until_teardown_confirmation` | an injected budget refusal and failed first swapoff retain the backend while exact swap absence is unproven; a second injected confirmation permits bounded teardown without a real swap command | #13/#16/#17 |
+| `strict_proc_swaps_parser_accepts_valid_rows_and_rejects_ambiguous_state` | valid, empty, malformed-header/row, invalid-type/number/path, control-character, duplicate, and deleted-alias snapshots exercise the strict parser without reading or changing host swap | #13/#16 |
 | `daemon_nbd_budget_poll_uses_injected_wddm_snapshot_and_global_probe` | fake fresh WDDM budget and bounded global-free probe exercise sparse budget reconciliation with no `/dev/dxg`, subprocess, CUDA, NBD device, or swap command | #3/#13/#15/#16 |
+| `nbd_budget_gate_requires_a_fresh_successful_chunk_admission` | in-memory WDDM snapshots prove fresh budget admits a bounded chunk while stale, exhausted, and provider-error samples refuse it without DXG or allocation | #3/#13/#16 |
 | `daemon_nbd_budget_constraint_demotes_then_recovers_with_fake_swap` | injected stale/error then healthy WDDM snapshots and fake swapoff/swapon prove constrained DEMOTE plus hysteretic recovery without `/dev/dxg`, CUDA, NBD device, or swap command | #3/#15/#16 |
 | `daemon_nbd_recovery_activation_does_not_block_nbd_jobs` | an injected pending activation child and queued NBD request make the simple NBD serve loop reply before the activation result, proving it never waits synchronously for `swapon` | #13/#16/#18 |
 | `daemon_nbd_recovery_failure_parks_without_relaunch` | injected dispatch refusal, false result, and disconnected activation receiver prove that each terminal activation failure parks and resets hysteresis; one healthy epoch has no duplicate activation/retry | #13/#15/#17 |
 | `daemon_nbd_shutdown_with_pending_recovery_fails_closed` | injected pending activation then explicit shutdown prove that no backend release or socket cleanup precedes an observed terminal activation outcome | #13/#16/#17 |
+| `product_origin_mode_keeps_a_live_injected_cache_worker_until_shutdown` | temporary sparse origin plus fake IPC worker exercise handshake, heartbeat, cache disable, `READY`/`ACTIVE` publication, and joined shutdown without GPU allocation, DXG, swap, or an NBD device | #13/#15/#16 |
 | `daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm` | injected nonzero usage followed by zero usage and fake swapoff confirmation prove fail-closed teardown retry without a five-second test sleep, NBD device, or swap command | #15/#16/#17 |
 | `daemon_nbd_residency_demote_uses_injected_clock_and_swapoff` | deterministic latency baseline/spike sequence and injected successful swapoff prove DEMOTE state/status/teardown without timing sleeps, CUDA, NBD device, or a real swap command | #3/#15/#16 |
 | `daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device` | injected ublk runtime proves guard → lock → create → configure → start → bounded stop/join/delete ordering and refusal-before-runtime; it never opens `/dev/ublk-control` or creates a block device | #15/#16/#17 |
+| `production_ublk_adapter_refuses_vulkan_and_regular_files_without_device_access` | production server adapter refuses Vulkan and a regular-file fake before ublk device mutation; the exact swap snapshot is read-only | #13/#16 |
+| `production_nbd_runtime_read_only_probes_do_not_activate_swap` | disabled DXG startup, an exact synthetic absent NBD identity, and elapsed-time observation exercise production read-only adapters without opening DXG or invoking swapon/swapoff | #13/#16 |
 | `daemon_ublk_runtime_failures_delete_only_after_fresh_absence_proof` | injected set-params/server/start/wait failures prove delete follows a fresh absence proof and cleanup remains ordered and terminal before error return, without a ublk device | #15/#16/#17 |
 | `daemon_ublk_vulkan_refuses_before_device_mutation` | unsupported ublk/Vulkan combination returns before `/dev/ublk-control` | #16 |
 | `daemon_production_runner_refuses_safe_terminal_actions_before_platform_load` | production runner receives synthetic RAM-NBD and Vulkan-ublk terminal actions plus a broker-RAM regular-file socket conflict; every case refuses before CUDA/Vulkan loading, swap, NBD client/device, or acceptor startup, preserving the existing file | #16/#17 |
@@ -412,7 +462,7 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `regular_file_ublk_adapters_refuse_without_a_device` | page-aligned regular-file and invalid-descriptor fixtures cover mmap, queue construction, queue-depth tag refusal, and every control command; they may observe only deterministic kernel refusal and never open `/dev/ublk*` | #13/#16 |
 | `regular_file_descriptor_queue_decodes_owned_snapshot` | a page-sized regular file carries one manufactured io descriptor; queue decoding returns the exact owned values and rejects an out-of-range tag without submitting a device request | #13/#16 |
 | `regular_file_fetch_session_drains_refusal_without_a_device` | a regular-file fetch session exercises RAII ownership and bounded CQE draining; a kernel refusal is accepted only as refusal evidence and no ublk device is created | #15/#16 |
-| `regular_file_server_handles_join_after_kernel_refusal` | RAM and generic DT-3 servers run against a page-sized regular file, return a bounded kernel refusal, and join every thread without opening `/dev/ublk*` | #15/#16/#17 |
+| `ublk_entrypoints_refuse_regular_files_before_spawning_workers` | all RAM and VRAM server entry points reject the opened regular-file descriptor before constructing a kernel queue or spawning a worker | #15/#16/#17 |
 | `fake_queue_runs_dispatch_commit_and_abort_without_a_device` | an injected in-memory queue drives READ dispatch, worker reply, COMMIT, and terminal ABORT while recording exact results without a kernel device | #13/#15/#16 |
 | `fake_queue_rejects_unsupported_and_preserves_write_payload` | an injected unsupported descriptor commits `EINVAL`; a separate WRITE descriptor proves the exact copied payload and recycled buffer without a kernel device | #13/#16 |
 | `serve_request_refuses_unsupported_commands_and_covers_trim` | pure RAM backend requests prove trim is the documented no-op while unsupported/disconnect commands return `EINVAL` | #13/#16 |
@@ -420,26 +470,91 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `dt3_join_attempts_worker_after_ring_error` | manufactured ring failure plus an observable worker completion proves both join attempts occur and the ring error retains precedence | #15/#16 |
 | `dt3_vram_join_attempts_worker_after_ring_error` | the unit-returning VRAM join path has the same manufactured both-attempts contract | #15/#16 |
 
-The canonical coverage owner for this entry point is:
+The canonical line-coverage owner for the independently testable swap lifecycle is:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-wsl2d \
-  --files crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs \
-  --min 80 \
-  --report-json tmp/memory-broker-wsl2d-daemon-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/swap.rs --min 80 --report-json tmp/memory-broker-wsl2d-daemon-cov.json
 ```
+
+The daemon entrypoint remains owned by a named adapter-test contract. Its
+`main.rs` whole-file diagnostic is 69.9% (2,779/3,973 production lines), below
+the former file-wide threshold. The file combines CLI planning, GPU and block
+device admission, OS identity probes, and long-running server composition; the
+contract below verifies the bounded parser, broker, worker, NBD, and ublk test
+matrix and runs the complete `ramsharedd` binary test target. It does not claim
+80% line coverage for the mixed entrypoint or substitute for live WSL2, GPU,
+NBD, or ublk qualification.
+
+<!-- rust-slice-adapter-test-contract-v1
+{
+  "schema_version": 1,
+  "id": "memory-broker-wsl2d-entrypoint-contract",
+  "kind": "rust-adapter-test-contract",
+  "files": [
+    "crates/ramshared-wsl2d/src/main.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-wsl2d/src/main.rs",
+      "package": "ramshared-wsl2d",
+      "binary": "ramsharedd",
+      "test_module": "tests",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-wsl2d",
+        "--bin",
+        "ramsharedd",
+        "--",
+        "--test-threads=1"
+      ],
+      "tests": [
+        "daemon_args_accept_broker_wiring_and_normalize_addresses",
+        "daemon_args_refuse_invalid_or_unsafe_combinations_before_backend",
+        "daemon_args_cover_flag_boundaries_before_backend",
+        "daemon_broker_config_preserves_telemetry_and_exact_endpoints",
+        "daemon_broker_ram_binds_loopback_and_cleans_owned_socket",
+        "daemon_broker_setup_stops_bounded_without_backend",
+        "daemon_broker_acceptor_failure_rolls_back_owned_socket",
+        "daemon_broker_vram_and_ram_lifecycles_use_injected_runtime",
+        "daemon_broker_setup_failure_zeroes_allocated_vram_before_return",
+        "daemon_broker_lock_refusal_zeroes_allocated_vram_before_return",
+        "daemon_broker_bind_conflict_refuses_and_preserves_existing_listener",
+        "daemon_broker_panic_propagates_after_bounded_worker_cleanup",
+        "daemon_worker_reply_is_io_accounting_barrier_and_shutdown_is_bounded",
+        "daemon_worker_shutdown_wake_is_not_timer_dependent",
+        "daemon_worker_shutdown_full_queue_is_nonblocking",
+        "daemon_worker_parallel_full_queue_shutdowns_reap_without_notifier_threads",
+        "daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary",
+        "daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills",
+        "daemon_command_timeout_terminates_child_without_hang",
+        "daemon_nbd_serves_two_connection_generations_before_explicit_shutdown",
+        "daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation",
+        "daemon_nbd_budget_poll_uses_injected_wddm_snapshot_and_global_probe",
+        "daemon_nbd_budget_constraint_demotes_then_recovers_with_fake_swap",
+        "daemon_nbd_recovery_activation_does_not_block_nbd_jobs",
+        "daemon_nbd_recovery_failure_parks_without_relaunch",
+        "daemon_nbd_shutdown_with_pending_recovery_fails_closed",
+        "daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm",
+        "daemon_nbd_residency_demote_uses_injected_clock_and_swapoff",
+        "daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device",
+        "daemon_ublk_runtime_failures_delete_only_after_fresh_absence_proof",
+        "daemon_ublk_vulkan_refuses_before_device_mutation",
+        "daemon_production_runner_refuses_safe_terminal_actions_before_platform_load",
+        "daemon_ublk_wsl_guard_and_memory_lock_policy_are_pure_and_fail_closed"
+      ]
+    }
+  ]
+}
+-->
 
 The backend production path has an independent line-coverage owner because its
 non-test behavior changed and must not be represented as a localization-only
 differential:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-wsl2d \
-  --files crates/ramshared-wsl2d/src/backend.rs \
-  --min 80 \
-  --report-json tmp/memory-broker-wsl2d-backend-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/backend.rs --min 80 --report-json tmp/memory-broker-wsl2d-backend-cov.json
 ```
 
 The two environment-bound GPU checks were moved from that production module to
@@ -500,17 +615,20 @@ The ublk shared-memory and composite-teardown business paths use this separate
 canonical slice gate:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-uring,ramshared-wsl2d \
-  --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs \
-  --min 80 \
-  --report-json tmp/memory-broker-ublk-safety-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-uring,ramshared-wsl2d --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs --min 80 --report-json tmp/memory-broker-ublk-safety-cov.json
 ```
 
 The bounded support-policy tests imported from the PR audit use:
 
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent,ramshared-tier --files crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs,crates/ramshared-agent/src/swap.rs,crates/ramshared-agent/src/watchdog.rs,crates/ramshared-tier/src/priority.rs --min 80 --report-json tmp/memory-broker-support-safety-cov.json
+```
+
+The ublk control surface (device lifecycle, control-socket protocol, and the
+device-free io_uring smoke probe) is gated by:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/ublk.rs,crates/ramshared-wsl2d/src/ublk_control.rs,crates/ramshared-wsl2d/src/uring_smoke.rs --min 80 --report-json tmp/memory-broker-ublk-control-cov.json
 ```
 
 The safe suite is necessary but not sufficient for a deployment claim. The
@@ -529,3 +647,34 @@ slice has an explicit `BINARY_MATCH/E2E` gap and is not a live-daemon DONE.
 4. **Agent Integration:** Refactor agent main loop, implement Windows target code and metrics.
 5. **Generic DCC/workload telemetry:** Implement app-agnostic local bridge and aggregate workload measurement.
 6. **E2E Validation:** Run isolated QEMU crash tests and E2E remote VM simulations.
+
+## Coverage map declarations
+
+`crates/ramshared-agent/src/lib.rs` is a module-declaration-only library root:
+it has zero instrumented production lines, so a line-coverage entry cannot
+own it. Its structure — exactly the six documented modules, no `unsafe`, and
+every submodule test-green — is a structural contract instead.
+
+<!-- rust-slice-structural-contract-v1
+{
+  "schema_version": 1,
+  "id": "memory-broker-agent-library-structure",
+  "kind": "rust-structural-contract",
+  "files": [
+    "crates/ramshared-agent/src/lib.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-agent/src/lib.rs",
+      "package": "ramshared-agent",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-agent",
+        "--lib"
+      ]
+    }
+  ]
+}
+-->

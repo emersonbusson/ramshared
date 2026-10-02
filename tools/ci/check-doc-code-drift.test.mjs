@@ -10,7 +10,7 @@ test('checkDocCodeDrift: passes on current repository layout', () => {
   const result = checkDocCodeDrift()
   assert.equal(result.ok, true, `Expected pass, got findings: ${result.findings.join(', ')}`)
   assert.equal(result.findings.length, 0)
-  assert.equal(result.checkedCrates, 15)
+  assert.equal(result.checkedCrates, 16)
 })
 
 test('checkDocCodeDrift: detects missing crate readme', () => {

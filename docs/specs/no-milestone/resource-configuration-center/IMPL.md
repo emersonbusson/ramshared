@@ -1,0 +1,263 @@
+# IMPL — Cross-platform resource configuration
+
+> SSDV3 Step 3 · SPEC:
+> `docs/specs/no-milestone/resource-configuration-center/SPEC.md`
+
+## Status
+
+**partial** · read-only discovery, a v1 typed multi-target profile, and
+`ramshared config plan` are implemented for native Linux and WSL2. The command
+loads the root-owned default profile or an explicit bounded draft, binds its
+storage targets to fresh inventory, and reports capacity/refusal reasons.
+`ramshared config draft --output PATH` now offers an attended TTY volume/role/
+size wizard and saves only a new user-owned draft with mode `0600`. The draft
+is not the protected system profile and does not apply settings. There is still
+no adapter-bound VRAM selection, disk benchmark, provider apply/rollback, or
+native Linux target qualification on a native host.
+
+## Delivered contract
+
+- `ramshared config` opens a read-only terminal view; `config show` prints a
+  human-readable inventory and `config show --json` prints a typed snapshot.
+  `config plan [--json] [--profile PATH]` loads the root-owned
+  `/etc/ramshared/resource-profile.toml` when present, or a user-supplied
+  bounded draft. A missing default profile is reported as `not_configured`; an
+  explicitly requested missing profile fails. Unsupported mutation actions
+  fail during parsing before resource discovery.
+- `config draft --output PATH` requires terminal input and output. It lists all
+  storage rows and their eligibility reasons, selects fresh eligible Linux
+  filesystems or uniquely identified Windows volumes, accepts variable MiB
+  sizes for fallback swap and SSD origin, plus optional positive ZRAM and SSD-
+  origin tier ceilings. Blank cap input leaves the value unset; zero, malformed,
+  and overflowing values refuse before any file is written. The final plan
+  displays the exact ceilings and states that they do not reserve resources.
+  VRAM cap input stays unavailable until inventory can bind a fresh budget to a
+  stable adapter ID; the wizard refuses manual IDs. It checks the combined
+  target-plus-reserve plan before asking for the exact `SAVE` confirmation. It
+  creates a new user-owned file with mode `0600`, verifies its exact bytes after
+  write, syncs file and parent, and refuses overwrite. A draft can be reviewed
+  with `config plan --profile PATH`; it is never treated as applied
+  configuration.
+- Linux reads RAM and swap counters from the active guest and enumerates block
+  devices with `lsblk`. It joins devices to `/proc/self/mountinfo` by
+  `MAJ:MIN` and samples filesystem total/free capacity through `statvfs`.
+- A Linux filesystem is only marked as a storage candidate when it is a
+  writable ext4/XFS filesystem on a partition or directly on a whole disk,
+  with an exact matching mount record, non-removable status, filesystem UUID,
+  stable backing identity, and measured capacity. Partitions use their
+  parent's WWN/serial; whole-disk filesystems use the disk's own WWN/serial.
+  Known network-backed transports and missing/unrecognized transport identity,
+  removable/USB, read-only, unmounted, unsupported, or ambiguous candidates
+  remain visible with a refusal reason. Bind/subtree mounts whose mountinfo
+  root is not `/` also remain visible but are ineligible.
+- A native Linux profile stores filesystem UUID, stable backing-device
+  identity, and managed relative path; it does not store the ephemeral mount
+  ID. A plan resolves exactly one current filesystem-root mount, checks its
+  live mount ID and device number, writable eligibility, and fresh `statvfs`
+  capacity, then reports that current mount ID in the plan. Multiple matching
+  mounts refuse as ambiguous. It does not create a file, activate swap, select
+  a disk, or claim native-host qualification.
+- Native Linux origin intent is distinct from a materialized sealed file:
+  `linux_file_origin_request` carries stable filesystem/device identity, a
+  managed relative path, and requested bytes without fabricating an inode or
+  manifest hash. The read-only planner checks current identity and capacity
+  and reports the request kind; it does not claim the file was created or is
+  ready to open. `linux_file_origin` remains reserved for an existing sealed
+  file, and duplicate-path validation treats both forms as the same target.
+- Under WSL2, the view labels guest RAM separately from Windows host physical
+  memory and commit headroom, and lists every volume returned by the bounded
+  `Get-Volume` query, including removable, unknown, and drive-letterless rows.
+  The text view shows drive type, filesystem, stable volume identity, capacity,
+  and the same volume-level eligibility reasons used by the planner. Missing
+  Windows capacity remains unavailable instead of being converted to zero.
+  These are candidates only: a configured path still needs fresh identity and
+  host-capacity binding. Native Linux never queries a Windows host provider. A
+  WSL guest filesystem is never offered as a write target until its exact
+  backing Windows volume and host free capacity are bound to that guest
+  filesystem; guest VHDX free space alone is not proof.
+- A WSL2 plan binds a configured target to one fresh Windows volume identity,
+  confirms the drive-letter or volume-GUID path resolves under that volume,
+  checks fixed NTFS/ReFS eligibility and free capacity, and rejects aliases
+  where two profile entries resolve to one volume-relative path. Unknown,
+  stale, ambiguous, mismatched, or inconsistent samples are refusals.
+- The view explicitly says disk speed was not measured and GPU/VRAM budgets
+  were not sampled. It opens no GPU context and does not modify swap, an
+  origin, a profile, `.wslconfig`, a driver, or a running RamShared tier.
+- Plan output states `writes_performed=false` and `apply_enabled=false` in
+  both text/JSON forms. Caps are displayed as ceilings only; the plan does
+  not authorize them against live GPU, ZRAM, or origin budgets.
+- `ramshared-config::resource_profile` parses a 64 KiB-bounded TOML profile
+  with schema version 1, variable byte ceilings, adapter-bound GPU caps, and
+  multiple platform-bound storage targets. A profile can represent swap and
+  origin placements on the same or different stable volumes, including a new
+  native origin request before its file has an inode. Validation
+  rejects schema or platform mismatch, unknown fields, unsafe or duplicate
+  managed paths, unbound identities, and invalid allocation metadata. It
+  computes a checked free-space requirement per stable volume, summing every
+  managed allocation and adding the SPEC's 10 GiB reserve once per volume.
+  Windows volume identities are canonicalized case-insensitively before
+  grouping, so case variants cannot split one volume's reserve or allocations.
+  The model does not inspect live volume free space or authorize writes.
+  Windows paths reject ambiguous components, alternate data streams, reserved
+  device names, and malformed volume GUIDs. The loader rejects symlinks and
+  oversized or non-regular inputs; the system profile must be root-owned, single-link, mode
+  0600, under a root-owned non-writable directory. This floor is not a RAM,
+  swap, or VRAM minimum. User-draft saving exists; protected system-profile
+  saving and storage mutation providers do not.
+
+## Files
+
+| Path | Change |
+| --- | --- |
+| `crates/ramshared-cli/src/main.rs` | `config` parsing, dispatch, help text, read-only planning, and guarded draft-mode parsing; unsupported apply actions remain rejected. |
+| `crates/ramshared-cli/src/resource_config.rs` | Platform inventory and planning, Linux/WSL volume selection, target sizing, optional ZRAM/SSD-origin ceilings, combined-capacity review, safe user-draft creation, and read-only TUI. |
+| `crates/ramshared-cli/tests/cli_dispatch.rs` | Executes JSON discovery, explicit-profile plan, and non-TTY draft refusal; verifies no draft is written without a terminal. |
+| `crates/ramshared-config/src/resource_profile.rs` | Versioned bounded policy model, platform-bound storage targets, variable tier caps, checked capacity arithmetic, case-insensitive Windows volume grouping, and canonical target paths. |
+| `crates/ramshared-config/tests/resource_profile.rs` | Tests variable caps, overflow, round trips, native origin intent, platform mismatch, malformed identity, duplicate targets, and case-insensitive volume capacity grouping. |
+| `docs/specs/no-milestone/resource-configuration-center/SPEC.md` | Names implemented profile and inventory tests while retaining the full configuration contract as incomplete. |
+
+## Validation
+
+- RED/GREEN: `mounted_whole_disk_filesystem_uses_its_own_stable_identity`
+  failed against the partition-only eligibility rule and passed after whole
+  disks gained their own stable identity. Later,
+  `network_backed_block_devices_are_ineligible_and_multiple_local_disks_remain_eligible`
+  failed on an iSCSI fixture and passed after network and unproven transports
+  were rejected; the test confirms independent NVMe and SATA candidates can
+  both be marked eligible. It does not implement user selection.
+- RED/GREEN: `resource_plan_rejects_drive_and_volume_guid_aliases_for_same_target`
+  first exposed that the plan accepted two spellings of the same volume-relative
+  file as `storage_ready`; the planner now refuses the second entry. The CLI
+  parser regression also reproduced `--profile --json` being accepted as a
+  profile filename; an option-looking value now fails before discovery.
+- RED/GREEN: `native_linux_profile_survives_a_new_mount_namespace_id` first
+  received `identity_unavailable` when the current mount ID changed from 41 to
+  990. The profile no longer persists a mount ID; the planner now binds the
+  fresh unique mount and reports its ephemeral ID. The new
+  `resource_profile_rejects_transient_mount_id_in_persisted_targets` test
+  refuses the obsolete field. `storage_candidate_rejects_filesystem_subtree_mounts`
+  also reproduced the prior acceptance and now verifies a refusal.
+- Regression: `resource_profile_accepts_a_new_linux_origin_request_without_a_preexisting_inode`
+  proves a new native file origin is representable before it has an inode,
+  validates platform/size/duplicate-path refusals, and round-trips the
+  request through TOML. `native_linux_origin_request_plan_binds_volume_without_claiming_creation`
+  verifies the planner binds the current mount and reserve calculation while
+  keeping `writes_performed=false` and `apply_enabled=false`.
+- RED/GREEN: `config_draft_wizard_saves_planned_caps_as_unenforced_draft_policy`
+  failed because the wizard treated the first cap input as the final `SAVE`
+  confirmation. It now captures optional variable ZRAM and SSD-origin ceilings,
+  renders their exact values in the read-only plan, and leaves VRAM unselected
+  without a fresh adapter-bound budget. The same test covers blank caps, zero,
+  negative, malformed, and overflowing input and proves refusal writes no file.
+  found that case variants were counted as separate disks.
+  `resource_plan_aggregates_case_aliases_before_capacity_check` verifies the
+  planner now adds both allocations and one reserve before checking capacity.
+- The six `config_draft_*` tests cover both platform target forms,
+  invalid/stale/ambiguous candidates, checked MiB input, exact confirmation,
+  no overwrite, and mode/owner checks. The CLI regression
+  `cli_resource_config_draft_refuses_non_tty_before_writing` verifies no file
+  is created without an interactive terminal.
+- The full CLI suite passed 400 unit tests and 13 CLI integration tests,
+  including
+  `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`.
+- Profile tests: `cargo test -j 1 -p ramshared-config` passed 15 unit and 12
+  profile integration tests, including malformed/ambiguous Windows target
+  paths, refusal of persisted mount IDs, pending native-origin requests, and
+  case-insensitive allocation grouping.
+  The profile slice gate passed at **93.7% (314/335 lines)**.
+- CLI E2E: `cli_resource_config_json_discovers_platform_resources_read_only`
+  executes the built binary under the current WSL2 kernel, parses its JSON,
+  checks platform and resource fields, and verifies `config apply` refuses.
+  Its live WSL discovery uses the unfiltered `Get-Volume` collector; the
+  deterministic unit matrix verifies removable, unsupported-filesystem, and
+  missing-identity reasons in the text view.
+- CLI plan E2E: `cli_resource_config_plan_loads_an_explicit_profile_without_applying_it`
+  loads a temporary user-readable caps-only draft and verifies no write or
+  apply permission is reported. It does not prove a live storage-target plan;
+  the target identity/capacity paths are currently covered by unit fixtures.
+- Live selected-volume WSL E2E (2026-09-28): an attended TTY session selected
+  one eligible real Windows host volume, drafted a 1 MiB fallback-swap request
+  under a temporary user-owned directory, and ran `config plan` against that
+  profile. The result was `ready_for_review` / `storage_ready`, with
+  `writes_performed=false` and `apply_enabled=false`; the temporary profile
+  was removed. This proves live identity/capacity planning only; it did not
+  create a VHDX, activate swap, or write to the selected volume.
+- Static checks: `cargo clippy -j 1 -p ramshared-cli -p ramshared-config
+  --all-targets --all-features -- -D warnings` passed. `cargo fmt --all -- --check`,
+  `git diff --check`, and the full `./scripts/docs-check.sh` passed after the
+  current source and SPEC/IMPL updates.
+- Slice coverage: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli
+  --files crates/ramshared-cli/src/resource_config.rs --min 80` passed at
+  **88.4% (2,633/2,978 lines)** for discovery, draft creation, and read-only
+  planning, including pending native-origin capacity planning.
+- PowerShell 5.1 manufactured/static harnesses passed for
+  `Test-WindowsStorageMatrixStatic.ps1`,
+  `Test-RamSharedWslLifecycleRecoveryStatic.ps1`,
+  `Test-HostAutonomousLifecycleStatic.ps1`, and
+  `Test-RamSharedOriginStatic.ps1`. `-ExecutionPolicy Bypass` applied only to
+  each test process; the Windows execution policy was not changed.
+- Direct source tests for active gates passed: GPU budget 13/13, host-gate
+  policy 14/14, and swapoff-first legacy migration 1/1. These prove helper
+  logic only; they do not prove a live transport handshake or installed
+  lifecycle.
+- `mount_capacity_uses_live_available_blocks_without_writing` samples the
+  current filesystem read-only. This Linux environment runs WSL2; it does not
+  substitute for a native Linux machine E2E.
+- A fresh `config show --json` sample at 2026-09-28 03:38 UTC identified the
+  WSL root as ext4 directly on a whole virtual disk with about 1,007 GiB total
+  and 834 GiB free. It is now correctly marked ineligible because the exact
+  Windows volume backing its VHDX and that host volume's capacity are not
+  bound to the guest filesystem. The host separately reported five fixed
+  Windows volumes; labels and IDs are omitted here. No C:/I: ranking was made
+  because no disk benchmark ran.
+- At that sample the guest had about 8.0 GiB `MemAvailable`, 2.35 GiB
+  `SwapFree`, and zero PSI. Windows physical headroom was about 1,682 MiB;
+  a later 03:52 UTC sample reported 1,778 MiB and three PowerShell processes
+  totaling 231 MiB private memory (largest 115 MiB). This does not reproduce
+  the previously observed 11.5 GiB PowerShell process and does not identify
+  its cause.
+- At the recorded 03:38 UTC sample, the fixture
+  `meminfo_accepts_user_sized_ram_and_swap_without_product_minima`
+  accepts values from 256 MiB RAM / 128 MiB swap through 48 GiB RAM / 20 GiB
+  swap. They are parser fixtures, not fixed product limits. At that sample,
+  `/usr/local/bin/ramshared` reported v0.14.1; this v0.15.0 source target had
+  not been installed. No `ramsharedd` process was present, and the only active
+  swap was the 4 GiB WSL fallback device.
+
+## Gaps
+
+- The read-only TUI cannot edit settings. The separate `config draft` wizard
+  selects storage targets and optional ZRAM/SSD-origin ceilings, then saves an
+  unprivileged user draft. It cannot select a GPU adapter or set a VRAM cap,
+  run the bounded disk benchmark, recommend a measured leader, or apply/
+  rollback changes. GPU inventory is not adapter-structured.
+- The WSL memory ceiling stays read-only by SPEC. The typed profile contains
+  no host-RAM setting; only ZRAM, per-adapter VRAM, origin, and platform-owned
+  fallback swap targets are in its scope.
+- The typed profile loader, read-only plan, and user-draft writer are wired to
+  live inventory. There is no protected system-profile writer, privileged
+  Linux helper, Windows configuration helper, transaction log, or apply/
+  rollback flow.
+- Selection currently covers conventional fallback swap and SSD origin only.
+  A draft target is capacity-reviewed, but no live storage mutation is exposed.
+- Native Linux host qualification, WSL2 mutation flows, per-filesystem
+  allocation behavior, GPU adapter selection, and storage benchmark behavior
+  remain unqualified. A read-only WSL plan now binds one selected real host
+  volume to fresh identity and capacity.
+- The active reliability PARTIAL gates listed in `docs/reliability/GAP-REGISTER.md`
+  are unaffected by this read-only configuration slice.
+
+## Rollback trigger
+
+Revert or disable storage candidacy if any writable ext4/XFS filesystem is
+accepted without a matching mount/device number, fresh capacity, filesystem
+UUID, stable backing identity, or verified non-removable status, or if the view
+changes active swap, an origin, GPU allocation, or platform configuration.
+
+## Traceability
+
+| RF | ITEM | Status |
+| --- | --- | --- |
+| RF-1..RF-2, RF-5, RF-13 | ITEM-1..ITEM-3 | Read-only discovery plus user-confirmed draft selection; native live E2E remains open. |
+| RF-3, RF-5, RF-7..RF-8, RF-12 | ITEM-1 | Typed schema, bounded loading, stable identity/capacity planning, and owner-only user draft; no system-profile write or configuration apply is exposed. |
+| RF-3..RF-4, RF-6..RF-12 | ITEM-4..ITEM-8 | Provider integration, selection, mutation, benchmark, and live qualification remain incomplete. |

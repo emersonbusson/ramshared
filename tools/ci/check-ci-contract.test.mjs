@@ -23,8 +23,8 @@ import {
 } from './check-ci-contract.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const RUSTSEC_SNAPSHOT_COMMIT = 'f58ccfe51a5954186716998f01360d1079a8a3a5'
-const RUSTSEC_SNAPSHOT_UTC = '2026-09-17T07:37:14Z'
+const RUSTSEC_SNAPSHOT_COMMIT = 'ef03605143a913024f864d2edf476adad5720c93'
+const RUSTSEC_SNAPSHOT_UTC = '2026-09-28T09:30:11Z'
 const REMOTE_OBSERVATION_NOW = Date.parse('2026-08-09T16:00:00Z')
 
 function compliantRemoteObservation(overrides = {}) {
@@ -361,7 +361,7 @@ test('ci_specific_policies_reject_malformed_coverage_and_cancellation_rules', ()
 
 test('ci_contract_rejects_stale_advisory_snapshot', () => {
   const result = validateContract(currentOnlyContract(cargoAuditGate()), {
-    now: Date.parse('2026-09-09T09:13:33Z'),
+    now: Date.parse('2026-10-07T09:30:11Z'),
   })
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'advisory-db-snapshot-stale'), true)
@@ -684,8 +684,24 @@ test('ci_contract_local_gate_accepts_compliant_observed_remote_controls', () => 
 
 test('item3_hardened_workflows_clear_current_hosted_gaps', () => {
   const result = run({ root: ROOT })
-  const hostedGaps = result.gaps.filter((item) => /^(?:rust-quality|docs-integrity|validation-schema|comment-language|pr-body|gitleaks|cargo-audit|cargo-deny|trivy|release-automation):/.test(item))
+  const hostedGaps = result.gaps.filter((item) => /^(?:rust-quality|docs-integrity|guest-pressure-safety|validation-schema|comment-language|pr-body|gitleaks|cargo-audit|cargo-deny|trivy|release-automation):/.test(item))
   assert.deepEqual(hostedGaps, [])
+})
+
+test('guest_pressure_safety_is_a_named_fail_closed_ci_gate', () => {
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const gate = contract.gates.find((item) => item.id === 'guest-pressure-safety')
+  assert.equal(gate.implementation, 'current')
+  assert.equal(gate.workflow, '.github/workflows/ci.yml')
+  assert.equal(gate.job, 'guest-pressure-safety')
+  assert.equal(gate.policy.timeout_minutes, 10)
+  assert.deepEqual(gate.policy.permissions, { contents: 'read' })
+  assert.deepEqual(gate.open_gaps, [])
+  assert.equal(contract.p0_requirements.some((item) => item.gate_ids.includes(gate.id)), true)
+
+  const caller = contract.aggregate.architecture.callers.find((item) => item.job === 'ci-core')
+  assert.equal(caller.gates.includes(gate.id), true)
+  assert.equal(caller.summary_needs.includes('guest-pressure-safety'), true)
 })
 
 test('item4_windows_static_gate_is_current_and_fork_safe', () => {
@@ -1089,6 +1105,18 @@ test('release_promotion_node_coverage_is_wired_into_the_canonical_pr_caller', ()
   }
   assert.match(workflow, /--test-coverage-lines=80 --test-coverage-branches=80/)
   assert.match(workflow, /--test-coverage-functions=80/)
+})
+
+test('planner_coverage_fetches_pinned_rust_baselines_before_running', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
+  const fetchIndex = workflow.indexOf('name: Fetch immutable Rust slice baselines for planner coverage')
+  const plannerIndex = workflow.indexOf('name: Exact Rust coverage planner coverage')
+
+  assert.ok(fetchIndex >= 0)
+  assert.ok(plannerIndex > fetchIndex)
+  const fetchStep = workflow.slice(fetchIndex, plannerIndex)
+  assert.match(fetchStep, /git fetch --no-tags origin "\$revision"/)
+  assert.match(fetchStep, /git cat-file -e "\$\{revision\}\^\{commit\}"/)
 })
 
 test('ci_contract_requires_fail_closed_trivy_sarif_publication', () => {

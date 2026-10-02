@@ -33,7 +33,8 @@ const RELEASE_PROMOTION_POLICY = 'docs/governance/release-promotion.json'
 const RELEASE_TARGET_TAG = 'v0.9.0-beta.1'
 const RELEASE_PRODUCER_TARGET_TAG = 'derived-from-conventional-commits'
 const RELEASE_INTEGRITY_ARTIFACT_RETENTION_DAYS = 14
-const LOCAL_REUSABLE_AGGREGATE_KIND = 'local-reusable-needs-v1'
+const LOCAL_REUSABLE_AGGREGATE_KIND = 'local-reusable-needs-v2'
+const AGGREGATE_ENTRYPOINT_EVENTS = new Set(['pull_request', 'push-main'])
 const RUST_SLICE_COVERAGE_MAP = 'docs/governance/rust-slice-coverage.json'
 const RUST_SLICE_COVERAGE_PLANNER = 'tools/ci/plan-rust-slice-coverage.mjs'
 const RUST_LLVM_COV_VERSION = '0.8.7'
@@ -389,7 +390,10 @@ function validateAggregateModel(aggregate, gates, errors) {
   const seenCallerJobs = new Set()
   for (const caller of architecture.callers) {
     if (!isObject(caller) || !validJobId(caller.job) || !['direct', 'reusable'].includes(caller.kind) ||
-        !Array.isArray(caller.gates) || caller.gates.length === 0 || caller.gates.some((id) => typeof id !== 'string')) {
+        !Array.isArray(caller.gates) || caller.gates.length === 0 || caller.gates.some((id) => typeof id !== 'string') ||
+        !Array.isArray(caller.entrypoint_triggers) || caller.entrypoint_triggers.length === 0 ||
+        caller.entrypoint_triggers.some((event) => !AGGREGATE_ENTRYPOINT_EVENTS.has(event)) ||
+        new Set(caller.entrypoint_triggers).size !== caller.entrypoint_triggers.length) {
       errors.push(finding('aggregate', 'aggregate-caller-invalid'))
       continue
     }
@@ -401,8 +405,12 @@ function validateAggregateModel(aggregate, gates, errors) {
       if (!gate || gate.workflow !== aggregate.workflow || gate.job !== caller.job) {
         errors.push(finding('aggregate', 'aggregate-direct-caller-invalid', caller.job))
       }
+      if (gate && !sameStringSet(caller.entrypoint_triggers, gate.triggers)) {
+        errors.push(finding('aggregate', 'aggregate-caller-trigger-mismatch', caller.job))
+      }
     } else if (!safeRelative(caller.workflow) || !validJobId(caller.summary_job) ||
-        !Array.isArray(caller.summary_needs) || caller.summary_needs.length === 0 || caller.summary_needs.some((job) => !validJobId(job))) {
+        !Array.isArray(caller.summary_needs) || caller.summary_needs.length === 0 || caller.summary_needs.some((job) => !validJobId(job)) ||
+        new Set(caller.summary_needs).size !== caller.summary_needs.length) {
       errors.push(finding('aggregate', 'aggregate-reusable-caller-invalid', caller.job))
     }
     for (const gateId of caller.gates) {
@@ -1266,6 +1274,16 @@ function reusableCallerFindings(contract, caller, root, entrypointText) {
   const block = jobBlock(entrypointText, caller.job)
   if (!block) return ['aggregate-caller-job-absent']
   const joined = block.join('\n')
+  const expectedCondition = sameStringSet(caller.entrypoint_triggers, ['pull_request', 'push-main'])
+    ? null
+    : sameStringSet(caller.entrypoint_triggers, ['pull_request'])
+      ? "github.event_name == 'pull_request'"
+      : sameStringSet(caller.entrypoint_triggers, ['push-main'])
+        ? "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+        : 'invalid'
+  if (expectedCondition === 'invalid' || fieldValue(block, 'if') !== expectedCondition) {
+    findings.push('aggregate-caller-trigger-mismatch')
+  }
   if (fieldValue(block, 'needs') !== null || jobList(block, 'needs') !== null) findings.push('aggregate-caller-has-needs')
   const scopedPermissions = permissionsBlock(block, 4)
   if (!samePermissions(scopedPermissions, callerPermissions(contract, caller))) findings.push('aggregate-caller-permissions-mismatch')
@@ -1343,10 +1361,7 @@ export function validateAggregateNeeds(contract, needs, event) {
   const errors = []
   const architecture = contract.aggregate.architecture
   for (const caller of architecture.callers) {
-    const active = caller.gates.some((id) => {
-      const gate = contract.gates.find((item) => item.id === id)
-      return gate?.triggers.includes(trigger)
-    })
+    const active = caller.entrypoint_triggers.includes(trigger)
     if (!active) continue
     const result = needs[caller.job]?.result
     if (result === undefined) errors.push(finding('aggregate', 'aggregate-caller-missing', caller.job))

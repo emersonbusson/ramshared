@@ -72,11 +72,7 @@ All uAPI arrays are bounded to 64, layouts are fixed-width, pointers reference o
 The canonical coverage owner for native autotier is:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs \
-  -p ramshared-wsl2d,ramshared-dxg \
-  --files crates/ramshared-wsl2d/src/autotier.rs,crates/ramshared-dxg/src/lib.rs \
-  --min 80 \
-  --report-json tmp/wsl2-native-vram-autotier-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d,ramshared-dxg --files crates/ramshared-wsl2d/src/autotier.rs,crates/ramshared-dxg/src/lib.rs --min 80 --report-json tmp/wsl2-native-vram-autotier-cov.json
 ```
 
 ## Rollback trigger

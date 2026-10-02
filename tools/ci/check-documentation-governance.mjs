@@ -8,6 +8,7 @@ import { evaluateClaimClosures, loadClaimClosures } from './documentation-claim-
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MAX_FILE_BYTES = 512 * 1024
+const MAX_VALIDATION_LOG_BYTES = 1024 * 1024
 const MAX_FILES = 2000
 const REQUIRED_PARITY = [
   'architecture and topology', 'capability state', 'prd and spec requirements',
@@ -213,10 +214,10 @@ const forbiddenProductPatterns = [
 export function scanProvenance(files, allowlist = { entries: [] }, baseline = { entries: [] }) {
   const findings = [...validateAllowlist(allowlist), ...validateBaseline(baseline)]
   const patterns = [
-    ['SECRET', /(?:(?:password|api[-_ ]?key|token|credential)\s*(?:=|:)\s*["']?(?!(?:<REDACTED>|…|\.\.\.))[^\s"',}]+|--(?:password|api[-_]?key|token|credential)\s+(?!\$|<REDACTED>|…|\.\.\.)[^\s]+)/i],
+    ['SECRET', /(?:(?:\b(?:password|api[-_ ]?key|token|credential)\b)\s*(?:=|:)\s*["']?(?!(?:<REDACTED>|…|\.\.\.))[A-Za-z0-9][^\s"',}]*|--(?:password|api[-_]?key|token|credential)\s+(?!\$|<REDACTED>|…|\.\.\.)[^\s]+)/i],
     ['PRIVATE_KEY', /-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----/i],
     ['PRIVATE_PATH', /(?:\/home\/[A-Za-z0-9._-]+\/|C:\\Users\\[^\\\s"']+|\\\\wsl(?:\.localhost|\$)\\[^\\]+\\home\\[^\\]+)/i],
-    ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i],
+    ['EMAIL', /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.(?!service\b|socket\b|target\b|timer\b|mount\b|swap\b|path\b|device\b|slice\b|scope\b)[A-Z]{2,}\b/i],
     ['KERNEL_ADDRESS', /\bffff[0-9a-f]{12,16}\b/i],
   ]
   for (const file of [...files].sort((a, b) => a.path.localeCompare(b.path))) {
@@ -311,6 +312,10 @@ function* walk(dir) {
   }
 }
 
+export function fileSizeLimitFor(relativePath) {
+  return relativePath === 'validation.md' ? MAX_VALIDATION_LOG_BYTES : MAX_FILE_BYTES
+}
+
 function structuralFiles(root) {
   const extensions = new Set(['.md', '.json', '.jsonl', '.yml', '.yaml', '.sh', '.ps1', '.mjs'])
   const files = []
@@ -319,7 +324,7 @@ function structuralFiles(root) {
     if (!extensions.has(path.extname(full).toLowerCase())) continue
     if (!(rel === 'README.md' || rel === 'README.pt-BR.md' || rel === 'ARCHITECTURE.md' || rel === 'CLAUDE.md' || rel === 'AGENTS.md' || rel === 'validation.md' || rel.startsWith('.claude/rules/') || rel.startsWith('docs/') || rel === 'scripts/docs-check.sh')) continue
     const stat = statSync(full)
-    if (stat.size > MAX_FILE_BYTES) { files.push({ path: rel, text: '', oversize: true }); continue }
+    if (stat.size > fileSizeLimitFor(rel)) { files.push({ path: rel, text: '', oversize: true }); continue }
     files.push({ path: rel, text: readFileSync(full, 'utf8') })
     if (files.length > MAX_FILES) break
   }

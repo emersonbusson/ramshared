@@ -95,14 +95,18 @@ const DOC_RULES = [
 
 function gitCandidatePaths(root) {
   try {
-    return execFileSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], {
+    const options = {
       cwd: root,
       encoding: 'utf8',
       maxBuffer: 32 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    }
+    const deleted = new Set(execFileSync('git', ['ls-files', '--deleted', '-z'], options)
       .split('\0')
-      .filter(Boolean)
+      .filter(Boolean))
+    return execFileSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], options)
+      .split('\0')
+      .filter((file) => file && !deleted.has(file))
   } catch {
     throw new LegacyPreallocationError('git-candidate-query-failed')
   }

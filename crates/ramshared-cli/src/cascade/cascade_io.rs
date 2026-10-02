@@ -11,17 +11,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{Read, Write};
-#[cfg(not(test))]
 use std::os::fd::AsRawFd;
-#[cfg(not(test))]
-use std::os::unix::fs::FileTypeExt;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 const SHORT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const SWAPOFF_TIMEOUT: Duration = Duration::from_secs(120);
+const ORIGIN_DAEMON_READINESS_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_OUTPUT_LIMIT: usize = 64 * 1024;
 const LIFECYCLE_BINDING_SCHEMA: u32 = 1;
 const LIFECYCLE_BINDING_MAX_BYTES: u64 = 64 * 1024;
@@ -74,27 +73,13 @@ where
         on_spawn,
     )
     .map_err(|error| CascadeError::Shell {
-        cmd: label.clone(),
+        cmd: label,
         msg: error.to_string(),
     })?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let status = output
-        .status
-        .code()
-        .map(|code| format!("exit {code}"))
-        .unwrap_or_else(|| "terminated by signal".into());
-    Err(CascadeError::Shell {
-        cmd: label,
-        msg: if stderr.is_empty() {
-            status
-        } else {
-            format!("{status}: {stderr}")
-        },
-    })
+    // `run_capture_command` returns Ok only for a successful exit status;
+    // non-zero and signalled children arrive here as `ProcessSpawnError`,
+    // whose `Display` already carries the exit code and stderr.
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn run_command_bounded(command: &str, args: &[&str]) -> Result<String, CascadeError> {
@@ -103,6 +88,15 @@ fn run_command_bounded(command: &str, args: &[&str]) -> Result<String, CascadeEr
 
 trait CommandRunner {
     fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError>;
+
+    fn run_bounded(
+        &self,
+        command: &str,
+        args: &[&str],
+        _timeout: Duration,
+    ) -> Result<String, CascadeError> {
+        self.run(command, args)
+    }
 }
 
 struct SystemCommandRunner;
@@ -110,6 +104,15 @@ struct SystemCommandRunner;
 impl CommandRunner for SystemCommandRunner {
     fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
         run_command_bounded(command, args)
+    }
+
+    fn run_bounded(
+        &self,
+        command: &str,
+        args: &[&str],
+        timeout: Duration,
+    ) -> Result<String, CascadeError> {
+        run_command_bounded_for(command, args, timeout)
     }
 }
 
@@ -198,6 +201,17 @@ struct BoundDeviceIdentity {
     kernel_owner_instance_id: Option<String>,
 }
 
+struct BoundDeviceObservation {
+    path: String,
+    expected_kind: ManagedDeviceKind,
+    owner_policy: NbdOwnerPolicy,
+    dev_t: String,
+    sysfs_path: String,
+    sysfs_dev_t: String,
+    live_owner: Option<String>,
+    owner_is_absent: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct BoundSocketIdentity {
@@ -240,7 +254,6 @@ fn canonical_invocation_id(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-#[cfg(not(test))]
 fn linux_device_number(dev: u64) -> String {
     let major = ((dev & 0x0000_0000_000f_ff00) >> 8) | ((dev & 0xffff_f000_0000_0000) >> 32);
     let minor = (dev & 0xff) | ((dev & 0x0000_0fff_fff0_0000) >> 12);
@@ -250,72 +263,91 @@ fn linux_device_number(dev: u64) -> String {
 fn current_boot_id() -> Result<String, CascadeError> {
     #[cfg(test)]
     {
-        Ok("11111111-2222-4333-8444-555555555555".into())
+        current_boot_id_with(|| Ok("11111111-2222-4333-8444-555555555555".into()))
     }
     #[cfg(not(test))]
     {
-        let value = fs::read_to_string("/proc/sys/kernel/random/boot_id")
-            .map_err(|error| CascadeError::Io(format!("read boot identity: {error}")))?;
-        let value = value.trim().to_ascii_lowercase();
-        if !canonical_boot_id(&value) {
-            return Err(CascadeError::Precondition(
-                "kernel boot identity is not canonical".into(),
-            ));
-        }
-        Ok(value)
+        current_boot_id_with(|| fs::read_to_string("/proc/sys/kernel/random/boot_id"))
     }
+}
+
+fn current_boot_id_with(
+    read: impl FnOnce() -> std::io::Result<String>,
+) -> Result<String, CascadeError> {
+    let value = read().map_err(|error| CascadeError::Io(format!("read boot identity: {error}")))?;
+    let value = value.trim().to_ascii_lowercase();
+    if !canonical_boot_id(&value) {
+        return Err(CascadeError::Precondition(
+            "kernel boot identity is not canonical".into(),
+        ));
+    }
+    Ok(value)
 }
 
 fn daemon_invocation_id(pid: u32) -> Result<String, CascadeError> {
     #[cfg(test)]
     {
-        let _ = pid;
-        Ok("0123456789abcdef0123456789abcdef".into())
+        daemon_invocation_id_with(pid, |_| {
+            Ok(b"INVOCATION_ID=0123456789abcdef0123456789abcdef\0".to_vec())
+        })
     }
     #[cfg(not(test))]
     {
-        let bytes = fs::read(format!("/proc/{pid}/environ")).map_err(|error| {
-            CascadeError::Precondition(format!(
-                "cannot read exact daemon systemd invocation identity: {error}"
-            ))
-        })?;
-        let mut matches = bytes.split(|byte| *byte == 0).filter_map(|entry| {
-            entry
-                .strip_prefix(b"INVOCATION_ID=")
-                .and_then(|value| std::str::from_utf8(value).ok())
-        });
-        let value = matches
-            .next()
-            .filter(|_| matches.next().is_none())
-            .map(str::to_ascii_lowercase)
-            .ok_or_else(|| {
-                CascadeError::Precondition(
-                    "daemon has no unique systemd InvocationID; direct unmanaged activation is refused"
-                        .into(),
-                )
-            })?;
-        if !canonical_invocation_id(&value) {
-            return Err(CascadeError::Precondition(
-                "daemon systemd InvocationID is not canonical".into(),
-            ));
-        }
-        Ok(value)
+        daemon_invocation_id_with(pid, |pid| fs::read(format!("/proc/{pid}/environ")))
     }
+}
+
+fn daemon_invocation_id_with(
+    pid: u32,
+    read: impl FnOnce(u32) -> std::io::Result<Vec<u8>>,
+) -> Result<String, CascadeError> {
+    let bytes = read(pid).map_err(|error| {
+        CascadeError::Precondition(format!(
+            "cannot read exact daemon systemd invocation identity: {error}"
+        ))
+    })?;
+    let mut matches = bytes.split(|byte| *byte == 0).filter_map(|entry| {
+        entry
+            .strip_prefix(b"INVOCATION_ID=")
+            .and_then(|value| std::str::from_utf8(value).ok())
+    });
+    let value = matches
+        .next()
+        .filter(|_| matches.next().is_none())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| {
+            CascadeError::Precondition(
+                "daemon has no unique systemd InvocationID; direct unmanaged activation is refused"
+                    .into(),
+            )
+        })?;
+    if !canonical_invocation_id(&value) {
+        return Err(CascadeError::Precondition(
+            "daemon systemd InvocationID is not canonical".into(),
+        ));
+    }
+    Ok(value)
 }
 
 fn socket_identity(path: &Path) -> Result<BoundSocketIdentity, CascadeError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| CascadeError::Io(format!("stat export socket: {error}")))?;
-    #[cfg(not(test))]
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
-        return Err(CascadeError::Precondition(
-            "daemon export path is not an exact Unix socket".into(),
-        ));
-    }
-    #[cfg(test)]
+    socket_identity_from_metadata(path, &metadata, !cfg!(test))
+}
+
+fn socket_identity_from_metadata(
+    path: &Path,
+    metadata: &fs::Metadata,
+    require_socket: bool,
+) -> Result<BoundSocketIdentity, CascadeError> {
     if metadata.file_type().is_symlink() {
         return Err(CascadeError::Precondition(
             "daemon export path is a symlink".into(),
+        ));
+    }
+    if require_socket && !metadata.file_type().is_socket() {
+        return Err(CascadeError::Precondition(
+            "daemon export path is not an exact Unix socket".into(),
         ));
     }
     Ok(BoundSocketIdentity {
@@ -325,7 +357,6 @@ fn socket_identity(path: &Path) -> Result<BoundSocketIdentity, CascadeError> {
     })
 }
 
-#[cfg(not(test))]
 fn parse_sysfs_device_number(text: &str) -> Result<String, CascadeError> {
     let value = text.trim();
     if !canonical_device_number(value) {
@@ -388,6 +419,104 @@ fn nbd_kernel_owner_identity(
     }
 }
 
+fn bound_device_from_observation(
+    observation: BoundDeviceObservation,
+) -> Result<BoundDeviceIdentity, CascadeError> {
+    let BoundDeviceObservation {
+        path,
+        expected_kind,
+        owner_policy,
+        dev_t,
+        sysfs_path,
+        sysfs_dev_t,
+        live_owner,
+        owner_is_absent,
+    } = observation;
+    if sysfs_dev_t != dev_t {
+        return Err(CascadeError::Precondition(
+            "managed device node and sysfs dev_t disagree".into(),
+        ));
+    }
+    let kernel_owner_instance_id = if expected_kind == ManagedDeviceKind::Nbd {
+        nbd_kernel_owner_identity(live_owner, owner_is_absent, owner_policy)?
+    } else {
+        None
+    };
+    Ok(BoundDeviceIdentity {
+        kind: expected_kind,
+        path,
+        dev_t,
+        sysfs_path,
+        sysfs_dev_t,
+        kernel_owner_instance_id,
+    })
+}
+
+fn observe_bound_device_in_sysfs<F, P>(
+    path: String,
+    expected_kind: ManagedDeviceKind,
+    owner_policy: NbdOwnerPolicy,
+    named: DetachedNbdNode,
+    sysfs_class_block: &Path,
+    mut daemon_instance_for_pid: F,
+    mut owner_process_is_absent: P,
+) -> Result<BoundDeviceIdentity, CascadeError>
+where
+    F: FnMut(u32) -> Option<String>,
+    P: FnMut(u32) -> Result<bool, CascadeError>,
+{
+    if named.is_symlink || !named.is_block_device {
+        return Err(CascadeError::Precondition(format!(
+            "managed device {path} is not an exact block-device node"
+        )));
+    }
+    let basename = Path::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CascadeError::Precondition("managed device name is invalid".into()))?;
+    let sysfs = fs::canonicalize(sysfs_class_block.join(basename)).map_err(|error| {
+        CascadeError::Precondition(format!("resolve managed sysfs identity: {error}"))
+    })?;
+    let sysfs_dev_t =
+        parse_sysfs_device_number(&fs::read_to_string(sysfs.join("dev")).map_err(|error| {
+            CascadeError::Precondition(format!("read managed sysfs dev_t: {error}"))
+        })?)?;
+    let owner_observation = if expected_kind == ManagedDeviceKind::Nbd {
+        let pid = fs::read_to_string(sysfs.join("pid"))
+            .map_err(|error| {
+                CascadeError::Precondition(format!("read NBD kernel owner PID: {error}"))
+            })?
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| CascadeError::Precondition("NBD kernel owner PID is invalid".into()))?;
+        if pid == 0 {
+            return Err(CascadeError::Precondition(
+                "NBD kernel owner is absent".into(),
+            ));
+        }
+        let live_owner = daemon_instance_for_pid(pid);
+        let owner_is_absent = if live_owner.is_none() {
+            owner_process_is_absent(pid)?
+        } else {
+            false
+        };
+        Some((live_owner, owner_is_absent))
+    } else {
+        None
+    };
+    let (live_owner, owner_is_absent) = owner_observation.unwrap_or((None, false));
+    bound_device_from_observation(BoundDeviceObservation {
+        path,
+        expected_kind,
+        owner_policy,
+        dev_t: named.dev_t,
+        sysfs_path: sysfs.to_string_lossy().into_owned(),
+        sysfs_dev_t,
+        live_owner,
+        owner_is_absent,
+    })
+}
+
 #[cfg(not(test))]
 fn nbd_kernel_owner_is_absent(pid: u32) -> Result<bool, CascadeError> {
     match fs::symlink_metadata(format!("/proc/{pid}")) {
@@ -412,7 +541,6 @@ fn observe_bound_device_with_nbd_owner_policy(
     }
     #[cfg(test)]
     {
-        let _ = owner_policy;
         let index = path
             .bytes()
             .rev()
@@ -424,21 +552,24 @@ fn observe_bound_device_with_nbd_owner_policy(
             .collect::<String>()
             .parse::<u64>()
             .unwrap_or(0);
-        let (major, owner) = match expected_kind {
-            ManagedDeviceKind::Nbd => (43, Some("4242-100".into())),
-            ManagedDeviceKind::Ublk => (259, None),
-            ManagedDeviceKind::Zram => (252, None),
+        let (major, owner, owner_absent) = match expected_kind {
+            ManagedDeviceKind::Nbd => (43, Some("4242-100".into()), false),
+            ManagedDeviceKind::Ublk => (259, None, false),
+            ManagedDeviceKind::Zram => (252, None, false),
         };
-        Ok(BoundDeviceIdentity {
-            kind: expected_kind,
-            dev_t: format!("{major}:{index}"),
+        let dev_t = format!("{major}:{index}");
+        bound_device_from_observation(BoundDeviceObservation {
+            path: path.clone(),
+            expected_kind,
+            owner_policy,
+            dev_t: dev_t.clone(),
             sysfs_path: format!(
                 "/sys/devices/virtual/block/{}",
                 path.rsplit('/').next().unwrap_or_default()
             ),
-            sysfs_dev_t: format!("{major}:{index}"),
-            kernel_owner_instance_id: owner,
-            path,
+            sysfs_dev_t: dev_t,
+            live_owner: owner,
+            owner_is_absent: owner_absent,
         })
     }
     #[cfg(not(test))]
@@ -446,62 +577,19 @@ fn observe_bound_device_with_nbd_owner_policy(
         let named = fs::symlink_metadata(&path).map_err(|error| {
             CascadeError::Precondition(format!("managed device {path} is unavailable: {error}"))
         })?;
-        if named.file_type().is_symlink() || !named.file_type().is_block_device() {
-            return Err(CascadeError::Precondition(format!(
-                "managed device {path} is not an exact block-device node"
-            )));
-        }
-        let dev_t = linux_device_number(named.rdev());
-        let basename = Path::new(&path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| CascadeError::Precondition("managed device name is invalid".into()))?;
-        let sysfs =
-            fs::canonicalize(Path::new("/sys/class/block").join(basename)).map_err(|error| {
-                CascadeError::Precondition(format!("resolve managed sysfs identity: {error}"))
-            })?;
-        let sysfs_dev_t =
-            parse_sysfs_device_number(&fs::read_to_string(sysfs.join("dev")).map_err(
-                |error| CascadeError::Precondition(format!("read managed sysfs dev_t: {error}")),
-            )?)?;
-        if sysfs_dev_t != dev_t {
-            return Err(CascadeError::Precondition(
-                "managed device node and sysfs dev_t disagree".into(),
-            ));
-        }
-        let kernel_owner_instance_id = if expected_kind == ManagedDeviceKind::Nbd {
-            let pid = fs::read_to_string(sysfs.join("pid"))
-                .map_err(|error| {
-                    CascadeError::Precondition(format!("read NBD kernel owner PID: {error}"))
-                })?
-                .trim()
-                .parse::<u32>()
-                .map_err(|_| {
-                    CascadeError::Precondition("NBD kernel owner PID is invalid".into())
-                })?;
-            if pid == 0 {
-                return Err(CascadeError::Precondition(
-                    "NBD kernel owner is absent".into(),
-                ));
-            }
-            let live_owner = daemon_instance_id_from_pid(pid);
-            let owner_is_absent = if live_owner.is_none() {
-                nbd_kernel_owner_is_absent(pid)?
-            } else {
-                false
-            };
-            nbd_kernel_owner_identity(live_owner, owner_is_absent, owner_policy)?
-        } else {
-            None
-        };
-        Ok(BoundDeviceIdentity {
-            kind: expected_kind,
+        observe_bound_device_in_sysfs(
             path,
-            dev_t,
-            sysfs_path: sysfs.to_string_lossy().into_owned(),
-            sysfs_dev_t,
-            kernel_owner_instance_id,
-        })
+            expected_kind,
+            owner_policy,
+            DetachedNbdNode {
+                is_symlink: named.file_type().is_symlink(),
+                is_block_device: named.file_type().is_block_device(),
+                dev_t: linux_device_number(named.rdev()),
+            },
+            Path::new("/sys/class/block"),
+            daemon_instance_id_from_pid,
+            nbd_kernel_owner_is_absent,
+        )
     }
 }
 
@@ -517,57 +605,67 @@ fn detect_live_managed_devices() -> Result<Vec<BoundDeviceIdentity>, CascadeErro
     }
     #[cfg(not(test))]
     {
-        let mut devices = Vec::new();
-        let entries = fs::read_dir("/sys/class/block")
-            .map_err(|error| CascadeError::Io(format!("enumerate managed devices: {error}")))?;
-        for entry in entries {
-            let entry = entry.map_err(|error| {
-                CascadeError::Io(format!("enumerate managed device entry: {error}"))
-            })?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| CascadeError::Precondition("non-UTF-8 block-device name".into()))?;
-            let path = format!("/dev/{name}");
-            let Some(kind) = device_kind_for_path(&path) else {
-                continue;
-            };
-            let live = match kind {
-                ManagedDeviceKind::Nbd => match fs::read_to_string(entry.path().join("pid")) {
-                    Ok(value) if value.trim().is_empty() => false,
-                    Ok(value) => {
-                        value.trim().parse::<u32>().map_err(|_| {
-                            CascadeError::Precondition(format!("{name} owner PID is malformed"))
-                        })? > 0
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(error) => {
-                        return Err(CascadeError::Precondition(format!(
-                            "read {name} owner PID: {error}"
-                        )));
-                    }
-                },
-                ManagedDeviceKind::Zram => {
-                    fs::read_to_string(entry.path().join("disksize"))
-                        .map_err(|error| {
-                            CascadeError::Precondition(format!("read {name} disksize: {error}"))
-                        })?
-                        .trim()
-                        .parse::<u64>()
-                        .map_err(|_| {
-                            CascadeError::Precondition(format!("{name} disksize is malformed"))
-                        })?
-                        > 0
-                }
-                ManagedDeviceKind::Ublk => true,
-            };
-            if live {
-                devices.push(observe_bound_device(&path, kind)?);
-            }
-        }
-        devices.sort();
-        Ok(devices)
+        detect_live_managed_devices_in(Path::new("/sys/class/block"), observe_bound_device)
     }
+}
+
+fn detect_live_managed_devices_in<F>(
+    class_block: &Path,
+    mut observe: F,
+) -> Result<Vec<BoundDeviceIdentity>, CascadeError>
+where
+    F: FnMut(&str, ManagedDeviceKind) -> Result<BoundDeviceIdentity, CascadeError>,
+{
+    let mut devices = Vec::new();
+    let entries = fs::read_dir(class_block)
+        .map_err(|error| CascadeError::Io(format!("enumerate managed devices: {error}")))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            CascadeError::Io(format!("enumerate managed device entry: {error}"))
+        })?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| CascadeError::Precondition("non-UTF-8 block-device name".into()))?;
+        let path = format!("/dev/{name}");
+        let Some(kind) = device_kind_for_path(&path) else {
+            continue;
+        };
+        let live = match kind {
+            ManagedDeviceKind::Nbd => match fs::read_to_string(entry.path().join("pid")) {
+                Ok(value) if value.trim().is_empty() => false,
+                Ok(value) => {
+                    value.trim().parse::<u32>().map_err(|_| {
+                        CascadeError::Precondition(format!("{name} owner PID is malformed"))
+                    })? > 0
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => {
+                    return Err(CascadeError::Precondition(format!(
+                        "read {name} owner PID: {error}"
+                    )));
+                }
+            },
+            ManagedDeviceKind::Zram => {
+                fs::read_to_string(entry.path().join("disksize"))
+                    .map_err(|error| {
+                        CascadeError::Precondition(format!("read {name} disksize: {error}"))
+                    })?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|_| {
+                        CascadeError::Precondition(format!("{name} disksize is malformed"))
+                    })?
+                    > 0
+            }
+            ManagedDeviceKind::Ublk => true,
+        };
+        if live {
+            devices.push(observe(&path, kind)?);
+        }
+    }
+    devices.sort();
+    Ok(devices)
 }
 
 /// Captures the device set immediately before an ownership-changing command.
@@ -622,6 +720,148 @@ struct DetachedNbdObservation {
     sysfs_dev_t: String,
 }
 
+#[derive(Clone, Debug)]
+struct DetachedNbdEvidence {
+    named_is_symlink: bool,
+    named_is_block_device: bool,
+    dev_t: String,
+    sysfs_path: String,
+    sysfs_dev_t: String,
+    owner_pid: Option<u32>,
+    size_sectors: u64,
+    has_holders: bool,
+    named_after_is_symlink: bool,
+    named_after_is_block_device: bool,
+    named_after_dev_t: String,
+}
+
+#[derive(Clone, Debug)]
+struct DetachedNbdNode {
+    is_symlink: bool,
+    is_block_device: bool,
+    dev_t: String,
+}
+
+fn validate_detached_nbd_evidence(
+    path: String,
+    evidence: DetachedNbdEvidence,
+) -> Result<DetachedNbdObservation, CascadeError> {
+    if evidence.named_is_symlink || !evidence.named_is_block_device {
+        return Err(CascadeError::Precondition(
+            "detached NBD target is not an exact block-device node".into(),
+        ));
+    }
+    if evidence.sysfs_dev_t != evidence.dev_t {
+        return Err(CascadeError::Precondition(
+            "detached NBD node and sysfs dev_t disagree".into(),
+        ));
+    }
+    if evidence.owner_pid.is_some_and(|pid| pid != 0) {
+        return Err(CascadeError::UnsafeContainment(format!(
+            "NBD target {path} still has a kernel owner PID"
+        )));
+    }
+    if evidence.size_sectors != 0 {
+        return Err(CascadeError::UnsafeContainment(format!(
+            "NBD target {path} still exports {} sectors",
+            evidence.size_sectors
+        )));
+    }
+    if evidence.has_holders {
+        return Err(CascadeError::UnsafeContainment(format!(
+            "NBD target {path} still has a kernel holder"
+        )));
+    }
+    if evidence.named_after_is_symlink
+        || !evidence.named_after_is_block_device
+        || evidence.named_after_dev_t != evidence.dev_t
+    {
+        return Err(CascadeError::Precondition(
+            "detached NBD target identity changed during absence proof".into(),
+        ));
+    }
+    Ok(DetachedNbdObservation {
+        path,
+        dev_t: evidence.dev_t,
+        sysfs_path: evidence.sysfs_path,
+        sysfs_dev_t: evidence.sysfs_dev_t,
+    })
+}
+
+fn prove_detached_nbd_sysfs<F>(
+    path: String,
+    named: DetachedNbdNode,
+    sysfs_class_block: &Path,
+    mut restat_named: F,
+) -> Result<DetachedNbdObservation, CascadeError>
+where
+    F: FnMut() -> Result<DetachedNbdNode, CascadeError>,
+{
+    if named.is_symlink || !named.is_block_device {
+        return Err(CascadeError::Precondition(
+            "detached NBD target is not an exact block-device node".into(),
+        ));
+    }
+    let basename = Path::new(&path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CascadeError::Precondition("detached NBD name is invalid".into()))?;
+    let sysfs = fs::canonicalize(sysfs_class_block.join(basename)).map_err(|error| {
+        CascadeError::Precondition(format!("resolve detached NBD sysfs identity: {error}"))
+    })?;
+    let sysfs_dev_t =
+        parse_sysfs_device_number(&fs::read_to_string(sysfs.join("dev")).map_err(|error| {
+            CascadeError::Precondition(format!("read detached NBD sysfs dev_t: {error}"))
+        })?)?;
+    let owner_pid = match fs::read_to_string(sysfs.join("pid")) {
+        Ok(value) => {
+            let value = value.trim();
+            (!value.is_empty())
+                .then(|| value.parse::<u32>())
+                .transpose()
+                .map_err(|_| {
+                    CascadeError::Precondition("detached NBD owner PID is malformed".into())
+                })?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(CascadeError::Precondition(format!(
+                "read detached NBD owner PID: {error}"
+            )));
+        }
+    };
+    let size_sectors = fs::read_to_string(sysfs.join("size"))
+        .map_err(|error| CascadeError::Precondition(format!("read detached NBD size: {error}")))?
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| CascadeError::Precondition("detached NBD size is malformed".into()))?;
+    let mut holders = fs::read_dir(sysfs.join("holders")).map_err(|error| {
+        CascadeError::Precondition(format!("enumerate detached NBD holders: {error}"))
+    })?;
+    let has_holders = holders
+        .next()
+        .transpose()
+        .map_err(|error| CascadeError::Precondition(format!("read detached NBD holder: {error}")))?
+        .is_some();
+    let named_after = restat_named()?;
+    validate_detached_nbd_evidence(
+        path,
+        DetachedNbdEvidence {
+            named_is_symlink: named.is_symlink,
+            named_is_block_device: named.is_block_device,
+            dev_t: named.dev_t,
+            sysfs_path: sysfs.to_string_lossy().into_owned(),
+            sysfs_dev_t,
+            owner_pid,
+            size_sectors,
+            has_holders,
+            named_after_is_symlink: named_after.is_symlink,
+            named_after_is_block_device: named_after.is_block_device,
+            named_after_dev_t: named_after.dev_t,
+        },
+    )
+}
+
 /// Proves that one exact NBD target is detached at the kernel boundary.
 ///
 /// A missing entry in the live-device enumeration is not enough: a timeout can
@@ -639,106 +879,48 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
     #[cfg(test)]
     {
         let observed = observe_bound_device(&path, ManagedDeviceKind::Nbd)?;
-        Ok(DetachedNbdObservation {
+        validate_detached_nbd_evidence(
             path,
-            dev_t: observed.dev_t,
-            sysfs_path: observed.sysfs_path,
-            sysfs_dev_t: observed.sysfs_dev_t,
-        })
+            DetachedNbdEvidence {
+                named_is_symlink: false,
+                named_is_block_device: true,
+                dev_t: observed.dev_t.clone(),
+                sysfs_path: observed.sysfs_path,
+                sysfs_dev_t: observed.sysfs_dev_t,
+                owner_pid: None,
+                size_sectors: 0,
+                has_holders: false,
+                named_after_is_symlink: false,
+                named_after_is_block_device: true,
+                named_after_dev_t: observed.dev_t,
+            },
+        )
     }
     #[cfg(not(test))]
     {
         let named = fs::symlink_metadata(&path).map_err(|error| {
             CascadeError::Precondition(format!("stat exact detached NBD target: {error}"))
         })?;
-        if named.file_type().is_symlink() || !named.file_type().is_block_device() {
-            return Err(CascadeError::Precondition(
-                "detached NBD target is not an exact block-device node".into(),
-            ));
-        }
-        let dev_t = linux_device_number(named.rdev());
-        let basename = Path::new(&path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| CascadeError::Precondition("detached NBD name is invalid".into()))?;
-        let sysfs =
-            fs::canonicalize(Path::new("/sys/class/block").join(basename)).map_err(|error| {
-                CascadeError::Precondition(format!("resolve detached NBD sysfs identity: {error}"))
-            })?;
-        let sysfs_dev_t = parse_sysfs_device_number(
-            &fs::read_to_string(sysfs.join("dev")).map_err(|error| {
-                CascadeError::Precondition(format!("read detached NBD sysfs dev_t: {error}"))
-            })?,
-        )?;
-        if sysfs_dev_t != dev_t {
-            return Err(CascadeError::Precondition(
-                "detached NBD node and sysfs dev_t disagree".into(),
-            ));
-        }
-        match fs::read_to_string(sysfs.join("pid")) {
-            Ok(value) => {
-                let value = value.trim();
-                if !value.is_empty()
-                    && value.parse::<u32>().map_err(|_| {
-                        CascadeError::Precondition("detached NBD owner PID is malformed".into())
-                    })? != 0
-                {
-                    return Err(CascadeError::UnsafeContainment(format!(
-                        "NBD target {path} still has a kernel owner PID"
-                    )));
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(CascadeError::Precondition(format!(
-                    "read detached NBD owner PID: {error}"
-                )));
-            }
-        }
-        let size = fs::read_to_string(sysfs.join("size"))
-            .map_err(|error| {
-                CascadeError::Precondition(format!("read detached NBD size: {error}"))
-            })?
-            .trim()
-            .parse::<u64>()
-            .map_err(|_| CascadeError::Precondition("detached NBD size is malformed".into()))?;
-        if size != 0 {
-            return Err(CascadeError::UnsafeContainment(format!(
-                "NBD target {path} still exports {size} sectors"
-            )));
-        }
-        let mut holders = fs::read_dir(sysfs.join("holders")).map_err(|error| {
-            CascadeError::Precondition(format!("enumerate detached NBD holders: {error}"))
-        })?;
-        if holders
-            .next()
-            .transpose()
-            .map_err(|error| {
-                CascadeError::Precondition(format!("read detached NBD holder: {error}"))
-            })?
-            .is_some()
-        {
-            return Err(CascadeError::UnsafeContainment(format!(
-                "NBD target {path} still has a kernel holder"
-            )));
-        }
-        let named_after = fs::symlink_metadata(&path).map_err(|error| {
-            CascadeError::Precondition(format!("restat exact detached NBD target: {error}"))
-        })?;
-        if named_after.file_type().is_symlink()
-            || !named_after.file_type().is_block_device()
-            || linux_device_number(named_after.rdev()) != dev_t
-        {
-            return Err(CascadeError::Precondition(
-                "detached NBD target identity changed during absence proof".into(),
-            ));
-        }
-        Ok(DetachedNbdObservation {
+        let path_for_restat = path.clone();
+        prove_detached_nbd_sysfs(
             path,
-            dev_t,
-            sysfs_path: sysfs.to_string_lossy().into_owned(),
-            sysfs_dev_t,
-        })
+            DetachedNbdNode {
+                is_symlink: named.file_type().is_symlink(),
+                is_block_device: named.file_type().is_block_device(),
+                dev_t: linux_device_number(named.rdev()),
+            },
+            Path::new("/sys/class/block"),
+            || {
+                let named_after = fs::symlink_metadata(&path_for_restat).map_err(|error| {
+                    CascadeError::Precondition(format!("restat exact detached NBD target: {error}"))
+                })?;
+                Ok(DetachedNbdNode {
+                    is_symlink: named_after.file_type().is_symlink(),
+                    is_block_device: named_after.file_type().is_block_device(),
+                    dev_t: linux_device_number(named_after.rdev()),
+                })
+            },
+        )
     }
 }
 
@@ -775,14 +957,24 @@ impl EffectBoundDevice {
                     "stat pinned managed device after external effect: {error}"
                 ))
             })?;
-            if linux_device_number(metadata.rdev()) != self.identity.dev_t {
-                return Err(CascadeError::Precondition(
-                    "pinned managed-device dev_t changed across an external effect".into(),
-                ));
-            }
+            validate_pinned_effect_metadata(&metadata, &self.identity.dev_t)?;
         }
         Ok(())
     }
+}
+
+fn validate_pinned_effect_metadata(
+    metadata: &fs::Metadata,
+    expected_dev_t: &str,
+) -> Result<(), CascadeError> {
+    if !metadata.file_type().is_block_device()
+        || linux_device_number(metadata.rdev()) != expected_dev_t
+    {
+        return Err(CascadeError::Precondition(
+            "pinned managed-device dev_t changed across an external effect".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn bind_device_for_effect(device: &BoundDeviceIdentity) -> Result<EffectBoundDevice, CascadeError> {
@@ -799,9 +991,9 @@ fn bind_device_for_effect_with(
     device: &BoundDeviceIdentity,
     revalidate: fn(&BoundDeviceIdentity) -> Result<(), CascadeError>,
 ) -> Result<EffectBoundDevice, CascadeError> {
-    revalidate(device)?;
     #[cfg(test)]
     {
+        revalidate(device)?;
         Ok(EffectBoundDevice {
             identity: device.clone(),
             effect_path: device.path.clone(),
@@ -809,37 +1001,48 @@ fn bind_device_for_effect_with(
     }
     #[cfg(not(test))]
     {
-        let file = fs::File::open(&device.path).map_err(|error| {
-            CascadeError::Precondition(format!(
-                "open exact managed device for effect binding: {error}"
-            ))
-        })?;
-        let metadata = file.metadata().map_err(|error| {
-            CascadeError::Precondition(format!("stat exact managed device effect binding: {error}"))
-        })?;
-        if !metadata.file_type().is_block_device()
-            || linux_device_number(metadata.rdev()) != device.dev_t
-        {
-            return Err(CascadeError::Precondition(
-                "opened managed-device fd does not match the sealed dev_t".into(),
-            ));
-        }
-        revalidate(device)?;
-        let effect_path = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd());
-        let opened = fs::metadata(&effect_path).map_err(|error| {
-            CascadeError::Precondition(format!("stat managed-device proc-fd effect path: {error}"))
-        })?;
-        if linux_device_number(opened.rdev()) != device.dev_t {
-            return Err(CascadeError::Precondition(
-                "managed-device proc-fd path does not preserve the sealed dev_t".into(),
-            ));
-        }
+        let (file, effect_path) =
+            open_device_for_effect_with(device, revalidate, |path| fs::File::open(path))?;
         Ok(EffectBoundDevice {
             identity: device.clone(),
             effect_path,
             file,
         })
     }
+}
+
+fn open_device_for_effect_with(
+    device: &BoundDeviceIdentity,
+    mut revalidate: impl FnMut(&BoundDeviceIdentity) -> Result<(), CascadeError>,
+    open: impl FnOnce(&Path) -> std::io::Result<fs::File>,
+) -> Result<(fs::File, String), CascadeError> {
+    revalidate(device)?;
+    let file = open(Path::new(&device.path)).map_err(|error| {
+        CascadeError::Precondition(format!(
+            "open exact managed device for effect binding: {error}"
+        ))
+    })?;
+    let metadata = file.metadata().map_err(|error| {
+        CascadeError::Precondition(format!("stat exact managed device effect binding: {error}"))
+    })?;
+    if !metadata.file_type().is_block_device()
+        || linux_device_number(metadata.rdev()) != device.dev_t
+    {
+        return Err(CascadeError::Precondition(
+            "opened managed-device fd does not match the sealed dev_t".into(),
+        ));
+    }
+    revalidate(device)?;
+    let effect_path = format!("/proc/{}/fd/{}", std::process::id(), file.as_raw_fd());
+    let opened = fs::metadata(&effect_path).map_err(|error| {
+        CascadeError::Precondition(format!("stat managed-device proc-fd effect path: {error}"))
+    })?;
+    if linux_device_number(opened.rdev()) != device.dev_t {
+        return Err(CascadeError::Precondition(
+            "managed-device proc-fd path does not preserve the sealed dev_t".into(),
+        ));
+    }
+    Ok((file, effect_path))
 }
 
 fn validate_lifecycle_binding(binding: &LifecycleBinding) -> Result<(), CascadeError> {
@@ -1436,7 +1639,10 @@ fn cache_status_has_current_daemon_identity_at(
         return false;
     };
     cache_status_matches_current_daemon(&status, &expected, now_unix_ms)
-        && status.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+        // Cache health can degrade while the origin remains authoritative.
+        // Teardown still needs the exact live daemon identity so swapoff can
+        // complete before stopping that daemon.
+        && status.get("ok").and_then(serde_json::Value::as_bool).is_some()
         && status
             .get("origin_state")
             .and_then(serde_json::Value::as_str)
@@ -1472,6 +1678,15 @@ fn cache_status_has_current_daemon_identity(paths: &RuntimePaths, pid: u32) -> b
     unix_time_ms().is_some_and(|now_unix_ms| {
         cache_status_has_current_daemon_identity_at(paths, pid, now_unix_ms)
     })
+}
+
+fn cache_status_is_healthy(paths: &RuntimePaths, pid: u32) -> bool {
+    cache_status_has_current_daemon_identity(paths, pid)
+        && fs::read_to_string(&paths.cache_status_file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|status| status.get("ok").and_then(serde_json::Value::as_bool))
+            == Some(true)
 }
 
 fn verified_daemon_pid(paths: &RuntimePaths) -> Option<u32> {
@@ -1949,8 +2164,18 @@ fn build_daemon_command(
             ORIGIN_CONFIG_FILE,
         ])
         .env("RAMSHARED_VRAM_CACHE_CAP_MIB", cache_cap_mib.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::null());
+    // Capture daemon stderr for debugging (Bug 5: was Stdio::null()).
+    let log_path = std::path::Path::new("/run/ramsharedd.log");
+    if let Ok(log_file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        command.stderr(log_file);
+    } else {
+        command.stderr(Stdio::null());
+    }
     bounded_process::configure_process_group(&mut command);
     command
 }
@@ -1965,6 +2190,10 @@ fn spawn_daemon_with_deadline(
     readiness_timeout: Duration,
 ) -> Result<std::process::Child, CascadeError> {
     fs::create_dir_all(&paths.runtime_dir).map_err(|error| CascadeError::Io(error.to_string()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o755));
+    }
     remove_runtime_file(&paths.socket);
     remove_runtime_file(&paths.cache_status_file);
     remove_runtime_file(&paths.supervisor_status_file);
@@ -1989,7 +2218,7 @@ fn spawn_daemon_with_deadline(
         return Err(CascadeError::Io(error.to_string()));
     }
     let deadline = Instant::now() + readiness_timeout;
-    while (!paths.socket.exists() || !cache_status_has_current_daemon_identity(paths, child.id()))
+    while (!paths.socket.exists() || !cache_status_is_healthy(paths, child.id()))
         && Instant::now() < deadline
     {
         sleep(Duration::from_millis(50));
@@ -2003,7 +2232,7 @@ fn spawn_daemon_with_deadline(
             "daemon did not start (socket missing)".into(),
         ));
     }
-    if !cache_status_has_current_daemon_identity(paths, child.id()) {
+    if !cache_status_is_healthy(paths, child.id()) {
         // No NBD attach exists yet. A daemon without an exact current identity
         // cannot safely consume control-plane zero-cache requests.
         terminate_spawned_child(&mut child)?;
@@ -2478,12 +2707,128 @@ pub fn up_with_args(args: &[String]) -> Result<(), CascadeError> {
     up_with_config(parse_up_args_from(args, default_daemon())?)
 }
 
+fn validate_windows_origin_path(path: &str) -> Result<(), CascadeError> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 4
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || (bytes[2] != b'\\' && bytes[2] != b'/')
+    {
+        return Err(CascadeError::Precondition(
+            "origin VHDX path must be an absolute Windows drive path (e.g. C:\\...)".into(),
+        ));
+    }
+    if bytes[3..].iter().any(|byte| {
+        !(byte.is_ascii_alphanumeric() || matches!(byte, b'\\' | b'/' | b'.' | b'_' | b'-' | b' '))
+    }) {
+        return Err(CascadeError::Precondition(
+            "origin VHDX path contains forbidden shell characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_origin_attached<R: CommandRunner>(
+    runner: &R,
+    origin_path: &str,
+    expected_partuuid: &str,
+    manifest_path: &Path,
+    expected_manifest_sha256: &str,
+) -> Result<(), CascadeError> {
+    #[cfg(test)]
+    {
+        if origin_path == "/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555" {
+            return Ok(());
+        }
+    }
+    if Path::new(origin_path).exists() {
+        return Ok(());
+    }
+    let manifest = fs::read(manifest_path).map_err(|error| {
+        CascadeError::Precondition(format!(
+            "sealed host origin manifest is unavailable: {error}"
+        ))
+    })?;
+    if manifest.len() > 64 * 1024 || !canonical_sha256(expected_manifest_sha256) {
+        return Err(CascadeError::Precondition(
+            "sealed host origin manifest size or hash is invalid".into(),
+        ));
+    }
+    let actual_hash: String = Sha256::digest(&manifest)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if !actual_hash.eq_ignore_ascii_case(expected_manifest_sha256) {
+        return Err(CascadeError::Precondition(
+            "sealed host origin manifest hash does not match origin configuration".into(),
+        ));
+    }
+    let json_bytes = manifest
+        .strip_prefix(&[0xEF, 0xBB, 0xBF][..])
+        .unwrap_or(&manifest);
+    let value: serde_json::Value = serde_json::from_slice(json_bytes).map_err(|error| {
+        CascadeError::Precondition(format!("sealed host origin manifest is invalid: {error}"))
+    })?;
+    let origin_vhdx = value
+        .get("origin_vhdx")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            CascadeError::Precondition("sealed host origin VHDX path is missing".into())
+        })?;
+    if value
+        .get("partuuid")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|partuuid| !partuuid.eq_ignore_ascii_case(expected_partuuid))
+    {
+        return Err(CascadeError::Precondition(
+            "sealed host origin manifest PARTUUID differs from origin configuration".into(),
+        ));
+    }
+    validate_windows_origin_path(origin_vhdx)?;
+
+    eprintln!("[up] origin VHDX detached; attempting bounded host attach via wsl.exe...");
+    let wsl_path = if std::path::Path::new("/mnt/c/Windows/System32/wsl.exe").exists() {
+        "/mnt/c/Windows/System32/wsl.exe"
+    } else {
+        "wsl.exe"
+    };
+    runner.run_bounded(
+        wsl_path,
+        &["--mount", "--vhd", origin_vhdx, "--bare"],
+        Duration::from_secs(10),
+    )?;
+
+    #[cfg(not(test))]
+    {
+        for _ in 0..20 {
+            if Path::new(origin_path).exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    if !Path::new(origin_path).exists() {
+        return Err(CascadeError::Precondition(format!(
+            "origin device {origin_path} (PARTUUID {expected_partuuid}) did not appear after host attach"
+        )));
+    }
+    Ok(())
+}
+
 fn setup_new_cascade<R: CommandRunner>(
     runner: &R,
     paths: &RuntimePaths,
     args: &UpArgs,
     prios: &TierPriorities,
 ) -> Result<std::process::Child, CascadeError> {
+    ensure_origin_attached(
+        runner,
+        &args.origin_path,
+        &args.origin_partuuid,
+        Path::new("/mnt/c/ProgramData/RamShared/ramshared-origin-manifest.json"),
+        &args.host_manifest_sha256,
+    )?;
     let partuuid = origin_partuuid(&args.origin_path)?;
     if !partuuid.eq_ignore_ascii_case(&args.origin_partuuid) {
         return Err(CascadeError::Precondition(
@@ -2491,6 +2836,10 @@ fn setup_new_cascade<R: CommandRunner>(
         ));
     }
     fs::create_dir_all(&paths.runtime_dir).map_err(|error| CascadeError::Io(error.to_string()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&paths.runtime_dir, fs::Permissions::from_mode(0o755));
+    }
     arm_forensics_at(paths);
 
     // zram tier (HOT). --zram 0 skips.
@@ -2513,7 +2862,7 @@ fn setup_new_cascade<R: CommandRunner>(
             &args.swap_dev,
             &args.origin_path,
             paths,
-            Duration::from_secs(6),
+            ORIGIN_DAEMON_READINESS_TIMEOUT,
         )?;
         connect_nbd_with(
             runner,
@@ -2915,18 +3264,20 @@ fn canonical_root_owned_daemon(path: &str) -> Result<PathBuf, CascadeError> {
     Ok(canonical)
 }
 
-fn discover_legacy_daemon(
-    expected_path: &str,
-    expected_slice_mb: u64,
-) -> Result<LegacyDaemonIdentity, CascadeError> {
-    let executable = canonical_root_owned_daemon(expected_path)?;
-    let executable_sha256 = sha256_file(&executable)?;
-    let legacy_executable = canonical_root_owned_daemon(LEGACY_DAEMON_PATH).ok();
-    let mut matches = Vec::new();
-    let mut foreign_daemon_seen = false;
-    for entry in fs::read_dir("/proc").map_err(|error| {
+fn legacy_daemon_observations_at<C, O>(
+    proc_root: &Path,
+    mut read_comm: C,
+    mut observe: O,
+) -> Result<Vec<(u32, String, LegacyDaemonObservation)>, CascadeError>
+where
+    C: FnMut(u32) -> Result<String, std::io::Error>,
+    O: FnMut(u32) -> Result<LegacyDaemonObservation, CascadeError>,
+{
+    let entries = fs::read_dir(proc_root).map_err(|error| {
         CascadeError::Io(format!("enumerate processes for legacy daemon: {error}"))
-    })? {
+    })?;
+    let mut observations = Vec::new();
+    for entry in entries {
         let entry =
             entry.map_err(|error| CascadeError::Io(format!("read process entry: {error}")))?;
         let Some(pid) = entry
@@ -2937,40 +3288,60 @@ fn discover_legacy_daemon(
         else {
             continue;
         };
-        let comm = fs::read_to_string(format!("/proc/{pid}/comm"));
+        let comm = read_comm(pid);
         if comm.ok().as_deref().map(str::trim) != Some("ramsharedd") {
             continue;
         }
-        let observation = read_legacy_daemon_observation(pid)?;
-        let proof = if fs::canonicalize(&observation.executable_link)
-            .ok()
-            .as_deref()
-            == Some(executable.as_path())
-        {
-            Some(LegacyDaemonProof::BinaryMatch)
-        } else if legacy_replaced_daemon_is_bound(&observation, &executable, expected_slice_mb) {
-            Some(LegacyDaemonProof::ReplacedBinary {
-                slice_mb: expected_slice_mb,
-            })
-        } else {
-            legacy_regular_daemon_proof(
-                &observation,
-                legacy_executable.as_deref(),
-                &executable_sha256,
-                expected_slice_mb,
-            )
-        };
+        observations.push((pid, "ramsharedd".into(), observe(pid)?));
+    }
+    Ok(observations)
+}
+
+fn select_legacy_daemon_identity<I, C>(
+    executable: &Path,
+    legacy_executable: Option<&Path>,
+    executable_sha256: [u8; 32],
+    expected_slice_mb: u64,
+    observations: impl IntoIterator<Item = (u32, String, LegacyDaemonObservation)>,
+    mut canonicalize_link: C,
+    mut instance_id: I,
+) -> Result<LegacyDaemonIdentity, CascadeError>
+where
+    I: FnMut(u32) -> Option<String>,
+    C: FnMut(&Path) -> Option<PathBuf>,
+{
+    let mut matches = Vec::new();
+    let mut foreign_daemon_seen = false;
+    for (pid, comm, observation) in observations {
+        if pid == 0 || comm.trim() != "ramsharedd" {
+            continue;
+        }
+        let proof =
+            if canonicalize_link(&observation.executable_link).as_deref() == Some(executable) {
+                Some(LegacyDaemonProof::BinaryMatch)
+            } else if legacy_replaced_daemon_is_bound(&observation, executable, expected_slice_mb) {
+                Some(LegacyDaemonProof::ReplacedBinary {
+                    slice_mb: expected_slice_mb,
+                })
+            } else {
+                legacy_regular_daemon_proof(
+                    &observation,
+                    legacy_executable,
+                    &executable_sha256,
+                    expected_slice_mb,
+                )
+            };
         let Some(proof) = proof else {
             foreign_daemon_seen = true;
             continue;
         };
-        let instance_id = daemon_instance_id_from_pid(pid).ok_or_else(|| {
+        let instance_id = instance_id(pid).ok_or_else(|| {
             CascadeError::Precondition("legacy daemon start identity is unavailable".into())
         })?;
         matches.push(LegacyDaemonIdentity {
             pid,
             instance_id,
-            executable: executable.clone(),
+            executable: executable.to_path_buf(),
             proof,
         });
     }
@@ -2988,6 +3359,29 @@ fn discover_legacy_daemon(
             "legacy migration refuses multiple BINARY_MATCH ramsharedd processes".into(),
         )),
     }
+}
+
+fn discover_legacy_daemon(
+    expected_path: &str,
+    expected_slice_mb: u64,
+) -> Result<LegacyDaemonIdentity, CascadeError> {
+    let executable = canonical_root_owned_daemon(expected_path)?;
+    let executable_sha256 = sha256_file(&executable)?;
+    let legacy_executable = canonical_root_owned_daemon(LEGACY_DAEMON_PATH).ok();
+    let observations = legacy_daemon_observations_at(
+        Path::new("/proc"),
+        |pid| fs::read_to_string(format!("/proc/{pid}/comm")),
+        read_legacy_daemon_observation,
+    )?;
+    select_legacy_daemon_identity::<_, _>(
+        &executable,
+        legacy_executable.as_deref(),
+        executable_sha256,
+        expected_slice_mb,
+        observations,
+        |path| fs::canonicalize(path).ok(),
+        daemon_instance_id_from_pid,
+    )
 }
 
 fn revalidate_legacy_daemon(identity: &LegacyDaemonIdentity) -> Result<(), CascadeError> {
@@ -3379,7 +3773,9 @@ impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, 
             &self.binding.devices,
         )?;
         let pinned = bind_device_for_effect(device)?;
-        let result = self.runner.run("swapoff", &["--", pinned.path()]);
+        let result = self
+            .runner
+            .run_bounded("swapoff", &["--", pinned.path()], SWAPOFF_TIMEOUT);
         match result {
             Ok(_) => {
                 prove_exact_swap_absent(device)?;
@@ -3790,7 +4186,11 @@ mod tests {
             CascadeError::Precondition("primary fixture failure".into()),
         );
         assert!(error.to_string().contains("primary fixture failure"));
-        assert!(!paths.zram_dev_file.exists());
+        assert!(
+            !paths.zram_dev_file.exists(),
+            "exact rollback retained a device record: error={error}; calls={:?}",
+            runner.calls()
+        );
         assert_eq!(runner.calls(), vec!["zramctl -r /dev/zram7"]);
 
         assert!(rollback_zram_tier(&runner, &paths, "", false));
@@ -3969,6 +4369,24 @@ mod tests {
         .unwrap_or_else(|error| panic!("write cache identity status: {error}"));
     }
 
+    #[test]
+    fn degraded_cache_keeps_exact_daemon_identity_for_swapoff_first_teardown() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create runtime directory");
+        let pid = std::process::id();
+        let instance_id = daemon_instance_id_from_pid(pid).expect("current process identity");
+        fs::write(
+            &paths.cache_status_file,
+            format!(
+                r#"{{"schema_version":1,"daemon_instance_id":"{instance_id}","written_at_unix_ms":{},"ok":false,"origin_state":"READY","cache_state":"UNAVAILABLE","logical_capacity_kib":4194304,"vram_cached_kib":0,"gpu_headroom_kib":null,"ssd_origin_written_kib":1,"cache_fallback_reads":1,"cache_invalidations":0,"cache_releases":0,"cache_target_kib":4194304}}"#,
+                unix_time_ms().expect("current time")
+            ),
+        )
+        .expect("write degraded status");
+        assert!(cache_status_has_current_daemon_identity(&paths, pid));
+    }
+
     fn seal_runtime_lifecycle(
         paths: &RuntimePaths,
         daemon_pid: u32,
@@ -4043,6 +4461,488 @@ mod tests {
         });
     }
 
+    #[test]
+    fn sysfs_device_discovery_filters_live_devices_and_rejects_malformed_state() {
+        let fixture = TestDir::new();
+        let class_block = fixture.path.join("sys/class/block");
+        for (name, file, value) in [
+            ("nbd0", "pid", "  \n"),
+            ("nbd1", "pid", "4242\n"),
+            ("zram0", "disksize", "0\n"),
+            ("zram1", "disksize", "4096\n"),
+        ] {
+            let device = class_block.join(name);
+            fs::create_dir_all(&device).expect("create synthetic sysfs block device");
+            fs::write(device.join(file), value).expect("write synthetic sysfs attribute");
+        }
+        fs::create_dir_all(class_block.join("nbd2")).expect("create ownerless NBD fixture");
+        fs::create_dir_all(class_block.join("ublkb4")).expect("create synthetic ublk device");
+        fs::create_dir_all(class_block.join("sda")).expect("create unrelated block device");
+
+        let observe = |path: &str, kind: ManagedDeviceKind| {
+            Ok(BoundDeviceIdentity {
+                kind,
+                path: path.to_string(),
+                dev_t: "259:4".into(),
+                sysfs_path: format!(
+                    "/fixture/sys/class/block/{}",
+                    path.trim_start_matches("/dev/")
+                ),
+                sysfs_dev_t: "259:4".into(),
+                kernel_owner_instance_id: (kind == ManagedDeviceKind::Nbd)
+                    .then(|| "4242-100".into()),
+            })
+        };
+
+        let live = detect_live_managed_devices_in(&class_block, observe)
+            .expect("valid sysfs fixture should be enumerated");
+        assert_eq!(
+            live.iter()
+                .map(|device| device.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/dev/nbd1", "/dev/ublkb4", "/dev/zram1"]
+        );
+
+        assert!(
+            detect_live_managed_devices_in(&fixture.path.join("missing"), |_, _| {
+                unreachable!("unreadable sysfs root is refused before observing devices")
+            })
+            .is_err()
+        );
+        assert!(
+            detect_live_managed_devices_in(&class_block, |path, kind| {
+                if path == "/dev/nbd1" {
+                    return Err(CascadeError::Precondition(
+                        "fixture observer refusal".into(),
+                    ));
+                }
+                observe_bound_device(path, kind)
+            })
+            .is_err()
+        );
+
+        let malformed_nbd = class_block.join("nbd3");
+        fs::create_dir_all(&malformed_nbd).expect("create malformed NBD fixture");
+        fs::write(malformed_nbd.join("pid"), "not-a-pid\n").expect("write malformed NBD owner PID");
+        assert!(detect_live_managed_devices_in(&class_block, observe_bound_device).is_err());
+        fs::remove_file(malformed_nbd.join("pid")).expect("remove malformed PID fixture");
+        fs::create_dir(malformed_nbd.join("pid")).expect("replace PID with unreadable directory");
+        assert!(detect_live_managed_devices_in(&class_block, observe_bound_device).is_err());
+
+        let bad_zram = class_block.join("zram3");
+        fs::create_dir_all(&bad_zram).expect("recreate malformed zram fixture");
+        fs::write(bad_zram.join("disksize"), "invalid\n").expect("write malformed size");
+        assert!(detect_live_managed_devices_in(&class_block, observe_bound_device).is_err());
+    }
+
+    #[test]
+    fn detached_nbd_evidence_requires_exact_idle_unheld_device_identity() {
+        let valid = DetachedNbdEvidence {
+            named_is_symlink: false,
+            named_is_block_device: true,
+            dev_t: "43:7".into(),
+            sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+            sysfs_dev_t: "43:7".into(),
+            owner_pid: Some(0),
+            size_sectors: 0,
+            has_holders: false,
+            named_after_is_symlink: false,
+            named_after_is_block_device: true,
+            named_after_dev_t: "43:7".into(),
+        };
+        let observed = validate_detached_nbd_evidence("/dev/nbd7".into(), valid.clone())
+            .expect("zero owner, size, and holders prove detached state");
+        assert_eq!(observed.path, "/dev/nbd7");
+        assert_eq!(observed.dev_t, "43:7");
+        for evidence in [
+            DetachedNbdEvidence {
+                named_is_symlink: true,
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                named_is_block_device: false,
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                sysfs_dev_t: "43:8".into(),
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                owner_pid: Some(42),
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                size_sectors: 8,
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                has_holders: true,
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                named_after_is_symlink: true,
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                named_after_is_block_device: false,
+                ..valid.clone()
+            },
+            DetachedNbdEvidence {
+                named_after_dev_t: "43:8".into(),
+                ..valid.clone()
+            },
+        ] {
+            assert!(validate_detached_nbd_evidence("/dev/nbd7".into(), evidence).is_err());
+        }
+    }
+
+    #[test]
+    fn detached_nbd_sysfs_proof_reads_exact_identity_and_rejects_unsafe_state() {
+        let named = DetachedNbdNode {
+            is_symlink: false,
+            is_block_device: true,
+            dev_t: "43:7".into(),
+        };
+        let fixture = |dev: &str, pid: Option<&str>, size: &str, holder: bool| {
+            let temp = TestDir::new();
+            let sysfs = temp.path.join("sys/class/block/nbd7");
+            fs::create_dir_all(sysfs.join("holders")).expect("create sysfs-shaped fixture");
+            fs::write(sysfs.join("dev"), dev).expect("write dev_t fixture");
+            fs::write(sysfs.join("size"), size).expect("write size fixture");
+            if let Some(pid) = pid {
+                fs::write(sysfs.join("pid"), pid).expect("write owner fixture");
+            }
+            if holder {
+                fs::write(sysfs.join("holders/holder0"), "").expect("write holder fixture");
+            }
+            (
+                temp,
+                sysfs.parent().expect("class block path").to_path_buf(),
+            )
+        };
+        let prove = |class_block: &Path, named_after: DetachedNbdNode| {
+            prove_detached_nbd_sysfs("/dev/nbd7".into(), named.clone(), class_block, || {
+                Ok(named_after.clone())
+            })
+        };
+
+        let (_temp, class_block) = fixture("43:7\n", None, "0\n", false);
+        let observed = prove(&class_block, named.clone()).expect("empty detached NBD is accepted");
+        assert_eq!(observed.dev_t, "43:7");
+        assert_eq!(observed.sysfs_dev_t, "43:7");
+
+        let sysfs = class_block.join("nbd7");
+        fs::remove_file(sysfs.join("dev")).expect("remove detached NBD dev_t");
+        assert!(prove(&class_block, named.clone()).is_err());
+        fs::write(sysfs.join("dev"), "43:7\n").expect("restore detached NBD dev_t");
+        fs::create_dir(sysfs.join("pid")).expect("replace PID with unreadable directory");
+        assert!(prove(&class_block, named.clone()).is_err());
+        fs::remove_dir(sysfs.join("pid")).expect("remove unreadable PID fixture");
+        fs::remove_dir_all(sysfs.join("holders")).expect("remove detached holders directory");
+        assert!(prove(&class_block, named.clone()).is_err());
+        fs::create_dir(sysfs.join("holders")).expect("restore detached holders directory");
+
+        for (dev, pid, size, holder) in [
+            ("bad\n", None, "0\n", false),
+            ("43:7\n", Some("not-a-pid\n"), "0\n", false),
+            ("43:7\n", Some("41\n"), "0\n", false),
+            ("43:7\n", None, "bad\n", false),
+            ("43:7\n", None, "8\n", false),
+            ("43:7\n", None, "0\n", true),
+        ] {
+            let (_temp, class_block) = fixture(dev, pid, size, holder);
+            assert!(prove(&class_block, named.clone()).is_err());
+        }
+
+        let (_temp, class_block) = fixture("43:7\n", Some(" \n"), "0\n", false);
+        assert!(prove(&class_block, named.clone()).is_ok());
+        let (_temp, class_block) = fixture("43:7\n", Some("0\n"), "0\n", false);
+        assert!(prove(&class_block, named.clone()).is_ok());
+
+        let (_temp, class_block) = fixture("43:7\n", None, "0\n", false);
+        let changed = DetachedNbdNode {
+            dev_t: "43:8".into(),
+            ..named.clone()
+        };
+        assert!(prove(&class_block, changed).is_err());
+        assert!(
+            prove_detached_nbd_sysfs(
+                "/dev/nbd7".into(),
+                DetachedNbdNode {
+                    is_symlink: true,
+                    ..named.clone()
+                },
+                &class_block,
+                || unreachable!("symlink refusal precedes sysfs I/O"),
+            )
+            .is_err()
+        );
+        assert!(
+            prove_detached_nbd_sysfs(
+                "/dev/nbd7".into(),
+                DetachedNbdNode {
+                    is_block_device: false,
+                    ..named.clone()
+                },
+                &class_block,
+                || unreachable!("non-device refusal precedes sysfs I/O"),
+            )
+            .is_err()
+        );
+        assert!(
+            prove_detached_nbd_sysfs(
+                "/dev/nbd7".into(),
+                named.clone(),
+                &class_block.join("missing"),
+                || unreachable!("missing sysfs path precedes restat"),
+            )
+            .is_err()
+        );
+        assert!(
+            prove_detached_nbd_sysfs("/dev/nbd7".into(), named, &class_block, || Err(
+                CascadeError::Precondition("restat refused".into())
+            ),)
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn bound_device_observation_enforces_sysfs_and_nbd_owner_policy() {
+        let live_nbd = bound_device_from_observation(BoundDeviceObservation {
+            path: "/dev/nbd7".into(),
+            expected_kind: ManagedDeviceKind::Nbd,
+            owner_policy: NbdOwnerPolicy::RequireLive,
+            dev_t: "43:7".into(),
+            sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+            sysfs_dev_t: "43:7".into(),
+            live_owner: Some("4242-100".into()),
+            owner_is_absent: false,
+        })
+        .expect("matching sysfs identity and live owner are accepted");
+        assert_eq!(
+            live_nbd.kernel_owner_instance_id.as_deref(),
+            Some("4242-100")
+        );
+
+        let ownerless_nbd = bound_device_from_observation(BoundDeviceObservation {
+            path: "/dev/nbd7".into(),
+            expected_kind: ManagedDeviceKind::Nbd,
+            owner_policy: NbdOwnerPolicy::PermitAbsent,
+            dev_t: "43:7".into(),
+            sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+            sysfs_dev_t: "43:7".into(),
+            live_owner: None,
+            owner_is_absent: true,
+        })
+        .expect("explicitly absent owner is allowed for NBD observation");
+        assert_eq!(ownerless_nbd.kernel_owner_instance_id, None);
+
+        assert!(
+            bound_device_from_observation(BoundDeviceObservation {
+                path: "/dev/nbd7".into(),
+                expected_kind: ManagedDeviceKind::Nbd,
+                owner_policy: NbdOwnerPolicy::RequireLive,
+                dev_t: "43:7".into(),
+                sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+                sysfs_dev_t: "43:7".into(),
+                live_owner: None,
+                owner_is_absent: true,
+            })
+            .is_err()
+        );
+        assert!(
+            bound_device_from_observation(BoundDeviceObservation {
+                path: "/dev/nbd7".into(),
+                expected_kind: ManagedDeviceKind::Nbd,
+                owner_policy: NbdOwnerPolicy::PermitAbsent,
+                dev_t: "43:7".into(),
+                sysfs_path: "/fixture/sys/class/block/nbd7".into(),
+                sysfs_dev_t: "43:8".into(),
+                live_owner: None,
+                owner_is_absent: true,
+            })
+            .is_err()
+        );
+
+        let zram = bound_device_from_observation(BoundDeviceObservation {
+            path: "/dev/zram2".into(),
+            expected_kind: ManagedDeviceKind::Zram,
+            owner_policy: NbdOwnerPolicy::RequireLive,
+            dev_t: "252:2".into(),
+            sysfs_path: "/fixture/sys/class/block/zram2".into(),
+            sysfs_dev_t: "252:2".into(),
+            live_owner: None,
+            owner_is_absent: false,
+        })
+        .expect("non-NBD devices do not require an NBD owner");
+        assert_eq!(zram.kernel_owner_instance_id, None);
+    }
+
+    #[test]
+    fn production_effect_binding_refuses_non_block_files_after_exact_revalidation() {
+        let identity = BoundDeviceIdentity {
+            kind: ManagedDeviceKind::Nbd,
+            path: "/dev/null".into(),
+            dev_t: "43:7".into(),
+            sysfs_path: "/sys/devices/virtual/block/nbd7".into(),
+            sysfs_dev_t: "43:7".into(),
+            kernel_owner_instance_id: Some("4242-100".into()),
+        };
+        let validations = std::cell::Cell::new(0);
+        let result = open_device_for_effect_with(
+            &identity,
+            |_| {
+                validations.set(validations.get() + 1);
+                Ok(())
+            },
+            |path| fs::File::open(path),
+        );
+        assert!(matches!(result, Err(CascadeError::Precondition(_))));
+        assert_eq!(validations.get(), 1, "identity is checked before opening");
+
+        let character_metadata = fs::metadata("/dev/null").expect("stat harmless character device");
+        assert!(matches!(
+            validate_pinned_effect_metadata(&character_metadata, "1:3"),
+            Err(CascadeError::Precondition(_))
+        ));
+
+        let missing = BoundDeviceIdentity {
+            path: "/dev/ramshared-test-device-that-does-not-exist".into(),
+            ..identity
+        };
+        assert!(matches!(
+            open_device_for_effect_with(&missing, |_| Ok(()), |path| fs::File::open(path)),
+            Err(CascadeError::Precondition(_))
+        ));
+    }
+
+    #[test]
+    fn sysfs_bound_device_observation_checks_node_owner_and_dev_t() {
+        let fixture = TestDir::new();
+        let class_block = fixture.path.join("sys/class/block");
+        let nbd = class_block.join("nbd7");
+        fs::create_dir_all(&nbd).expect("create sysfs-shaped NBD fixture");
+        fs::write(nbd.join("dev"), "43:7\n").expect("write NBD dev_t");
+        fs::write(nbd.join("pid"), "4242\n").expect("write NBD owner PID");
+        let named = DetachedNbdNode {
+            is_symlink: false,
+            is_block_device: true,
+            dev_t: "43:7".into(),
+        };
+        let observe = |named: DetachedNbdNode, class_block: &Path| {
+            observe_bound_device_in_sysfs(
+                "/dev/nbd7".into(),
+                ManagedDeviceKind::Nbd,
+                NbdOwnerPolicy::PermitAbsent,
+                named,
+                class_block,
+                |pid| Some(format!("{pid}-100")),
+                |_| unreachable!("a live owner identity needs no /proc probe"),
+            )
+        };
+
+        let live = observe(named.clone(), &class_block).expect("matching live NBD is accepted");
+        assert_eq!(live.dev_t, "43:7");
+        assert_eq!(live.sysfs_dev_t, "43:7");
+        assert_eq!(live.kernel_owner_instance_id.as_deref(), Some("4242-100"));
+
+        fs::write(nbd.join("dev"), "43:8\n").expect("write mismatching dev_t");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::remove_file(nbd.join("dev")).expect("remove NBD dev_t fixture");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::write(nbd.join("dev"), "43:7\n").expect("restore NBD dev_t");
+        fs::write(nbd.join("dev"), "invalid\n").expect("write malformed dev_t");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::write(nbd.join("dev"), "43:7\n").expect("restore NBD dev_t");
+        fs::write(nbd.join("pid"), "invalid\n").expect("write malformed owner PID");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::remove_file(nbd.join("pid")).expect("remove NBD owner PID");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::create_dir(nbd.join("pid")).expect("replace owner PID with unreadable directory");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::remove_dir(nbd.join("pid")).expect("remove unreadable owner PID fixture");
+        fs::write(nbd.join("pid"), "0\n").expect("write ownerless NBD PID");
+        assert!(observe(named.clone(), &class_block).is_err());
+        fs::write(nbd.join("pid"), "4242\n").expect("restore NBD owner PID");
+
+        assert!(
+            observe(
+                DetachedNbdNode {
+                    is_symlink: true,
+                    ..named.clone()
+                },
+                &class_block,
+            )
+            .is_err()
+        );
+        assert!(
+            observe(
+                DetachedNbdNode {
+                    is_block_device: false,
+                    ..named.clone()
+                },
+                &class_block,
+            )
+            .is_err()
+        );
+        assert!(observe(named.clone(), &class_block.join("missing")).is_err());
+
+        let ownerless = observe_bound_device_in_sysfs(
+            "/dev/nbd7".into(),
+            ManagedDeviceKind::Nbd,
+            NbdOwnerPolicy::PermitAbsent,
+            named.clone(),
+            &class_block,
+            |_| None,
+            |_| Ok(true),
+        )
+        .expect("absent owner process can be tolerated by explicit NBD policy");
+        assert_eq!(ownerless.kernel_owner_instance_id, None);
+        assert!(
+            observe_bound_device_in_sysfs(
+                "/dev/nbd7".into(),
+                ManagedDeviceKind::Nbd,
+                NbdOwnerPolicy::PermitAbsent,
+                named.clone(),
+                &class_block,
+                |_| None,
+                |_| Ok(false),
+            )
+            .is_err()
+        );
+        assert!(
+            observe_bound_device_in_sysfs(
+                "/dev/nbd7".into(),
+                ManagedDeviceKind::Nbd,
+                NbdOwnerPolicy::PermitAbsent,
+                named.clone(),
+                &class_block,
+                |_| None,
+                |_| Err(CascadeError::Precondition("owner lookup refused".into())),
+            )
+            .is_err()
+        );
+
+        let zram = class_block.join("zram3");
+        fs::create_dir_all(&zram).expect("create sysfs-shaped zram fixture");
+        fs::write(zram.join("dev"), "252:3\n").expect("write zram dev_t");
+        let zram_identity = observe_bound_device_in_sysfs(
+            "/dev/zram3".into(),
+            ManagedDeviceKind::Zram,
+            NbdOwnerPolicy::RequireLive,
+            DetachedNbdNode {
+                is_symlink: false,
+                is_block_device: true,
+                dev_t: "252:3".into(),
+            },
+            &class_block,
+            |_| unreachable!("non-NBD devices do not inspect a daemon owner"),
+            |_| unreachable!("non-NBD devices do not inspect an owner process"),
+        )
+        .expect("non-NBD device does not require NBD ownership");
+        assert_eq!(zram_identity.kind, ManagedDeviceKind::Zram);
+    }
+
     fn install_two_tier_down_snapshots(
         devices: &[BoundDeviceIdentity],
         active_nbd: bool,
@@ -4097,6 +4997,7 @@ mod tests {
     struct ScriptedRunner {
         responses: RefCell<VecDeque<(String, Result<String, CascadeError>)>>,
         calls: RefCell<Vec<String>>,
+        bounded_calls: RefCell<Vec<(String, Duration)>>,
     }
 
     impl ScriptedRunner {
@@ -4104,6 +5005,7 @@ mod tests {
             Self {
                 responses: RefCell::new(responses.into()),
                 calls: RefCell::new(Vec::new()),
+                bounded_calls: RefCell::new(Vec::new()),
             }
         }
 
@@ -4124,6 +5026,18 @@ mod tests {
             };
             assert_eq!(expected, label, "test command order");
             response
+        }
+
+        fn run_bounded(
+            &self,
+            command: &str,
+            args: &[&str],
+            timeout: Duration,
+        ) -> Result<String, CascadeError> {
+            self.bounded_calls
+                .borrow_mut()
+                .push((command_label(command, args), timeout));
+            self.run(command, args)
         }
     }
 
@@ -4465,7 +5379,7 @@ mod tests {
         let fixture = TestDir::new();
         let daemon = fixture.program(
             "ramsharedd",
-            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then touch \"$2\"; fi\n  shift\ndone\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n",
+            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then touch \"$2\"; fi\n  shift\ndone\nexec /bin/sleep 60\n",
         );
         let paths = RuntimePaths::under(&fixture.path);
         match spawn_daemon_with_deadline(
@@ -4562,6 +5476,99 @@ mod tests {
             !paths.forensics_markers[0].exists(),
             "marker was not disarmed"
         );
+    }
+
+    #[test]
+    fn connect_nbd_records_exact_preprovisioned_swap_before_activation() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        let mut daemon = controlled_child();
+        prepare_connect_identity(&paths, daemon.id());
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        set_live_device_snapshots([Ok(Vec::new())]);
+        let socket = paths.socket.to_string_lossy().into_owned();
+        let attach = format!("nbd-client -C 2 -unix {socket} /dev/nbd0");
+        let runner = ScriptedRunner::new(vec![
+            (attach.clone(), Ok(String::new())),
+            (
+                "blkid -s TYPE -o value /dev/nbd0".into(),
+                Ok("swap\n".into()),
+            ),
+            (
+                "blkid -s UUID -o value /dev/nbd0".into(),
+                Ok("99999999-8888-4777-8666-555555555555\n".into()),
+            ),
+            ("swapon -p 100 /dev/nbd0".into(), Ok(String::new())),
+        ]);
+
+        connect_nbd_with(
+            &runner,
+            &mut daemon,
+            &paths,
+            NbdAttachConfig {
+                connections: 2,
+                ..nbd_attach_fixture()
+            },
+        )
+        .expect("the exact sealed swap device should attach and activate");
+
+        let binding = read_lifecycle_binding(&paths).expect("sealed lifecycle binding");
+        assert_eq!(binding.devices.len(), 1);
+        assert_eq!(binding.devices[0].path, "/dev/nbd0");
+        assert_eq!(
+            read_nbd_path_record(&paths.swap_dev_file).expect("NBD path record"),
+            "/dev/nbd0"
+        );
+        let capacity =
+            fs::read_to_string(&paths.capacity_status_file).expect("published capacity status");
+        assert!(capacity.contains("logical_capacity_kib=65536"));
+        assert_eq!(
+            runner.calls(),
+            vec![
+                attach,
+                "blkid -s TYPE -o value /dev/nbd0".into(),
+                "blkid -s UUID -o value /dev/nbd0".into(),
+                "swapon -p 100 /dev/nbd0".into(),
+            ]
+        );
+        terminate_spawned_child(&mut daemon).expect("stop the controlled test daemon");
+    }
+
+    #[test]
+    fn connect_nbd_refuses_invalid_target_and_zero_connections_before_runner() {
+        for (swap_dev, connections) in [("/dev/zram7", 1), ("/dev/nbd0", 0)] {
+            let fixture = TestDir::new();
+            let paths = RuntimePaths::under(&fixture.path);
+            let mut daemon = controlled_child();
+            let runner = ScriptedRunner::new(Vec::new());
+
+            let error = error_from(
+                connect_nbd_with(
+                    &runner,
+                    &mut daemon,
+                    &paths,
+                    NbdAttachConfig {
+                        swap_dev,
+                        connections,
+                        ..nbd_attach_fixture()
+                    },
+                ),
+                "invalid attach inputs must fail before command execution",
+            );
+
+            assert!(matches!(
+                error,
+                CascadeError::Precondition(_) | CascadeError::Arg(_)
+            ));
+            assert!(runner.calls().is_empty());
+            assert!(
+                daemon
+                    .try_wait()
+                    .expect("observe refused fixture child")
+                    .is_some(),
+                "refused attach must reap only its spawned fixture child"
+            );
+        }
     }
 
     #[test]
@@ -5007,6 +6014,58 @@ mod tests {
     }
 
     #[test]
+    fn zram_zero_capacity_skips_commands_and_successful_setup_seals_exact_device() {
+        let zero_fixture = TestDir::new();
+        let zero_paths = RuntimePaths::under(&zero_fixture.path);
+        let unused_runner = ScriptedRunner::new(Vec::new());
+        assert_eq!(
+            setup_zram_with(&unused_runner, &zero_paths, 0, 200).expect("zero is disabled"),
+            ""
+        );
+        assert!(unused_runner.calls().is_empty());
+
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create isolated runtime");
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        let identity = bound_device_fixture("/dev/zram7", ManagedDeviceKind::Zram);
+        set_live_device_snapshots([Ok(vec![identity.clone()])]);
+        let runner = ScriptedRunner::new(vec![
+            (
+                "modprobe zram".into(),
+                Err(CascadeError::Shell {
+                    cmd: "modprobe zram".into(),
+                    msg: "module already loaded".into(),
+                }),
+            ),
+            (
+                "zramctl --find --size 64M --algorithm lzo-rle".into(),
+                Ok("/dev/zram7\n".into()),
+            ),
+            ("mkswap /dev/zram7".into(), Ok(String::new())),
+            ("swapon -p 200 /dev/zram7".into(), Ok(String::new())),
+        ]);
+
+        let device = setup_zram_with(&runner, &paths, 64, 200)
+            .expect("exact, preprovisioned zram may activate after validation");
+
+        assert_eq!(device, "/dev/zram7");
+        assert_eq!(
+            read_bound_device_record(&paths.zram_dev_file).expect("sealed device"),
+            identity
+        );
+        assert_eq!(
+            runner.calls(),
+            vec![
+                "modprobe zram".to_string(),
+                "zramctl --find --size 64M --algorithm lzo-rle".to_string(),
+                "mkswap /dev/zram7".to_string(),
+                "swapon -p 200 /dev/zram7".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     // TestName: malformed_zram_success_resets_exact_new_device_without_leak
     fn malformed_zram_success_resets_exact_new_device_without_leak() {
         let fixture = TestDir::new();
@@ -5044,6 +6103,163 @@ mod tests {
             ]
         );
         assert!(!paths.zram_dev_file.exists());
+    }
+
+    #[test]
+    fn malformed_zram_allocation_refuses_unreadable_post_state_without_reset() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        set_live_device_snapshots([Err("injected sysfs enumeration failure")]);
+        let runner = ScriptedRunner::new(vec![
+            ("modprobe zram".into(), Ok(String::new())),
+            (
+                "zramctl --find --size 64M --algorithm lzo-rle".into(),
+                Ok("allocator-success-without-device".into()),
+            ),
+        ]);
+
+        let error = error_from(
+            setup_zram_with(&runner, &paths, 64, 200),
+            "unreadable post-allocation state must prevent reset",
+        );
+
+        assert!(
+            error
+                .to_string()
+                .contains("post-allocation state is unreadable"),
+            "unexpected reconciliation error: {error}"
+        );
+        assert_eq!(
+            runner.calls(),
+            vec![
+                "modprobe zram".to_string(),
+                "zramctl --find --size 64M --algorithm lzo-rle".to_string(),
+            ],
+            "no reset is safe while the live-device set is unreadable"
+        );
+        assert!(!paths.zram_dev_file.exists());
+    }
+
+    #[test]
+    fn malformed_zram_allocation_refuses_ambiguous_delta_without_reset() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        set_live_device_snapshots([Ok(vec![bound_device_fixture(
+            "/dev/nbd0",
+            ManagedDeviceKind::Nbd,
+        )])]);
+        let runner = ScriptedRunner::new(vec![
+            ("modprobe zram".into(), Ok(String::new())),
+            (
+                "zramctl --find --size 64M --algorithm lzo-rle".into(),
+                Ok("allocator-success-without-device".into()),
+            ),
+        ]);
+
+        let error = error_from(
+            setup_zram_with(&runner, &paths, 64, 200),
+            "a wrong-kind device delta must not be reset as zram",
+        );
+
+        assert!(
+            error.to_string().contains("allocation delta is ambiguous"),
+            "unexpected reconciliation error: {error}"
+        );
+        assert_eq!(
+            runner.calls().len(),
+            2,
+            "ambiguous state must not reset a device"
+        );
+        assert!(!paths.zram_dev_file.exists());
+    }
+
+    #[test]
+    fn malformed_zram_reset_failure_preserves_sealed_ownership_evidence() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(&paths.runtime_dir)
+            .unwrap_or_else(|error| panic!("create zram reconciliation runtime: {error}"));
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        set_live_device_snapshots([Ok(vec![bound_device_fixture(
+            "/dev/zram7",
+            ManagedDeviceKind::Zram,
+        )])]);
+        let runner = ScriptedRunner::new(vec![
+            ("modprobe zram".into(), Ok(String::new())),
+            (
+                "zramctl --find --size 64M --algorithm lzo-rle".into(),
+                Ok("allocator-success-without-device".into()),
+            ),
+            (
+                "zramctl -r /dev/zram7".into(),
+                Err(CascadeError::Shell {
+                    cmd: "zramctl -r /dev/zram7".into(),
+                    msg: "injected reset failure".into(),
+                }),
+            ),
+        ]);
+
+        let error = error_from(
+            setup_zram_with(&runner, &paths, 64, 200),
+            "an unproven reset must retain the exact ownership record",
+        );
+
+        assert!(
+            error
+                .to_string()
+                .contains("reset of reconciled zram device")
+        );
+        assert!(
+            paths.zram_dev_file.exists(),
+            "ownership evidence was discarded"
+        );
+        assert_eq!(
+            runner.calls().len(),
+            3,
+            "no later allocator fallback is safe"
+        );
+    }
+
+    #[test]
+    fn malformed_zram_final_snapshot_failure_preserves_sealed_ownership_evidence() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(&paths.runtime_dir)
+            .unwrap_or_else(|error| panic!("create zram reconciliation runtime: {error}"));
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        set_live_device_snapshots([
+            Ok(vec![bound_device_fixture(
+                "/dev/zram7",
+                ManagedDeviceKind::Zram,
+            )]),
+            Err("injected post-reset enumeration failure"),
+        ]);
+        let runner = ScriptedRunner::new(vec![
+            ("modprobe zram".into(), Ok(String::new())),
+            (
+                "zramctl --find --size 64M --algorithm lzo-rle".into(),
+                Ok("allocator-success-without-device".into()),
+            ),
+            ("zramctl -r /dev/zram7".into(), Ok(String::new())),
+        ]);
+
+        let error = error_from(
+            setup_zram_with(&runner, &paths, 64, 200),
+            "unreadable post-reset state must preserve the ownership record",
+        );
+
+        assert!(error.to_string().contains("reset completion"));
+        assert!(
+            paths.zram_dev_file.exists(),
+            "ownership evidence was discarded"
+        );
+        assert_eq!(
+            runner.calls().len(),
+            3,
+            "the device state remains uncertain"
+        );
     }
 
     #[test]
@@ -5088,6 +6304,61 @@ mod tests {
             ]
         );
         assert!(paths.zram_dev_file.exists());
+    }
+
+    #[test]
+    fn zram_format_failure_rolls_back_only_the_new_exact_device() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create isolated zram runtime");
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
+        let zram = bound_device_fixture("/dev/zram7", ManagedDeviceKind::Zram);
+        set_live_device_snapshots([Ok(vec![zram.clone()]), Ok(vec![zram]), Ok(Vec::new())]);
+        let runner = ScriptedRunner::new(vec![
+            (
+                "modprobe zram".into(),
+                Err(CascadeError::Shell {
+                    cmd: "modprobe zram".into(),
+                    msg: "already loaded fixture".into(),
+                }),
+            ),
+            (
+                "zramctl --find --size 64M --algorithm lzo-rle".into(),
+                Ok("/dev/zram7".into()),
+            ),
+            (
+                "mkswap /dev/zram7".into(),
+                Err(CascadeError::Shell {
+                    cmd: "mkswap /dev/zram7".into(),
+                    msg: "injected format failure".into(),
+                }),
+            ),
+            ("zramctl -r /dev/zram7".into(), Ok(String::new())),
+        ]);
+
+        let error = error_from(
+            setup_zram_with(&runner, &paths, 64, 200),
+            "a failed format should report the primary error after exact rollback",
+        );
+
+        assert!(
+            error.to_string().contains("injected format failure"),
+            "rollback result did not preserve the primary failure: {error}"
+        );
+        assert!(
+            !paths.zram_dev_file.exists(),
+            "exact rollback retained a device record: error={error}; calls={:?}",
+            runner.calls()
+        );
+        assert_eq!(
+            runner.calls(),
+            vec![
+                "modprobe zram".to_string(),
+                "zramctl --find --size 64M --algorithm lzo-rle".to_string(),
+                "mkswap /dev/zram7".to_string(),
+                "zramctl -r /dev/zram7".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -5189,7 +6460,7 @@ mod tests {
         let fixture = TestDir::new();
         let daemon = fixture.program(
             "ramsharedd",
-            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then\n    runtime=${2%/*}\n    start=$(awk '{print $22}' /proc/$$/stat)\n    now=$(date +%s%3N)\n    printf '{\"schema_version\":1,\"daemon_instance_id\":\"%s-%s\",\"written_at_unix_ms\":%s,\"ok\":true,\"origin_state\":\"READY\",\"cache_state\":\"ACTIVE\",\"logical_capacity_kib\":1024,\"vram_cached_kib\":0,\"gpu_headroom_kib\":null,\"ssd_origin_written_kib\":1024,\"cache_fallback_reads\":0,\"cache_invalidations\":0,\"cache_releases\":0,\"cache_target_kib\":0}' \"$$\" \"$start\" \"$now\" > \"$runtime/cache-status.json\"\n    touch \"$2\"\n  fi\n  shift\ndone\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n",
+            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then\n    runtime=${2%/*}\n    start=$(awk '{print $22}' /proc/$$/stat)\n    now=$(date +%s%3N)\n    printf '{\"schema_version\":1,\"daemon_instance_id\":\"%s-%s\",\"written_at_unix_ms\":%s,\"ok\":true,\"origin_state\":\"READY\",\"cache_state\":\"ACTIVE\",\"logical_capacity_kib\":1024,\"vram_cached_kib\":0,\"gpu_headroom_kib\":null,\"ssd_origin_written_kib\":1024,\"cache_fallback_reads\":0,\"cache_invalidations\":0,\"cache_releases\":0,\"cache_target_kib\":0}' \"$$\" \"$start\" \"$now\" > \"$runtime/cache-status.json\"\n    touch \"$2\"\n  fi\n  shift\ndone\nexec /bin/sleep 60\n",
         );
         let paths = RuntimePaths::under(&fixture.path);
         let _seams = ParentSeams::install("Filename Type Size Used Priority\n", 0);
@@ -5282,7 +6553,7 @@ mod tests {
         let fixture = TestDir::new();
         let daemon = fixture.program(
             "ramsharedd",
-            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then\n    runtime=${2%/*}\n    start=$(awk '{print $22}' /proc/$$/stat)\n    now=$(date +%s%3N)\n    printf '{\"schema_version\":1,\"daemon_instance_id\":\"%s-%s\",\"written_at_unix_ms\":%s,\"ok\":true,\"origin_state\":\"READY\",\"cache_state\":\"ACTIVE\",\"logical_capacity_kib\":1024,\"vram_cached_kib\":0,\"gpu_headroom_kib\":null,\"ssd_origin_written_kib\":1024,\"cache_fallback_reads\":0,\"cache_invalidations\":0,\"cache_releases\":0,\"cache_target_kib\":0}' \"$$\" \"$start\" \"$now\" > \"$runtime/cache-status.json\"\n    touch \"$2\"\n  fi\n  shift\ndone\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n",
+            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then\n    runtime=${2%/*}\n    start=$(awk '{print $22}' /proc/$$/stat)\n    now=$(date +%s%3N)\n    printf '{\"schema_version\":1,\"daemon_instance_id\":\"%s-%s\",\"written_at_unix_ms\":%s,\"ok\":true,\"origin_state\":\"READY\",\"cache_state\":\"ACTIVE\",\"logical_capacity_kib\":1024,\"vram_cached_kib\":0,\"gpu_headroom_kib\":null,\"ssd_origin_written_kib\":1024,\"cache_fallback_reads\":0,\"cache_invalidations\":0,\"cache_releases\":0,\"cache_target_kib\":0}' \"$$\" \"$start\" \"$now\" > \"$runtime/cache-status.json\"\n    touch \"$2\"\n  fi\n  shift\ndone\nexec /bin/sleep 60\n",
         );
         let paths = RuntimePaths::under(&fixture.path);
         const ZRAM_ACTIVE: &str =
@@ -5380,7 +6651,7 @@ mod tests {
         let fixture = TestDir::new();
         let daemon = fixture.program(
             "ramsharedd",
-            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then\n    runtime=${2%/*}\n    start=$(awk '{print $22}' /proc/$$/stat)\n    now=$(date +%s%3N)\n    printf '{\"schema_version\":1,\"daemon_instance_id\":\"%s-%s\",\"written_at_unix_ms\":%s,\"ok\":true,\"origin_state\":\"READY\",\"cache_state\":\"ACTIVE\",\"logical_capacity_kib\":1024,\"vram_cached_kib\":0,\"gpu_headroom_kib\":null,\"ssd_origin_written_kib\":1024,\"cache_fallback_reads\":0,\"cache_invalidations\":0,\"cache_releases\":0,\"cache_target_kib\":0}' \"$$\" \"$start\" \"$now\" > \"$runtime/cache-status.json\"\n    touch \"$2\"\n  fi\n  shift\ndone\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n",
+            "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--sock\" ]; then\n    runtime=${2%/*}\n    start=$(awk '{print $22}' /proc/$$/stat)\n    now=$(date +%s%3N)\n    printf '{\"schema_version\":1,\"daemon_instance_id\":\"%s-%s\",\"written_at_unix_ms\":%s,\"ok\":true,\"origin_state\":\"READY\",\"cache_state\":\"ACTIVE\",\"logical_capacity_kib\":1024,\"vram_cached_kib\":0,\"gpu_headroom_kib\":null,\"ssd_origin_written_kib\":1024,\"cache_fallback_reads\":0,\"cache_invalidations\":0,\"cache_releases\":0,\"cache_target_kib\":0}' \"$$\" \"$start\" \"$now\" > \"$runtime/cache-status.json\"\n    touch \"$2\"\n  fi\n  shift\ndone\nexec /bin/sleep 60\n",
         );
         let paths = RuntimePaths::under(&fixture.path);
         const ZRAM_ACTIVE: &str =
@@ -5746,6 +7017,153 @@ mod tests {
                 ..observation
             },
         ));
+    }
+
+    #[test]
+    fn legacy_daemon_proc_enumeration_uses_injected_fixture_root() {
+        let fixture = TestDir::new();
+        for (pid, comm) in [
+            ("123", " ramsharedd \n"),
+            ("124", "other\n"),
+            ("0", "ramsharedd\n"),
+        ] {
+            let process = fixture.path.join(pid);
+            fs::create_dir_all(&process).expect("create synthetic process directory");
+            fs::write(process.join("comm"), comm).expect("write synthetic process comm");
+        }
+        fs::create_dir(fixture.path.join("not-a-pid")).expect("create non-PID entry");
+        let observed = std::cell::RefCell::new(Vec::new());
+        let observations = legacy_daemon_observations_at(
+            &fixture.path,
+            |pid| fs::read_to_string(fixture.path.join(pid.to_string()).join("comm")),
+            |pid| {
+                observed.borrow_mut().push(pid);
+                Ok(LegacyDaemonObservation {
+                    uid: 0,
+                    executable_link: PathBuf::from("/fixture/ramsharedd"),
+                    canonical_executable: Some(PathBuf::from("/fixture/ramsharedd")),
+                    executable_sha256: None,
+                    arguments: Vec::new(),
+                    owns_legacy_listener: false,
+                })
+            },
+        )
+        .expect("synthetic proc tree enumerates without touching host /proc");
+        assert_eq!(*observed.borrow(), [123]);
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].0, 123);
+        assert!(
+            legacy_daemon_observations_at(
+                &fixture.path.join("missing"),
+                |_| unreachable!("unreadable root fails before reading comm"),
+                |_| unreachable!("unreadable root fails before process observation"),
+            )
+            .is_err()
+        );
+        assert!(
+            legacy_daemon_observations_at(
+                &fixture.path,
+                |pid| fs::read_to_string(fixture.path.join(pid.to_string()).join("comm")),
+                |_| Err(CascadeError::Precondition(
+                    "fixture observation failure".into()
+                )),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_daemon_selection_requires_one_proven_process_and_instance() {
+        let executable = PathBuf::from("/fixture/bin/ramsharedd");
+        let observation = |path: &str| LegacyDaemonObservation {
+            uid: 0,
+            executable_link: PathBuf::from(path),
+            canonical_executable: Some(PathBuf::from(path)),
+            executable_sha256: None,
+            arguments: Vec::new(),
+            owns_legacy_listener: false,
+        };
+        let binary_match = (
+            42,
+            "ramsharedd".into(),
+            observation("/fixture/bin/ramsharedd"),
+        );
+
+        let selected = select_legacy_daemon_identity(
+            &executable,
+            None,
+            [0x5a; 32],
+            4096,
+            [
+                (
+                    0,
+                    "ramsharedd".into(),
+                    observation("/fixture/bin/ramsharedd"),
+                ),
+                (7, "other".into(), observation("/fixture/bin/foreign")),
+                binary_match.clone(),
+            ],
+            |path| Some(path.to_path_buf()),
+            |pid| Some(format!("{pid}-100")),
+        )
+        .expect("one exact binary and invocation identity are admitted");
+        assert_eq!(selected.pid, 42);
+        assert_eq!(selected.proof, LegacyDaemonProof::BinaryMatch);
+
+        let no_match = select_legacy_daemon_identity(
+            &executable,
+            None,
+            [0x5a; 32],
+            4096,
+            [(7, "other".into(), observation("/fixture/bin/foreign"))],
+            |path| Some(path.to_path_buf()),
+            |pid| Some(format!("{pid}-100")),
+        )
+        .expect_err("unrelated processes are ignored, leaving no proven daemon");
+        assert!(no_match.to_string().contains("requires one BINARY_MATCH"));
+
+        let foreign = select_legacy_daemon_identity(
+            &executable,
+            None,
+            [0x5a; 32],
+            4096,
+            [(43, "ramsharedd".into(), observation("/fixture/bin/foreign"))],
+            |path| Some(path.to_path_buf()),
+            |pid| Some(format!("{pid}-100")),
+        )
+        .expect_err("a foreign daemon blocks migration");
+        assert!(foreign.to_string().contains("foreign ramsharedd"));
+
+        let multiple = select_legacy_daemon_identity(
+            &executable,
+            None,
+            [0x5a; 32],
+            4096,
+            [
+                binary_match.clone(),
+                (
+                    43,
+                    "ramsharedd".into(),
+                    observation("/fixture/bin/ramsharedd"),
+                ),
+            ],
+            |path| Some(path.to_path_buf()),
+            |pid| Some(format!("{pid}-100")),
+        )
+        .expect_err("multiple proven daemon processes are ambiguous");
+        assert!(multiple.to_string().contains("multiple BINARY_MATCH"));
+
+        let missing_instance = select_legacy_daemon_identity(
+            &executable,
+            None,
+            [0x5a; 32],
+            4096,
+            [binary_match],
+            |path| Some(path.to_path_buf()),
+            |_| None,
+        )
+        .expect_err("identity loss refuses an otherwise matching process");
+        assert!(missing_instance.to_string().contains("start identity"));
     }
 
     #[test]
@@ -6560,6 +7978,16 @@ mod tests {
                 "nbd-client -d /dev/nbd0",
             ]
         );
+        assert_eq!(
+            runner.bounded_calls.borrow().as_slice(),
+            &[
+                ("swapoff -- /dev/nbd0".to_string(), Duration::from_secs(120)),
+                (
+                    "swapoff -- /dev/zram0".to_string(),
+                    Duration::from_secs(120)
+                ),
+            ]
+        );
         assert!(!paths.swap_dev_file.exists());
         assert!(!paths.zram_dev_file.exists());
         assert!(!paths.forensics_markers[0].exists());
@@ -6981,6 +8409,98 @@ mod tests {
     }
 
     #[test]
+    fn proc_identity_and_socket_metadata_adapters_share_fail_closed_validation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            current_boot_id_with(|| { Ok(" 11111111-2222-4333-8444-555555555555\n".into()) })?,
+            "11111111-2222-4333-8444-555555555555"
+        );
+        assert!(matches!(
+            current_boot_id_with(|| Ok("not-a-boot-id".into())),
+            Err(CascadeError::Precondition(_))
+        ));
+        assert!(matches!(
+            current_boot_id_with(|| Err(std::io::Error::from(std::io::ErrorKind::NotFound))),
+            Err(CascadeError::Io(_))
+        ));
+
+        let valid_id = b"INVOCATION_ID=0123456789ABCDEF0123456789ABCDEF\0".to_vec();
+        assert_eq!(
+            daemon_invocation_id_with(4321, |pid| {
+                assert_eq!(pid, 4321);
+                Ok(valid_id.clone())
+            })?,
+            "0123456789abcdef0123456789abcdef"
+        );
+        for bytes in [
+            b"OTHER=value\0".to_vec(),
+            b"INVOCATION_ID=short\0".to_vec(),
+            b"INVOCATION_ID=0123456789abcdef0123456789abcdef\0INVOCATION_ID=0123456789abcdef0123456789abcdef\0".to_vec(),
+            b"INVOCATION_ID=\xff\0".to_vec(),
+        ] {
+            assert!(matches!(
+                daemon_invocation_id_with(4321, |_| Ok(bytes)),
+                Err(CascadeError::Precondition(_))
+            ));
+        }
+        assert!(matches!(
+            daemon_invocation_id_with(4321, |_| {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            }),
+            Err(CascadeError::Precondition(_))
+        ));
+
+        let fixture = TestDir::new();
+        let socket_path = fixture.path.join("export.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket_path)?;
+        let socket_metadata = fs::symlink_metadata(&socket_path)?;
+        let socket = socket_identity_from_metadata(&socket_path, &socket_metadata, true)?;
+        assert_eq!(socket.path, socket_path.to_string_lossy());
+        assert_eq!(socket.inode, socket_metadata.ino());
+
+        let regular_path = fixture.path.join("regular-file");
+        fs::write(&regular_path, b"fixture")?;
+        let regular_metadata = fs::symlink_metadata(&regular_path)?;
+        assert!(matches!(
+            socket_identity_from_metadata(&regular_path, &regular_metadata, true),
+            Err(CascadeError::Precondition(_))
+        ));
+        let character_device = fs::metadata("/dev/null")?;
+        assert!(matches!(
+            validate_pinned_effect_metadata(&character_device, "1:3"),
+            Err(CascadeError::Precondition(_))
+        ));
+
+        let symlink_path = fixture.path.join("socket-link");
+        std::os::unix::fs::symlink(&socket_path, &symlink_path)?;
+        let symlink_metadata = fs::symlink_metadata(&symlink_path)?;
+        assert!(matches!(
+            socket_identity_from_metadata(&symlink_path, &symlink_metadata, true),
+            Err(CascadeError::Precondition(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn system_command_runner_uses_bounded_capture_for_success_and_spawn_refusal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let runner = SystemCommandRunner;
+        assert_eq!(
+            runner.run("/bin/printf", &["%s", "safe-fixture"])?,
+            "safe-fixture"
+        );
+        assert_eq!(
+            runner.run_bounded("/bin/true", &[], Duration::from_secs(1))?,
+            ""
+        );
+        assert!(matches!(
+            runner.run("/missing/ramshared-command-fixture", &[]),
+            Err(CascadeError::Shell { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn legacy_runtime_records_are_compatible_validates_files() {
         let dir = TestDir::new();
         let paths = RuntimePaths::under(&dir.path);
@@ -7240,5 +8760,1125 @@ mod tests {
         assert!(up_with_args(&["--unknown".to_string()]).is_err());
         assert!(up_with_args(&["--vram-mb".to_string(), "invalid".to_string()]).is_err());
         assert!(up_with_args(&["--zram-mb".to_string(), "-5".to_string()]).is_err());
+    }
+
+    #[test]
+    fn up_with_args_refuses_ublk_before_swap_or_device_access() {
+        let error = up_with_args(&["--transport".to_string(), "ublk".to_string()])
+            .expect_err("product ublk is a fail-closed refusal");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("transport ublk refused on WSL2")
+                || message.contains("transport ublk in `ramshared up` is not implemented yet"),
+            "unexpected explicit ublk refusal: {message}"
+        );
+    }
+
+    #[test]
+    fn up_with_config_refuses_missing_safety_net_before_runtime_setup() {
+        const EMPTY: &str = "Filename Type Size Used Priority\n";
+        let _seams = ParentSeams::install(EMPTY, 0);
+        set_live_device_snapshots([Ok(Vec::new())]);
+        TEST_MEM_AVAILABLE.with(|cell| *cell.borrow_mut() = Some(0));
+
+        let mut args = up_args_fixture();
+        args.vram_mb = 1024;
+        let error = up_with_config(args)
+            .expect_err("the safety-net preflight must refuse before runtime setup");
+
+        assert!(
+            error.to_string().contains("no DEMOTE safety net"),
+            "preflight returned an earlier error: {error}"
+        );
+        assert!(
+            SH_SCRIPT.with(|queue| queue.borrow().is_empty()),
+            "a failed preflight must not invoke a product command"
+        );
+    }
+
+    fn write_test_host_manifest(dir: &TestDir) -> (PathBuf, String) {
+        let manifest = dir.path.join("origin-manifest.json");
+        let contents = br#"{"origin_vhdx":"C:\\ProgramData\\RamShared\\ramshared-origin.vhdx","partuuid":"11111111-2222-4333-8444-555555555555"}"#;
+        fs::write(&manifest, contents).expect("write manifest");
+        let hash = Sha256::digest(contents)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        (manifest, hash)
+    }
+
+    #[test]
+    fn ensure_origin_attached_is_noop_when_device_present() {
+        let dir = TestDir::new();
+        let present_device = dir.path.join("present-device");
+        fs::write(&present_device, b"block").expect("write present device");
+
+        struct NoOpRunner(RefCell<Vec<String>>);
+        impl CommandRunner for NoOpRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.0.borrow_mut().push(command_label(command, args));
+                Ok(String::new())
+            }
+        }
+        let runner = NoOpRunner(RefCell::new(Vec::new()));
+        let res = ensure_origin_attached(
+            &runner,
+            present_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            Path::new("/nonexistent/manifest.json"),
+            "",
+        );
+        assert!(res.is_ok());
+        assert!(runner.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn ensure_origin_attached_issues_bounded_mount_when_absent() {
+        let dir = TestDir::new();
+        let absent_device = dir.path.join("absent-device");
+        let (manifest, manifest_hash) = write_test_host_manifest(&dir);
+
+        struct MountRunner {
+            target: PathBuf,
+            calls: RefCell<Vec<String>>,
+        }
+        impl CommandRunner for MountRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.calls.borrow_mut().push(command_label(command, args));
+                // Simulate host mount exposing the target device
+                fs::write(&self.target, b"mounted").expect("write target device");
+                Ok(String::new())
+            }
+        }
+        let runner = MountRunner {
+            target: absent_device.clone(),
+            calls: RefCell::new(Vec::new()),
+        };
+        let res = ensure_origin_attached(
+            &runner,
+            absent_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &manifest_hash,
+        );
+        assert!(res.is_ok());
+        let calls = runner.calls.borrow().clone();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0].starts_with("wsl.exe --mount")
+                || calls[0].starts_with("/mnt/c/Windows/System32/wsl.exe --mount")
+        );
+        assert!(!calls[0].contains("cmd.exe"));
+    }
+
+    #[test]
+    fn ensure_origin_attached_refuses_unsealed_manifest_before_host_call() {
+        let dir = TestDir::new();
+        let device = dir.path.join("absent-device");
+        let manifest = dir.path.join("origin-manifest.json");
+        fs::write(&manifest, br#"{"origin_vhdx":"C:\\Other\\disk.vhdx"}"#).expect("write manifest");
+        struct NoHostCall;
+        impl CommandRunner for NoHostCall {
+            fn run(&self, _: &str, _: &[&str]) -> Result<String, CascadeError> {
+                panic!("unsealed manifest must not invoke the host");
+            }
+        }
+        let error = ensure_origin_attached(
+            &NoHostCall,
+            device.to_str().expect("utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &"0".repeat(64),
+        )
+        .expect_err("hash mismatch must refuse attachment");
+        assert!(error.to_string().contains("manifest"));
+    }
+
+    #[test]
+    fn ensure_origin_attached_rejects_unreadable_and_noncanonical_manifests_before_host_call() {
+        struct NoHostCall;
+        impl CommandRunner for NoHostCall {
+            fn run(&self, _: &str, _: &[&str]) -> Result<String, CascadeError> {
+                panic!("invalid origin manifest must not invoke the host");
+            }
+        }
+
+        let dir = TestDir::new();
+        let missing_device = dir.path.join("missing-device");
+        let missing_manifest = dir.path.join("missing-manifest.json");
+        let missing_error = ensure_origin_attached(
+            &NoHostCall,
+            missing_device.to_str().expect("UTF-8 fixture path"),
+            "11111111-2222-4333-8444-555555555555",
+            &missing_manifest,
+            &"a".repeat(64),
+        )
+        .expect_err("missing manifest must refuse before host attach");
+        assert!(missing_error.to_string().contains("unavailable"));
+
+        let malformed_cases: [(&str, &[u8], &str); 4] = [
+            ("invalid-json", b"not-json", "invalid"),
+            (
+                "missing-path",
+                br#"{"partuuid":"11111111-2222-4333-8444-555555555555"}"#,
+                "VHDX path is missing",
+            ),
+            (
+                "wrong-partuuid",
+                br#"{"origin_vhdx":"C:\\safe\\origin.vhdx","partuuid":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}"#,
+                "PARTUUID differs",
+            ),
+            (
+                "unsafe-path",
+                br#"{"origin_vhdx":"C:\\safe;echo\\origin.vhdx","partuuid":"11111111-2222-4333-8444-555555555555"}"#,
+                "forbidden shell characters",
+            ),
+        ];
+        for (label, contents, expected_error) in malformed_cases {
+            let manifest = dir.path.join(format!("{label}.json"));
+            fs::write(&manifest, contents).expect("write manifest fixture");
+            let hash = Sha256::digest(contents)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let error = ensure_origin_attached(
+                &NoHostCall,
+                missing_device.to_str().expect("UTF-8 fixture path"),
+                "11111111-2222-4333-8444-555555555555",
+                &manifest,
+                &hash,
+            )
+            .expect_err("noncanonical manifest must be rejected");
+            assert!(
+                error.to_string().contains(expected_error),
+                "{label} returned an unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_origin_attached_fails_closed_on_timeout_or_mismatch() {
+        let dir = TestDir::new();
+        let absent_device = dir.path.join("absent-device");
+        let (manifest, manifest_hash) = write_test_host_manifest(&dir);
+
+        struct FailingRunner(RefCell<Vec<String>>);
+        impl CommandRunner for FailingRunner {
+            fn run(&self, command: &str, args: &[&str]) -> Result<String, CascadeError> {
+                self.0.borrow_mut().push(command_label(command, args));
+                // Deliberately do NOT create the target device to simulate timeout/failure
+                Ok(String::new())
+            }
+        }
+        let runner = FailingRunner(RefCell::new(Vec::new()));
+        let res = ensure_origin_attached(
+            &runner,
+            absent_device.to_str().expect("valid utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &manifest_hash,
+        );
+        assert!(res.is_err());
+        assert!(
+            res.expect_err("expected error on timeout")
+                .to_string()
+                .contains("did not appear")
+        );
+
+        // Validation of dangerous windows path characters
+        assert!(validate_windows_origin_path("C:\\safe\\origin.vhdx").is_ok());
+        assert!(validate_windows_origin_path("invalid-drive-path").is_err());
+        assert!(validate_windows_origin_path("C:\\path;rm -rf").is_err());
+        assert!(validate_windows_origin_path("C:\\path&echo").is_err());
+        assert!(validate_windows_origin_path("C:\\path%TEMP%\\origin.vhdx").is_err());
+        assert!(validate_windows_origin_path("C:\\path^echo\\origin.vhdx").is_err());
+        assert!(validate_windows_origin_path("C:\\path\norigin.vhdx").is_err());
+    }
+
+    #[test]
+    fn ensure_origin_attached_propagates_host_mount_failure() {
+        let dir = TestDir::new();
+        let device = dir.path.join("appeared-despite-error");
+        let (manifest, manifest_hash) = write_test_host_manifest(&dir);
+
+        struct FailedMount(PathBuf);
+        impl CommandRunner for FailedMount {
+            fn run(&self, _command: &str, _args: &[&str]) -> Result<String, CascadeError> {
+                fs::write(&self.0, b"unexpected-device").expect("write fixture");
+                Err(CascadeError::Precondition("host mount failed".into()))
+            }
+        }
+        let error = ensure_origin_attached(
+            &FailedMount(device.clone()),
+            device.to_str().expect("utf-8 path"),
+            "11111111-2222-4333-8444-555555555555",
+            &manifest,
+            &manifest_hash,
+        )
+        .expect_err("host mount failure must not be ignored");
+        assert!(error.to_string().contains("host mount failed"));
+    }
+
+    #[test]
+    // TestName: linux_device_number_encodes_glibc_major_minor_layout
+    fn linux_device_number_encodes_glibc_major_minor_layout() {
+        // glibc gnu_dev_makedev layout, checked against gnu_dev_major/minor.
+        assert_eq!(linux_device_number(0x0000_0000_0000_0000), "0:0");
+        assert_eq!(linux_device_number(0x0000_0000_0000_0801), "8:1");
+        assert_eq!(linux_device_number(0x0000_0000_0000_0821), "8:33");
+        assert_eq!(linux_device_number(0x0000_0000_0000_0100), "1:0");
+        assert_eq!(linux_device_number(0x0000_0000_0001_0000), "256:0");
+    }
+
+    #[test]
+    // TestName: parse_zram_device_accepts_exact_nodes_and_rejects_shapes
+    fn parse_zram_device_accepts_exact_nodes_and_rejects_shapes() {
+        assert_eq!(parse_zram_device("/dev/zram0"), Some("/dev/zram0".into()));
+        assert_eq!(
+            parse_zram_device("  /dev/zram12\n"),
+            Some("/dev/zram12".into())
+        );
+        assert_eq!(parse_zram_device("/dev/zram"), None);
+        assert_eq!(parse_zram_device("/dev/zramx"), None);
+        assert_eq!(parse_zram_device("/dev/zram0p1"), None);
+        assert_eq!(parse_zram_device("/dev/nbd0"), None);
+        assert_eq!(parse_zram_device(""), None);
+    }
+
+    #[test]
+    // TestName: exact_single_device_delta_admits_one_new_matching_kind
+    fn exact_single_device_delta_admits_one_new_matching_kind() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let zram = bound_device_fixture("/dev/zram0", ManagedDeviceKind::Zram);
+        let nbd7 = bound_device_fixture("/dev/nbd7", ManagedDeviceKind::Nbd);
+        let nbd_only = std::slice::from_ref(&nbd);
+        let zram_only = std::slice::from_ref(&zram);
+        assert_eq!(
+            exact_single_device_delta(
+                &[nbd.clone(), zram.clone()],
+                &[nbd.clone(), zram.clone(), nbd7.clone()],
+                ManagedDeviceKind::Nbd
+            ),
+            Some(nbd7.clone())
+        );
+        assert_eq!(
+            exact_single_device_delta(
+                nbd_only,
+                &[nbd.clone(), zram.clone()],
+                ManagedDeviceKind::Nbd
+            ),
+            None,
+            "the added device must be the requested kind"
+        );
+        assert_eq!(
+            exact_single_device_delta(&[], nbd_only, ManagedDeviceKind::Nbd),
+            Some(nbd.clone())
+        );
+        assert_eq!(
+            exact_single_device_delta(nbd_only, nbd_only, ManagedDeviceKind::Nbd),
+            None,
+            "no delta is not a single addition"
+        );
+        assert_eq!(
+            exact_single_device_delta(
+                nbd_only,
+                &[nbd.clone(), nbd.clone()],
+                ManagedDeviceKind::Nbd
+            ),
+            None,
+            "duplicates on either side invalidate the set"
+        );
+        assert_eq!(
+            exact_single_device_delta(nbd_only, zram_only, ManagedDeviceKind::Nbd),
+            None,
+            "a replacement is not an addition"
+        );
+    }
+
+    #[test]
+    // TestName: option_value_once_refuses_repeated_options
+    fn option_value_once_refuses_repeated_options() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            option_value_once(&args(&["--daemon", "ramsharedd"]), "--daemon"),
+            Some("ramsharedd")
+        );
+        assert_eq!(option_value_once(&args(&[]), "--daemon"), None);
+        assert_eq!(option_value_once(&args(&["--daemon"]), "--daemon"), None);
+        assert_eq!(
+            option_value_once(&args(&["--daemon", "a", "--daemon", "b"]), "--daemon"),
+            None,
+            "a duplicated option is ambiguous and must be refused"
+        );
+    }
+
+    #[test]
+    // TestName: deleted_executable_path_strips_the_kernel_marker
+    fn deleted_executable_path_strips_the_kernel_marker() {
+        assert_eq!(
+            deleted_executable_path(Path::new("/usr/local/bin/ramsharedd (deleted)")),
+            Some(PathBuf::from("/usr/local/bin/ramsharedd"))
+        );
+        assert_eq!(
+            deleted_executable_path(Path::new("/usr/local/bin/ramsharedd")),
+            None
+        );
+        assert_eq!(
+            deleted_executable_path(Path::new("not-utf8-\u{FFFD} (deleted)")),
+            Some(PathBuf::from("not-utf8-\u{FFFD}"))
+        );
+    }
+
+    #[test]
+    // TestName: legacy_runtime_record_values_match_all_topologies
+    fn legacy_runtime_record_values_match_all_topologies() {
+        // A missing record is vacuously consistent — it cannot contradict the
+        // admitted topology. A present record must name that exact topology.
+        assert!(legacy_runtime_record_values_match(
+            None,
+            None,
+            None,
+            42,
+            "/dev/nbd0",
+            None
+        ));
+        assert!(legacy_runtime_record_values_match(
+            Some("42"),
+            Some("/dev/nbd0"),
+            None,
+            42,
+            "/dev/nbd0",
+            None
+        ));
+        assert!(legacy_runtime_record_values_match(
+            Some(" 42 "),
+            Some(" /dev/nbd0 "),
+            Some("/dev/zram0"),
+            42,
+            "/dev/nbd0",
+            Some("/dev/zram0")
+        ));
+        assert!(
+            legacy_runtime_record_values_match(
+                None,
+                None,
+                None,
+                42,
+                "/dev/nbd0",
+                Some("/dev/zram0")
+            ),
+            "an absent zram record cannot contradict an expected zram tier"
+        );
+        assert!(!legacy_runtime_record_values_match(
+            Some("43"),
+            None,
+            None,
+            42,
+            "/dev/nbd0",
+            None
+        ));
+        assert!(!legacy_runtime_record_values_match(
+            None,
+            Some("/dev/nbd1"),
+            None,
+            42,
+            "/dev/nbd0",
+            None
+        ));
+        assert!(
+            !legacy_runtime_record_values_match(
+                None,
+                None,
+                Some("/dev/zram0"),
+                42,
+                "/dev/nbd0",
+                None
+            ),
+            "a zram record with no expected zram tier is a topology mismatch"
+        );
+    }
+
+    #[test]
+    // TestName: legacy_daemon_identity_matches_each_proof_and_refuses_mismatch
+    fn legacy_daemon_identity_matches_each_proof_and_refuses_mismatch() {
+        let executable = PathBuf::from("/usr/local/bin/ramsharedd");
+        let observation = LegacyDaemonObservation {
+            uid: 0,
+            executable_link: executable.clone(),
+            canonical_executable: Some(executable.clone()),
+            executable_sha256: Some([7u8; 32]),
+            arguments: vec!["ramsharedd".into()],
+            owns_legacy_listener: true,
+        };
+        let identity = |proof: LegacyDaemonProof| LegacyDaemonIdentity {
+            pid: 4242,
+            instance_id: "4242-100".into(),
+            executable: executable.clone(),
+            proof,
+        };
+        assert!(legacy_daemon_identity_matches(
+            &identity(LegacyDaemonProof::BinaryMatch),
+            Some("4242-100"),
+            &observation
+        ));
+        assert!(
+            !legacy_daemon_identity_matches(
+                &identity(LegacyDaemonProof::BinaryMatch),
+                Some("4242-101"),
+                &observation
+            ),
+            "a different instance id must not match"
+        );
+        assert!(
+            !legacy_daemon_identity_matches(
+                &identity(LegacyDaemonProof::BinaryMatch),
+                None,
+                &observation
+            ),
+            "a missing instance id must not match"
+        );
+        let mut other = observation.clone();
+        other.canonical_executable = Some(PathBuf::from("/tmp/other"));
+        assert!(
+            !legacy_daemon_identity_matches(
+                &identity(LegacyDaemonProof::BinaryMatch),
+                Some("4242-100"),
+                &other
+            ),
+            "a different canonical executable must not match a BinaryMatch proof"
+        );
+    }
+
+    #[test]
+    // TestName: validate_lifecycle_binding_refuses_invalid_schema_and_identity
+    fn validate_lifecycle_binding_refuses_invalid_schema_and_identity() {
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let valid = lifecycle_binding_fixture(vec![nbd.clone()]);
+        validate_lifecycle_binding(&valid).expect("the fixture binding is well formed");
+        let cases: Vec<(&str, LifecycleBinding)> = vec![
+            (
+                "schema_version",
+                LifecycleBinding {
+                    schema_version: 2,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "boot_id",
+                LifecycleBinding {
+                    boot_id: "nope".into(),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "invocation",
+                LifecycleBinding {
+                    daemon_invocation_id: "xyz".into(),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "pid",
+                LifecycleBinding {
+                    daemon_pid: 0,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "ticks",
+                LifecycleBinding {
+                    daemon_start_ticks: 0,
+                    ..valid.clone()
+                },
+            ),
+            (
+                "instance",
+                LifecycleBinding {
+                    daemon_instance_id: "9-9".into(),
+                    ..valid.clone()
+                },
+            ),
+            (
+                "socket.path",
+                LifecycleBinding {
+                    export_socket: BoundSocketIdentity {
+                        path: String::new(),
+                        filesystem_dev: 1,
+                        inode: 1,
+                    },
+                    ..valid.clone()
+                },
+            ),
+            (
+                "socket.inode",
+                LifecycleBinding {
+                    export_socket: BoundSocketIdentity {
+                        path: "/run/x".into(),
+                        filesystem_dev: 1,
+                        inode: 0,
+                    },
+                    ..valid.clone()
+                },
+            ),
+            (
+                "origin.partuuid",
+                LifecycleBinding {
+                    origin: BoundOriginIdentity {
+                        partuuid: "bad".into(),
+                        ..valid.origin.clone()
+                    },
+                    ..valid.clone()
+                },
+            ),
+            (
+                "origin.dev_t",
+                LifecycleBinding {
+                    origin: BoundOriginIdentity {
+                        partition_dev_t: "x".into(),
+                        ..valid.origin.clone()
+                    },
+                    ..valid.clone()
+                },
+            ),
+            (
+                "origin.sha",
+                LifecycleBinding {
+                    origin: BoundOriginIdentity {
+                        host_manifest_sha256: "zz".into(),
+                        ..valid.origin.clone()
+                    },
+                    ..valid.clone()
+                },
+            ),
+        ];
+        for (label, binding) in cases {
+            let error = validate_lifecycle_binding(&binding)
+                .expect_err(&format!("lifecycle binding must refuse {label}"));
+            assert!(
+                error.to_string().contains("invalid schema or identity"),
+                "{label} produced the wrong refusal: {error}"
+            );
+        }
+        let mut bad_device = nbd.clone();
+        bad_device.dev_t = "1:1".into();
+        let error = validate_lifecycle_binding(&lifecycle_binding_fixture(vec![bad_device]))
+            .expect_err("a device whose dev_t disagrees with sysfs must be refused");
+        assert!(error.to_string().contains("cardinality or identity"));
+    }
+
+    #[test]
+    // TestName: bound_device_record_round_trip_refuses_unsealed_shapes
+    fn bound_device_record_round_trip_refuses_unsealed_shapes() {
+        let dir = TestDir::new();
+        let path = dir.path.join("nbd-record.json");
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        write_bound_device_record(&path, &nbd).expect("write a sealed device record");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("seal the record");
+        assert_eq!(
+            read_bound_device_record(&path).expect("read the sealed record"),
+            nbd
+        );
+
+        let world = dir.path.join("world.json");
+        write_bound_device_record(&world, &nbd).expect("write the world-readable record");
+        fs::set_permissions(&world, fs::Permissions::from_mode(0o644)).expect("widen the record");
+        let error =
+            read_bound_device_record(&world).expect_err("a world-readable record must be refused");
+        assert!(error.to_string().contains("not a sealed regular file"));
+
+        let empty = dir.path.join("empty.json");
+        fs::write(&empty, b"").expect("write an empty record");
+        fs::set_permissions(&empty, fs::Permissions::from_mode(0o600))
+            .expect("seal the empty record");
+        assert!(read_bound_device_record(&empty).is_err());
+
+        let link = dir.path.join("link.json");
+        std::os::unix::fs::symlink(&path, &link).expect("symlink the record");
+        assert!(read_bound_device_record(&link).is_err());
+
+        let garbage = dir.path.join("garbage.json");
+        fs::write(&garbage, b"{\"kind\":\"nbd\"}").expect("write a malformed record");
+        fs::set_permissions(&garbage, fs::Permissions::from_mode(0o600))
+            .expect("seal the malformed record");
+        assert!(read_bound_device_record(&garbage).is_err());
+    }
+
+    #[test]
+    // TestName: nbd_path_record_round_trip_refuses_non_nbd_targets
+    fn nbd_path_record_round_trip_refuses_non_nbd_targets() {
+        let dir = TestDir::new();
+        let path = dir.path.join("nbd-path");
+        write_nbd_path_record(&path, "/dev/nbd0").expect("publish an exact NBD path record");
+        assert_eq!(
+            read_nbd_path_record(&path).expect("read the NBD path record"),
+            "/dev/nbd0"
+        );
+
+        assert!(
+            write_nbd_path_record(&path, "/dev/zram0").is_err(),
+            "a zram target is not an NBD path"
+        );
+        assert!(
+            write_nbd_path_record(&path, "/dev/nbd0/../nbd0").is_err(),
+            "a non-canonical target is refused"
+        );
+
+        let oversized = dir.path.join("oversized");
+        fs::write(&oversized, vec![b'x'; 5000]).expect("write an oversized record");
+        assert!(read_nbd_path_record(&oversized).is_err());
+
+        let foreign = dir.path.join("foreign");
+        fs::write(&foreign, b"/dev/zram0").expect("write a foreign device record");
+        assert!(read_nbd_path_record(&foreign).is_err());
+    }
+
+    #[test]
+    // TestName: forensics_markers_arm_disarm_and_remove_idempotently
+    fn forensics_markers_arm_disarm_and_remove_idempotently() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        let marker = &paths.forensics_markers[0];
+        assert!(!marker.exists(), "the fixture starts unarmed");
+        arm_forensics_at(&paths);
+        assert!(marker.is_file(), "arming must publish the marker");
+        arm_forensics_at(&paths);
+        assert!(
+            marker.is_file(),
+            "re-arming must not destroy an existing regular marker"
+        );
+
+        fs::write(marker, b"").expect("empty the marker");
+        fs::remove_file(marker).expect("remove the marker");
+        std::os::unix::fs::symlink("/tmp", marker).expect("plant a symlink marker");
+        arm_forensics_at(&paths);
+        assert!(
+            marker
+                .symlink_metadata()
+                .expect("stat the planted marker")
+                .file_type()
+                .is_symlink(),
+            "arming must refuse to adopt a non-regular marker"
+        );
+        fs::remove_file(marker).expect("remove the planted symlink");
+
+        arm_forensics_at(&paths);
+        assert!(marker.is_file());
+        disarm_forensics_at(&paths);
+        assert!(!marker.exists(), "disarming must remove the marker");
+        disarm_forensics_at(&paths);
+        remove_runtime_file(marker);
+        remove_runtime_file(dir.path.join("never-existed"));
+    }
+
+    #[test]
+    // TestName: boot_and_invocation_identity_readers_refuse_malformed_values
+    fn boot_and_invocation_identity_readers_refuse_malformed_values() {
+        assert!(
+            current_boot_id_with(|| Ok("11111111-2222-4333-8444-555555555555\n".into())).is_ok()
+        );
+        assert!(current_boot_id_with(|| Ok("not-a-uuid".into())).is_err());
+        assert!(current_boot_id_with(|| Err(std::io::Error::other("denied"))).is_err());
+
+        let env = |body: &[u8]| {
+            let owned = body.to_vec();
+            daemon_invocation_id_with(1, move |_| Ok(owned))
+        };
+        assert!(env(b"INVOCATION_ID=0123456789abcdef0123456789abcdef\0").is_ok());
+        assert!(
+            env(b"PATH=/usr/bin\0").is_err(),
+            "a daemon without INVOCATION_ID is refused"
+        );
+        assert!(
+            env(b"INVOCATION_ID=0123456789abcdef0123456789abcdef\0INVOCATION_ID=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\0").is_err(),
+            "two InvocationIDs are ambiguous and refused"
+        );
+        assert!(
+            env(b"INVOCATION_ID=xyz\0").is_err(),
+            "a non-canonical InvocationID is refused"
+        );
+        assert!(daemon_invocation_id_with(1, |_| Err(std::io::Error::other("denied"))).is_err());
+    }
+
+    #[test]
+    // TestName: sysfs_device_number_and_socket_identity_refuse_unsafe_shapes
+    fn sysfs_device_number_and_socket_identity_refuse_unsafe_shapes() {
+        assert_eq!(
+            parse_sysfs_device_number(" 8:33 \n").expect("canonical dev_t"),
+            "8:33"
+        );
+        assert!(parse_sysfs_device_number("8").is_err());
+        assert!(parse_sysfs_device_number("x:y").is_err());
+        assert!(parse_sysfs_device_number("").is_err());
+
+        let dir = TestDir::new();
+        let regular = dir.path.join("regular");
+        fs::write(&regular, b"x").expect("write a regular file");
+        let metadata = fs::symlink_metadata(&regular).expect("stat the regular file");
+        assert!(socket_identity_from_metadata(&regular, &metadata, true).is_err());
+        assert_eq!(
+            socket_identity_from_metadata(&regular, &metadata, false)
+                .expect("a non-socket is accepted when the caller does not require one")
+                .inode,
+            metadata.ino()
+        );
+
+        let target = dir.path.join("target");
+        let link = dir.path.join("link");
+        fs::write(&target, b"x").expect("write the symlink target");
+        std::os::unix::fs::symlink(&target, &link).expect("create the symlink");
+        let link_meta = fs::symlink_metadata(&link).expect("stat the symlink");
+        assert!(socket_identity_from_metadata(&link, &link_meta, false).is_err());
+    }
+
+    #[test]
+    // TestName: transport_ublk_is_refused_on_wsl2_and_off_wsl2
+    fn transport_ublk_is_refused_on_wsl2_and_off_wsl2() {
+        for running_on_wsl2 in [true, false] {
+            let error = check_transport_for(Transport::Ublk, running_on_wsl2)
+                .expect_err("ublk is fail-closed on every platform until the full wire-up exists");
+            assert!(
+                error.to_string().contains("transport ublk"),
+                "the refusal must name the transport (wsl2={running_on_wsl2}): {error}"
+            );
+        }
+        check_transport_for(Transport::Nbd, true).expect("nbd is the Day-1 WSL2 product transport");
+        check_transport_for(Transport::Nbd, false).expect("nbd is accepted off WSL2 as well");
+    }
+
+    #[test]
+    // TestName: legacy_daemon_proofs_bind_exact_arguments_and_refuse_drift
+    fn legacy_daemon_proofs_bind_exact_arguments_and_refuse_drift() {
+        let legacy = PathBuf::from("/usr/local/bin/ramsharedd");
+        let hash = [9u8; 32];
+        let arguments = |extra: &[&str]| {
+            let mut args = vec![
+                legacy.to_string_lossy().into_owned(),
+                "--slices".into(),
+                "1".into(),
+                "--slice-mb".into(),
+                "64".into(),
+                "--listen-nbd".into(),
+                "127.0.0.1:10809".into(),
+            ];
+            args.extend(extra.iter().map(|value| (*value).to_string()));
+            args
+        };
+        let observation = |link: &str, args: Vec<String>| LegacyDaemonObservation {
+            uid: 0,
+            executable_link: PathBuf::from(link),
+            canonical_executable: Some(legacy.clone()),
+            executable_sha256: Some(hash),
+            arguments: args,
+            owns_legacy_listener: true,
+        };
+
+        let replaced = observation("/usr/local/bin/ramsharedd (deleted)", arguments(&[]));
+        assert!(legacy_replaced_daemon_is_bound(&replaced, &legacy, 64));
+        assert!(
+            !legacy_replaced_daemon_is_bound(&replaced, &legacy, 128),
+            "a different slice size must not match a ReplacedBinary proof"
+        );
+        let mut drifted = replaced.clone();
+        drifted.arguments = arguments(&["--listen-nbd", "127.0.0.1:1"]);
+        assert!(!legacy_replaced_daemon_is_bound(&drifted, &legacy, 64));
+
+        let regular = observation("/usr/local/bin/ramsharedd", arguments(&[]));
+        assert!(legacy_regular_daemon_is_bound(&regular, &legacy, &hash, 64));
+        assert!(
+            !legacy_regular_daemon_is_bound(&regular, &legacy, &[1u8; 32], 64),
+            "a hash mismatch must not match a LegacyPathHashMatch proof"
+        );
+
+        let identity = |proof: LegacyDaemonProof| LegacyDaemonIdentity {
+            pid: 4242,
+            instance_id: "4242-100".into(),
+            executable: legacy.clone(),
+            proof,
+        };
+        assert!(legacy_daemon_identity_matches(
+            &identity(LegacyDaemonProof::ReplacedBinary { slice_mb: 64 }),
+            Some("4242-100"),
+            &replaced
+        ));
+        assert!(!legacy_daemon_identity_matches(
+            &identity(LegacyDaemonProof::ReplacedBinary { slice_mb: 64 }),
+            Some("4242-100"),
+            &regular
+        ));
+        assert!(legacy_daemon_identity_matches(
+            &identity(LegacyDaemonProof::LegacyPathHashMatch {
+                legacy_executable: legacy.clone(),
+                executable_sha256: hash,
+                slice_mb: 64,
+            }),
+            Some("4242-100"),
+            &regular
+        ));
+    }
+
+    #[test]
+    // TestName: legacy_runtime_record_value_refuses_every_unsealed_shape
+    fn legacy_runtime_record_value_refuses_every_unsealed_shape() {
+        let dir = TestDir::new();
+        let path = dir.path.join("swap-dev");
+
+        fs::write(&path, b"/dev/nbd0").expect("write the record");
+        std::os::unix::fs::symlink("/dev/null", dir.path.join("link")).expect("plant a symlink");
+        assert!(
+            legacy_runtime_record_value(&dir.path.join("link")).is_err(),
+            "a symlink is not a sealed regular file"
+        );
+
+        if rustix::process::getuid().as_raw() == 0 {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+                .expect("widen the record");
+            assert!(
+                legacy_runtime_record_value(&path).is_err(),
+                "a group- or world-writable record is not sealed even when root-owned"
+            );
+
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("seal the record");
+            fs::write(&path, b"").expect("empty the record");
+            assert!(
+                legacy_runtime_record_value(&path).is_err(),
+                "an empty record is malformed even when sealed"
+            );
+
+            fs::write(&path, b"/dev/nbd0\n/dev/nbd1").expect("write a multi-line record");
+            assert!(
+                legacy_runtime_record_value(&path).is_err(),
+                "an embedded newline is malformed even when sealed"
+            );
+
+            fs::write(&path, b"  /dev/nbd0 \n").expect("rewrite the record");
+            assert_eq!(
+                legacy_runtime_record_value(&path).expect("a sealed record is readable"),
+                Some("/dev/nbd0".into()),
+                "whitespace is trimmed and the single line is published"
+            );
+        } else {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("seal the record");
+            assert!(
+                legacy_runtime_record_value(&path).is_err(),
+                "a non-root-owned record is refused before its content is read"
+            );
+        }
+    }
+
+    #[test]
+    // TestName: read_lifecycle_binding_refuses_symlink_and_invalid_payload
+    fn read_lifecycle_binding_refuses_symlink_and_invalid_payload() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create the fixture runtime dir");
+        assert!(
+            read_lifecycle_binding(&paths).is_err(),
+            "a missing binding is refused"
+        );
+
+        let nbd = bound_device_fixture("/dev/nbd0", ManagedDeviceKind::Nbd);
+        let binding = lifecycle_binding_fixture(vec![nbd]);
+        let payload = serde_json::to_vec(&binding).expect("serialize the fixture binding");
+        fs::write(&paths.lifecycle_binding_file, &payload).expect("write the binding");
+        fs::set_permissions(
+            &paths.lifecycle_binding_file,
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("seal the binding");
+        assert!(read_lifecycle_binding(&paths).is_ok());
+
+        let link = dir.path.join("binding-link");
+        std::os::unix::fs::symlink(&paths.lifecycle_binding_file, &link)
+            .expect("symlink the binding");
+        assert!(
+            read_lifecycle_binding(&RuntimePaths {
+                lifecycle_binding_file: link,
+                ..RuntimePaths::under(&dir.path)
+            })
+            .is_err()
+        );
+
+        fs::write(&paths.lifecycle_binding_file, b"not json").expect("corrupt the binding");
+        fs::set_permissions(
+            &paths.lifecycle_binding_file,
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("re-seal the binding");
+        assert!(
+            read_lifecycle_binding(&paths).is_err(),
+            "an unparsable binding is refused"
+        );
+
+        let mut invalid = binding.clone();
+        invalid.schema_version = 99;
+        fs::write(
+            &paths.lifecycle_binding_file,
+            serde_json::to_vec(&invalid).expect("serialize"),
+        )
+        .expect("write the invalid binding");
+        fs::set_permissions(
+            &paths.lifecycle_binding_file,
+            fs::Permissions::from_mode(0o600),
+        )
+        .expect("re-seal the binding");
+        assert!(
+            read_lifecycle_binding(&paths).is_err(),
+            "a binding that fails schema validation must not be published to the caller"
+        );
+    }
+
+    #[test]
+    // TestName: revalidate_daemon_and_socket_refuses_identity_drift
+    fn revalidate_daemon_and_socket_refuses_identity_drift() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        let daemon_pid = std::process::id();
+        let devices = seal_runtime_lifecycle(&paths, daemon_pid, false);
+        let binding = read_lifecycle_binding(&paths).expect("read the sealed fixture binding");
+        assert_eq!(binding.devices, devices);
+
+        revalidate_daemon_and_socket(&binding, &paths)
+            .expect("the freshly sealed fixture must revalidate");
+
+        let mut other_boot = binding.clone();
+        other_boot.boot_id = "99999999-2222-4333-8444-555555555555".into();
+        assert!(
+            revalidate_daemon_and_socket(&other_boot, &paths).is_err(),
+            "a different kernel boot identity must refuse the binding"
+        );
+
+        let mut other_instance = binding.clone();
+        other_instance.daemon_instance_id = "1-1".into();
+        other_instance.daemon_start_ticks = 1;
+        assert!(
+            revalidate_daemon_and_socket(&other_instance, &paths).is_err(),
+            "a different daemon instance must refuse the binding"
+        );
+    }
+
+    #[test]
+    // TestName: pinned_effect_metadata_refuses_non_block_and_dev_t_drift
+    fn pinned_effect_metadata_refuses_non_block_and_dev_t_drift() {
+        let dir = TestDir::new();
+        let regular = dir.path.join("regular");
+        fs::write(&regular, b"x").expect("write a regular file");
+        let metadata = fs::symlink_metadata(&regular).expect("stat the regular file");
+        assert!(
+            validate_pinned_effect_metadata(&metadata, "0:0").is_err(),
+            "a regular file is not a block device, so it cannot pin a managed device"
+        );
+        assert!(
+            validate_pinned_effect_metadata(&metadata, "8:33").is_err(),
+            "a dev_t mismatch is refused even if the type check were to pass"
+        );
+    }
+
+    #[test]
+    // TestName: open_verified_daemon_pidfd_refuses_before_kernel_binding
+    fn open_verified_daemon_pidfd_refuses_before_kernel_binding() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        fs::create_dir_all(&paths.runtime_dir).expect("create the fixture runtime dir");
+        let pid = std::process::id();
+        let instance = daemon_instance_id_from_pid(pid).expect("derive the fixture instance id");
+        let error = open_verified_daemon_pidfd(&paths, pid, "9-9")
+            .expect_err("a different instance id must refuse before any pidfd is opened");
+        assert!(error.to_string().contains("refusing ambiguous signal"));
+        assert!(open_verified_daemon_pidfd(&paths, u32::MAX, &instance).is_err());
+    }
+
+    #[test]
+    // TestName: run_command_bounded_reports_exit_status_and_stderr
+    fn run_command_bounded_reports_exit_status_and_stderr() {
+        let with_stderr = run_command_bounded("/bin/sh", &["-c", "echo boom >&2; exit 3"])
+            .expect_err("a non-zero exit is an error");
+        let message = with_stderr.to_string();
+        assert!(
+            message.contains("exit 3"),
+            "the status code is named: {message}"
+        );
+        assert!(message.contains("boom"), "stderr is preserved: {message}");
+
+        let silent = run_command_bounded("/bin/sh", &["-c", "exit 7"])
+            .expect_err("a silent non-zero exit is still an error");
+        assert!(
+            silent.to_string().contains("exit 7"),
+            "an empty stderr falls back to the bare status: {silent}"
+        );
+
+        let killed = run_command_bounded("/bin/sh", &["-c", "kill -9 $$"])
+            .expect_err("a signalled child is an error");
+        assert!(
+            killed.to_string().contains("terminated by signal"),
+            "a missing exit code is reported as a signal: {killed}"
+        );
+    }
+
+    #[test]
+    // TestName: revalidate_daemon_and_socket_refuses_each_identity_field
+    fn revalidate_daemon_and_socket_refuses_each_identity_field() {
+        let dir = TestDir::new();
+        let paths = RuntimePaths::under(&dir.path);
+        let binding_device = seal_runtime_lifecycle(&paths, std::process::id(), false);
+        let pristine = read_lifecycle_binding(&paths).expect("read the sealed fixture binding");
+        assert_eq!(pristine.devices, binding_device);
+        revalidate_daemon_and_socket(&pristine, &paths)
+            .expect("the freshly sealed fixture must revalidate");
+
+        let mut invocation = pristine.clone();
+        invocation.daemon_invocation_id = "deadbeefdeadbeefdeadbeefdeadbeef".into();
+        let error = revalidate_daemon_and_socket(&invocation, &paths)
+            .expect_err("a different InvocationID must refuse the binding");
+        assert!(
+            error.to_string().contains("InvocationID"),
+            "the refusal names the field: {error}"
+        );
+
+        let cache = pristine.clone();
+        write_daemon_identity_status(&paths, cache.daemon_pid, "1-1");
+        let error = revalidate_daemon_and_socket(&cache, &paths)
+            .expect_err("a stale cache status must refuse the binding");
+        assert!(
+            error.to_string().contains("cache status"),
+            "the refusal names the field: {error}"
+        );
+        write_daemon_identity_status(&paths, cache.daemon_pid, &cache.daemon_instance_id);
+
+        let mut socket = pristine.clone();
+        socket.export_socket.inode = socket.export_socket.inode.wrapping_add(1);
+        let error = revalidate_daemon_and_socket(&socket, &paths)
+            .expect_err("a different export socket must refuse the binding");
+        assert!(
+            error.to_string().contains("export socket"),
+            "the refusal names the field: {error}"
+        );
+
+        let mut origin = pristine.clone();
+        origin.origin.partuuid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee".into();
+        let error = revalidate_daemon_and_socket(&origin, &paths)
+            .expect_err("a different sealed origin must refuse the binding");
+        assert!(
+            error.to_string().contains("sealed origin manifest"),
+            "the refusal names the field: {error}"
+        );
+    }
+
+    #[test]
+    // TestName: legacy_runtime_record_value_reports_stat_errors
+    fn legacy_runtime_record_value_reports_stat_errors() {
+        let dir = TestDir::new();
+        let regular = dir.path.join("regular");
+        fs::write(&regular, b"x").expect("write a regular file");
+        let not_a_directory = regular.join("child");
+        assert!(
+            legacy_runtime_record_value(&not_a_directory).is_err(),
+            "an ENOTDIR stat failure is reported, not silently treated as absent"
+        );
     }
 }

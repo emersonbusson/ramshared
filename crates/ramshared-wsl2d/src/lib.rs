@@ -8,8 +8,12 @@ pub mod backend;
 pub mod broker_srv;
 pub mod canary_probe;
 pub mod conn;
+pub mod control_plane;
 pub mod demote_status;
 pub mod governor;
+pub mod gpu_budget;
+pub mod host_gate;
+pub mod pid_file;
 pub mod residency;
 pub mod state;
 pub mod swap;
@@ -28,6 +32,7 @@ pub use demote_status::{
     write_demote_status,
 };
 pub use governor::{DynamicHeadroomGovernor, HeadroomZone};
+pub use pid_file::{PID_FILE_PATH, PidFileGuard, live_ramsharedd_pid_at};
 pub use residency::{Canary, DemoteReason, ResidencyConfig, ResidencySampler, Verdict};
 pub use state::State;
 pub use telemetry::{

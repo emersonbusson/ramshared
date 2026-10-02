@@ -144,6 +144,8 @@ the new binding or claim a completed migration.
 | First error | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_migration_executor_stops_on_first_refusal` | hermetic executor | #15, #16 | E2E-gated |
 | Legacy daemon identity | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_regular_daemon_requires_the_sealed_binary_hash_and_listener` | hermetic | #13, #16 | E2E-gated |
 | Legacy NBD owner | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_nbd_owner_policy_accepts_only_confirmed_absence` | unit | #13, #16 | E2E-gated |
+| Legacy daemon selection | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_daemon_selection_requires_one_proven_process_and_instance` | injected process observations | #13, #16 | source coverage; no signal |
+| Legacy daemon process enumeration | `crates/ramshared-cli/src/cascade/cascade_io.rs` :: `legacy_daemon_proc_enumeration_uses_injected_fixture_root` | synthetic proc tree; exact PID and comm matching; observation refusal | #13, #16 | no host `/proc` read or process signal |
 | Attended migration | watchdog harness :: before/action/after | live E2E | #13, #16, #17 | required |
 
 ## Kahneman
@@ -159,12 +161,12 @@ the new binding or claim a completed migration.
 
 ## Validation checklist
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p ramshared-cli legacy_migration -- --test-threads=1`
-- [ ] `cargo test -p ramshared-cli public_control_commands_parse_exactly --bin ramshared`
-- [ ] `cargo clippy -p ramshared-cli --all-targets -- -D warnings`
-- [ ] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/mod.rs --min 80`
-- [ ] `./scripts/docs-check.sh`
+- [x] `cargo fmt --all -- --check` (2026-09-30: clean)
+- [x] `cargo test -p ramshared-cli legacy_migration -- --test-threads=1` (2026-09-30: 8 passed / 0 failed)
+- [x] `cargo test -p ramshared-cli public_control_commands_parse_exactly --bin ramshared` (2026-09-30: 1 passed)
+- [x] `cargo clippy -p ramshared-cli --all-targets -- -D warnings` (2026-09-30: clean)
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/cascade/cascade_io.rs --min 80` (2026-09-30: mod.rs 83.5%, cascade_io.rs 80.0%)
+- [x] `./scripts/docs-check.sh` (2026-09-30: OK)
 - [ ] BINARY_MATCH, replaced-binary listener proof, or fixed legacy-path SHA-256 proof of the deployed daemon
   before live E2E
 - [ ] Approved watchdog harness: before → action → after, legitimate and

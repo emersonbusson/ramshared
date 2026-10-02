@@ -1020,11 +1020,28 @@ fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
     Some((value("MemTotal")? * 1024, value("MemAvailable")? * 1024))
 }
 
-fn parse_psi_full_avg10(text: &str) -> Option<f64> {
-    text.lines()
-        .find(|line| line.starts_with("full "))?
-        .split_whitespace()
-        .find_map(|field| field.strip_prefix("avg10=")?.parse().ok())
+pub(crate) fn parse_psi_full_avg10(text: &str) -> Option<f64> {
+    let mut full_rows = 0;
+    let mut result = None;
+    for line in text.lines().filter(|line| line.starts_with("full ")) {
+        full_rows += 1;
+        let mut avg10_count = 0;
+        for field in line.split_whitespace() {
+            let Some(value) = field.strip_prefix("avg10=") else {
+                continue;
+            };
+            avg10_count += 1;
+            let value = value.parse::<f64>().ok()?;
+            if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                return None;
+            }
+            result = Some(value);
+        }
+        if avg10_count != 1 {
+            return None;
+        }
+    }
+    if full_rows == 1 { result } else { None }
 }
 
 fn publish_at(
@@ -1091,7 +1108,7 @@ fn apply_decision_with(
             detail,
             action_results: action_results.clone(),
         })?;
-        workload::publish_admission_state_at(
+        workload::publish_admission_state_at_with_transient_retry(
             ledger_root,
             supervisor_identity,
             decision.state.as_str(),
@@ -1107,8 +1124,14 @@ fn apply_decision_with(
     // Close admission exactly when its action is executed. A refusal remains
     // that action's definitive typed result; later pressure actions still run
     // and every outcome is published in execution order.
+    //
+    // A transient ledger lock contention is retried here rather than treated
+    // as fatal: a supervisor that exits on `EWOULDBLOCK` crash-loops under
+    // ordinary reservation churn. The retry is bounded and only matches the
+    // busy signature, so a still-busy lock after the budget is recorded as
+    // this action's definitive failure — never as a synthetic success.
     let action_results = execute_actions_with(decision, action_paths, runner, || {
-        workload::publish_admission_state_at(
+        workload::publish_admission_state_at_with_transient_retry(
             ledger_root,
             supervisor_identity,
             decision.state.as_str(),
@@ -1216,7 +1239,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    // Tests assert panics and unwrap injected fixtures on purpose. The crate
+    // denies both lints for production code; the deny must not leak into the
+    // test module that is supposed to exercise those paths.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use std::cell::RefCell;
@@ -1388,10 +1414,17 @@ mod tests {
 
         fn program(&self, name: &str, source: &str) -> std::path::PathBuf {
             let path = self.path.join(name);
-            fs::write(&path, source).unwrap();
-            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            // Publish through a temporary name and rename. A freshly written
+            // script that is exec'd in place can surface ETXTBSY ("Text file
+            // busy") when parallel fixtures race the kernel's write-side
+            // deny-write-access check on spawn. Rename publishes a path whose
+            // write handle is already closed.
+            let staging = self.path.join(format!("{name}.staging"));
+            fs::write(&staging, source).unwrap();
+            let mut permissions = fs::metadata(&staging).unwrap().permissions();
             permissions.set_mode(0o700);
-            fs::set_permissions(&path, permissions).unwrap();
+            fs::set_permissions(&staging, permissions).unwrap();
+            fs::rename(&staging, &path).unwrap();
             path
         }
     }
@@ -2524,6 +2557,9 @@ mod tests {
             Some(2.5)
         );
         assert!(parse_psi_full_avg10("some avg10=1.0\n").is_none());
+        assert!(parse_psi_full_avg10("full avg10=NaN\n").is_none());
+        assert!(parse_psi_full_avg10("full avg10=100.01\n").is_none());
+        assert!(parse_psi_full_avg10("full avg10=1.0\nfull avg10=2.0\n").is_none());
 
         let root = fixture();
         let state = root.join("nested/supervisor.json");
@@ -2699,6 +2735,79 @@ mod tests {
     }
 
     #[test]
+    // TestName: transient_admission_lock_contention_does_not_terminate_the_supervisor
+    fn transient_admission_lock_contention_does_not_terminate_the_supervisor() {
+        let root = fixture();
+        let state_path = root.join("supervisor-state.json");
+        let ledger_root = root.join("admission");
+        fs::create_dir_all(&ledger_root).unwrap();
+        let authority = std::fs::File::open(&ledger_root).unwrap();
+        authority.try_lock().unwrap();
+        let runtime = root.join("runtime");
+        let decision = SupervisorDecision {
+            state: SupervisorState::Guarded,
+            actions: vec![SupervisorAction::CloseAdmission],
+            healthy_samples: 0,
+        };
+        let identity = OwnerIdentity::current().unwrap();
+
+        // A DecisionApplyError here is what makes `run()` return Err and lets
+        // systemd restart the supervisor. A lock that another ledger actor is
+        // about to release must not reach that outcome.
+        let contended_state_path = state_path.clone();
+        let contended_ledger_root = ledger_root.clone();
+        let contended_runtime = runtime.clone();
+        let contended_identity = identity.clone();
+        let apply = std::thread::spawn(move || {
+            let runner = FakeUnitRunner {
+                calls: RefCell::new(Vec::new()),
+                fail: false,
+            };
+            let action_paths = ActionPaths {
+                runtime: &contended_runtime,
+                ledger: &contended_ledger_root.join("reservations.json"),
+                daemon_instance_id: Some("fixture-daemon"),
+                issued_at_unix_ms: Some(1_000),
+            };
+            apply_decision_with(
+                &contended_state_path,
+                &contended_ledger_root,
+                &decision,
+                &action_paths,
+                &runner,
+                &contended_identity,
+                1_000,
+            )
+        });
+        std::thread::sleep(Duration::from_millis(40));
+        drop(authority);
+        let results = apply.join().unwrap().expect(
+            "a transient admission lock contention terminated the supervisor \
+             instead of being retried",
+        );
+        assert_eq!(results[0].status, SupervisorActionStatus::Succeeded);
+        let gate: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(ledger_root.join("admission-state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(gate["admission_open"], false);
+        assert_eq!(gate["control_state"], "GUARDED");
+        let state: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+        let close = state["action_results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| result["action"] == "close_admission")
+            .unwrap();
+        assert_eq!(
+            close["status"], "succeeded",
+            "a retried transient must close admission for real, not record a failure"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     // TestName: bounded_systemctl_adapter_is_fixture_scoped_under_parallel_execution
     fn bounded_systemctl_adapter_is_fixture_scoped_under_parallel_execution() {
         let fixture = TestDir::new();
@@ -2706,17 +2815,13 @@ mod tests {
             "systemctl-fixture",
             "#!/bin/sh\ncase \"$1\" in\n  --version) exit 0 ;;\n  ramshared-invalid-command) exit 1 ;;\n  *) exit 2 ;;\nesac\n",
         );
+        // Exit-code mapping is the subject here, not spawn latency. The budget
+        // only has to bound the call, so it is generous enough to survive the
+        // parallel suite spawning this shell on a loaded host.
+        let budget = Duration::from_secs(5);
+        assert!(run_systemctl_bounded_for(&systemctl, &["--version"], budget).is_ok());
         assert!(
-            run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(100),)
-                .is_ok()
-        );
-        assert!(
-            run_systemctl_bounded_for(
-                &systemctl,
-                &["ramshared-invalid-command"],
-                Duration::from_millis(100),
-            )
-            .is_err()
+            run_systemctl_bounded_for(&systemctl, &["ramshared-invalid-command"], budget).is_err()
         );
     }
 
@@ -2765,7 +2870,7 @@ mod tests {
                     "#!/bin/sh\nsleep 0.05\n[ \"$1\" = \"--version\" ]\n",
                 );
                 success_start.wait();
-                run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_millis(500))
+                run_systemctl_bounded_for(&systemctl, &["--version"], Duration::from_secs(2))
             });
             let timeout_start = std::sync::Arc::clone(&start);
             let timeout = scope.spawn(move || {
@@ -2777,9 +2882,81 @@ mod tests {
                 timeout_start.wait();
                 run_systemctl_bounded_for(&systemctl, &[], Duration::from_millis(100))
             });
-            assert!(success.join().unwrap().is_ok());
+            let success = success.join().unwrap();
+            assert!(success.is_ok(), "successful fixture failed: {success:?}");
             let error = timeout.join().unwrap().unwrap_err();
             assert!(error.contains("timed out"), "{error}");
         });
+    }
+
+    #[test]
+    fn successful_action_results_commit_only_their_owned_state() {
+        let mut supervisor = Supervisor::default();
+        let action_results = [
+            SupervisorActionResult {
+                action: SupervisorAction::FreezeDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::ThawDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::TerminateDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::KillDiscardable,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::CloseAdmission,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::ReduceVramCache,
+                status: SupervisorActionStatus::Succeeded,
+                error: None,
+            },
+            SupervisorActionResult {
+                action: SupervisorAction::RequestReclaim,
+                status: SupervisorActionStatus::Failed,
+                error: Some(SupervisorActionError::new("retry later".into())),
+            },
+        ];
+
+        supervisor.commit_action_results(&action_results, 1_234);
+
+        assert!(!supervisor.discardable_frozen);
+        assert!(!supervisor.discardable_freeze_pending);
+        assert_eq!(
+            supervisor.emergency_kill_eligible_ms,
+            Some(1_234 + EMERGENCY_TERM_GRACE_MS)
+        );
+        assert!(supervisor.emergency_kill_sent);
+    }
+
+    #[test]
+    fn action_error_deserialization_accepts_only_sanitized_bounded_values() {
+        assert_eq!(SupervisorState::Healthy.as_str(), "HEALTHY");
+        assert_eq!(SupervisorState::Guarded.as_str(), "GUARDED");
+        assert_eq!(SupervisorState::Critical.as_str(), "CRITICAL");
+        assert_eq!(SupervisorState::Emergency.as_str(), "EMERGENCY");
+
+        let sanitized = SupervisorActionError::new("first\tline".into());
+        assert_eq!(&*sanitized, "first line");
+        let encoded = serde_json::to_string(&sanitized).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SupervisorActionError>(&encoded).unwrap(),
+            sanitized
+        );
+        assert!(serde_json::from_str::<SupervisorActionError>("\"raw\\nline\"").is_err());
+        let oversized = format!("\"{}\"", "x".repeat(ACTION_ERROR_MAX_BYTES + 1));
+        assert!(serde_json::from_str::<SupervisorActionError>(&oversized).is_err());
     }
 }

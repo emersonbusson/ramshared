@@ -749,6 +749,103 @@ mod tests {
             Err(RefusalCode::LowerTierShortfall)
         );
     }
+
+    #[test]
+    fn product_state_and_transport_as_str_spell_stable_tokens() {
+        assert_eq!(ProductState::ProductOff.as_str(), "PRODUCT_OFF");
+        assert_eq!(ProductState::Ready.as_str(), "READY");
+        assert_eq!(ProductState::Blocked.as_str(), "BLOCKED");
+        assert_eq!(ProductTransport::Nbd.as_str(), "nbd");
+        assert_eq!(ProductTransport::None.as_str(), "none");
+    }
+
+    #[test]
+    fn refusal_code_as_str_names_every_variant() {
+        // Every refusal code is operator-facing status surface. A silent rename
+        // would break dashboards and triage scripts that match these tokens.
+        let cases = [
+            (RefusalCode::TransportMustBeNbd, "TRANSPORT_MUST_BE_NBD"),
+            (
+                RefusalCode::LegacyUblkProductActive,
+                "LEGACY_UBLK_PRODUCT_ACTIVE",
+            ),
+            (
+                RefusalCode::NbdLifecycleIncomplete,
+                "NBD_LIFECYCLE_INCOMPLETE",
+            ),
+            (RefusalCode::ReleaseGateFailed, "RELEASE_GATE_FAILED"),
+            (RefusalCode::ReleaseGateUnknown, "RELEASE_GATE_UNKNOWN"),
+            (RefusalCode::RelayGateFailed, "RELAY_GATE_FAILED"),
+            (RefusalCode::RelayGateUnknown, "RELAY_GATE_UNKNOWN"),
+            (RefusalCode::BinaryMatchFailed, "BINARY_MATCH_FAILED"),
+            (RefusalCode::BinaryMatchRequired, "BINARY_MATCH_REQUIRED"),
+            (RefusalCode::BinaryMatchUnknown, "BINARY_MATCH_UNKNOWN"),
+            (RefusalCode::InvalidVramSize, "INVALID_VRAM_SIZE"),
+            (RefusalCode::CapacityOverflow, "CAPACITY_OVERFLOW"),
+            (RefusalCode::LowerTierSinkUnknown, "LOWER_TIER_SINK_UNKNOWN"),
+            (
+                RefusalCode::LowerTierSinkAmbiguous,
+                "LOWER_TIER_SINK_AMBIGUOUS",
+            ),
+            (
+                RefusalCode::LowerTierMeasurementStale,
+                "LOWER_TIER_MEASUREMENT_STALE",
+            ),
+            (
+                RefusalCode::LowerTierAlignmentInvalid,
+                "LOWER_TIER_ALIGNMENT_INVALID",
+            ),
+            (RefusalCode::LowerTierShortfall, "LOWER_TIER_SHORTFALL"),
+            (RefusalCode::ApprovalMissing, "APPROVAL_MISSING"),
+            (RefusalCode::RebootRequested, "REBOOT_REQUESTED"),
+        ];
+        for (code, expected) in cases {
+            assert_eq!(code.as_str(), expected, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn readiness_reason_as_str_names_every_variant() {
+        assert_eq!(ReadinessReason::NotEvaluated.as_str(), "not_evaluated");
+        assert_eq!(ReadinessReason::ProductOff.as_str(), "product_off");
+        assert_eq!(ReadinessReason::AllGatesPass.as_str(), "all_gates_pass");
+        assert_eq!(
+            ReadinessReason::Refusal(RefusalCode::RebootRequested).as_str(),
+            "REBOOT_REQUESTED"
+        );
+    }
+
+    #[test]
+    fn relay_and_binary_gates_fail_closed() {
+        let mut input = ready_input();
+        input.relay_gate = Gate::Fail;
+        assert_eq!(
+            evaluate_product(&input).reason,
+            ReadinessReason::Refusal(RefusalCode::RelayGateFailed)
+        );
+        input.relay_gate = Gate::Unknown;
+        assert_eq!(
+            evaluate_product(&input).reason,
+            ReadinessReason::Refusal(RefusalCode::RelayGateUnknown)
+        );
+        input.relay_gate = Gate::NotApplicable;
+        assert_eq!(
+            evaluate_product(&input).reason,
+            ReadinessReason::Refusal(RefusalCode::RelayGateUnknown)
+        );
+
+        input.relay_gate = Gate::Pass;
+        input.binary_match = Gate::Fail;
+        assert_eq!(
+            evaluate_product(&input).reason,
+            ReadinessReason::Refusal(RefusalCode::BinaryMatchFailed)
+        );
+        input.binary_match = Gate::Unknown;
+        assert_eq!(
+            evaluate_product(&input).reason,
+            ReadinessReason::Refusal(RefusalCode::BinaryMatchUnknown)
+        );
+    }
 }
 
 /// Semantic error for NBD probe connection failures.
@@ -801,6 +898,22 @@ mod nbd_readiness_error_tests {
         assert_eq!(
             NbdReadinessError::from(std::io::ErrorKind::InvalidData),
             NbdReadinessError::Other(std::io::ErrorKind::InvalidData)
+        );
+    }
+
+    #[test]
+    fn nbd_readiness_error_display_names_every_variant() {
+        assert_eq!(
+            NbdReadinessError::ConnectionRefused.to_string(),
+            "NBD connection refused"
+        );
+        assert_eq!(
+            NbdReadinessError::Timeout.to_string(),
+            "NBD connection timed out"
+        );
+        assert_eq!(
+            NbdReadinessError::Other(std::io::ErrorKind::UnexpectedEof).to_string(),
+            "NBD IO error: UnexpectedEof"
         );
     }
 }

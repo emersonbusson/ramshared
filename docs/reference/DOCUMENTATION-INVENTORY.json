@@ -2,25 +2,13 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 321,
-    "classified": 318,
+    "total": 355,
+    "classified": 352,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
   },
   "entries": [
-    {
-      "path": ".claude/rules/agent-orchestration.md",
-      "disposition": "classified",
-      "ruleId": "agent-rules",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "agent-governance",
-      "canonicalSource": ".claude/rules/documentation.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
     {
       "path": ".claude/rules/benchmarks.md",
       "disposition": "classified",
@@ -331,6 +319,18 @@
     },
     {
       "path": "crates/ramshared-integrity/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-ipc/README.md",
       "disposition": "classified",
       "ruleId": "crate-documentation",
       "verification": {
@@ -1120,6 +1120,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/reliability/JULES-PR-CONSOLIDATION-20260921.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
@@ -1133,6 +1145,18 @@
     },
     {
       "path": "docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/MIMO-SOURCE-AUDIT-20260929.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
       "verification": {
@@ -1181,6 +1205,18 @@
     },
     {
       "path": "docs/reliability/incidents/2026-08-23-wsl2-dxg-fortify-systemd-no-go.md",
+      "disposition": "classified",
+      "ruleId": "reliability-incidents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/incidents/2026-09-23-wsl2-stress-branch-audit.md",
       "disposition": "classified",
       "ruleId": "reliability-incidents",
       "verification": {
@@ -1325,6 +1361,18 @@
     },
     {
       "path": "docs/runbooks/windows-autonomous-broker.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/windows-elevation.md",
       "disposition": "classified",
       "ruleId": "operation-runbooks",
       "verification": {
@@ -1828,6 +1876,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/cuda-rust-native-tiering/validation.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-validation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
       "path": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/IMPL.md",
       "disposition": "classified",
       "ruleId": "ssdv3-implementation-records",
@@ -2009,6 +2069,54 @@
     },
     {
       "path": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/gpu-reserve-floor-authority/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/gpu-reserve-floor-authority/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/gpu-reserve-floor-authority/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/gpu-reserve-floor-authority/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {
@@ -2212,6 +2320,54 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/public-repository-hygiene/AUDIT.md",
       "disposition": "classified",
       "ruleId": "ssdv3-audits",
@@ -2285,6 +2441,138 @@
     },
     {
       "path": "docs/specs/no-milestone/release-promotion-publication/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/resource-configuration-center/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/resource-configuration-center/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/resource-configuration-center/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/resource-configuration-center/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/AUDIT-source.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-gap-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-STATIC-PROOF.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-coco-static-proof",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {
@@ -2848,6 +3136,54 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/wsl2-cascade-boot/AUDIT-2.5.md",
       "disposition": "classified",
       "ruleId": "ssdv3-audits",
@@ -3182,6 +3518,54 @@
       "canonicalSource": "validation.md",
       "lifecycle": "immutable",
       "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
     },
     {
       "path": "docs/specs/no-milestone/wsl2-kernel-vmbus-headroom/AUDIT-2.5.md",
@@ -3700,7 +4084,31 @@
       "freshnessDays": 30
     },
     {
+      "path": "docs/upstream/VMBUS-RING-V2-UPSTREAM-STATUS.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
       "path": "docs/upstream/microsoft-wsl-40795-comment-draft.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
+      "path": "docs/upstream/vmbus-ring-v2-cover-letter-DRAFT.md",
       "disposition": "classified",
       "ruleId": "upstream-drafts",
       "verification": {

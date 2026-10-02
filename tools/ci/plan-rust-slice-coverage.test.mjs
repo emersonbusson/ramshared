@@ -249,13 +249,12 @@ const MEMORY_BROKER_WSL2D_DAEMON_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-wsl2d',
-    '--files', 'crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs',
+    '--files', 'crates/ramshared-wsl2d/src/swap.rs',
     '--min', '80',
     '--report-json', 'tmp/memory-broker-wsl2d-daemon-cov.json',
   ],
   packages: ['ramshared-wsl2d'],
   files: [
-    'crates/ramshared-wsl2d/src/main.rs',
     'crates/ramshared-wsl2d/src/swap.rs',
   ],
   min: 80,
@@ -298,6 +297,20 @@ const MEMORY_BROKER_WSL2D_DAEMON_MAIN_TESTS = [
 const MEMORY_BROKER_WSL2D_DAEMON_PROCESS_TESTS = [
   'daemon_process_refusals_exit_before_backend',
 ]
+const MEMORY_BROKER_WSL2D_ENTRYPOINT_TEST_CONTRACT = {
+  id: 'memory-broker-wsl2d-entrypoint-contract',
+  kind: 'rust-adapter-test-contract',
+  spec: 'docs/specs/no-milestone/memory-broker/SPEC.md',
+  files: ['crates/ramshared-wsl2d/src/main.rs'],
+  verifications: [{
+    source: 'crates/ramshared-wsl2d/src/main.rs',
+    package: 'ramshared-wsl2d',
+    binary: 'ramsharedd',
+    test_module: 'tests',
+    cargo_test: ['cargo', 'test', '-p', 'ramshared-wsl2d', '--bin', 'ramsharedd', '--', '--test-threads=1'],
+    tests: MEMORY_BROKER_WSL2D_DAEMON_MAIN_TESTS,
+  }],
+}
 const WSL2_CONN_COVERAGE_ENTRY = {
   id: 'wsl2-cascade-connection-transport',
   kind: 'rust-line-coverage',
@@ -351,14 +364,13 @@ const CASCADE_TRANSPORT_ORCHESTRATION_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-cli',
-    '--files', 'crates/ramshared-cli/src/bounded_process.rs,crates/ramshared-cli/src/cascade/cascade_io.rs',
+    '--files', 'crates/ramshared-cli/src/bounded_process.rs',
     '--min', '80',
     '--report-json', 'tmp/cascade-transport-orchestration-cov.json',
   ],
   packages: ['ramshared-cli'],
   files: [
     'crates/ramshared-cli/src/bounded_process.rs',
-    'crates/ramshared-cli/src/cascade/cascade_io.rs',
   ],
   min: 80,
 }
@@ -370,18 +382,36 @@ const CASCADE_TRANSPORT_ORCHESTRATION_CASCADE_TESTS = [
   'daemon_pid_requires_positive_pid_and_exact_identity',
   'failed_readiness_terminates_only_spawned_child',
   'connect_nbd_preserves_primary_error_and_rolls_back_once',
+  'connect_nbd_records_exact_preprovisioned_swap_before_activation',
   'connect_nbd_refusal_terminates_exact_daemon_without_detach',
+  'connect_nbd_refuses_invalid_target_and_zero_connections_before_runner',
   'connect_nbd_uncertain_swapon_preserves_backend_and_daemon',
   'zram_fallback_refuses_unexpected_device_without_swapon',
   'malformed_zram_success_resets_exact_new_device_without_leak',
   'zram_setup_never_mutates_unbound_sysfs_fallback',
+  'zram_zero_capacity_skips_commands_and_successful_setup_seals_exact_device',
   'runtime_marker_and_pid_record_refuse_unsafe_identity',
   'setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture',
   'setup_new_cascade_rolls_back_zram_after_nbd_failure',
   'setup_new_cascade_keeps_zram_record_on_swapoff_refusal',
   'down_with_runtime_preserves_swapoff_first_and_cleans_temp_state',
   'transport_refusal_is_fail_closed_before_command',
+  'ensure_origin_attached_rejects_unreadable_and_noncanonical_manifests_before_host_call',
 ]
+const CASCADE_TRANSPORT_ADAPTER_TEST_CONTRACT = {
+  id: 'cascade-transport-adapter-contract',
+  kind: 'rust-adapter-test-contract',
+  spec: 'docs/specs/no-milestone/cascade-transport-policy/SPEC.md',
+  files: ['crates/ramshared-cli/src/cascade/cascade_io.rs'],
+  verifications: [{
+    source: 'crates/ramshared-cli/src/cascade/cascade_io.rs',
+    package: 'ramshared-cli',
+    binary: 'ramshared',
+    test_module: 'tests',
+    cargo_test: ['cargo', 'test', '-p', 'ramshared-cli', '--bin', 'ramshared', '--', '--test-threads=1'],
+    tests: CASCADE_TRANSPORT_ORCHESTRATION_CASCADE_TESTS,
+  }],
+}
 const CASCADE_TRANSPORT_ORCHESTRATION_RUNNER_TESTS = [
   'capture_runner_keeps_legitimate_success_and_nonzero_status_typed',
   'capture_runner_rejects_bounded_output_overflow',
@@ -426,7 +456,7 @@ function moduleExportGlueBaseReader(source = 'pub mod cascade;\npub mod priority
 
 function coverageMap() {
   return {
-    schema_version: 2,
+    schema_version: 3,
     entries: [{
       id: 'fixture-policy',
       kind: 'rust-line-coverage',
@@ -529,6 +559,57 @@ pub(crate) use policy as internal_policy;
 `) {
   const specText = embeddedOwnership('rust-slice-structural-contract-v1', structuralDeclaration(entry))
   const root = fixtureRoot(specText)
+  writeFixtureFile(root, entry.files[0], source)
+  return root
+}
+
+function adapterTestContractEntry() {
+  return {
+    id: 'fixture-adapter-contract',
+    kind: 'rust-adapter-test-contract',
+    spec: 'docs/specs/no-milestone/fixture/SPEC.md',
+    files: ['crates/fixture/src/main.rs'],
+    verifications: [{
+      source: 'crates/fixture/src/main.rs',
+      package: 'fixture',
+      binary: 'fixture',
+      test_module: 'tests',
+      cargo_test: ['cargo', 'test', '-p', 'fixture', '--bin', 'fixture', '--', '--test-threads=1'],
+      tests: ['adapter_refuses_unsafe_target', 'adapter_keeps_cleanup_order'],
+    }],
+  }
+}
+
+function adapterTestContractDeclaration(entry) {
+  return {
+    schema_version: 1,
+    id: entry.id,
+    kind: entry.kind,
+    files: entry.files,
+    verifications: entry.verifications,
+  }
+}
+
+function adapterTestContractRoot(
+  entry = adapterTestContractEntry(),
+  source = `#[cfg(test)]
+mod tests {
+    #[test]
+    fn adapter_refuses_unsafe_target() {
+        let multiline = "this Rust string
+continues across lines";
+        assert!(!multiline.is_empty());
+    }
+
+    #[test]
+    fn adapter_keeps_cleanup_order() {}
+}
+`,
+) {
+  const root = fixtureRoot(embeddedOwnership(
+    'rust-slice-adapter-test-contract-v1',
+    adapterTestContractDeclaration(entry),
+  ))
   writeFixtureFile(root, entry.files[0], source)
   return root
 }
@@ -838,6 +919,14 @@ test('spec_coverage_map_requires_exact_command_in_spec', () => {
   assert.equal(result.errors.some((item) => item.rule === 'spec-command-missing'), true)
 })
 
+test('coverage_map_accepts_an_exact_include_ignored_coverage_command', () => {
+  const command = 'node tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80 --include-ignored'
+  const root = fixtureRoot(`\`\`\`bash\n${command}\n\`\`\`\n`)
+  const map = coverageMap()
+  map.entries[0].command.push('--include-ignored')
+  assert.equal(validateCoverageMap(map, root).ok, true)
+})
+
 test('changed_business_rust_file_requires_mapped_spec_command', () => {
   const root = fixtureRoot('```bash\nnode tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80\n```\n')
   const mapped = selectCoverageEntries(coverageMap(), ['crates/fixture/src/policy.rs'], root)
@@ -849,13 +938,51 @@ test('changed_business_rust_file_requires_mapped_spec_command', () => {
   assert.equal(unmapped.errors.some((item) => item.rule === 'changed-rust-file-unmapped'), true)
 })
 
+test('changed_rust_file_in_cfg_test_path_module_is_not_a_production_coverage_slice', () => {
+  const root = fixtureRoot('```bash\nnode tools/ci/check-rust-slice-coverage.mjs -p fixture --files crates/fixture/src/policy.rs --min 80\n```\n')
+  writeFixtureFile(
+    root,
+    'crates/fixture/src/monitor.rs',
+    '#[cfg(test)]\n#[path = "monitor_pressure_tests.rs"]\nmod pressure_classification_tests;\n',
+  )
+  writeFixtureFile(
+    root,
+    'crates/fixture/src/monitor_pressure_tests.rs',
+    '#[test]\nfn classifies_pressure() {}\n',
+  )
+
+  const selected = selectCoverageEntries(
+    coverageMap(),
+    ['crates/fixture/src/monitor_pressure_tests.rs'],
+    root,
+  )
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'NO_CHANGE')
+
+  writeFixtureFile(
+    root,
+    'crates/fixture/src/monitor.rs',
+    '#[path = "monitor_pressure_tests.rs"]\nmod pressure_classification_tests;\n',
+  )
+  const unguarded = selectCoverageEntries(
+    coverageMap(),
+    ['crates/fixture/src/monitor_pressure_tests.rs'],
+    root,
+  )
+  assert.equal(unguarded.ok, false)
+  assert.deepEqual(unguarded.errors, [{
+    rule: 'changed-rust-file-unmapped',
+    detail: 'crates/fixture/src/monitor_pressure_tests.rs',
+  }])
+})
+
 test('microsoft_native_vram_n3_state_has_exact_coverage_owner', () => {
   const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
   const entry = map.entries.find((item) => item.id === MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY.id)
   assert.deepEqual(entry, MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
@@ -866,7 +993,7 @@ test('microsoft_native_vram_n3_state_has_exact_coverage_owner', () => {
 
 test('microsoft_native_vram_n3_module_export_glue_accepts_exact_projection_and_all_targets', () => {
   const entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = moduleExportGlueRoot(entry)
   const selected = selectCoverageEntries(map, entry.files, root, {
     baseRevision: 'e'.repeat(40),
@@ -896,7 +1023,7 @@ test('main_all_accepts_unchanged_exact_module_export_glue_projection', () => {
   const entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY
   const stableSource = 'pub mod cascade;\npub mod priority;\npub mod n3_state;\npub mod nbd_readiness;\n'
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     entry.files,
     moduleExportGlueRoot(entry, stableSource),
     {
@@ -910,7 +1037,7 @@ test('main_all_accepts_unchanged_exact_module_export_glue_projection', () => {
 
   const incompleteSource = 'pub mod cascade;\npub mod priority;\npub mod n3_state;\n'
   const incomplete = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     entry.files,
     moduleExportGlueRoot(entry, incompleteSource),
     {
@@ -936,7 +1063,7 @@ test('microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_w
   ]
   for (const headSource of invalidSources) {
     const result = selectCoverageEntries(
-      { schema_version: 2, entries: [entry] },
+      { schema_version: 3, entries: [entry] },
       entry.files,
       moduleExportGlueRoot(entry, headSource),
       { baseRevision: 'f'.repeat(40), readBaseFile: moduleExportGlueBaseReader(base) },
@@ -950,7 +1077,7 @@ test('microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_w
     files: ['crates/ramshared-tier/src/other.rs'],
   }
   const wrongPathResult = validateCoverageMap(
-    { schema_version: 2, entries: [wrongPath] },
+    { schema_version: 3, entries: [wrongPath] },
     moduleExportGlueRoot(wrongPath),
   )
   assert.equal(wrongPathResult.ok, false)
@@ -958,7 +1085,7 @@ test('microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_w
 
   const wrongDeclaration = { ...entry, declaration: 'pub mod other;' }
   const wrongDeclarationResult = validateCoverageMap(
-    { schema_version: 2, entries: [wrongDeclaration] },
+    { schema_version: 3, entries: [wrongDeclaration] },
     moduleExportGlueRoot(wrongDeclaration),
   )
   assert.equal(wrongDeclarationResult.ok, false)
@@ -974,7 +1101,7 @@ test('wsl2_nbd_product_readiness_has_exact_coverage_owner_and_named_tests', () =
   assert.deepEqual(entry, WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
@@ -1002,7 +1129,7 @@ test('comment_language_measured_rust_files_keep_exact_ownership_boundaries', () 
   const entry = map.entries.find((item) => item.id === COMMENT_LANGUAGE_COVERAGE_ENTRY.id)
   assert.deepEqual(entry, COMMENT_LANGUAGE_COVERAGE_ENTRY)
 
-  const ownerOnlyMap = { schema_version: 2, entries: [entry] }
+  const ownerOnlyMap = { schema_version: 3, entries: [entry] }
   const covered = selectCoverageEntries(ownerOnlyMap, COMMENT_LANGUAGE_HIGH_COVERAGE_FILES, REPOSITORY_ROOT)
   assert.equal(covered.ok, true)
   assert.equal(covered.state, 'READY')
@@ -1017,10 +1144,11 @@ test('comment_language_measured_rust_files_keep_exact_ownership_boundaries', () 
 
   const featureOwned = selectCoverageEntries(
     {
-      schema_version: 2,
+      schema_version: 3,
       entries: [
         map.entries.find((item) => item.id === MEMORY_BROKER_AGENT_CLI_COVERAGE_ENTRY.id),
         map.entries.find((item) => item.id === CASCADE_TRANSPORT_ORCHESTRATION_COVERAGE_ENTRY.id),
+        map.entries.find((item) => item.id === CASCADE_TRANSPORT_ADAPTER_TEST_CONTRACT.id),
         map.entries.find((item) => item.id === CASCADE_LIFECYCLE_CLI_COVERAGE_ENTRY.id),
         map.entries.find((item) => item.id === WSL2_CONN_COVERAGE_ENTRY.id),
       ],
@@ -1034,20 +1162,20 @@ test('comment_language_measured_rust_files_keep_exact_ownership_boundaries', () 
     featureOwned.entries.map((item) => item.id),
     [
       'cascade-lifecycle-observability',
-      'cascade-transport-orchestration',
+      'cascade-transport-adapter-contract',
       'memory-broker-agent-cli',
       'wsl2-cascade-connection-transport',
     ],
   )
 })
 
-test('wsl2_control_plane_requires_exact_four_file_coverage_owner', () => {
+test('wsl2_control_plane_requires_exact_production_file_coverage_owner', () => {
   const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
   const entry = map.entries.find((item) => item.id === WSL2_CONTROL_PLANE_COVERAGE_ENTRY.id)
   assert.deepEqual(entry, WSL2_CONTROL_PLANE_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     WSL2_CONTROL_PLANE_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
@@ -1062,7 +1190,7 @@ test('memory_broker_agent_cli_requires_exact_coverage_owner_and_named_tests', ()
   assert.deepEqual(entry, MEMORY_BROKER_AGENT_CLI_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     MEMORY_BROKER_AGENT_CLI_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
@@ -1092,7 +1220,7 @@ test('memory_broker_wsl2d_daemon_requires_exact_coverage_owner_and_named_tests',
   assert.deepEqual(entry, MEMORY_BROKER_WSL2D_DAEMON_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     MEMORY_BROKER_WSL2D_DAEMON_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
@@ -1102,6 +1230,16 @@ test('memory_broker_wsl2d_daemon_requires_exact_coverage_owner_and_named_tests',
     selected.entries.map((item) => item.id),
     [MEMORY_BROKER_WSL2D_DAEMON_COVERAGE_ENTRY.id],
   )
+
+  const adapterContract = map.entries.find((item) => item.id === MEMORY_BROKER_WSL2D_ENTRYPOINT_TEST_CONTRACT.id)
+  assert.deepEqual(adapterContract, MEMORY_BROKER_WSL2D_ENTRYPOINT_TEST_CONTRACT)
+  const adapterSelection = selectCoverageEntries(
+    { schema_version: 3, entries: [adapterContract] },
+    adapterContract.files,
+    REPOSITORY_ROOT,
+  )
+  assert.equal(adapterSelection.ok, true)
+  assert.equal(adapterSelection.state, 'READY')
 
   const mainTests = readFileSync(
     path.join(REPOSITORY_ROOT, 'crates', 'ramshared-wsl2d', 'src', 'main.rs'),
@@ -1124,7 +1262,7 @@ test('cuda_pinned_host_mapping_has_exact_line_coverage_owner', () => {
   const entry = map.entries.find((item) => item.id === CUDA_PINNED_HOST_MAPPING_COVERAGE_ENTRY.id)
   assert.deepEqual(entry, CUDA_PINNED_HOST_MAPPING_COVERAGE_ENTRY)
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     entry.files,
     REPOSITORY_ROOT,
   )
@@ -1146,7 +1284,7 @@ test('memory_broker_backend_has_exact_coverage_and_pinned_gpu_relocation_owners'
   assert.deepEqual(relocation, MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [coverage, relocation] },
+    { schema_version: 3, entries: [coverage, relocation] },
     [coverage.files[0], relocation.verification.ignored_test_source],
     REPOSITORY_ROOT,
   )
@@ -1161,7 +1299,7 @@ test('wsl2_connection_transport_requires_exact_canonical_coverage', () => {
   assert.deepEqual(entry, WSL2_CONN_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     WSL2_CONN_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
@@ -1176,7 +1314,7 @@ test('cascade_lifecycle_cli_dispatch_requires_exact_coverage_owner_and_named_tes
   assert.deepEqual(entry, CASCADE_LIFECYCLE_CLI_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     ['crates/ramshared-cli/src/main.rs'],
     REPOSITORY_ROOT,
   )
@@ -1206,13 +1344,23 @@ test('cascade_transport_orchestration_requires_exact_coverage_owner_and_named_te
   assert.deepEqual(entry, CASCADE_TRANSPORT_ORCHESTRATION_COVERAGE_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [entry] },
+    { schema_version: 3, entries: [entry] },
     CASCADE_TRANSPORT_ORCHESTRATION_COVERAGE_ENTRY.files,
     REPOSITORY_ROOT,
   )
   assert.equal(selected.ok, true)
   assert.equal(selected.state, 'READY')
   assert.deepEqual(selected.entries.map((item) => item.id), [CASCADE_TRANSPORT_ORCHESTRATION_COVERAGE_ENTRY.id])
+
+  const adapterContract = map.entries.find((item) => item.id === CASCADE_TRANSPORT_ADAPTER_TEST_CONTRACT.id)
+  assert.deepEqual(adapterContract, CASCADE_TRANSPORT_ADAPTER_TEST_CONTRACT)
+  const adapterSelection = selectCoverageEntries(
+    { schema_version: 3, entries: [adapterContract] },
+    adapterContract.files,
+    REPOSITORY_ROOT,
+  )
+  assert.equal(adapterSelection.ok, true)
+  assert.equal(adapterSelection.state, 'READY')
 
   const cascadeSource = readFileSync(
     path.join(REPOSITORY_ROOT, 'crates', 'ramshared-cli', 'src', 'cascade', 'cascade_io.rs'),
@@ -1232,7 +1380,7 @@ test('cascade_transport_orchestration_requires_exact_coverage_owner_and_named_te
 
 test('windows_platform_entry_requires_exact_feature_spec_and_named_checks', () => {
   const entry = platformEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = platformRoot(entry)
 
   const validation = validateCoverageMap(map, root)
@@ -1267,7 +1415,7 @@ test('windows_platform_entry_requires_exact_feature_spec_and_named_checks', () =
 
 test('windows_platform_entry_refuses_static_harness_outside_windows_ci', () => {
   const entry = platformEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const result = validateCoverageMap(map, platformRoot(entry, { wrapperIncludesStatic: false }))
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'platform-static-harness-not-run'), true)
@@ -1275,7 +1423,7 @@ test('windows_platform_entry_refuses_static_harness_outside_windows_ci', () => {
 
 test('structural_contract_accepts_only_module_surface_and_runs_package_tests', () => {
   const entry = structuralEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = structuralRoot(entry)
   const validation = validateCoverageMap(map, root)
   assert.equal(validation.ok, true)
@@ -1331,7 +1479,7 @@ test('structural_contract_refuses_executable_or_malformed_rust', () => {
     '// comments only\n',
   ]) {
     const result = validateCoverageMap(
-      { schema_version: 2, entries: [entry] },
+      { schema_version: 3, entries: [entry] },
       structuralRoot(entry, source),
     )
     assert.equal(result.ok, false)
@@ -1341,7 +1489,7 @@ test('structural_contract_refuses_executable_or_malformed_rust', () => {
   const invalidVerification = structuralEntry()
   invalidVerification.verifications[0].package = 'other'
   const invalidVerificationResult = validateCoverageMap(
-    { schema_version: 2, entries: [invalidVerification] },
+    { schema_version: 3, entries: [invalidVerification] },
     structuralRoot(invalidVerification),
   )
   assert.equal(invalidVerificationResult.ok, false)
@@ -1350,7 +1498,7 @@ test('structural_contract_refuses_executable_or_malformed_rust', () => {
 
   const missingContractRoot = fixtureRoot('no structural declaration\n')
   writeFixtureFile(missingContractRoot, entry.files[0], 'pub mod policy;\n')
-  const missingContract = validateCoverageMap({ schema_version: 2, entries: [entry] }, missingContractRoot)
+  const missingContract = validateCoverageMap({ schema_version: 3, entries: [entry] }, missingContractRoot)
   assert.equal(missingContract.errors.some((item) => item.rule === 'structural-spec-contract-missing'), true)
 
   const mismatchedRoot = structuralRoot(entry)
@@ -1362,8 +1510,51 @@ test('structural_contract_refuses_executable_or_malformed_rust', () => {
       files: ['crates/fixture/src/other.rs'],
     }),
   )
-  const mismatched = validateCoverageMap({ schema_version: 2, entries: [entry] }, mismatchedRoot)
+  const mismatched = validateCoverageMap({ schema_version: 3, entries: [entry] }, mismatchedRoot)
   assert.equal(mismatched.errors.some((item) => item.rule === 'structural-spec-contract-mismatch'), true)
+})
+
+test('adapter_test_contract_requires_named_unit_tests_and_runs_the_binary_suite', () => {
+  const entry = adapterTestContractEntry()
+  const map = { schema_version: 3, entries: [entry] }
+  const root = adapterTestContractRoot(entry)
+
+  assert.equal(validateCoverageMap(map, root).ok, true)
+  const selected = selectCoverageEntries(map, entry.files, root)
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'READY')
+  assert.deepEqual(selected.entries.map((item) => item.id), [entry.id])
+
+  const calls = []
+  const execution = runCoveragePlan(selected.entries, {
+    root,
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(execution.ok, true)
+  assert.deepEqual(calls, [{
+    command: 'cargo',
+    args: ['test', '-p', 'fixture', '--bin', 'fixture', '--', '--test-threads=1'],
+    options: { cwd: root, shell: false, stdio: 'inherit' },
+  }])
+
+  const missingTest = adapterTestContractEntry()
+  missingTest.verifications[0].tests.push('test_that_does_not_exist')
+  const missingRoot = adapterTestContractRoot(missingTest)
+  const missing = validateCoverageMap({ schema_version: 3, entries: [missingTest] }, missingRoot)
+  assert.equal(missing.ok, false)
+  assert.equal(missing.errors.some((item) => item.rule === 'adapter-test-contract-test-missing'), true)
+
+  const failedCommands = runCoveragePlan(selected.entries, {
+    root,
+    spawn() {
+      return { status: 1 }
+    },
+  })
+  assert.equal(failedCommands.ok, false)
+  assert.equal(failedCommands.errors.some((item) => item.rule === 'adapter-test-contract-command-failed'), true)
 })
 
 test('windows_autonomous_sources_have_exact_structural_or_platform_owners', () => {
@@ -1391,7 +1582,7 @@ test('windows_autonomous_sources_have_exact_structural_or_platform_owners', () =
 
 test('localization_differential_accepts_comment_only_source_change', () => {
   const entry = localizationEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = localizationRoot(entry, '// English comment\npub fn policy() {}\n')
   const result = selectCoverageEntries(map, entry.files, root, {
     baseRevision: 'a'.repeat(40),
@@ -1406,7 +1597,7 @@ test('localization_differential_accepts_comment_only_source_change', () => {
 
 test('localization_differential_refuses_semantic_change_or_missing_base', () => {
   const entry = localizationEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = localizationRoot(entry, 'pub fn policy() { eprintln!("English"); }\n')
 
   const semantic = selectCoverageEntries(map, entry.files, root, {
@@ -1429,7 +1620,7 @@ test('localization_differential_refuses_semantic_change_or_missing_base', () => 
 
 test('test_only_localization_differential_accepts_declared_cfg_test_change', () => {
   const entry = testOnlyLocalizationEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = testOnlyLocalizationRoot(entry)
   const selected = selectCoverageEntries(map, entry.files, root, {
     baseRevision: 'd'.repeat(40),
@@ -1479,7 +1670,7 @@ test('test_only_localization_differential_accepts_declared_cfg_test_change', () 
 
 test('ignored_test_relocation_accepts_exact_pinned_provenance', () => {
   const entry = relocatedTestOnlyLocalizationEntry()
-  const map = { schema_version: 2, entries: [entry] }
+  const map = { schema_version: 3, entries: [entry] }
   const root = relocatedTestOnlyLocalizationRoot(entry)
 
   assert.equal(validateCoverageMap(map, root).ok, true)
@@ -1503,7 +1694,7 @@ test('ignored_test_relocation_global_owner_relation_allows_one_line_owner_and_on
   )
   const root = relocationOwnershipRoot([relocation])
   writeFixtureFile(root, coverage.spec, `\`\`\`bash\n${coverage.command.join(' ')}\n\`\`\`\n`)
-  assert.equal(validateCoverageMap({ schema_version: 2, entries: [coverage, relocation] }, root).ok, true)
+  assert.equal(validateCoverageMap({ schema_version: 3, entries: [coverage, relocation] }, root).ok, true)
 
   const secondLine = lineOwnerFor(
     relocation.files[0],
@@ -1512,7 +1703,7 @@ test('ignored_test_relocation_global_owner_relation_allows_one_line_owner_and_on
   )
   writeFixtureFile(root, secondLine.spec, `\`\`\`bash\n${secondLine.command.join(' ')}\n\`\`\`\n`)
   const duplicateLine = validateCoverageMap(
-    { schema_version: 2, entries: [coverage, secondLine, relocation] },
+    { schema_version: 3, entries: [coverage, secondLine, relocation] },
     root,
   )
   assert.equal(duplicateLine.ok, false)
@@ -1526,7 +1717,7 @@ test('global_line_coverage_ownership_refuses_duplicate_pure_owners_including_cli
   const root = fixtureRoot(`\`\`\`bash\n${first.command.join(' ')}\n\`\`\`\n`)
   writeFixtureFile(root, first.spec, `\`\`\`bash\n${first.command.join(' ')}\n\`\`\`\n`)
   writeFixtureFile(root, second.spec, `\`\`\`bash\n${second.command.join(' ')}\n\`\`\`\n`)
-  const map = { schema_version: 2, entries: [first, second] }
+  const map = { schema_version: 3, entries: [first, second] }
   const validation = validateCoverageMap(map, root)
   assert.equal(validation.ok, false)
   assert.equal(validation.errors.some((item) => item.rule === 'line-coverage-production-owner-duplicate'), true)
@@ -1556,7 +1747,7 @@ test('planner_trust_inputs_require_confined_non_symlink_regular_files', () => {
   mkdirSync(path.dirname(path.join(root, spec)), { recursive: true })
   symlinkSync(path.join(outside, 'policy.rs'), path.join(root, source))
   symlinkSync(path.join(outside, 'SPEC.md'), path.join(root, spec))
-  const validation = validateCoverageMap({ schema_version: 2, entries: [owner] }, root)
+  const validation = validateCoverageMap({ schema_version: 3, entries: [owner] }, root)
   assert.equal(validation.ok, false)
   assert.equal(validation.errors.some((item) => item.rule === 'coverage-file-untrusted'), true)
   assert.equal(validation.errors.some((item) => item.rule === 'coverage-spec-untrusted'), true)
@@ -1601,7 +1792,7 @@ test('ignored_test_relocation_global_validation_refuses_duplicate_production_and
   })
   const productionRoot = relocationOwnershipRoot([first, duplicateProduction])
   const productionResult = validateCoverageMap(
-    { schema_version: 2, entries: [first, duplicateProduction] },
+    { schema_version: 3, entries: [first, duplicateProduction] },
     productionRoot,
   )
   assert.equal(productionResult.ok, false)
@@ -1615,7 +1806,7 @@ test('ignored_test_relocation_global_validation_refuses_duplicate_production_and
   })
   const integrationRoot = relocationOwnershipRoot([first, duplicateIntegration])
   const integrationResult = validateCoverageMap(
-    { schema_version: 2, entries: [first, duplicateIntegration] },
+    { schema_version: 3, entries: [first, duplicateIntegration] },
     integrationRoot,
   )
   assert.equal(integrationResult.ok, false)
@@ -1639,7 +1830,7 @@ test('ignored_test_relocation_global_validation_refuses_wrong_cross_owner_overla
     'rust-slice-localization-comment-differential-v1',
     localizationDeclaration(localization),
   ))
-  const result = validateCoverageMap({ schema_version: 2, entries: [relocation, localization] }, root)
+  const result = validateCoverageMap({ schema_version: 3, entries: [relocation, localization] }, root)
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'ignored-test-relocation-production-owner-conflict'), true)
 })
@@ -1656,7 +1847,7 @@ test('ignored_test_relocation_duplicate_owner_cli_all_is_blocked_and_never_ready
   })
   const root = relocationOwnershipRoot([first, second])
   writeFixtureFile(root, 'docs/governance/rust-slice-coverage.json', `${JSON.stringify({
-    schema_version: 2,
+    schema_version: 3,
     entries: [first, second],
   })}\n`)
   const output = []
@@ -1717,7 +1908,7 @@ test('ignored_test_relocation_refuses_wrong_package_path_target_or_command', () 
     const entry = relocatedTestOnlyLocalizationEntry()
     item.mutate(entry.verification)
     const root = relocatedTestOnlyLocalizationRoot(entry)
-    const result = validateCoverageMap({ schema_version: 2, entries: [entry] }, root)
+    const result = validateCoverageMap({ schema_version: 3, entries: [entry] }, root)
     assert.equal(result.ok, false, item.name)
     assert.equal(result.errors.some((error) => error.rule === 'ignored-test-relocation-verification-invalid'), true, item.name)
   }
@@ -1729,7 +1920,7 @@ test('ignored_test_relocation_refuses_missing_or_symlinked_head_test', () => {
     missingEntry,
     RELOCATED_TEST_ONLY_INTEGRATION_SOURCE.replace('fn gpu_roundtrip()', 'fn different_test()'),
   )
-  const missing = validateCoverageMap({ schema_version: 2, entries: [missingEntry] }, missingRoot)
+  const missing = validateCoverageMap({ schema_version: 3, entries: [missingEntry] }, missingRoot)
   assert.equal(missing.ok, false)
   assert.equal(missing.errors.some((item) => item.rule === 'ignored-test-relocation-head-test-missing'), true)
 
@@ -1740,7 +1931,7 @@ test('ignored_test_relocation_refuses_missing_or_symlinked_head_test', () => {
   writeFileSync(target, RELOCATED_TEST_ONLY_INTEGRATION_SOURCE)
   rmSync(link)
   symlinkSync(target, link)
-  const symlinked = validateCoverageMap({ schema_version: 2, entries: [symlinkEntry] }, symlinkRoot)
+  const symlinked = validateCoverageMap({ schema_version: 3, entries: [symlinkEntry] }, symlinkRoot)
   assert.equal(symlinked.ok, false)
   assert.equal(symlinked.errors.some((item) => item.rule === 'ignored-test-relocation-head-source-invalid'), true)
 })
@@ -1751,7 +1942,7 @@ test('ignored_test_relocation_refuses_undeclared_import_drift', () => {
     entry,
     RELOCATED_TEST_ONLY_INTEGRATION_SOURCE.replace('use fixture::Gpu;', 'use foreign::Gpu;'),
   )
-  const result = validateCoverageMap({ schema_version: 2, entries: [entry] }, root)
+  const result = validateCoverageMap({ schema_version: 3, entries: [entry] }, root)
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'ignored-test-relocation-imports-mismatch'), true)
 
@@ -1760,7 +1951,7 @@ test('ignored_test_relocation_refuses_undeclared_import_drift', () => {
     cfgEntry,
     `#![cfg(any())]\n${RELOCATED_TEST_ONLY_INTEGRATION_SOURCE}`,
   )
-  const cfgResult = validateCoverageMap({ schema_version: 2, entries: [cfgEntry] }, cfgRoot)
+  const cfgResult = validateCoverageMap({ schema_version: 3, entries: [cfgEntry] }, cfgRoot)
   assert.equal(cfgResult.ok, false)
   assert.equal(cfgResult.errors.some((item) => item.rule === 'ignored-test-relocation-head-source-invalid'), true)
 })
@@ -1833,7 +2024,7 @@ test('ignored_test_relocation_refuses_base_sha_missing_test_semantic_drift_or_ev
     const evidence = item.evidence ?? entry.verification.ignored_gpu_tests
       .map((ignored) => `- \`${ignored.historical_command.join(' ')}\`: **PASS**.`)
       .join('\n')
-    const result = selectCoverageEntries({ schema_version: 2, entries: [entry] }, entry.files, root, {
+    const result = selectCoverageEntries({ schema_version: 3, entries: [entry] }, entry.files, root, {
       baseRevision: 'd'.repeat(40),
       readBaseFile: relocatedTestOnlyBaseReader(entry, item.base, evidence),
     })
@@ -1898,7 +2089,7 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
   for (const item of cases) {
     const entry = testOnlyLocalizationEntry()
     const root = testOnlyLocalizationRoot(entry, item.head)
-    const result = selectCoverageEntries({ schema_version: 2, entries: [entry] }, entry.files, root, {
+    const result = selectCoverageEntries({ schema_version: 3, entries: [entry] }, entry.files, root, {
       baseRevision: 'e'.repeat(40),
       readBaseFile: testOnlyBaseReader(entry),
     })
@@ -1909,7 +2100,7 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
   const undeclared = testOnlyLocalizationEntry()
   undeclared.verifications[0].source = 'crates/fixture/src/undeclared.rs'
   const undeclaredRoot = testOnlyLocalizationRoot(undeclared)
-  const undeclaredResult = validateCoverageMap({ schema_version: 2, entries: [undeclared] }, undeclaredRoot)
+  const undeclaredResult = validateCoverageMap({ schema_version: 3, entries: [undeclared] }, undeclaredRoot)
   assert.equal(undeclaredResult.ok, false)
   assert.equal(undeclaredResult.errors.some((item) => item.rule === 'test-only-source-files-mismatch'), true)
 
@@ -1917,7 +2108,7 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
   wrongPackage.verifications[0].package = 'other'
   wrongPackage.verifications[0].cargo_test = ['cargo', 'test', '-p', 'other', '--lib']
   const wrongPackageResult = validateCoverageMap(
-    { schema_version: 2, entries: [wrongPackage] },
+    { schema_version: 3, entries: [wrongPackage] },
     testOnlyLocalizationRoot(wrongPackage),
   )
   assert.equal(wrongPackageResult.ok, false)
@@ -1929,7 +2120,7 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
     TEST_ONLY_HEAD_SOURCE.replace('    #[test]\n    #[ignore', '    #[ignore'),
   )
   const ignoredButNotTestResult = validateCoverageMap(
-    { schema_version: 2, entries: [ignoredButNotTest] },
+    { schema_version: 3, entries: [ignoredButNotTest] },
     ignoredButNotTestRoot,
   )
   assert.equal(ignoredButNotTestResult.ok, false)
@@ -1937,7 +2128,7 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
 
   const evidenceEntry = testOnlyLocalizationEntry()
   const evidenceRoot = testOnlyLocalizationRoot(evidenceEntry)
-  const evidenceResult = selectCoverageEntries({ schema_version: 2, entries: [evidenceEntry] }, evidenceEntry.files, evidenceRoot, {
+  const evidenceResult = selectCoverageEntries({ schema_version: 3, entries: [evidenceEntry] }, evidenceEntry.files, evidenceRoot, {
     baseRevision: 'f'.repeat(40),
     readBaseFile: testOnlyBaseReader(evidenceEntry, TEST_ONLY_BASE_SOURCE, ''),
   })
@@ -1947,7 +2138,7 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
   const ambiguousEvidenceEntry = testOnlyLocalizationEntry()
   const ambiguousEvidenceRoot = testOnlyLocalizationRoot(ambiguousEvidenceEntry)
   const ambiguousEvidenceResult = selectCoverageEntries(
-    { schema_version: 2, entries: [ambiguousEvidenceEntry] },
+    { schema_version: 3, entries: [ambiguousEvidenceEntry] },
     ambiguousEvidenceEntry.files,
     ambiguousEvidenceRoot,
     {
@@ -1961,6 +2152,78 @@ test('test_only_localization_differential_refuses_spoofed_or_production_change',
   )
   assert.equal(ambiguousEvidenceResult.ok, false)
   assert.equal(ambiguousEvidenceResult.errors.some((item) => item.rule === 'test-only-ignored-evidence-missing'), true)
+})
+
+test('comment_language_test_only_localization_requires_immutable_base_proof', () => {
+  // DT-12: the test-only localization differential is fail-closed without an
+  // immutable-base proof. No GPU command is ever spawned by this slice.
+  const entry = testOnlyLocalizationEntry()
+  const map = { schema_version: 3, entries: [entry] }
+
+  // 1. No baseRevision at all → refused before any projection or spawn.
+  const noBase = testOnlyLocalizationRoot(entry)
+  const noBaseResult = selectCoverageEntries(map, entry.files, noBase, {})
+  assert.equal(noBaseResult.ok, false)
+  assert.equal(noBaseResult.errors.some((item) => item.rule === 'test-only-differential-base-required'), true)
+
+  // 2. baseRevision that is not a full 40-hex SHA → refused.
+  const shortSha = testOnlyLocalizationRoot(entry)
+  const shortShaResult = selectCoverageEntries(map, entry.files, shortSha, {
+    baseRevision: 'abc123',
+    readBaseFile: testOnlyBaseReader(entry),
+  })
+  assert.equal(shortShaResult.ok, false)
+
+  // 3. Base source missing → refused (cannot prove production projection).
+  const missingBase = testOnlyLocalizationRoot(entry)
+  const missingBaseResult = selectCoverageEntries(map, entry.files, missingBase, {
+    baseRevision: 'a'.repeat(40),
+    readBaseFile: () => null,
+  })
+  assert.equal(missingBaseResult.ok, false)
+
+  // 4. Base evidence without the named ignored-GPU PASS commands → refused.
+  const noEvidence = testOnlyLocalizationRoot(entry)
+  const noEvidenceResult = selectCoverageEntries(map, entry.files, noEvidence, {
+    baseRevision: 'b'.repeat(40),
+    readBaseFile: testOnlyBaseReader(entry, TEST_ONLY_BASE_SOURCE, 'no commands here'),
+  })
+  assert.equal(noEvidenceResult.ok, false)
+  assert.equal(noEvidenceResult.errors.some((item) => item.rule === 'test-only-ignored-evidence-missing'), true)
+
+  // 5. The two exact test-only source paths (files[] and verifications[].source)
+  //    must agree; a mismatch refuses.
+  const mismatched = testOnlyLocalizationEntry()
+  mismatched.verifications[0].source = 'crates/fixture/src/other.rs'
+  const mismatchRoot = testOnlyLocalizationRoot(mismatched)
+  const mismatchResult = validateCoverageMap({ schema_version: 3, entries: [mismatched] }, mismatchRoot)
+  assert.equal(mismatchResult.ok, false)
+  assert.equal(mismatchResult.errors.some((item) => item.rule === 'test-only-source-files-mismatch'), true)
+
+  // 6. With a complete immutable-base proof the entry is accepted and only the
+  //    exact package test is spawned — never an ignored GPU command.
+  const proven = testOnlyLocalizationRoot(entry)
+  const calls = []
+  const provenResult = selectCoverageEntries(map, entry.files, proven, {
+    baseRevision: 'c'.repeat(40),
+    readBaseFile: testOnlyBaseReader(entry),
+  })
+  assert.equal(provenResult.ok, true)
+  assert.equal(provenResult.state, 'READY')
+  const execution = runCoveragePlan(provenResult.entries, {
+    root: proven,
+    spawn(command, args) {
+      calls.push({ command, args })
+      return { status: 0 }
+    },
+  })
+  assert.equal(execution.ok, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].command, 'cargo')
+  assert.deepEqual(calls[0].args, ['test', '-p', 'fixture', '--lib'])
+  for (const call of calls) {
+    assert.equal(call.args.includes('--ignored'), false, 'GPU command must not be rerun by this slice')
+  }
 })
 
 test('no_rust_change_is_explicit_no_change_not_skip', () => {
@@ -2119,7 +2382,7 @@ test('ownership_contracts_fail_closed_for_invalid_shapes_and_base_reads', () => 
   assert.equal(extraLineResult.errors.some((item) => item.rule === 'coverage-entry-fields-invalid'), true)
 
   const platform = platformEntry()
-  const platformMap = { schema_version: 2, entries: [platform] }
+  const platformMap = { schema_version: 3, entries: [platform] }
   const platformRootPath = platformRoot(platform)
   platform.verifications[0].static.test = 'missing_static_test'
   const platformResult = validateCoverageMap(platformMap, platformRootPath)
@@ -2127,7 +2390,7 @@ test('ownership_contracts_fail_closed_for_invalid_shapes_and_base_reads', () => 
   assert.equal(platformResult.errors.some((item) => item.rule === 'platform-spec-contract-mismatch'), true)
 
   const localization = localizationEntry()
-  const localizationMap = { schema_version: 2, entries: [localization] }
+  const localizationMap = { schema_version: 3, entries: [localization] }
   const localizationRootPath = localizationRoot(localization)
   const unreadableBase = selectCoverageEntries(localizationMap, localization.files, localizationRootPath, {
     baseRevision: 'c'.repeat(40),

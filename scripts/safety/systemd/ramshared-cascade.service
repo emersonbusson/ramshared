@@ -2,20 +2,23 @@
 Requires=ramshared-host-gate.service
 After=ramshared-host-gate.service
 Description=RamShared sealed NBD-only cascade (scoped approval required)
-Documentation=file:///opt/ramshared/current/scripts/safety/nbd-product-preflight.sh
+Documentation=file:///opt/ramshared/current/README.md
 After=local-fs.target
 ConditionPathExists=!/var/lib/ramshared/safe-mode.json
-ConditionPathExists=/run/ramshared/host-resume-lease.json
 
 [Service]
 Type=simple
 Slice=ramshared-control.slice
 User=root
-# No approval is embedded here. A version-scoped override supplies only
-# RAMSHARED_NBD_CONTROLLER_APPROVAL=lifecycle:<version>.
-ExecStartPre=/opt/ramshared/current/scripts/safety/nbd-product-preflight.sh --check
-ExecStart=/opt/ramshared/current/scripts/safety/cascade-controller.sh --execute
-# systemd signals only the controller. The controller retries swapoff and
+# DT-1: `ramshared boot` is the single native bootstrap verb. It runs the
+# fail-closed gate chain (identity → approval → lease → dirty) then activates.
+# The lease is a host prerequisite the bootstrap verifies and reports (NFR-6),
+# not a silent unit-level skip.
+ExecStart=/opt/ramshared/current/bin/ramshared boot
+# DT-5 / NFR-6: journal the unbounded stop window before swapoff so a long
+# teardown is expected rather than mysterious.
+ExecStop=/bin/sh -c 'echo NBD_STOP_WINDOW=unbounded; exec /opt/ramshared/current/bin/ramshared down'
+# systemd signals only the bootstrap. The bootstrap retries swapoff and
 # detach forever; systemd never escalates to the backend process.
 KillMode=process
 SendSIGKILL=no

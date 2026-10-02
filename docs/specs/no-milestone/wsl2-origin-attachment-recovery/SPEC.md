@@ -119,8 +119,27 @@ Delete: none.
 
 ## Validation checklist
 
-- [ ] Focused manufactured origin-manager test.
-- [ ] `Test-RamSharedOriginStatic.ps1`.
-- [ ] `./scripts/docs-check.sh`.
+- [x] Focused manufactured origin-manager test. 2026-10-01:
+  `Manage-RamSharedOrigin.ps1 -Action test -Run` → 17 passed, 0 failed,
+  exit 0. Named row
+  `PASS origin_attach_decision_is_idempotent_and_fail_closed` present in
+  the output, alongside the 16 other manufactured cases
+  (volume selection, manifest binding, install/uninstall rollback
+  authorities, canonical GUID/PARTUUID acceptance, malformed identity
+  refusal).
+- [x] `Test-RamSharedOriginStatic.ps1`. 2026-10-01: exit 0,
+  `PASS origin_test_mode_skips_live_host_discovery`. Static suite asserts
+  every required contract marker and the install/configure/uninstall
+  branch ordering, and internally runs the manufactured suite to confirm
+  the named PASS lines.
+- [x] `./scripts/docs-check.sh`. 2026-10-01: `✓ docs-check OK`, exit 0.
 - [ ] Live VHDX proof, exact PARTUUID visibility, and host-gate receipt.
-- [ ] No swap/cascade/stress action as part of attachment validation.
+  Environment-bound — not claimed.
+- [x] No swap/cascade/stress action as part of attachment validation.
+  Confirmed 2026-10-01: neither `Manage-RamSharedOrigin.ps1` nor
+  `Test-RamSharedOriginStatic.ps1` references `swapon`, `swapoff`,
+  cascade start/stop, stress, pressure, or ublk. Test mode is entered at
+  `if ($Action -eq "test") { Invoke-OriginManufacturedTests; exit 0 }`
+  before any action switch, and the static suite forbids `Clear-Disk`,
+  `Remove-Partition`, `Remove-Item -Recurse`, `Get-Disk |`, `--shutdown`,
+  and `--unmount` in the production source.

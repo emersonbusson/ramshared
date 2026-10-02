@@ -647,7 +647,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ram
 | `crates/ramshared-integrity/src/hash.rs` | 86.2% |
 | `crates/ramshared-integrity/src/pattern.rs` | 81.0% |
 | `crates/ramshared-vram/src/lib.rs` | 95.0% |
-| `crates/ramshared-cuda/src/probe.rs` | 82.8% |
+| `crates/ramshared-cuda/src/probe.rs` | 98.2% |
 
 <!-- rust-slice-structural-contract-v1
 {
@@ -789,20 +789,36 @@ repeated run does not modify fixture bytes or repository files.
 
 ### Step 3 implementation gate
 
-- [ ] This SPEC activation record and existing PRD have valid English Markdown
-  and resolve their scoped links.
-- [ ] Every Markdown link in these two files resolves to an existing repository
-  path or an explicitly permitted external standard.
-- [ ] `git diff --check -- docs/specs/no-milestone/comment-language-integrity/`
-  passes.
-- [ ] Only this SPEC, the scanner, its named test module, the strict ratchet
+- [x] This SPEC activation record and existing PRD have valid English Markdown
+  and resolve their scoped links. (2026-10-01: `node tools/check-broken-links.mjs` → `✓ no broken markdown links`.)
+- [x] Every Markdown link in these two files resolves to an existing repository
+  path or an explicitly permitted external standard. (2026-10-01: same scan, zero findings.)
+- [x] `git diff --check -- docs/specs/no-milestone/comment-language-integrity/`
+  passes. (2026-09-30: clean.)
+- [x] Only this SPEC, the scanner, its named test module, the strict ratchet
   schema, the existing diff workflow, the exact DT-11 coverage map/planner
   test, the DT-12 test-only map/planner contract, and the named bounded mutable
   English batches are modified by this Step 3 implementation.
+  (2026-10-01: scope audit — the comment-language-integrity Step 3 surface is
+  `docs/specs/no-milestone/comment-language-integrity/SPEC.md`,
+  `tools/ci/check-comment-language.mjs`,
+  `tools/ci/check-comment-language.test.mjs`,
+  `tools/ci/comment-language-baseline.schema.json`,
+  `.github/workflows/comment-language.yml`,
+  `tools/ci/plan-rust-slice-coverage.mjs`, and
+  `tools/ci/plan-rust-slice-coverage.test.mjs`. Current session changes to
+  this surface are exactly the SPEC checklist and the DT-12 planner test
+  `comment_language_test_only_localization_requires_immutable_base_proof` —
+  both in the allowed set. No scanner, schema, workflow, or map file is
+  modified. Other SPEC edits in the same working tree belong to separate
+  feature SPECs and are outside this Step 3 boundary.)
 
-- [ ] `node --check tools/ci/check-comment-language.mjs`
-- [ ] Focused `node --test tools/ci/check-comment-language.test.mjs`
-- [ ] Per-file coverage:
+- [x] `node --check tools/ci/check-comment-language.mjs` (2026-09-30: OK.)
+- [x] Focused `node --test tools/ci/check-comment-language.test.mjs`
+  (2026-09-30: 32/32 pass, including `addProtectedDigest_refuses_oversized_inventory`
+  and `protected_inventory_stays_under_the_scanner_ceiling`.)
+- [x] Per-file coverage: (2026-09-30: 92.95% lines, 84.83% branches, 98.53%
+  functions — all ≥80%.)
 
   ```bash
   node --test --experimental-test-coverage \
@@ -812,32 +828,59 @@ repeated run does not modify fixture bytes or repository files.
     tools/ci/check-comment-language.test.mjs
   ```
 
-- [ ] `node tools/ci/check-comment-language.mjs --diff <base>` rejects a new
+- [x] `node tools/ci/check-comment-language.mjs --diff <base>` rejects a new
   finding and accepts an English or exact localized addition.
-- [ ] `node tools/ci/check-comment-language.mjs --all` reports deterministic
-  mutable/protected counts.
-- [ ] Fixture `--ratchet <base>` tests prove that a working record matches the
+  (2026-09-30: `--diff origin/main` → `PASS`, 0 findings; rejection/acceptance
+  covered by `cli_diff_accepts_english_and_refuses_new_finding` and
+  `localized_diff_is_accepted_by_the_exact_allowlist`.)
+- [x] `node tools/ci/check-comment-language.mjs --all` reports deterministic
+  mutable/protected counts. (2026-09-30: two consecutive runs identical —
+  `mutable_files=4 mutable_lines=19 protected_files=5 protected_lines=38
+  finding_count=57`. Historical findings are the expected `--all` snapshot,
+  not the CI gate.)
+- [x] Fixture `--ratchet <base>` tests prove that a working record matches the
   current scan and either equals or makes one bounded strict decrease from its
   committed base record; a repository invocation remains fail-closed until
-  baseline stabilization materializes that base record.
-- [ ] No diagnostic echoes source, marker, secret, absolute path, or diff text.
-- [ ] No protected evidence/history/IMPL file is translated, rewritten, or
+  baseline stabilization materializes that base record. (2026-10-01: 6 ratchet tests green — `ratchet_rejects_growth_and_accepts_strict_decrease`, `ratchet_uses_base_record_not_pr_record`, `ratchet_refuses_protected_inventory_drift`, `ratchet_schema_rejects_suppression_capability`, `ratchet_schema_file_is_strict_and_suppression_free`, `ratchet_requires_anchored_base_record_before_activation`.)
+- [x] No diagnostic echoes source, marker, secret, absolute path, or diff text. (2026-10-01: `--all` output shows only `file:line — rule — type` tuples; zero source/secret/path content.)
+- [x] No protected evidence/history/IMPL file is translated, rewritten, or
   counted as a mutable exception. The named migration batches have no protected
   path; the first repository digest comparison is deferred to stabilization.
-- [ ] The workflow invokes the exact implemented diff command only. Ratchet
+  (2026-10-01: scanner `isProtected` covers CHANGELOG.md, validation.md, docs/**/evidence/, docs/postmortems/, docs/reliability/, docs/specs/**/IMPL.md; zero protected paths in mutable batches.)
+- [x] The workflow invokes the exact implemented diff command only. Ratchet
   activation is deferred until its baseline is present in the PR base. Full
   docs/index/claims gates remain out of scope and are not claimed here.
-- [ ] DT-9 design is closed: the fixed future record path, strict schema,
+  (2026-10-01: `comment-language.yml` runs `check-comment-language.mjs --diff origin/$base_ref`; no `--ratchet` flag present.)
+- [x] DT-9 design is closed: the fixed future record path, strict schema,
   maintainer-review protocol, base comparison, batch limits, fixture bootstrap,
-  and missing-base refusal are tested. Material baseline and workflow activation
+  and missing-base refusal are tested. (2026-10-01: `ratchet_schema_rejects_suppression_capability`, `ratchet_schema_file_is_strict_and_suppression_free`, `bootstrap_requires_the_reviewed_snapshot_and_protocol`, `ratchet_uses_base_record_not_pr_record`, `batch_limit_rejects_more_than_ten_files_or_hundred_lines`, `ratchet_requires_anchored_base_record_before_activation` all green.) Material baseline and workflow activation
   remain pending stabilization.
-- [ ] DT-11's exact canonical command passes with every named production file
+- [x] DT-11's exact canonical command passes with every named production file
   at ≥80% line coverage, and planner tests prove every former lower-coverage
   path has its exact separate feature owner; zero historical paths remain
-  low-coverage or unmapped.
-- [ ] DT-12 accepts only the two exact test-only source paths after a full-base
+  low-coverage or unmapped. (2026-09-30: `comment-language-rust-localization-high-coverage`
+  green — handshake 94.0%, protocol 90.4%, arbiter 92.6%, model 100.0%,
+  broker protocol 97.5%, slices 87.3%, broker_srv 80.6%, canary_probe 91.2%,
+  residency 98.1%, telemetry 100.0%. The CUDA probe row was re-measured at
+  98.2% and is owned by `cuda-probe-planning-coverage`.)
+- [x] DT-12 accepts only the two exact test-only source paths after a full-base
   lexical projection proves their production text unchanged, package tests pass,
   and the immutable base contains all named ignored-GPU PASS commands. No GPU
   command is rerun by this slice.
+  (2026-10-01: named test
+  `comment_language_test_only_localization_requires_immutable_base_proof`
+  added and green — 1 passed, 0 failed. Proves: (1) missing `baseRevision`
+  refuses with `test-only-differential-base-required`; (2) non-full-SHA base
+  refuses; (3) missing base source refuses; (4) base evidence without the
+  named ignored-GPU `**PASS**.` commands refuses with
+  `test-only-ignored-evidence-missing`; (5) `files[]` vs
+  `verifications[].source` mismatch refuses with
+  `test-only-source-files-mismatch` — the two exact test-only source paths
+  must agree; (6) with a complete immutable-base proof the entry is READY
+  and only `cargo test -p fixture --lib` is spawned — `--ignored` never
+  appears in any spawned argv. Companion tests
+  `test_only_localization_differential_accepts_declared_cfg_test_change`
+  and `test_only_localization_differential_refuses_spoofed_or_production_change`
+  remain green. Full planner suite: 48 passed, 0 failed.)
 
 `BINARY_MATCH`: N/A — no daemon, driver, or runtime surface.

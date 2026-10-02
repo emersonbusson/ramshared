@@ -1,10 +1,10 @@
 {
   "schema_version": "ramshared-spec-evidence/v1",
   "slug": "benchmark-evidence-integrity",
-  "status": "DONE",
+  "status": "PARTIAL",
   "spec": {
     "path": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
-    "sha256": "ed0eaef1dcd53b73464f123a193d44c5fda98386276ca57bcebdc69a63492b36"
+    "sha256": "b31559050a31b145cf47c2882d23649edb93e02e6e09df6897a16727ef07e2f6"
   },
   "tests": [
     {
@@ -18,45 +18,87 @@
       "path": "tools/ci/check-spec-evidence.test.mjs",
       "kind": "unit",
       "exit_code": 0
+    },
+    {
+      "name": "monitor_benchmark_rejects_legacy_unqualified_status",
+      "path": "crates/ramshared-cli/src/monitor.rs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "monitor_benchmark_accepts_promotable_v1_evidence",
+      "path": "crates/ramshared-cli/src/monitor.rs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "monitor_benchmark_rejects_nonpromotable_evidence",
+      "path": "crates/ramshared-cli/src/monitor.rs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "monitor_benchmark_rejects_dirty_or_incomplete_evidence",
+      "path": "crates/ramshared-cli/src/monitor.rs",
+      "kind": "unit",
+      "exit_code": 0
     }
   ],
   "cover": [
     {
       "path": "tools/ci/check-benchmark-evidence.mjs",
       "classification": "N/A — Node unit-tested",
-      "justification": "The canonical Rust slice coverage tool is not applicable to zero-dependency Node business logic."
+      "justification": "The benchmark validator is zero-dependency Node logic covered by named unit and refusal fixtures."
     },
     {
       "path": "tools/ci/check-spec-evidence.mjs",
       "classification": "N/A — Node unit-tested",
-      "justification": "The canonical Rust slice coverage tool is not applicable to zero-dependency Node business logic."
+      "justification": "The claim validator is zero-dependency Node logic covered by named unit and refusal fixtures."
+    },
+    {
+      "path": "crates/ramshared-cli/src/monitor.rs",
+      "line_percent": 88.7,
+      "evidence": "EVD-0086; 2,033 of 2,292 lines"
     }
   ],
   "live": {
     "required": true,
     "before": {
-      "benchmark_sections": 5,
-      "legacy_jsonl_rows": 3,
-      "evidence_gate": false
+      "legacy_fixture_verdict": "PASS_ZERO_PANIC",
+      "installed_dashboard": "0.14.1, old parser"
     },
     "action": {
-      "command": "./scripts/docs-check.sh"
+      "commands": [
+        "cargo test -p ramshared-cli -j 1 monitor_benchmark_",
+        "cargo test -p ramshared-cli -j 1",
+        "cargo clippy -p ramshared-cli --all-targets -- -D warnings",
+        "node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/monitor.rs --min 80"
+      ]
     },
     "after": {
-      "mapped_sections": 5,
-      "mapped_legacy_rows": 3,
-      "docs_check_exit": 0
+      "source_tests": "4 passed; full CLI: 345 unit + 10 dispatch passed",
+      "legacy_fixture_verdict": "AWAITING_QUALIFICATION",
+      "installed_dashboard": "still 0.14.1; new parser not deployed"
     },
     "legitimate": {
-      "verdict": "PASS"
+      "verdict": "PASS",
+      "scope": "promotable v1 parser fixture only"
     },
     "refusals": [
       {
-        "name": "hash-mismatched artifact",
+        "name": "legacy unqualified Build #5 record",
         "verdict": "PASS"
       },
       {
-        "name": "non-PASS promotion",
+        "name": "non-promotable evidence",
+        "verdict": "PASS"
+      },
+      {
+        "name": "dirty or incomplete evidence",
+        "verdict": "PASS"
+      },
+      {
+        "name": "forged metric summaries",
         "verdict": "PASS"
       }
     ],
@@ -69,7 +111,7 @@
     ]
   },
   "binary_match": {
-    "required": false,
+    "required": true,
     "passed": false,
     "identities": []
   },
@@ -84,7 +126,12 @@
   "impl_path": "docs/specs/no-milestone/benchmark-evidence-integrity/IMPL.md",
   "gaps": {
     "open": [],
-    "env_bound": []
+    "env_bound": [
+      {
+        "blocker": "The corrected dashboard source has not been built and installed in the deployment environment, so its live process identity remains unverified.",
+        "next_proof": "Build and install the exact source revision, verify BINARY_MATCH, and capture deployed before/action/after output showing the legacy record remains AWAITING_QUALIFICATION."
+      }
+    ]
   },
   "rollback_trigger": "one invalid claim or sensitive diagnostic passes the public gate"
 }

@@ -24,6 +24,8 @@ pub type FnInit = unsafe extern "C" fn(c_uint) -> CuResult;
 pub type FnDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
 pub type FnDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
 pub type FnDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
+pub type FnDeviceGetUuid = unsafe extern "C" fn(*mut [i8; 16], CuDevice) -> CuResult;
+pub type FnDeviceGetLuid = unsafe extern "C" fn(*mut c_char, *mut c_uint, CuDevice) -> CuResult;
 pub type FnCtxCreate = unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult;
 pub type FnCtxDestroy = unsafe extern "C" fn(CuContext) -> CuResult;
 pub type FnCtxSynchronize = unsafe extern "C" fn() -> CuResult;
@@ -51,6 +53,8 @@ pub struct Syms {
     pub device_get_count: FnDeviceGetCount,
     pub device_get: FnDeviceGet,
     pub device_get_name: FnDeviceGetName,
+    pub device_get_uuid: Option<FnDeviceGetUuid>,
+    pub device_get_luid: Option<FnDeviceGetLuid>,
     pub ctx_create: FnCtxCreate,
     pub ctx_destroy: FnCtxDestroy,
     pub ctx_synchronize: FnCtxSynchronize,

@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -16,7 +19,9 @@ import { fileURLToPath } from 'node:url'
 import {
   LanguageError,
   MAX_FILE_BYTES,
+  MAX_PROTECTED_INVENTORY_BYTES,
   RATCHET_BASELINE_PATH,
+  addProtectedDigest,
   checkFile,
   classifyPath,
   cleanCommentText,
@@ -290,6 +295,14 @@ test('resource_bound_and_invalid_utf8_fail_closed', () => {
   )
 })
 
+test('append_only_validation_log_uses_its_bounded_size_budget', () => {
+  assert.deepEqual(scanBuffer('validation.md', Buffer.alloc(MAX_FILE_BYTES + 1)), [])
+  assert.throws(
+    () => scanBuffer('validation.md', Buffer.alloc(1024 * 1024 + 1)),
+    (error) => error instanceof LanguageError && error.message === 'file-size-limit',
+  )
+})
+
 test('opaque_protected_inventory_skips_invalid_utf8_but_diff_fails_closed', (t) => {
   const target = 'docs/specs/no-milestone/example/evidence/legacy.txt'
   const root = repository(t, { [target]: 'Historical English record\n' })
@@ -522,4 +535,61 @@ test('bootstrap_requires_the_reviewed_snapshot_and_protocol', () => {
     observed: bootstrap,
     bootstrapSnapshot: bootstrap,
   }).code, 'ratchet-snapshot-mismatch')
+})
+
+test('addProtectedDigest_refuses_oversized_inventory', () => {
+  const digest = createHash('sha256')
+  const headroom = addProtectedDigest(
+    digest,
+    'docs/reliability/GAP-REGISTER.md',
+    Buffer.alloc(64, 0x61),
+    0,
+  )
+  assert.equal(headroom, 64)
+  // A second buffer that would cross the ceiling is refused before any digest
+  // update, so a failing --all scan cannot silently produce a partial inventory
+  // hash that later passes as an authentic snapshot.
+  assert.throws(
+    () => addProtectedDigest(
+      digest,
+      'validation.md',
+      Buffer.alloc(MAX_PROTECTED_INVENTORY_BYTES, 0x62),
+      headroom,
+    ),
+    (error) => error instanceof LanguageError && error.message === 'protected-inventory-size-limit',
+  )
+})
+
+test('protected_inventory_stays_under_the_scanner_ceiling', () => {
+  // The protected inventory is append-only (validation.md log + evidence
+  // campaigns). This walks the real tree and fails when growth approaches the
+  // scanner ceiling, so the next overflow is a test signal instead of a silent
+  // --all refusal.
+  const protectedPaths = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, entry.name)
+      const rel = path.relative(ROOT, abs).split(path.sep).join('/')
+      if (entry.isDirectory()) {
+        if (rel.startsWith('target/') || rel.startsWith('.git/')) continue
+        walk(abs)
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (classifyPath(rel) !== 'protected') continue
+      protectedPaths.push(rel)
+    }
+  }
+  walk(ROOT)
+  assert.ok(protectedPaths.length > 0, 'protected inventory must not be empty')
+  const totalBytes = protectedPaths
+    .map((rel) => statSync(path.join(ROOT, rel)).size)
+    .reduce((sum, size) => sum + size, 0)
+  // Require one full validation log of headroom so routine appends do not
+  // immediately re-trip the ceiling.
+  const headroomFloor = 1024 * 1024
+  assert.ok(
+    totalBytes + headroomFloor < MAX_PROTECTED_INVENTORY_BYTES,
+    `protected inventory is ${totalBytes} bytes and leaves less than ${headroomFloor} bytes of headroom under ${MAX_PROTECTED_INVENTORY_BYTES}`,
+  )
 })

@@ -1,0 +1,525 @@
+#!/usr/bin/env bash
+# ramshared-resource-config-helper — closed-action privileged Linux provider for
+# the resource configuration center.
+#
+# Decision policy lives in crates/ramshared-cli/src/resource_config/linux.rs.
+# This helper only executes an exact, argv-bounded transaction and refuses
+# anything outside it. It never calls `swapoff`, never edits /etc/fstab, and
+# never disables or removes an existing swap (DT-8/DT-9).
+#
+# Actions (closed set):
+#   swap-inspect   --path PATH
+#   swap-apply     --name NAME --bytes N --priority N --fstype T --transport T
+#                  --mount-uuid UUID --backing-identity ID
+#   swap-cleanup   --path PATH --transaction-hash HEX
+#   native-origin-apply --name NAME --bytes N --fstype T --transport T
+#                  --mount-uuid UUID --backing-identity ID
+#                  --free-bytes N
+#
+# Manufactured tests set RAMSHARED_RESOURCE_CONFIG_TEST_ROOT to a disposable
+# directory; every host path is then resolved under that root and external
+# commands are taken from $TEST_ROOT/bin first. Production has no test root
+# and requires EUID 0.
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'USAGE'
+usage: ramshared-resource-config-helper ACTION [options]
+
+actions:
+  swap-inspect --path PATH
+  swap-apply --name NAME --bytes N --priority N --fstype T --transport T
+             --mount-uuid UUID --backing-identity ID
+  swap-cleanup --path PATH --transaction-hash HEX
+  native-origin-apply --name NAME --bytes N --fstype T --transport T
+             --mount-uuid UUID --backing-identity ID --free-bytes N
+
+environment:
+  RAMSHARED_RESOURCE_CONFIG_TEST_ROOT  manufactured root for tests only
+USAGE
+    exit 2
+}
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit "${2:-2}"
+}
+
+# --- test-root resolution (manufactured tests only) -------------------------
+
+TEST_ROOT=${RAMSHARED_RESOURCE_CONFIG_TEST_ROOT:-}
+if [[ -n $TEST_ROOT ]]; then
+    [[ $TEST_ROOT == /* && $TEST_ROOT != / && -d $TEST_ROOT && ! -L $TEST_ROOT ]] \
+        || die 'resource-config test root is invalid'
+    MANAGED_SWAP_DIR="$TEST_ROOT/var/lib/ramshared/swap"
+    MANAGED_ORIGIN_DIR="$TEST_ROOT/var/lib/ramshared/origin"
+    UNIT_DIR="$TEST_ROOT/etc/systemd/system"
+    PROC_SWAPS="$TEST_ROOT/proc/swaps"
+    PATH="$TEST_ROOT/bin:$PATH"
+    REQUIRE_ROOT=0
+else
+    MANAGED_SWAP_DIR=/var/lib/ramshared/swap
+    MANAGED_ORIGIN_DIR=/var/lib/ramshared/origin
+    UNIT_DIR=/etc/systemd/system
+    PROC_SWAPS=/proc/swaps
+    REQUIRE_ROOT=1
+fi
+export PATH
+
+require_root() {
+    if (( REQUIRE_ROOT == 1 )) && [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+        die 'refused: privileged action requires root' 77
+    fi
+}
+
+# --- bounded argument parsing -----------------------------------------------
+
+ACTION=${1:-}
+[[ -n $ACTION ]] || usage
+shift
+
+NAME=
+BYTES=
+PRIORITY=
+FSTYPE=
+TRANSPORT=
+MOUNT_UUID=
+BACKING_IDENTITY=
+PATH_ARG=
+TRANSACTION_HASH=
+FREE_BYTES=
+
+while (( $# > 0 )); do
+    case "$1" in
+        --name) NAME=${2:-}; shift 2 ;;
+        --bytes) BYTES=${2:-}; shift 2 ;;
+        --priority) PRIORITY=${2:-}; shift 2 ;;
+        --fstype) FSTYPE=${2:-}; shift 2 ;;
+        --transport) TRANSPORT=${2:-}; shift 2 ;;
+        --mount-uuid) MOUNT_UUID=${2:-}; shift 2 ;;
+        --backing-identity) BACKING_IDENTITY=${2:-}; shift 2 ;;
+        --path) PATH_ARG=${2:-}; shift 2 ;;
+        --transaction-hash) TRANSACTION_HASH=${2:-}; shift 2 ;;
+        --free-bytes) FREE_BYTES=${2:-}; shift 2 ;;
+        -h|--help) usage ;;
+        *) die "refused: unknown option '$1'" ;;
+    esac
+done
+
+# --- validation helpers ------------------------------------------------------
+
+require_abs_path() {
+    local value=$1 label=$2
+    [[ -n $value && $value == /* ]] \
+        || die "refused: $label must be an absolute path"
+    [[ $value != *$'\n'* && $value != *$'\r'* ]] \
+        || die "refused: $label must not contain control characters"
+    [[ $value != *'..'* ]] || die "refused: $label must not contain '..'"
+    [[ $value != *'//'* ]] || die "refused: $label must not contain '//'"
+}
+
+require_nonempty() {
+    local value=$1 label=$2
+    [[ -n $value ]] || die "refused: $label is required"
+}
+
+require_uint() {
+    local value=$1 label=$2
+    [[ $value =~ ^[0-9]+$ ]] || die "refused: $label must be an unsigned integer"
+}
+
+require_int() {
+    local value=$1 label=$2
+    [[ $value =~ ^-?[0-9]+$ ]] || die "refused: $label must be an integer"
+}
+
+require_managed_path() {
+    local target=$1
+    require_abs_path "$target" 'path'
+    local prefix="$MANAGED_SWAP_DIR/"
+    [[ $target == "$prefix"* ]] \
+        || die "refused: path is outside the app-owned managed directory"
+    local relative=${target#"$prefix"}
+    [[ -n $relative && $relative != */ && $relative != *'..'* ]] \
+        || die "refused: path is not a direct managed leaf"
+    if [[ -e $target || -L $target ]]; then
+        die "refused: target already exists; create-once only (DT-8)"
+    fi
+}
+
+require_owned_path() {
+    local target=$1
+    require_abs_path "$target" 'path'
+    local prefix="$MANAGED_SWAP_DIR/"
+    [[ $target == "$prefix"* ]] \
+        || die 'refused: foreign path is not an app-owned managed file' 1
+}
+
+# --- ownership evidence ------------------------------------------------------
+
+owner_marker_path() {
+    printf '%s.owner' "$1"
+}
+
+write_owner_marker() {
+    local target=$1 unit_name=$2 bytes=$3 hash=$4
+    local marker
+    marker=$(owner_marker_path "$target")
+    local tmp="$marker.tmp.$$"
+    umask 077
+    cat >"$tmp" <<JSON
+{"schema":"ramshared-swap-ownership/v1","path":"$target","bytes":$bytes,"unit":"$unit_name","transaction_hash":"$hash"}
+JSON
+    sync "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$marker"
+    sync "$(dirname -- "$marker")" 2>/dev/null || true
+}
+
+read_owner_field() {
+    local marker=$1 field=$2
+    [[ -f $marker && ! -L $marker ]] || return 1
+    python3 - "$marker" "$field" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    sys.exit(1)
+value = data.get(sys.argv[2])
+if value is None:
+    sys.exit(1)
+print(value)
+PY
+}
+
+transaction_hash_for() {
+    local target=$1 unit_name=$2
+    # Hash the identity fields, never the file contents: daemon writes change
+    # the payload while identity must stay stable (DT-12).
+    printf '%s|%s|%s\n' "$target" "$unit_name" \
+        "$(stat -c '%s' -- "$target" 2>/dev/null || echo 0)" \
+        | sha256sum | awk '{print $1}'
+}
+
+# --- swap table --------------------------------------------------------------
+
+swap_is_active() {
+    local target=$1
+    [[ -f $PROC_SWAPS ]] || return 1
+    awk -v want="$target" 'NR > 1 && $1 == want { found = 1 }
+        END { exit found ? 0 : 1 }' "$PROC_SWAPS"
+}
+
+swap_used_kib() {
+    local target=$1
+    [[ -f $PROC_SWAPS ]] || { echo 0; return 0; }
+    awk -v want="$target" 'NR > 1 && $1 == want { used = $4 }
+        END { print used + 0 }' "$PROC_SWAPS"
+}
+
+count_other_managed_swaps() {
+    local exclude=$1
+    local count=0
+    local existing
+    for existing in "$MANAGED_SWAP_DIR"/*.swap; do
+        [[ -e $existing ]] || continue
+        [[ $existing == "$exclude" ]] && continue
+        count=$((count + 1))
+    done
+    printf '%s\n' "$count"
+}
+
+# --- swap-apply --------------------------------------------------------------
+
+unit_name_for() {
+    printf 'ramshared-swap-%s' "$1"
+}
+
+write_swap_unit() {
+    local unit_name=$1 target=$2 priority=$3
+    local unit_path="$UNIT_DIR/$unit_name.swap"
+    [[ ! -e $unit_path ]] \
+        || die 'refused: unit already exists; create-once only (DT-8)'
+    mkdir -p -- "$UNIT_DIR"
+    local tmp="$unit_path.tmp.$$"
+    cat >"$tmp" <<UNIT
+# Managed by ramshared-resource-config-helper. Do not edit.
+[Unit]
+Description=RamShared managed fallback swap
+
+[Swap]
+What=$target
+Priority=$priority
+UNIT
+    sync "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$unit_path"
+    sync "$UNIT_DIR" 2>/dev/null || true
+}
+
+cmd_swap_apply() {
+    require_root
+    require_nonempty "$NAME" 'name'
+    require_uint "$BYTES" 'bytes'
+    require_int "$PRIORITY" 'priority'
+    require_nonempty "$FSTYPE" 'fstype'
+    require_nonempty "$TRANSPORT" 'transport'
+    require_nonempty "$MOUNT_UUID" 'mount-uuid'
+    require_nonempty "$BACKING_IDENTITY" 'backing-identity'
+    [[ $NAME =~ ^[a-z0-9][a-z0-9-]*$ ]] \
+        || die 'refused: name must be lowercase alphanumeric with dashes'
+    (( BYTES > 0 )) || die 'refused: bytes must be positive'
+
+    case "$FSTYPE" in
+        ext4|xfs) ;;
+        *) die "refused: filesystem '$FSTYPE' is not qualified for swapfiles" ;;
+    esac
+    case "$TRANSPORT" in
+        ata|ide|mmc|nvme|pci|sas|sata|scsi|virtio) ;;
+        nbd*|iscsi*|rbd*|drbd*|fcoe*|fc|aoe*|nvme-of*|nvmeof*|nvmf*)
+            die "refused: transport '$TRANSPORT' is network-backed (DT-7)" ;;
+        *) die "refused: transport '$TRANSPORT' is not qualified as local (DT-7)" ;;
+    esac
+
+    mkdir -p -- "$MANAGED_SWAP_DIR"
+    [[ -d $MANAGED_SWAP_DIR && ! -L $MANAGED_SWAP_DIR ]] \
+        || die 'refused: managed swap directory is not a real directory'
+
+    local target="$MANAGED_SWAP_DIR/$NAME.swap"
+    require_managed_path "$target"
+
+    local unit_name
+    unit_name=$(unit_name_for "$NAME")
+
+    # Refuse to disturb any existing swap (DT-8). This helper never calls
+    # swapoff and never touches foreign swap units or /etc/fstab.
+    if [[ -f $PROC_SWAPS ]]; then
+        if awk 'NR > 1 { print $1 }' "$PROC_SWAPS" | grep -Fqx -- "$target"; then
+            die "refused: target '$target' is already active" 1
+        fi
+    fi
+
+    # Create-once, no symlink traversal: the directory handle is already
+    # verified above and the leaf must not exist.
+    umask 077
+    local tmp="$target.tmp.$$"
+    if ! dd if=/dev/zero of="$tmp" bs=1M count=0 seek="$((BYTES / 1048576))" \
+        status=none 2>/dev/null; then
+        rm -f -- "$tmp"
+        die 'refused: allocation failed; existing swap left untouched' 1
+    fi
+    if [[ $(stat -c '%s' -- "$tmp") -ne $BYTES ]]; then
+        rm -f -- "$tmp"
+        die 'refused: allocated size mismatch; existing swap left untouched' 1
+    fi
+
+    if ! mkswap -- "$tmp" >/dev/null 2>&1; then
+        rm -f -- "$tmp"
+        # Preserve every pre-existing active swap: no swapoff, no removal.
+        die 'refused: mkswap failed; existing swap left untouched' 1
+    fi
+
+    if ! write_swap_unit "$unit_name" "$target" "$PRIORITY"; then
+        rm -f -- "$tmp"
+        die 'refused: unit write failed; existing swap left untouched' 1
+    fi
+
+    mv -f -- "$tmp" "$target"
+    sync "$MANAGED_SWAP_DIR" 2>/dev/null || true
+
+    local hash
+    hash=$(transaction_hash_for "$target" "$unit_name")
+
+    if ! swapon -- "$target" >/dev/null 2>&1; then
+        # Outcome is not deleted or retried blindly (DT-8). The file, unit and
+        # ownership evidence stay in place as proof of an uncertain result.
+        write_owner_marker "$target" "$unit_name" "$BYTES" "$hash"
+        die "refused: swapon failed; file and unit retained as evidence" 1
+    fi
+
+    write_owner_marker "$target" "$unit_name" "$BYTES" "$hash"
+    printf 'applied\t%s\t%s\n' "$target" "$unit_name"
+}
+
+# --- swap-cleanup ------------------------------------------------------------
+
+cmd_swap_cleanup() {
+    require_root
+    require_owned_path "$PATH_ARG"
+    require_nonempty "$TRANSACTION_HASH" 'transaction-hash'
+    [[ $TRANSACTION_HASH =~ ^[0-9a-f]{64}$ ]] \
+        || die 'refused: transaction-hash must be 64 lowercase hex characters'
+
+    local target=$PATH_ARG
+    local marker unit_name used_kib remaining
+
+    marker=$(owner_marker_path "$target")
+
+    # Idempotent replay (Kahneman #17): target, marker and unit all absent.
+    if [[ ! -e $target && ! -L $target && ! -e $marker ]]; then
+        if [[ ! -e "$UNIT_DIR/$(unit_name_for "${target##*/}").swap" ]]; then
+            printf 'already-clean\t%s\n' "$target"
+            return 0
+        fi
+    fi
+
+    [[ -f $marker && ! -L $marker ]] \
+        || die "refused: ownership evidence missing for '$target'" 1
+
+    local recorded_hash
+    recorded_hash=$(read_owner_field "$marker" transaction_hash) \
+        || die 'refused: ownership evidence is unreadable' 1
+    [[ $recorded_hash == "$TRANSACTION_HASH" ]] \
+        || die 'refused: transaction hash changed since creation' 1
+
+    local recorded_path
+    recorded_path=$(read_owner_field "$marker" path) \
+        || die 'refused: ownership evidence is unreadable' 1
+    [[ $recorded_path == "$target" ]] \
+        || die 'refused: ownership evidence names a different path' 1
+
+    unit_name=$(read_owner_field "$marker" unit) \
+        || die 'refused: ownership evidence is unreadable' 1
+
+    # Recompute the hash from the current file and unit. Any drift means the
+    # transaction is no longer the one that was created (DT-9).
+    local current_hash
+    current_hash=$(transaction_hash_for "$target" "$unit_name")
+    [[ $current_hash == "$recorded_hash" ]] \
+        || die 'refused: transaction hash changed since creation' 1
+
+    if swap_is_active "$target"; then
+        used_kib=$(swap_used_kib "$target")
+        if (( used_kib > 0 )); then
+            die "refused: target still has ${used_kib} KiB in use (DT-9)" 1
+        fi
+        die "refused: target is still active (DT-9)" 1
+    fi
+
+    # A systemd unit that still references the target blocks cleanup.
+    local unit_path="$UNIT_DIR/$unit_name.swap"
+    if [[ -f $unit_path ]] && grep -Fq -- "$target" "$unit_path"; then
+        if systemctl is-enabled --quiet "$unit_name.swap" 2>/dev/null; then
+            die "refused: unit '$unit_name.swap' still references the target" 1
+        fi
+        systemctl disable --quiet "$unit_name.swap" >/dev/null 2>&1 || true
+    fi
+
+    remaining=$(count_other_managed_swaps "$target")
+    if (( remaining == 0 )); then
+        die 'refused: target is the last persistent fallback (DT-9)' 1
+    fi
+
+    rm -f -- "$target" "$marker"
+    if [[ -f $unit_path ]]; then
+        rm -f -- "$unit_path"
+    fi
+    sync "$MANAGED_SWAP_DIR" 2>/dev/null || true
+    printf 'cleaned\t%s\n' "$target"
+}
+
+# --- swap-inspect ------------------------------------------------------------
+
+cmd_swap_inspect() {
+    require_owned_path "$PATH_ARG"
+    local target=$PATH_ARG marker
+    marker=$(owner_marker_path "$target")
+    if [[ ! -e $target && ! -e $marker ]]; then
+        printf 'absent\t%s\n' "$target"
+        return 0
+    fi
+    local active=no used=0
+    if swap_is_active "$target"; then
+        active=yes
+        used=$(swap_used_kib "$target")
+    fi
+    local owned=no hash=
+    if [[ -f $marker && ! -L $marker ]]; then
+        owned=yes
+        hash=$(read_owner_field "$marker" transaction_hash || true)
+    fi
+    printf 'present\t%s\tactive=%s\tused_kib=%s\towned=%s\thash=%s\n' \
+        "$target" "$active" "$used" "$owned" "$hash"
+}
+
+# --- native-origin-apply -----------------------------------------------------
+
+# Fixed-allocated, create-once native origin file (DT-12/DT-22). The manifest
+# is published only after the exact file exists and is verified. An existing
+# path or a capacity shortfall refuses before any mutation.
+cmd_native_origin_apply() {
+    require_root
+    require_nonempty "$NAME" 'name'
+    require_uint "$BYTES" 'bytes'
+    require_nonempty "$FSTYPE" 'fstype'
+    require_nonempty "$TRANSPORT" 'transport'
+    require_nonempty "$MOUNT_UUID" 'mount-uuid'
+    require_nonempty "$BACKING_IDENTITY" 'backing-identity'
+    require_uint "${FREE_BYTES:-}" 'free-bytes'
+    [[ $NAME =~ ^[a-z0-9][a-z0-9-]*$ ]] \
+        || die 'refused: name must be lowercase alphanumeric with dashes'
+    (( BYTES > 0 )) || die 'refused: bytes must be positive'
+
+    case "$FSTYPE" in
+        ext4|xfs) ;;
+        *) die "refused: filesystem '$FSTYPE' is not qualified for a native origin" ;;
+    esac
+    case "$TRANSPORT" in
+        ata|ide|mmc|nvme|pci|sas|sata|scsi|virtio) ;;
+        nbd*|iscsi*|rbd*|drbd*|fcoe*|fc|aoe*|nvme-of*|nvmeof*|nvmf*)
+            die "refused: transport '$TRANSPORT' is network-backed (DT-7)" ;;
+        *) die "refused: transport '$TRANSPORT' is not qualified as local (DT-7)" ;;
+    esac
+
+    # Capacity shortfall refuses before any mutation (DT-12/DT-22).
+    if (( FREE_BYTES < BYTES )); then
+        die "refused: capacity shortfall; free ${FREE_BYTES} < requested ${BYTES}" 1
+    fi
+
+    mkdir -p -- "$MANAGED_ORIGIN_DIR"
+    [[ -d $MANAGED_ORIGIN_DIR && ! -L $MANAGED_ORIGIN_DIR ]] \
+        || die 'refused: managed origin directory is not a real directory'
+
+    local target="$MANAGED_ORIGIN_DIR/$NAME.origin"
+    require_abs_path "$target" 'path'
+    local prefix="$MANAGED_ORIGIN_DIR/"
+    [[ $target == "$prefix"* ]] \
+        || die 'refused: path is outside the app-owned managed origin directory'
+    if [[ -e $target || -L $target ]]; then
+        die "refused: origin already exists; create-once only (DT-12)" 1
+    fi
+    if [[ -e "$target.owner" ]]; then
+        die 'refused: origin ownership evidence already exists' 1
+    fi
+
+    umask 077
+    local tmp="$target.tmp.$$"
+    if ! dd if=/dev/zero of="$tmp" bs=1M count="$((BYTES / 1048576))" \
+        status=none 2>/dev/null; then
+        rm -f -- "$tmp"
+        die 'refused: origin allocation failed' 1
+    fi
+    if [[ $(stat -c '%s' -- "$tmp") -ne $BYTES ]]; then
+        rm -f -- "$tmp"
+        die 'refused: origin allocated size mismatch' 1
+    fi
+
+    mv -f -- "$tmp" "$target"
+    sync "$MANAGED_ORIGIN_DIR" 2>/dev/null || true
+
+    local inode hash
+    inode=$(stat -c '%i' -- "$target")
+    hash=$(printf '%s|%s|%s|%s|%s\n' "$target" "$inode" "$BYTES" \
+        "$MOUNT_UUID" "$BACKING_IDENTITY" | sha256sum | awk '{print $1}')
+    write_owner_marker "$target" "native-origin-$NAME" "$BYTES" "$hash"
+    printf 'origin-created\t%s\tinode=%s\thash=%s\n' "$target" "$inode" "$hash"
+}
+
+# --- dispatch ----------------------------------------------------------------
+
+case "$ACTION" in
+    swap-apply) cmd_swap_apply ;;
+    swap-cleanup) cmd_swap_cleanup ;;
+    swap-inspect) cmd_swap_inspect ;;
+    native-origin-apply) cmd_native_origin_apply ;;
+    *) die "refused: unknown action '$ACTION'" ;;
+esac

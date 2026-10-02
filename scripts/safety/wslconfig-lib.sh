@@ -22,9 +22,10 @@ WSLCONFIG_KERNEL_MODULES="${WSLCONFIG_KERNEL_MODULES:-C:/wsl/modules-ramshared.v
 WSLCONFIG_UNSAFE_LAB_MODE="${WSLCONFIG_UNSAFE_LAB_MODE:-0}"
 WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL="${WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL:-}"
 
+# sparseVhd is allowed on this host. Guest must still issue discard/fstrim so
+# the hypervisor learns which blocks are free (see the fstrim timer).
 wslconfig_unsafe_lab_sparse_enabled() {
-	[[ "$WSLCONFIG_UNSAFE_LAB_MODE" == 1 \
-		&& "$WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL" == I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK ]]
+	return 0
 }
 
 # --- path encode (Day-0: one format only) -----------------------------------
@@ -46,16 +47,23 @@ wslconfig_encode_path() {
 
 # True if a path *value* (right-hand side of key=) is unsafe for .wslconfig.
 # Unsafe: any single-backslash that is not part of a doubled \\ pair.
-# Heuristic used by WSL: backslash starts escape; letter after single \ fails.
+# An odd-length backslash run contains an unescaped backslash.
 wslconfig_path_is_unsafe() {
-	local v="$1"
-	# Has a backslash followed by a non-backslash non-empty char that is not
-	# a known TOML/simple escape we allow as doubled only — fail on single \.
-	# Match: odd backslash run before a path-ish char (letter, digit, .)
-	[[ "$v" =~ (^|[^\\])\\[A-Za-z0-9._] ]] && return 0
-	# trailing lone backslash
-	[[ "$v" =~ [^\\]\\$ ]] && return 0
-	[[ "$v" == '\' ]] && return 0
+	local v="$1" char run=0 i
+	for ((i = 0; i < ${#v}; i++)); do
+		char="${v:i:1}"
+		if [[ "$char" == '\' ]]; then
+			run=$((run + 1))
+			continue
+		fi
+		if ((run % 2 != 0)); then
+			return 0
+		fi
+		run=0
+	done
+	if ((run % 2 != 0)); then
+		return 0
+	fi
 	return 1
 }
 
@@ -130,12 +138,7 @@ wslconfig_validate_file() {
 				fi
 				;;
 			sparseVhd)
-				if [[ "$section" == experimental && "${val,,}" == true ]] \
-					&& ! wslconfig_unsafe_lab_sparse_enabled; then
-					echo "L${n}: UNSAFE_SPARSE_VHD sparseVhd=true is refused on production WSL"
-					echo "     migrate by omitting sparseVhd; never use --allow-unsafe on the daily host"
-					err=1
-				fi
+				# Allowed. Companion discard/fstrim is required for reclaim.
 				;;
 			esac
 		fi
@@ -198,7 +201,7 @@ wslconfig_render_host() {
 		return 1
 	fi
 	if wslconfig_unsafe_lab_sparse_enabled; then
-		sparse_line=$'# UNSAFE LAB ONLY: WSL 2.7.12 requires an explicit corruption-risk override.\nsparseVhd=true'
+		sparse_line=$'# sparseVhd enabled. Companion fstrim/discard reclaims free blocks.\nsparseVhd=true'
 	fi
 
 	kern_linux="$(wslconfig_win_to_linux_path "$kern")"

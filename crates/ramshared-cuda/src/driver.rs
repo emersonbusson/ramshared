@@ -12,6 +12,8 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt;
 
+use ramshared_vram::{GpuAdapterIdentity, format_luid};
+
 use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
 
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
@@ -82,7 +84,7 @@ pub(super) fn validate_host_registration(
 }
 
 /// RAII wrapper for the loaded dynamic library handle: calls close on `Drop`.
-struct Lib(*mut c_void);
+pub(crate) struct Lib(pub(crate) *mut c_void);
 
 impl Drop for Lib {
     fn drop(&mut self) {
@@ -94,9 +96,14 @@ impl Drop for Lib {
 }
 
 /// CUDA library loaded and initialized successfully (`cuInit(0)`).
+///
+/// Holds NVML alongside it: on WSL2 GPU-PV `cuMemGetInfo` is scoped to the
+/// calling process's channel and does not observe other processes, so the
+/// VRAM budget must be read from the device-wide NVML authority.
 pub struct Cuda {
     _lib: Lib,
     syms: Syms,
+    nvml: crate::nvml::Nvml,
 }
 
 #[cfg(unix)]
@@ -136,6 +143,8 @@ impl Cuda {
                 device_get_count: load_sym(handle, c"cuDeviceGetCount")?,
                 device_get: load_sym(handle, c"cuDeviceGet")?,
                 device_get_name: load_sym(handle, c"cuDeviceGetName")?,
+                device_get_uuid: load_sym_opt(handle, c"cuDeviceGetUuid"),
+                device_get_luid: load_sym_opt(handle, c"cuDeviceGetLuid"),
                 ctx_create: load_sym(handle, c"cuCtxCreate_v2")?,
                 ctx_destroy: load_sym(handle, c"cuCtxDestroy_v2")?,
                 ctx_synchronize: load_sym(handle, c"cuCtxSynchronize")?,
@@ -158,7 +167,16 @@ impl Cuda {
         let r = unsafe { (syms.init)(0) };
         check(&syms, r, "cuInit")?;
 
-        Ok(Cuda { _lib: lib, syms })
+        // Fail closed when NVML is missing. Without it the budget would come
+        // from the per-process `cuMemGetInfo` view and the cache would refuse
+        // to yield to another VRAM consumer, which is the wrong safe default.
+        let nvml = crate::nvml::Nvml::load().map_err(|e| CudaError::Load(e.to_string()))?;
+
+        Ok(Cuda {
+            _lib: lib,
+            syms,
+            nvml,
+        })
     }
 
     /// Returns the number of CUDA-capable devices visible to the system.
@@ -189,7 +207,27 @@ impl Cuda {
             .to_string_lossy()
             .into_owned();
 
-        Ok(Device { raw, name, ordinal })
+        let uuid = self.syms.device_get_uuid.and_then(|get_uuid| {
+            let mut uuid = [0_i8; 16];
+            // SAFETY: uuid is a writable 16-byte CUDA UUID buffer and raw is a valid device.
+            (unsafe { get_uuid(&mut uuid, raw) } == CUDA_SUCCESS).then_some(uuid)
+        });
+        let luid = self.syms.device_get_luid.and_then(|get_luid| {
+            let mut luid = [0_i8; 8];
+            let mut node_mask = 0_u32;
+            // SAFETY: luid and node_mask are writable outputs and raw is a valid device.
+            (unsafe { get_luid(luid.as_mut_ptr(), &mut node_mask, raw) } == CUDA_SUCCESS)
+                .then(|| format_luid(luid.map(|byte| byte as u8)))
+                .flatten()
+        });
+
+        Ok(Device {
+            raw,
+            name,
+            ordinal,
+            uuid,
+            luid,
+        })
     }
 
     /// Creates a CUDA context on the specified device (becomes current on the calling thread).
@@ -198,7 +236,12 @@ impl Cuda {
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
-        Ok(Context { cuda: self, raw })
+        Ok(Context {
+            cuda: self,
+            raw,
+            adapter: cuda_adapter_identity(device.uuid, device.luid.clone()),
+            ordinal: device.ordinal,
+        })
     }
 }
 
@@ -208,6 +251,8 @@ pub struct Device {
     raw: CuDevice,
     name: String,
     ordinal: i32,
+    uuid: Option<[i8; 16]>,
+    luid: Option<String>,
 }
 
 impl Device {
@@ -230,10 +275,57 @@ impl Device {
 pub struct Context<'a> {
     cuda: &'a Cuda,
     raw: CuContext,
+    adapter: Option<GpuAdapterIdentity>,
+    ordinal: i32,
+}
+
+fn cuda_adapter_identity(
+    uuid: Option<[i8; 16]>,
+    luid: Option<String>,
+) -> Option<GpuAdapterIdentity> {
+    let uuid_key = uuid
+        .filter(|uuid| uuid.iter().any(|byte| *byte != 0))
+        .map(|uuid| {
+            uuid.iter()
+                .map(|byte| format!("{:02x}", *byte as u8))
+                .collect::<String>()
+        });
+    let key = uuid_key.or_else(|| luid.as_ref().map(|luid| format!("luid:{luid}")))?;
+    Some(GpuAdapterIdentity {
+        backend: "cuda".into(),
+        key,
+        luid,
+    })
 }
 
 impl<'a> Context<'a> {
+    pub fn adapter_identity(&self) -> Option<&GpuAdapterIdentity> {
+        self.adapter.as_ref()
+    }
+
+    /// Device ordinal this context was created on.
+    pub fn ordinal(&self) -> i32 {
+        self.ordinal
+    }
+
+    /// Device-wide VRAM occupancy across every process on this adapter (NVML).
+    pub fn device_memory(&self) -> Result<crate::nvml::NvmlMemory, CudaError> {
+        self.cuda
+            .nvml
+            .device_memory(self.ordinal)
+            .map_err(|e| CudaError::Driver {
+                op: "nvmlDeviceGetMemoryInfo",
+                code: -1,
+                msg: e.to_string(),
+            })
+    }
+
     /// Returns the free and total VRAM capacities in bytes (`cuMemGetInfo`).
+    ///
+    /// Scope is the calling process's GPU-PV channel, not the whole adapter:
+    /// other processes' allocations are invisible here. Use
+    /// [`Context::device_memory`] for device-wide occupancy; the VRAM budget
+    /// does so, and this method remains only as the raw allocator-local view.
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
         let (mut free, mut total) = (0_usize, 0_usize);
         // SAFETY: out-parameters are valid local pointers; CUDA context is current on the calling thread.
@@ -454,7 +546,7 @@ impl Drop for DeviceMem<'_, '_> {
 
 /// SAFETY: `handle` must refer to a valid open library; `name` must be a valid C-string;
 /// type `T` must be a C function pointer of pointer size.
-unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaError> {
+pub(crate) unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaError> {
     // SAFETY: caller contract (valid handle, null-terminated symbol name).
     let sym = unsafe { crate::loader::sym(handle, name.as_ptr()) };
     if sym.is_null() {
@@ -468,7 +560,7 @@ unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaE
 }
 
 /// Optional symbol resolution (symbol may be missing in legacy stubs).
-fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
+pub(crate) fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
     // SAFETY: same preconditions as load_sym.
     unsafe { load_sym(handle, name).ok() }
 }
@@ -499,14 +591,59 @@ fn err_string(syms: &Syms, r: CuResult) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-    use core::sync::atomic::{AtomicUsize, Ordering};
+    use core::cell::{Cell, RefCell};
+    use std::collections::BTreeMap;
 
     use super::*;
 
-    static UNREGISTER_CALLS: AtomicUsize = AtomicUsize::new(0);
+    #[test]
+    fn cuda_adapter_identity_requires_nonzero_driver_uuid() {
+        assert!(cuda_adapter_identity(None, None).is_none());
+        assert!(cuda_adapter_identity(Some([0; 16]), None).is_none());
+        assert_eq!(
+            cuda_adapter_identity(None, Some("aabbccdd:00001122".into()))
+                .expect("LUID is a stable CUDA identity")
+                .key,
+            "luid:aabbccdd:00001122"
+        );
+        let mut uuid = [0; 16];
+        uuid[0] = 0x12;
+        uuid[15] = -1;
+        let identity = cuda_adapter_identity(Some(uuid), Some("aabbccdd:00001122".into()))
+            .expect("nonzero CUDA UUID is identity");
+        assert_eq!(identity.backend, "cuda");
+        assert_eq!(identity.key, "120000000000000000000000000000ff");
+        assert_eq!(identity.luid.as_deref(), Some("aabbccdd:00001122"));
+    }
+
+    // Mock CUDA callbacks execute synchronously on the calling test thread.
+    // A global counter races when the test harness runs these tests in parallel.
+    thread_local! {
+        static UNREGISTER_CALLS: Cell<usize> = const { Cell::new(0) };
+        static MOCK_DEVICE_MEMORY: RefCell<BTreeMap<CuDevicePtr, Vec<u8>>> =
+            const { RefCell::new(BTreeMap::new()) };
+        static NEXT_MOCK_DEVICE_ADDRESS: Cell<CuDevicePtr> = const { Cell::new(0x1000) };
+    }
+
+    const MOCK_INVALID_VALUE: CuResult = 1;
+    const MOCK_OUT_OF_MEMORY: CuResult = 2;
+
+    fn with_mock_device_range<R>(
+        ptr: CuDevicePtr,
+        len: usize,
+        operation: impl FnOnce(&mut [u8]) -> R,
+    ) -> Option<R> {
+        MOCK_DEVICE_MEMORY.with(|memory| {
+            let mut memory = memory.borrow_mut();
+            let (base, allocation) = memory.range_mut(..=ptr).next_back()?;
+            let offset = usize::try_from(ptr.checked_sub(*base)?).ok()?;
+            let end = offset.checked_add(len)?;
+            Some(operation(allocation.get_mut(offset..end)?))
+        })
+    }
 
     unsafe extern "C" fn success_init(_: u32) -> CuResult {
         CUDA_SUCCESS
@@ -517,6 +654,25 @@ mod tests {
     }
     unsafe extern "C" fn success_device(device: *mut CuDevice, ordinal: i32) -> CuResult {
         unsafe { *device = ordinal };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_device_uuid(uuid: *mut [i8; 16], _: CuDevice) -> CuResult {
+        unsafe { *uuid = [0x12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] };
+        CUDA_SUCCESS
+    }
+    unsafe extern "C" fn success_device_luid(
+        luid: *mut c_char,
+        node_mask: *mut u32,
+        _: CuDevice,
+    ) -> CuResult {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                [0xAA_u8, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44].as_ptr(),
+                luid.cast::<u8>(),
+                8,
+            );
+            *node_mask = 1;
+        }
         CUDA_SUCCESS
     }
     unsafe extern "C" fn success_device_name(name: *mut c_char, _: i32, _: CuDevice) -> CuResult {
@@ -533,21 +689,90 @@ mod tests {
     unsafe extern "C" fn success_synchronize() -> CuResult {
         CUDA_SUCCESS
     }
-    unsafe extern "C" fn success_alloc(ptr: *mut CuDevicePtr, _: usize) -> CuResult {
-        unsafe { *ptr = 0x1000 };
+    unsafe extern "C" fn success_alloc(ptr: *mut CuDevicePtr, len: usize) -> CuResult {
+        if ptr.is_null() {
+            return MOCK_INVALID_VALUE;
+        }
+        let Some(address) = NEXT_MOCK_DEVICE_ADDRESS.with(|next| {
+            let address = next.get();
+            let width = u64::try_from(len).ok()?;
+            next.set(address.checked_add(width)?.checked_add(1)?);
+            Some(address)
+        }) else {
+            return MOCK_OUT_OF_MEMORY;
+        };
+        let mut allocation = Vec::new();
+        if allocation.try_reserve_exact(len).is_err() {
+            return MOCK_OUT_OF_MEMORY;
+        }
+        allocation.resize(len, 0);
+        MOCK_DEVICE_MEMORY.with(|memory| {
+            memory.borrow_mut().insert(address, allocation);
+        });
+        // SAFETY: the CUDA API supplies a valid output pointer; null was rejected above.
+        unsafe { *ptr = address };
         CUDA_SUCCESS
     }
-    unsafe extern "C" fn success_free(_: CuDevicePtr) -> CuResult {
+    unsafe extern "C" fn success_free(ptr: CuDevicePtr) -> CuResult {
+        MOCK_DEVICE_MEMORY.with(|memory| {
+            memory.borrow_mut().remove(&ptr);
+        });
         CUDA_SUCCESS
     }
-    unsafe extern "C" fn success_htod(_: CuDevicePtr, _: *const c_void, _: usize) -> CuResult {
-        CUDA_SUCCESS
+    unsafe extern "C" fn success_htod(
+        ptr: CuDevicePtr,
+        source: *const c_void,
+        len: usize,
+    ) -> CuResult {
+        if len == 0 {
+            return CUDA_SUCCESS;
+        }
+        if source.is_null() {
+            return MOCK_INVALID_VALUE;
+        }
+        let copied = with_mock_device_range(ptr, len, |target| {
+            // SAFETY: the test passes a valid source slice and the destination range is bounded
+            // by the mock allocation selected above.
+            unsafe {
+                core::ptr::copy_nonoverlapping(source.cast::<u8>(), target.as_mut_ptr(), len)
+            };
+        });
+        if copied.is_some() {
+            CUDA_SUCCESS
+        } else {
+            MOCK_INVALID_VALUE
+        }
     }
-    unsafe extern "C" fn success_dtoh(_: *mut c_void, _: CuDevicePtr, _: usize) -> CuResult {
-        CUDA_SUCCESS
+    unsafe extern "C" fn success_dtoh(
+        destination: *mut c_void,
+        ptr: CuDevicePtr,
+        len: usize,
+    ) -> CuResult {
+        if len == 0 {
+            return CUDA_SUCCESS;
+        }
+        if destination.is_null() {
+            return MOCK_INVALID_VALUE;
+        }
+        let copied = with_mock_device_range(ptr, len, |source| {
+            // SAFETY: the test passes a valid destination slice and the source range is bounded
+            // by the mock allocation selected above.
+            unsafe {
+                core::ptr::copy_nonoverlapping(source.as_ptr(), destination.cast::<u8>(), len)
+            };
+        });
+        if copied.is_some() {
+            CUDA_SUCCESS
+        } else {
+            MOCK_INVALID_VALUE
+        }
     }
-    unsafe extern "C" fn success_memset(_: CuDevicePtr, _: u8, _: usize) -> CuResult {
-        CUDA_SUCCESS
+    unsafe extern "C" fn success_memset(ptr: CuDevicePtr, value: u8, len: usize) -> CuResult {
+        if with_mock_device_range(ptr, len, |allocation| allocation.fill(value)).is_some() {
+            CUDA_SUCCESS
+        } else {
+            MOCK_INVALID_VALUE
+        }
     }
     unsafe extern "C" fn success_mem_info(free: *mut usize, total: *mut usize) -> CuResult {
         unsafe {
@@ -564,7 +789,7 @@ mod tests {
         CUDA_SUCCESS
     }
     unsafe extern "C" fn success_host_unregister(_: *mut c_void) -> CuResult {
-        UNREGISTER_CALLS.fetch_add(1, Ordering::SeqCst);
+        UNREGISTER_CALLS.with(|calls| calls.set(calls.get() + 1));
         CUDA_SUCCESS
     }
     unsafe extern "C" fn success_host_pointer(
@@ -583,14 +808,19 @@ mod tests {
         7
     }
 
-    fn mock_cuda(host_pointer: Option<crate::ffi::FnMemHostGetDevicePointer>) -> Cuda {
+    pub(crate) fn mock_cuda(host_pointer: Option<crate::ffi::FnMemHostGetDevicePointer>) -> Cuda {
+        // Allocator-local view from the mocked cuMemGetInfo: free=4096 total=8192.
+        crate::nvml::mock::set_device_memory(4096, 4096, 8192);
         Cuda {
             _lib: Lib(core::ptr::null_mut()),
+            nvml: crate::nvml::mock::build(),
             syms: Syms {
                 init: success_init,
                 device_get_count: success_device_count,
                 device_get: success_device,
                 device_get_name: success_device_name,
+                device_get_uuid: None,
+                device_get_luid: None,
                 ctx_create: success_context,
                 ctx_destroy: success_context_drop,
                 ctx_synchronize: success_synchronize,
@@ -617,13 +847,43 @@ mod tests {
 
     #[test]
     fn mock_driver_exercises_memory_and_mapping_raii() {
-        UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        UNREGISTER_CALLS.with(|calls| calls.set(0));
+        MOCK_DEVICE_MEMORY.with(|memory| memory.borrow_mut().clear());
+        NEXT_MOCK_DEVICE_ADDRESS.with(|next| next.set(0x1000));
         let cuda = mock_cuda(Some(success_host_pointer));
         assert_eq!(cuda.device_count().unwrap(), 1);
         let device = cuda.device(0).unwrap();
         assert_eq!(device.name(), "mock-gpu");
         let context = cuda.create_context(&device).unwrap();
         assert_eq!(context.mem_info().unwrap(), (4096, 8192));
+
+        assert_eq!(
+            ramshared_vram::VramProvider::mem_info(&context).unwrap(),
+            (4096, 8192)
+        );
+        let budget = ramshared_vram::VramProvider::budget_snapshot(&context).unwrap();
+        assert_eq!(budget.adapter, None);
+        assert_eq!(budget.total_bytes, Some(8192));
+        assert_eq!(budget.budget_bytes, 8192);
+        assert_eq!(budget.used_bytes, 4096);
+        assert_eq!(budget.available_bytes(), 4096);
+        assert_eq!(
+            budget.source,
+            ramshared_vram::GpuBudgetSource::DriverReported
+        );
+
+        let mut provider_memory = ramshared_vram::VramProvider::alloc(&context, 16).unwrap();
+        assert_eq!(ramshared_vram::VramMemory::len(&provider_memory), 16);
+        assert!(!ramshared_vram::VramMemory::is_empty(&provider_memory));
+        ramshared_vram::VramMemory::zero(&mut provider_memory).unwrap();
+        ramshared_vram::VramMemory::write_at(&mut provider_memory, 1, &[9, 8, 7]).unwrap();
+        let mut provider_output = [0; 3];
+        ramshared_vram::VramMemory::read_at(&provider_memory, 1, &mut provider_output).unwrap();
+        assert_eq!(provider_output, [9, 8, 7]);
+        assert!(matches!(
+            ramshared_vram::VramMemory::write_at(&mut provider_memory, 16, &[1]),
+            Err(ramshared_vram::VramError::OutOfRange { .. })
+        ));
 
         let mut memory = context.alloc(16).unwrap();
         assert_eq!(memory.len(), 16);
@@ -648,7 +908,7 @@ mod tests {
         mapping.as_mut_slice()[0] = 0x5A;
         assert_eq!(mapping.as_slice()[0], 0x5A);
         drop(mapping);
-        assert_eq!(UNREGISTER_CALLS.load(Ordering::SeqCst), 1);
+        UNREGISTER_CALLS.with(|calls| assert_eq!(calls.get(), 1));
         unsafe { std::alloc::dealloc(page, layout) };
     }
 
@@ -665,7 +925,7 @@ mod tests {
         ));
         drop(context);
 
-        UNREGISTER_CALLS.store(0, Ordering::SeqCst);
+        UNREGISTER_CALLS.with(|calls| calls.set(0));
         let failed_pointer = mock_cuda(Some(failed_host_pointer));
         let device = failed_pointer.device(0).unwrap();
         let context = failed_pointer.create_context(&device).unwrap();
@@ -677,7 +937,7 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(UNREGISTER_CALLS.load(Ordering::SeqCst), 1);
+        UNREGISTER_CALLS.with(|calls| assert_eq!(calls.get(), 1));
         unsafe { std::alloc::dealloc(page, layout) };
     }
 
@@ -692,5 +952,62 @@ mod tests {
             check(&no_symbol.syms, 7, "mock"),
             Err(CudaError::Driver { .. })
         ));
+    }
+
+    #[test]
+    fn device_lookup_preserves_ordinal_and_driver_adapter_identity() {
+        let mut cuda = mock_cuda(Some(success_host_pointer));
+        cuda.syms.device_get_uuid = Some(success_device_uuid);
+        cuda.syms.device_get_luid = Some(success_device_luid);
+
+        let device = cuda.device(3).unwrap();
+        assert_eq!(device.ordinal(), 3);
+        let context = cuda.create_context(&device).unwrap();
+        let identity = context.adapter_identity().unwrap();
+        assert_eq!(identity.backend, "cuda");
+        assert_eq!(identity.key, "12000000000000000000000000000000");
+        assert_eq!(identity.luid.as_deref(), Some("44332211:ddccbbaa"));
+    }
+
+    #[test]
+    fn cuda_error_display_keeps_each_error_context() {
+        let cases = [
+            (
+                CudaError::Load("missing library".into()),
+                "failed to load CUDA library: missing library",
+            ),
+            (
+                CudaError::Symbol("cuInit".into()),
+                "required CUDA symbol missing: cuInit",
+            ),
+            (
+                CudaError::Driver {
+                    op: "cuInit",
+                    code: 7,
+                    msg: "mock error".into(),
+                },
+                "cuInit failed (CUresult=7): mock error",
+            ),
+            (
+                CudaError::OutOfRange {
+                    off: 8,
+                    len: 4,
+                    size: 10,
+                },
+                "out of bounds access: off=8 len=4 > size=10",
+            ),
+            (
+                CudaError::InvalidValue("bad pointer".into()),
+                "invalid argument: bad pointer",
+            ),
+            (
+                CudaError::Unsupported("host pinning".into()),
+                "unsupported driver feature: host pinning",
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
     }
 }

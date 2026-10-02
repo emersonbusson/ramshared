@@ -1,132 +1,167 @@
-# SPEC - Host-Aware VRAM Safety Ceiling, Dynamic Chunk Tiering, and Non-Blocking Spillover
+# SPEC — Adapter-Bound VRAM Cache Safety and Fallback Contract
 
-## 1. Closed Scope
+## 1. Closed scope
 
-### In Now
-- **Host-aware auto-clamping** in `crates/ramshared-wsl2d/src/main.rs`: auto-detect total GPU VRAM and clamp requested broker slices to guarantee a minimum host reserve floor (2,048 MB on 6 GB GPU).
-- **Non-blocking DMA watchdog** in `ResilientBackend`: trip failover to RAM mirror when GPU writes stall or fail, preventing kernel `D` state hangs.
-- **Active watermark monitoring** wired into the multi-slice broker heartbeat loop (`serve_broker_jobs_with_poll_and_heartbeat`): emit `DemoteReason::GlobalGpuFreeFloor` when free VRAM drops below the low watermark.
-- **Tier 3 cascade spillover validation**: ensure Linux kernel spills swap naturally from Tier 1 (ZRAM) to Tier 2 (clamped VRAM) and overflows cleanly into Tier 3 (the backing SSD swap partition) under heavy pressure without freezing the Windows host.
+### In now
 
-### Out Now
-- Kernel-space LKM modifications to `mm/swapfile.c`.
-- Windows WDK StorPort driver alterations (WSL2 cascade specific).
-- Sparse page-table paging inside CUDA kernels (delegated to future in-tree GPU driver milestones).
+- `crates/ramshared-vram/src/lib.rs`: shared budget validity, adapter identity,
+  current-use reserve, and runtime-headroom arithmetic.
+- `crates/ramshared-wsl2d/src/gpu_budget.rs`: CUDA/Vulkan candidate policy,
+  exact-LUID WDDM intersection, freshness checks, and exact adapter selection.
+- `crates/ramshared-block/src/gpu_cache_worker.rs`: sparse allocation with a
+  fresh budget check before each allocation.
+- `crates/ramshared-block/src/isolated_origin.rs` and
+  `crates/ramshared-block/src/ipc_cache_client.rs`: cache timeout/failure falls
+  back to the authoritative origin.
+- `crates/ramshared-wsl2d/src/main.rs`: refuse GPU-backed direct `--slices`
+  actions before provider or device initialization.
+- Rust status and dashboard paths publish only fresh, internally consistent,
+  worker-bound GPU telemetry.
 
-### Assumed-Ready Dependencies
-- `crates/ramshared-wsl2d` existing broker runtime (`run_broker`, `serve_broker_jobs`).
-- `/dev/dxg` Direct3D driver and CUDA runtime (`Cuda::load()`, `provider.mem_info()`).
-- Linux swap configuration with `/dev/zram0` (priority 100), `/dev/nbd0` (priority 50), and the backing SSD swap partition (priority -2).
+### Out now
 
----
+- A hard timeout that interrupts a driver call already blocked in kernel
+  context. Process isolation protects the origin data path; it cannot prove
+  that a stuck child exits or that a physical GPU driver recovers.
+- GPU-backed direct `--slices` operation. Its synchronous provider calls are
+  refused by the planner. RAM-only broker operation remains available.
+- `ublk` GPU lifecycle, Windows StorPort, and physical pressure qualification.
+- Universal NVIDIA/AMD/Intel support or a freeze-free performance claim.
+
+### Assumed-ready dependencies
+
+- An opened, authoritative origin that passes its manifest and device identity
+  checks.
+- A CUDA or Vulkan provider that reports a fresh budget and usable adapter
+  identity. WDDM only constrains a provider with an exact matching LUID.
+- A local worker IPC channel with the configured read/write timeouts.
 
 ## 2. Traceability
 
-| PRD Requirement | Implementation / Decision Item | Covered By Test / Evidence |
-| :--- | :--- | :--- |
-| **RF-1** (Host Clamping) | `ITEM-1`, `DT-1` | `test_host_vram_clamping_rtx2060`, `test_host_vram_clamping_unconstrained` |
-| **RF-2** (DMA Watchdog) | `ITEM-2`, `DT-3` | `test_resilient_backend_watchdog_failover` |
-| **RF-3** (Watermark Demote) | `ITEM-3`, `DT-2` | `test_broker_heartbeat_watermark_demote` |
-| **RF-4** (Tier 3 Spillover) | `ITEM-4`, `DT-4` | Live multi-tier cascade stress drill (`scripts/stress-cascade-governor.sh`) |
-| **NFR-1** (Zero Freeze) | `ITEM-1`, `ITEM-2`, `ITEM-3` | `PASS_ZERO_PANIC` verdict on 6.18.40.1 kernel |
-| **NFR-2** (Failover Latency) | `ITEM-2` | Latency assertion $\le 50\text{ ms}$ |
-| **NFR-3** (Observability) | `ITEM-1`, `ITEM-3` | Telemetry JSONL event emission |
+| PRD requirement | Implementation / decision | Test / evidence |
+| --- | --- | --- |
+| RF-1 budget-bound admission | ITEM-1, DT-1 | `budget_target_preserves_reserve_after_existing_use`; `worker_budget_target_never_exceeds_current_available_headroom`; `mismatched_stale_future_and_malformed_budgets_are_rejected` |
+| RF-2 origin correctness | ITEM-2, DT-2 | `cache_timeout_falls_back_to_origin`; `daemon_survives_abrupt_gpu_worker_kill` |
+| RF-3 adapter identity | ITEM-1, DT-1 | `adapter_identity_matches_cross_api_only_through_shared_luid`; worker selection and reopen tests |
+| RF-4 direct broker refusal | ITEM-3, DT-3 | `daemon_gpu_legacy_broker_refuses_before_backend_initialization` |
+| RF-5 telemetry validity | ITEM-4 | active-worker budget telemetry and dashboard tests in `ramshared-wsl2d` / `ramshared-cli` |
+| NFR-2 bounded product data path | ITEM-2, DT-2 | timeout fallback unit test; physical stuck-driver behavior remains environment-bound |
 
----
+## 3. Technical decisions
 
-## 3. Technical Decisions
+| ID | Decision | Why |
+| --- | --- | --- |
+| DT-1 | A sample authorizes admission only when the source is driver-reported, the adapter identity exists, values are internally consistent, and the monotonic sample is not future-dated or older than 5 seconds. Cross-API matching uses only the same Windows LUID. | Local estimates, stale data, and unrelated adapters cannot safely describe current external GPU use. |
+| DT-2 | GPU memory is a best-effort cache behind the authoritative origin. Cache reads have a bounded IPC wait; cache transport, worker, or protocol failure revokes the cache and uses the origin. | A GPU cache result must never be required to preserve acknowledged block data. |
+| DT-3 | Reject GPU-backed `--slices` during action selection. Keep only its RAM backend until the synchronous GPU operations are either removed or moved behind a separately qualified origin-backed worker. | A post-hoc elapsed-time check cannot interrupt a driver call that has not returned. |
+| DT-4 | For the origin cache, `safe_target = min(requested, capacity - reserve, live_available - reserve - 640 MiB)`, where `capacity = min(total, budget)` and `reserve = max(configured reserve, 20% of capacity)`. Subtractions saturate; each allocation rechecks the budget including the requested chunk. | Existing external use must not consume the reserve or runtime buffer. |
+| DT-5 | When no trusted GPU candidate survives ranking and exact reopen/revalidation, start in origin-only mode. | A false GPU capacity is less safe than a disabled cache. |
 
-| # | Decision | Why |
-| :--- | :--- | :--- |
-| **DT-1** | **Host Reserve Floor Formula**: Enforce $\text{HOST\_RESERVE\_FLOOR} = \max(2048\text{ MB},\, \text{total\_vram} \times 35\%)$. | On a 6,144 MB GPU, guarantees at least 2,048 MB remains strictly available for Windows Desktop Window Manager (`dwm.exe`) and host 3D applications, completely eliminating GPU TDR lockups. |
-| **DT-2** | **Broker Global Free Floor Heartbeat Hook**: Connect `observe_global_free_floor` directly to `serve_broker_jobs_with_poll_and_heartbeat`. | Closes the architectural gap where the single-worker sparse harness checked free memory, but the production multi-slice broker ran blind without active memory polling. |
-| **DT-3** | **Watchdog Trip on DMA Stalls**: In `ResilientBackend`, track write latency; if GPU write exceeds 50ms or encounters an ioctl error (`-22`), immediately mark `failed_over = true` and serve subsequent I/O from RAM buffer. | Prevents synchronous CUDA memcpy from blocking the NBD worker thread when `/dev/dxg` stalls, avoiding uninterruptible sleep `D` state in Linux kernel swap. |
-| **DT-4** | **Cooperative Swap Spillover via Accurate Geometry**: Advertise the clamped slice size (e.g. 2,048 MB) as the true capacity of `/dev/nbd0`. | Allows standard Linux kernel swap priority (`pri=100 zram` $\rightarrow$ `pri=50 nbd` $\rightarrow$ `pri=-2 ssd`) to overflow naturally to Tier 3 SSD when VRAM reaches 100% of its safe capacity. |
+## 4. Atomicity and rollback
 
----
+### Atomicity frontier
 
-## 4. Atomicity and Rollback
+- Budget selection and `--slices` refusal occur before GPU provider initialization,
+  socket binding, NBD attach, or swap mutation.
+- Cache admission is best effort. The origin operation remains authoritative;
+  cache state cannot turn an origin error into success.
+- Cache teardown revokes the client before the worker supervisor attempts
+  termination. A child stuck in kernel driver code may survive the bounded
+  user-space escalation; the daemon must report unavailable/stuck rather than
+  claim complete release.
 
-- **Atomicity Frontier**:
-  - Sizing and clamping logic executes before any CUDA allocation (`provider.alloc()`) or NBD socket binding. If clamping fails or physical memory is below the minimum operational floor, the daemon exits cleanly with status code `1` before touching any system swap.
-  - Failover from VRAM to RAM mirror in `ResilientBackend` is unidirectional and lock-free (`failed_over: bool` with relaxed/SeqCst synchronization).
-- **Rollback**:
-  - **Userspace / Daemon**: Commit revert cleanly restores prior `ramshared-wsl2d` binary.
-  - **Kernel / Module**: `swapoff /dev/nbd0` cleanly detaches the NBD block device; the backing SSD swap partition and `/dev/zram0` (ZRAM) remain fully functional.
-  - **Host / Persistent**: No persistent state modified on the Windows host.
+### Rollback
 
----
+- **Userspace/daemon:** revert the planner, worker, and budget changes together;
+  keep the origin-only path as the safe operating mode.
+- **Kernel/module:** N/A — no kernel module or kernel code is changed here.
+- **Host/persistent:** the refusal occurs before broker/device effects. Existing
+  origin contents are not changed by a cache operation.
+- **Forward-only:** N/A for this source change. A live host activation is not
+  part of this patch.
 
-## 5. Kahneman Map (Critical Steps)
+## 5. Kahneman map
 
-| ITEM / Stage | # | Question | Min Evidence | Abort |
-| :--- | :--- | :--- | :--- | :--- |
-| **ITEM-1** (Clamping) | **#13** (Refusal + Legitimate) | Does the clamping logic strictly refuse unsafe allocations while accepting legitimate sub-floor requests? | `cargo test -p ramshared-wsl2d test_host_vram_clamping` | Any allocation that leaves $< 2,048\text{ MB}$ free on 6 GB GPU |
-| **ITEM-2** (Watchdog) | **#15** (Transient Retry / Failover) | Does the backend switch to RAM mirror within 50ms without hanging the caller thread? | `cargo test -p ramshared-wsl2d test_resilient_backend_watchdog` | Thread blocks $> 100\text{ ms}$ or returns `NBD_EIO` |
-| **ITEM-3** (Heartbeat) | **#16** (Exhaustion Behavior) | When physical VRAM is starved, does the broker emit `DemoteAll` before the host GPU driver crashes? | Unit simulation + telemetry JSONL event `watermark_demote` | Windows desktop freeze or GPU TDR |
-| **ITEM-4** (Spillover) | **#9** (Numeric Verification) | Does SSD utilization exceed 0 MB during the multi-tier stress drill while VRAM remains clamped? | `/proc/swaps` showing the backing SSD swap partition used $> 0\text{ MB}$ + `PASS_ZERO_PANIC` | Any freeze, hung task, or zero SSD usage under $>3\text{ GB}$ swap |
+| Item | # | Question | Minimum evidence | Abort |
+| --- | --- | --- | --- | --- |
+| ITEM-1 budget admission | #13 | Does a valid identified sample admit safe bytes, and do future/stale/estimated/mismatched samples refuse? | Named budget admission tests plus 80% slice coverage | Any invalid sample produces a nonzero target |
+| ITEM-2 origin fallback | #16 | When a worker stalls or exits, does the request use origin without waiting beyond IPC policy? | `cache_timeout_falls_back_to_origin` and `daemon_survives_abrupt_gpu_worker_kill` | Origin read/write result differs or caller remains blocked after timeout |
+| ITEM-3 direct broker refusal | #13 | Do all GPU backend values refuse before provider initialization while RAM remains selectable? | `daemon_gpu_legacy_broker_refuses_before_backend_initialization` plus `daemon_plan_routes_validated_actions_without_starting_a_backend` | GPU provider is initialized or a socket/device effect precedes refusal |
 
----
+## 6. Security checklist
 
-## 6. Security Checklist (Pre-Impl)
+- [x] Privilege: no new privilege boundary; existing origin/NBD daemon permissions remain validated by their owning flow.
+- [x] User/host copy: worker frame and cache chunk lengths are bounded before allocation/copy.
+- [x] Flags/IOCTL codes: GPU API ioctl validation belongs to the CUDA/Vulkan/DXG provider crates; this change does not add ioctl values.
+- [x] Info-leak: telemetry contains adapter identifiers and budgets, not kernel addresses.
+- [x] IRQ/atomic: N/A — all code in this SPEC runs in userspace.
+- [x] Lifetime: worker client revocation and cache allocation release are tested; complete release after an uninterruptible driver call is not claimed.
+- [x] Hot-unplug/device-gone: provider errors fail admission or revoke cache; origin remains usable.
+- [x] Host safety: direct synchronous GPU `--slices` is refused; live pressure testing requires a separate safe admission and supervised harness.
+- [x] Shared-hardware cushion: reserve is subtracted from both capacity and current live headroom, and each chunk rechecks admission.
+- [ ] Bounded DMA/foreign call: the parent origin data path has bounded IPC waits, but the kernel cannot guarantee interruption of a driver call inside a stuck child. Physical stuck-driver behavior remains a qualification gate.
+- [ ] Cooperative cascade spillover: only cache-to-origin fallback is source-tested; simultaneous physical ZRAM/cache/SSD pressure and teardown evidence remain open.
+- [x] Replayable operations: cache revocation is idempotent and repeated cache failure remains origin-safe.
 
-- [x] **Privilege**: Daemon requires `CAP_SYS_ADMIN` inside WSL2 to manage NBD and swap; no privilege escalation to Windows host.
-- [x] **User/Host Copy**: DMA buffers strictly bounded to allocated slice length; bounds checked on every NBD request.
-- [x] **Flags/IOCTL Codes**: Direct ioctl calls to `/dev/dxg` handled with validation; return codes checked.
-- [x] **Info-Leak**: No kernel virtual memory addresses leaked in telemetry or logs.
-- [x] **IRQ / IRQL**: Userspace daemon runs in user mode; no illegal sleeping in atomic context.
-- [x] **Lifetime**: Allocated VRAM explicitly zeroed on release; NBD disconnect signals clean worker teardown.
-- [x] **Hot-Unplug / Device-Gone**: If GPU device disappears, `ResilientBackend` hot-swaps to RAM without panicking.
-- [x] **Host Safety**: Enforces strict minimum 2,048 MB VRAM cushion for Windows host display.
-- [x] **Shared-Hardware Cushion**: Mathematical host reserve floor enforced; no greedy static allocation of shared VRAM/RAM.
-- [x] **Bounded DMA / Foreign Driver Calls**: Watchdog/timeout ensures no thread hangs indefinitely in foreign driver ioctls.
-- [x] **Cooperative Cascade Spillover**: Lower tiers (the backing SSD swap partition) verified to receive traffic when accelerator tier saturates or degrades.
-- [x] **Replayable Ops**: Clamping and demote state transitions are idempotent (#17).
+## 7. Files to modify
 
----
+| File | Change | Named verification |
+| --- | --- | --- |
+| `crates/ramshared-vram/src/lib.rs` | Central budget and identity contract | `budget_target_preserves_reserve_after_existing_use`; `adapter_identity_matches_cross_api_only_through_shared_luid` |
+| `crates/ramshared-cuda/src/nvml.rs` | Device-wide VRAM occupancy authority (`nvmlDeviceGetMemoryInfo`), which is what the budget must describe so the cache can get out of the way of a GPU application | `display_covers_load_and_symbol_variants`; `map_sym_preserves_symbol_names_and_stringifies_other_errors`; `negative_ordinal_is_rejected_before_any_driver_call`; `null_device_handle_is_reported_not_followed`; `check_rejects_non_success_and_falls_back_without_error_string`; `err_string_prefers_driver_description_and_survives_null`; `load_reports_whatever_the_host_nvidia_stack_provides` |
+| `crates/ramshared-cuda/src/vram_impl.rs` | CUDA adapter implements the shared budget and memory traits | `test_vram_error_conversion_out_of_range`; `test_vram_error_conversion_provider`; `mock_driver_exercises_memory_and_mapping_raii` |
+| `crates/ramshared-wsl2d/src/gpu_budget.rs` | Candidate selection, reserve sizing, WDDM composition | `direct_broker_slice_preserves_live_reserve_canary_and_alignment`; `mismatched_stale_future_and_malformed_budgets_are_rejected` |
+| `crates/ramshared-block/src/gpu_cache_worker.rs` | Live per-allocation admission | `worker_budget_target_never_exceeds_current_available_headroom`; `worker_respects_headroom_floor` |
+| `crates/ramshared-block/src/isolated_origin.rs` | Origin fallback contract | `cache_timeout_falls_back_to_origin` |
+| `crates/ramshared-wsl2d/src/main.rs` | Refuse synchronous GPU direct broker | `daemon_gpu_legacy_broker_refuses_before_backend_initialization`; `daemon_survives_abrupt_gpu_worker_kill` |
 
-## 7. Files to CREATE / MODIFY / DELETE
+## 8. Coverage and validation matrix
 
-### MODIFY
+| Production path | Test | Kind | Kahneman | Coverage |
+| --- | --- | --- | --- | --- |
+| `ramshared-vram/src/lib.rs` | named budget and identity tests above | unit | #13 | >=80% changed logic |
+| `ramshared-cuda/src/nvml.rs` | named load, guard, and error-path tests above | unit | #13/#16 | >=80% changed logic |
+| `ramshared-wsl2d/src/gpu_budget.rs` | freshness, WDDM, slice, and adapter selection tests | unit | #13 | Slice coverage is owned by the isolated GPU cache-worker SPEC. |
+| `ramshared-block/src/gpu_cache_worker.rs` | target, allocation, and revoke tests | unit | #16/#17 | >=80% changed logic |
+| `ramshared-block/src/isolated_origin.rs` | `cache_timeout_falls_back_to_origin` | unit | #16 | >=80% changed logic |
+| `ramshared-wsl2d/src/main.rs` | direct broker refusal and worker-loss tests | unit/integration | #13 | >=80% changed logic |
+| exact installed product path | worker allocation → origin fallback → teardown | live | #16 | OPEN — requires host/hardware qualification |
 
-**`crates/ramshared-wsl2d/src/main.rs`**
-- **Purpose**: Implement `calculate_safe_vram_slice`, wire host-aware clamping into `DaemonAction::Broker`, add watchdog timing to `ResilientBackend::write_at`, and hook `observe_global_free_floor` to broker heartbeat.
-- **RF / DT**: RF-1, RF-2, RF-3; DT-1, DT-2, DT-3.
-- **Key Changes**:
-  - Add helper function:
-    ```rust
-    fn calculate_safe_vram_slice(
-        requested_bytes: u64,
-        total_vram_bytes: u64,
-        free_vram_bytes: u64,
-        host_reserve_floor_bytes: u64,
-    ) -> (u64, bool)
-    ```
-  - In `run_broker_with_setup`, compute safe slice bytes before calling `provider.alloc()`.
-  - In `ResilientBackend`, add `last_write_latency: Duration` and failover logic on timeout.
-  - In `serve_broker_jobs_with_poll_and_heartbeat`, invoke global free floor evaluation.
-- **Required Tests**:
-  - `crates/ramshared-wsl2d/src/main.rs :: test_host_vram_clamping_rtx2060`
-  - `crates/ramshared-wsl2d/src/main.rs :: test_host_vram_clamping_unconstrained`
-  - `crates/ramshared-wsl2d/src/main.rs :: test_resilient_backend_watchdog_failover`
-- **Cover Target**: $\ge 80\%$ on new business-logic lines.
+Required source commands:
 
----
+```sh
+cargo fmt --all -- --check
+cargo test -p ramshared-vram -p ramshared-block -p ramshared-wsl2d
+cargo clippy -p ramshared-vram -p ramshared-block -p ramshared-cuda -p ramshared-dxg -p ramshared-vulkan -p ramshared-wsl2d --all-targets -- -D warnings
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/vram_impl.rs --min 80
+```
 
-## 8. Observability
+NVML device-wide occupancy coverage. `nvml.rs` is loaded at runtime through the
+platform loader, so the host NVIDIA stack is optional: with the driver present
+the gate covers candidate selection, symbol resolution, `nvmlInit_v2`, and a
+real device read, and without it the candidate-loop failure path. Both outcomes
+are legitimate and both keep the file above the 80% floor. Measured 2026-09-30
+on the WSL2 host with `libnvidia-ml.so.1` present: 92.8% lines (155/167).
 
-| Signal | Where | Level / Type |
-| :--- | :--- | :--- |
-| `vram_clamped` | `stderr` + `telemetry.jsonl` | INFO / Structured JSON |
-| `dma_watchdog_tripped` | `stderr` + `telemetry.jsonl` | WARN / Structured JSON |
-| `watermark_demote` | `stderr` + `telemetry.jsonl` | WARN / Structured JSON |
-| `tier3_spillover_active` | `scripts/stress-cascade-governor.sh` | INFO / Live terminal bar |
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/nvml.rs --min 80 --report-json tmp/cuda-nvml-cov.json
+```
 
----
+Live `before → action → after` evidence for GPU allocation, cache revocation,
+origin fallback, and host teardown remains OPEN for physical NVIDIA, AMD, and
+Intel adapters. Software Vulkan tests are not a substitute.
 
-## 9. Living Docs
+## 9. Observability
 
-| Document | Action |
-| :--- | :--- |
-| `ARCHITECTURE.md` | Document Tier 2 host-aware safety floor and dynamic Tier 3 spillover invariant. |
-| `docs/reliability/GAP-REGISTER.md` | Link this SPEC as the permanent resolution for WSL2 VRAM freeze under heavy swap pressure. |
+The worker heartbeat and `status --json` may expose adapter key/LUID, backend,
+budget, usage, available bytes, and sample age only when the snapshot passes
+identity, freshness, and consistency checks. No watchdog trip event or automatic
+Tier 3 spillover event is claimed by this SPEC.
+
+## 10. Living documents
+
+| Document | Required action |
+| --- | --- |
+| `ARCHITECTURE.md` | Keep reserve formulas surface-specific and describe GPU as a revocable cache. |
+| `docs/reliability/GAP-REGISTER.md` | Keep physical vendor, worker teardown, and pressure qualification PARTIAL. |
+| `docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/SPEC.md` | Keep process-boundary limitations and origin fallback evidence aligned. |

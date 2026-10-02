@@ -60,6 +60,106 @@ fn cli_help_and_unknown_command() {
 }
 
 #[test]
+fn cli_resource_config_json_discovers_platform_resources_read_only() {
+    let output = run_cli(&["config", "show", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+
+    assert!(matches!(
+        value["platform"].as_str(),
+        Some("native_linux" | "wsl2")
+    ));
+    assert!(value["guest_memory"]["total_bytes"].is_number());
+    assert!(value["swaps"].is_array());
+    assert!(value["block_devices"].is_array());
+    assert!(value["warnings"].is_array());
+    assert!(value["gpu_budget_status"].is_string());
+    assert!(value["observed_unix_ms"].as_u64().is_some());
+
+    if value["platform"] == "wsl2" {
+        assert!(value["windows"].is_object() || !value["warnings"].as_array().unwrap().is_empty());
+        assert!(
+            value["block_devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|device| device["eligible_for_file_storage"].as_bool() == Some(false)),
+            "guest filesystem capacity must not imply host-volume capacity"
+        );
+        assert!(
+            value["block_devices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|device| !device["mounts"].as_array().unwrap().is_empty())
+                .all(|device| device["eligibility_reason"]
+                    .as_str()
+                    .unwrap()
+                    .contains("host-volume")),
+            "mounted WSL guest filesystems need a host-volume binding reason"
+        );
+    } else {
+        assert!(value["windows"].is_null());
+    }
+
+    let mutation = run_cli(&["config", "apply"]);
+    assert_eq!(mutation.status.code(), Some(2));
+    assert!(stderr(&mutation).contains("invalid config option"));
+}
+
+#[test]
+fn cli_resource_config_draft_refuses_non_tty_before_writing() {
+    let path = std::env::temp_dir().join(format!(
+        "ramshared-resource-draft-{}-{}.toml",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let path_text = path.to_string_lossy().into_owned();
+
+    let output = run_cli(&["config", "draft", "--output", &path_text]);
+
+    assert_ne!(output.status.code(), Some(0));
+    assert!(stderr(&output).contains("needs a terminal"));
+    assert!(
+        !path.exists(),
+        "non-interactive draft must not create a file"
+    );
+}
+
+#[test]
+fn cli_resource_config_plan_loads_an_explicit_profile_without_applying_it() {
+    let path = std::env::temp_dir().join(format!(
+        "ramshared-resource-profile-{}-{}.toml",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&path, "schema_version = 1\n[caps]\nzram_bytes = 0\n").unwrap();
+    let path_text = path.to_string_lossy().into_owned();
+
+    let output = run_cli(&["config", "plan", "--json", "--profile", &path_text]);
+    let cleanup = fs::remove_file(&path);
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(
+        cleanup.is_ok(),
+        "temporary profile was not modified or retained"
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"].as_u64(), Some(1));
+    assert_eq!(value["profile_state"].as_str(), Some("validated"));
+    assert_eq!(
+        value["status"].as_str(),
+        Some("profile_loaded_no_storage_targets")
+    );
+    assert_eq!(
+        value["unenforced_planned_caps"]["zram_bytes"].as_u64(),
+        Some(0)
+    );
+    assert_eq!(value["writes_performed"].as_bool(), Some(false));
+    assert_eq!(value["apply_enabled"].as_bool(), Some(false));
+}
+
+#[test]
 fn cli_check_and_doctor_report_decision_json_and_text() {
     let check_json = run_cli(&["check", "--json"]);
     let check_value: serde_json::Value = serde_json::from_slice(&check_json.stdout).unwrap();
@@ -216,7 +316,7 @@ fn cli_stress_subcommand_and_json_report() {
         serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
     assert_eq!(
         val.get("status").and_then(serde_json::Value::as_str),
-        Some("PASS_ZERO_PANIC")
+        Some("INCONCLUSIVE")
     );
     assert!(val.get("reclaim_speed_gbs").is_some());
     assert!(val.get("avg_cycle_latency_ms").is_some());

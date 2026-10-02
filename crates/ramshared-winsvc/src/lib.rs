@@ -6,6 +6,7 @@
 
 pub mod broker_tenant;
 pub mod config;
+pub mod control_plane;
 pub mod cuda_probe;
 pub mod driver_link;
 pub mod evidence;

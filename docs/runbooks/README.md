@@ -13,6 +13,7 @@ A runbook explains a bounded procedure; it is not authority to change an unsafe 
 
 | Objective | Canonical runbook | Boundary |
 | --- | --- | --- |
+| Elevate a Windows command from WSL2 | [windows-elevation.md](windows-elevation.md) | A permission recipe only; origin attach and swap provision still require their exact approval tokens. |
 | Recover workstation disk space | [WORKSTATION-SPACE-RECOVERY.md](WORKSTATION-SPACE-RECOVERY.md) | Inventory and explicit human approval precede any removal; historical receipts never authorize a new cleanup. |
 | Operate the Windows autonomous broker | [windows-autonomous-broker.md](windows-autonomous-broker.md) | Physical-driver and storage controls remain supervised. |
 | Run the Windows VRAM drive drill | [windows-vram-drive-drill.md](windows-vram-drive-drill.md) | Use only its declared lab and identity gates. |

@@ -1,6 +1,10 @@
 # Roadmap
 
-Current release posture: **v0.12.0 Qualified Production Release**. Fully qualified across 100% capacity saturation under live host memory pressure on physical hardware. The multi-tier memory cascade (ZRAM ➔ GPU VRAM ➔ SSD Origin ➔ WSL2 disk fallback) operates with zero panics, zero data loss, and sub-millisecond page-fault latency.
+Current release posture: source target **v0.15.0**; latest published stable **v0.14.1**.
+Standard WSL2 uses NBD as its baseline transport. `ublk`/`io_uring` is qualified
+on native Linux or WSL2 with a compatible custom kernel (EVD-0039); product lifecycle
+promotion on the custom-kernel path remains deferred. EVD-0040 covers only
+zero-copy CUDA host mapping.
 
 Evidence lives in [validation.md](validation.md) and feature IMPL files.
 
@@ -10,9 +14,9 @@ Evidence lives in [validation.md](validation.md) and feature IMPL files.
 
 ### v0.10.0 — LKML Upstream RFC v2 & Tier 3 Cascade Qualification (2026-09)
 
-- Upstream Linux Kernel Driver RFC v2 submitted to LKML and Microsoft WSL ([microsoft/WSL#41054](https://github.com/microsoft/WSL/issues/41054)).
+- Upstream **`drivers/block` RamShared VRAM driver** RFC v2 submitted to LKML, and a separate Microsoft WSL config feature request ([microsoft/WSL#41054](https://github.com/microsoft/WSL/issues/41054)). This bullet does **not** refer to the Hyper-V/VMBus ring-buffer series, whose unversioned v1 went to `linux-hyperv` on 2026-09-17 and whose v2 remains an unsent draft (see `docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/`).
 - Consolidated Linux kernel drivers, multi-tier memory management, and fail-safe recovery into a unified production architecture.
-- Full Tier 3 cascade saturation stress qualification (EVD-0040): 9,160 MB active swap held across 40 continuous cycles under 99% RAM pressure with 100% SHA-256 byte-exact match and zero panics.
+- Historical Tier 3 cascade saturation evidence is retained in the benchmark and validation registries. It is not EVD-0040, which records zero-copy CUDA host mapping only.
 - High-resolution vector diagrams (Inter & JetBrains Mono) with infinite resolution across displays.
 - Interactive terminal TUI dashboard: `ramshared top`.
 
@@ -52,12 +56,12 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and isol
 
 ---
 
-## Next (v0.13.0)
+## Next (v0.16.0)
 
 | Priority | Milestone Target | Focus |
 | :--- | :--- | :--- |
-| Upstream Linux & WSL2 | LKML driver review & WSL merge (#41054) | Direct `ublk`/`io_uring` zero-copy default transport |
-| Multi-vendor Acceleration | Vulkan Memory Allocator (VMA) multi-vendor tier | AMD Radeon & Intel Arc hardware qualification |
+| Upstream Linux & WSL2 | LKML driver review & WSL merge (#41054) | Complete lifecycle qualification without presenting `ublk`/`io_uring` as the stock WSL2 default |
+| Multi-vendor Acceleration | Mature the Vulkan VRAM provider and reserve policy | AMD Radeon and Intel Arc physical cache qualification |
 
 ---
 

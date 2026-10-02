@@ -240,13 +240,28 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   `GFP_ATOMIC`).
 - [ ] **Input validation (service):** lease `bytes` revalidated in service before forwarding to broker;
   broker already rejects `> total` (`broker_srv.rs:412`).
-- [ ] **`unsafe`/FFI (Rust):** CUDA-Windows (ITEM-1), `driver_link` (ITEM-6), `ntpagefile` (ITEM-7) each
+- [x] **`unsafe`/FFI (Rust):** CUDA-Windows (ITEM-1), `driver_link` (ITEM-6), `ntpagefile` (ITEM-7) each
   use `// SAFETY:` per block; safe surface without `unsafe` (`ramshared-cuda` pattern).
-- [ ] **Secrets/pointers:** no hardcoded credential; **no kernel address logged** (WPP/ETW without
+  (2026-10-01: `crates/ramshared-cuda/src/loader_win.rs` has 8 `unsafe {` blocks and 8 `// SAFETY:`
+  comments, 1:1, added this session; `crates/ramshared-winsvc/src/driver_link.rs` (849 lines) and
+  `crates/ramshared-winsvc/src/ntpagefile.rs` (276 lines) contain zero `unsafe`, `extern`, raw
+  pointer casts, or IOCTL calls — pure safe surface, so the per-block rule is vacuously met.)
+- [x] **Secrets/pointers:** no hardcoded credential; **no kernel address logged** (WPP/ETW without
   pointers — aligned with `coding.md`: never leak KASLR); telemetry without PII (pagefile content is
-  process memory — **never** log payload).
-- [ ] **Kernel Oops/internal error:** failing IOCTL returns generic NTSTATUS; no implementation detail or
-  internal offset leaks to Ring-3.
+  process memory — **never** log payload). (2026-10-01: verified by source scan of
+  `drivers/windows/ramshared/*.c` — zero hits for `password|credential|secret|token|api_key|apikey`;
+  zero for `%p|%px|KASLR|kernel address|0xffff`; zero for pagefile/payload content on any
+  `log|trace|wpp|etw|DbgPrint|KdPrint` path.)
+- [x] **Kernel Oops/internal error:** failing IOCTL returns generic NTSTATUS; no implementation detail or
+  internal offset leaks to Ring-3. (2026-10-01: verified against `drivers/windows/ramshared/*.c` —
+  the complete set of returned codes is `STATUS_SUCCESS`, `STATUS_PENDING`, `STATUS_INVALID_PARAMETER`,
+  `STATUS_INVALID_DEVICE_REQUEST`, `STATUS_INSUFFICIENT_RESOURCES`, `STATUS_REVISION_MISMATCH`,
+  `STATUS_DEVICE_BUSY`, `STATUS_DEVICE_NOT_READY`, `STATUS_DEVICE_NOT_CONNECTED`, `STATUS_CANCELLED`
+  and the SRB equivalents `SRB_STATUS_SUCCESS/ERROR/BUSY/PENDING/INVALID_REQUEST/NO_DEVICE/DATA_OVERRUN/
+  AUTOSENSE_VALID` — all documented public values, zero custom or implementation-defined codes.
+  `IoStatus.Information` is `0` on every error path and a clamped byte count
+  (`if (info > outLen) info = 0`) on success; `protocol.h` structs expose only fixed-width integers
+  and caller-supplied user VAs — no kernel pointer or internal offset reaches Ring-3.)
 
 ## Files to CREATE
 
@@ -309,6 +324,14 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
 - **Structs:** `#[repr(C)] pub struct Sqe { pub tag:u64, pub op:u32, pub flags:u32, pub offset:u64, pub len:u32, pub buf_slot:u32 }` (same for `Cqe`, `RingHdr`, `Register`); `pub const ABI_VERSION:u32=1; pub const MAX_QD:u32=256; pub const MAX_IO:u32=1<<20;`.
 - **Functions:** `const _: () = { assert!(core::mem::size_of::<Sqe>()==32); assert!(core::mem::size_of::<Cqe>()==16); /* ... */ };`
 - **Required tests:** `golden_sqe_bytes` (serializes a known `Sqe` and compares it with the fixed byte array produced by C).
+- **Coverage:** the mirror is declaration-only (constants and `#[repr(C)]`
+  layouts; zero instrumented production lines after `#[cfg(test)]` exclusion),
+  so its named golden-layout tests are the evidence and the gate reports
+  `100.0% (0/0)`. Ownership is still registered so
+  `plan-rust-slice-coverage.mjs --changed-files` can attribute edits:
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/proto.rs --min 80 --report-json tmp/windows-swap-driver-protocol-mirror-cov.json
+  ```
 
 ### `drivers/windows/ramshared/driver.c` + `driver.h`  *(ITEM-5 — RF-1, DT-1)*
 
@@ -396,6 +419,20 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
 - **External dependencies (only `[target.'cfg(windows)']`):** `windows`/`windows-sys` (IOCTL, `MmXxx` through handles, `Win32_PageFileUsage`), `windows-service` (SCM), `ntapi` or own FFI for `NtCreatePagingFile`/`RtlGetVersion`, `serde`+`toml`.
 - **Reference pattern:** `ramshared-agent` (broker client) + `ramshared-wsl2d/main.rs` (single-thread VRAM I/O loop, `run_nbd`); memory-broker SPEC P2 (cross-compile gating).
 - **Required tests:** `driver_link` roundtrip against a **fake driver** (in-memory `DeviceIoControl` mock) — SQE READ/WRITE/FLUSH → RAM backend → CQE; `broker_tenant` `LeaseRequest`→`Granted` against fake broker; `ntpagefile` fallback (unsupported build → graceful `Err`); `config` parse. (Pure, run on Linux; bin is stub — DT-16.)
+- **Coverage (ITEM-7 pure logic):** `ntpagefile.rs` and `smoke.rs` are business logic that
+  runs on Linux — `ntpagefile` degrades every OS-touching helper to `NotWindows`, and
+  `post_boot_smoke` is an injected-input pure function. The `#[cfg(windows)]` FFI stubs
+  (`create_secondary_impl`/`remove_secondary_impl`/`current_build` Windows arm) are the
+  only env-bound surface and stay gated by the live Windows ITEM-7 evidence.
+  Measured 2026-09-30: `ntpagefile.rs` 98.4% lines (61/62), `smoke.rs` 100.0% (21/21).
+  Named tests: `allow_list_26200_only`; `unsupported_build_is_graceful`; `invalid_sizes`;
+  `empty_volume_is_refused_before_the_build_check`; `remove_rejects_unsupported_build`;
+  `display_names_every_error_variant`; `linux_os_touching_helpers_degrade_to_not_windows`;
+  `all_good`; `every_missing_input_degrades_with_its_own_check_name`;
+  `degrade_detail_describes_the_missing_artifact`.
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/smoke.rs,crates/ramshared-winsvc/src/ntpagefile.rs --min 80 --report-json tmp/windows-swap-driver-winsvc-pagefile-cov.json
+  ```
 - **Kahneman discipline:** ITEM-6/ITEM-7 in the Map.
 
 ### `drivers/windows/tools/poolstress/` (`poolstress.c`, `poolstress.inf`)  *(ITEM-8 — RF-7, DT-11; VM-only)*
@@ -442,6 +479,29 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
   ```bash
   node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/lib.rs --min 80 --report-json tmp/cuda-pinned-host-mapping-cov.json
   ```
+- **Unix loader coverage:** `loader_unix.rs` is four thin `dlopen`/`dlsym`/`dlclose`/`dlerror`
+  wrappers plus `error()`. The unit tests exercise them against `libc.so.6`, which every Unix
+  host has, so the wrapper surface is covered without depending on an NVIDIA driver install.
+  Measured 100.0% lines (17/17).
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/loader_unix.rs --min 80 --report-json tmp/windows-swap-driver-loader-unix-cov.json
+  ```
+- **Windows loader platform E2E:** `loader_win.rs` is `#[cfg(windows)]` and has no LLVM
+  instrumented regions on a Linux coverage run, so it cannot carry a `rust-line-coverage`
+  owner. It is owned by the `windows-platform-e2e` entry
+  `windows-swap-driver-loader-win-platform-e2e`, which binds the named static contract
+  `loader_win_adapter_contract` in `scripts/windows/Test-AutonomousBrokerStatic.ps1` to the
+  named live drill `three_round_sha` in `scripts/windows/Run-GuestAutonomousLifecycle.ps1`.
+  The static half asserts the RF-4/DT-5 adapter contract on the source: only the Win32
+  `LoadLibraryW`/`GetProcAddress`/`FreeLibrary` triad with no POSIX `dlopen*` call, null-handle
+  refusal in `sym`/`close` before any API call, NUL-terminated UTF-16 module path, `error()`
+  formatting the Win32 code alone with no pointer or path, and `close` mapping the FreeLibrary
+  BOOL to the dlclose-style 0/-1 status. That static suite was executed on 2026-09-30 through
+  Windows PowerShell 5.1 and reported `PASS loader_win_adapter_contract` together with the four
+  granular `loader_win_*` checks. The live half reaches `loader_win` through
+  `cuda_probe` → `Cuda::load()` on Windows and is **not** executed in this campaign; it stays
+  covered by the open "Corrected Windows physical lifecycle qualification" gate until a
+  supervised Windows lab run records `three_round_sha`.
 - **Kahneman discipline:** #14 + #1 (ITEM-1 Map).
 
 ### `crates/ramshared-cuda/Cargo.toml`  *(ITEM-1 — RF-4, DT-16)*
@@ -495,6 +555,29 @@ Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC
 | --- | --- |
 | — | None. The local `VramBackend` definition in `wsl2d/backend.rs` is **replaced** by re-export (ITEM-2); it is not a file to delete. Additive Day-0. |
 
+<!-- rust-slice-platform-e2e-v1
+{
+  "schema_version": 1,
+  "id": "windows-swap-driver-loader-win-platform-e2e",
+  "kind": "windows-platform-e2e",
+  "files": [
+    "crates/ramshared-cuda/src/loader_win.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-cuda/src/loader_win.rs",
+      "static": {
+        "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+        "test": "loader_win_adapter_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+        "test": "three_round_sha"
+      }
+    }
+  ]
+}
+-->
 ## Observability
 
 **Metrics / counters (service — ETW or perf counters):**
@@ -622,23 +705,39 @@ kernel-page drill with confirmed residency (DT-21).
 
 **Service + libraries (Rust userspace):**
 
-- [ ] Clean `cargo fmt --all -- --check`
-- [ ] Clean `cargo clippy --workspace --all-targets -- -D warnings` (new crates + bin stub)
-- [ ] Green `cargo test --workspace` (new pure tests + existing no regression; Windows bin = Linux stub, DT-16)
-- [ ] Green `cargo audit` + `cargo deny check` with `windows*`/`ntapi`/`toml`
+- [x] Clean `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] Clean `cargo clippy --workspace --all-targets -- -D warnings` (new crates + bin stub) (2026-10-01: `CARGO_BUILD_JOBS=1 cargo clippy --workspace --all-targets -- -D warnings` → exit 0, zero warnings.)
+- [x] Green `cargo test --workspace` (new pure tests + existing no regression; Windows bin = Linux stub, DT-16) (2026-10-01: `CARGO_BUILD_JOBS=1 cargo test --workspace` → 1785 passed, 0 failed, 26 ignored across 57 suites, exit 0.)
+- [x] Green `cargo audit` + `cargo deny check` with `windows*`/`ntapi`/`toml` (2026-10-01: `cargo audit` → 193 crate dependencies scanned, exit 0. `cargo deny check` → advisories ok, bans ok, licenses ok, sources ok, exit 0.)
 - [ ] **RNF-8:** PASS `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` + `qemu-broker-drill.sh` drills; **no `arbiter.rs` diff**
 - [ ] `#[ignore]` CUDA `nvcuda.dll` on RTX 2060 (ITEM-1) — plausible `mem_info`
 
 **Docs:**
 
-- [ ] Regenerated `docs/INDEX.md` (status `SPEC`); valid Kahneman-anchor links
-- [ ] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` updated in the same structural-slice commit
+- [x] Regenerated `docs/INDEX.md` (status `SPEC`); valid Kahneman-anchor links (2026-10-01: `node tools/generate-docs-index.mjs --check` → `✓ docs/INDEX.md is in sync.` Kahneman anchors resolve to `#disc-N` in `docs/methodology/kahneman-disciplines.md`.)
+- [x] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` updated in the same structural-slice commit
+      (2026-10-01: all four carry their required content on this branch, which is the unit the
+      `documentation.md` rule names ("same commit **or PR**"). Inventory: `DEGRADATION-MATRIX.md`
+      has the four required modes — WinDrive B2 service-dies-with-active-pagefile, Windows
+      Update/ImDisk regression, lease revocation with pagefile, and `NtCreatePagingFile`
+      guard-fail; `LIBRARIES.md` now names WDK + StorPort/SDV/InfVerif/Driver Verifier and the
+      real cargo dependency set (`windows-sys` 0.61, `windows-service` 0.8) plus the `nvcuda.dll`
+      loader — `ntapi` and the bare `windows` crate are absent from every `Cargo.toml` and are
+      explicitly not documented as dependencies; `ADR-0006-storport-virtual-miniport.md` records
+      the from-scratch StorPort decision and the RF-2 SPSC-ring protocol; `IMPL.md` is present at
+      `docs/specs/no-milestone/windows-swap-driver/IMPL.md`.)
 
 **Cognitive gates:**
 
-- [ ] Every critical ITEM points to `docs/methodology/kahneman-disciplines.md` (Map) with exact anchor
-- [ ] Every critical step records required question, minimum evidence, and abort trigger
-- [ ] No vague language at a critical point without observable criterion
+- [x] Every critical ITEM points to `docs/methodology/kahneman-disciplines.md` (Map) with exact anchor (2026-10-01: all 9 distinct `#disc-N` anchors in this SPEC resolve to `docs/methodology/kahneman-disciplines.md`: `#disc-1`, `#disc-2`, `#disc-3`, `#disc-5`, `#disc-6`, `#disc-9`, `#disc-11`, `#disc-13`, `#disc-14`.)
+- [x] Every critical step records required question, minimum evidence, and abort trigger (2026-10-01: the Kahneman map at the `Step / ITEM | Kahneman discipline | Link | Required question | Minimum evidence | Abort trigger` table has zero empty or `—` cells across every critical row.)
+- [x] No vague language at a critical point without observable criterion (2026-10-01: lexical scan of
+  the whole SPEC for `hopefully|ideally|robust|efficient|adequate|sufficient|reasonable|appropriate|
+  best effort|properly|correctly|TBD|TODO|FIXME|maybe|perhaps|etc.` returns zero hits at any critical
+  gate. The only hedged words are design-rationale prose (DT-7 "lands later" for a future P2 feature;
+  DT-21 "a gate, not hope" is itself the anti-vague rule). Every critical gate — ITEM-8/R7/DT-21,
+  the Kahneman map rows, and the named-test matrix — carries an observable criterion: `% Usage > 0`,
+  `≥3 executions`, `B1 vs B2`, `ABORTS AS INCONCLUSIVE`, or an exact test name.)
 - [ ] **R7 gate (ITEM-8):** kernel-page drill has run and `DEGRADATION-MATRIX` is updated
   **before** any load on the real host
 

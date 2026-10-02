@@ -32,7 +32,7 @@ crates/
 ├── ramshared-tier/        # 3-tier cascade state machine and priority ordering
 ├── ramshared-vram/        # Hardware-agnostic VRAM traits (VramProvider / VramMemory)
 ├── ramshared-cuda/        # Direct NVIDIA CUDA driver loader and DMA allocator
-├── ramshared-vulkan/      # Cross-vendor Vulkan allocator (AMD Radeon & Intel Arc)
+├── ramshared-vulkan/      # Vulkan VRAM provider; physical vendor qualification is separate
 ├── ramshared-uring/       # Linux io_uring asynchronous block engine
 ├── ramshared-block/       # Authoritative SSD origin persistence and NBD wire protocol
 ├── ramshared-integrity/   # SHA-256 block hashing and torn-read detection

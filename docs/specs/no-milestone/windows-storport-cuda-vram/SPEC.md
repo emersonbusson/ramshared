@@ -166,7 +166,25 @@ Evidence is executable tests + live lab campaigns (not “code exists”). Unche
   `PASS_VALID_QUEUE`, `REFUSE_FOREIGN_OWNER`, `REFUSE_RESERVED_REGISTER`, `REFUSE_BAD_RING`,
   `REFUSE_RING_INDEX_JUMP`, `REFUSE_RESERVED_CQE`, `REFUSE_UNKNOWN_IOCTL`,
   `COMPLETION_REENTRY_NO_SLOT_REUSE`, `RUNDOWN_UNMAP_AFTER_COPY` (#13).
+- Platform E2E ownership: the file is `#![cfg(windows)]` and has no LLVM instrumented
+  regions on a Linux coverage run, so it is owned by the `windows-platform-e2e` entry
+  `windows-storport-driver-adapter-platform-e2e`, which binds the named static contract
+  `windows_driver_mapped_queue_contract` in `scripts/windows/Test-ProductOnlineStatic.ps1`
+  to the named live drill `all_registered_depths_have_zero_disk_retries` in
+  `scripts/windows/Run-GuestAutonomousLifecycle.ps1`. The static half asserts the DT-4/DT-5/DT-6
+  adapter contract on the source: the Windows-gated unsafe-confined shape, the ABI-v1 IOCTL
+  codes derived from `FILE_DEVICE_MASS_STORAGE`/`METHOD_BUFFERED` with `ioctl_code(0..=4)`, one
+  pending `COMMIT_AND_FETCH` refused when one is already outstanding and cancelled/drained
+  through a single `OVERLAPPED` via `CancelIoEx`+`GetOverlappedResult`, ring-index publication
+  through `AtomicU32` `Acquire`/`Release`, `IoctlError` Display as pointer-free stable classes,
+  and every `WindowsMappedQueue` allocation exit path freeing its regions. That static suite was
+  executed on 2026-09-30 through Windows PowerShell 5.1 and reported
+  `PASS windows_driver_mapped_queue_contract`. The live half registers the mapped queue through
+  the product Online path and is **not** executed in this campaign; the refusal/Verifier drills
+  listed above and the live registration drill stay covered by the open "Corrected Windows
+  physical lifecycle qualification" gate until a supervised Windows lab run records them.
 - Cover target: N/A — E2E-only; Windows handle/MDL behavior requires WDK driver plus Verifier.
+  No Linux line percentage is claimed for this file.
 - Kahneman: ITEM-3 row.
 
 **`crates/ramshared-winsvc/src/evidence.rs`**
@@ -407,6 +425,29 @@ Tests: `./scripts/docs-check.sh`. Cover: N/A — docs.
 None. The lab backend remains an explicitly named VM instrument; its references are deleted only from
 the product binary and product installer.
 
+<!-- rust-slice-platform-e2e-v1
+{
+  "schema_version": 1,
+  "id": "windows-storport-driver-adapter-platform-e2e",
+  "kind": "windows-platform-e2e",
+  "files": [
+    "crates/ramshared-winsvc/src/windows_driver.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-winsvc/src/windows_driver.rs",
+      "static": {
+        "path": "scripts/windows/Test-ProductOnlineStatic.ps1",
+        "test": "windows_driver_mapped_queue_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+        "test": "all_registered_depths_have_zero_disk_retries"
+      }
+    }
+  ]
+}
+-->
 ## Observability
 
 | Signal | Where | Level / type |
@@ -466,6 +507,8 @@ the product binary and product installer.
 | `crates/ramshared-winsvc/src/host_safety.rs` | `crates/ramshared-winsvc/src/host_safety.rs` :: `pagefile_sources_are_unioned`; `either_pagefile_source_error_fails_closed`; `wildcard_or_ambiguous_pagefile_path_is_unsafe`; `lock_deadline_never_resumes_online`; `complete_campaign_verdict_requires_every_safety_term` | unit | #13/#16 | >=80% |
 | `crates/ramshared-block/src/vram_backend.rs` | `crates/ramshared-block/src/vram_backend.rs` :: `vram_backend_into_inner_allows_explicit_release_order` | unit | #16/#17 | >=80% |
 | `crates/ramshared-cuda/src/driver.rs` | `ramshared-winsvc probe-cuda` :: `probe_cuda_allocates_roundtrips_and_restores` | integration | #9/#16 | N/A — E2E-only; real `nvcuda.dll`/GPU |
+| `crates/ramshared-cuda/src/driver.rs` | `driver::tests::device_lookup_preserves_ordinal_and_driver_adapter_identity` | unit/identity | #13/#16 | ≥80% when selected by the exact Rust slice gate |
+| `crates/ramshared-cuda/src/driver.rs` | `driver::tests::cuda_error_display_keeps_each_error_context` | unit/diagnostic | #9/#13 | ≥80% when selected by the exact Rust slice gate |
 | `drivers/windows/ramshared/control.c`<br>`drivers/windows/ramshared/queue.c`<br>`drivers/windows/ramshared/virtdisk.c` | `scripts/windows/Invoke-WinDriveIoctlValidation.ps1` :: `PASS_VALID_QUEUE`; all named `REFUSE_*`; `COMPLETION_REENTRY_NO_SLOT_REUSE`; `RUNDOWN_UNMAP_AFTER_COPY`; `VPD_SERIAL_MATCH`; `STARTIO_READ_COPY_RACE` | WDK/Verifier (+ CA) | #5/#13 | N/A — WDK/Verifier; **SDV N/A — DT-30** |
 | `crates/ramshared-winsvc/src/windows_host.rs` | `crates/ramshared-winsvc/src/windows_host.rs` :: `pagefile_query_matches_canonical_volume`; `pagefile_query_error_is_unsafe`; `exclusive_volume_lock_closes_pagefile_race`; `lun_identity_requires_vendor_product_serial_and_size`; `powershell_dynamic_values_use_environment_only` | integration/static | #13/#16 | N/A — Windows process boundary; static source test on Linux |
 | `crates/ramshared-winsvc/src/main.rs` | `scripts/windows/Install-RamSharedService.ps1` :: `PRODUCT_IMAGEPATH_MATCH`; `NO_LAB_SCRIPT_REFERENCE` | drill/E2E | #13/#18 | N/A — E2E-only; SCM |
@@ -485,14 +528,19 @@ This SPEC is the single pure-line owner for the shared storage-product
 storport-specific modules. Later product SPECs may require extra named tests on
 those shared sources as evidence without creating a second coverage owner.
 
-- [x] `cargo fmt --all -- --check`
-- [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
-- [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
+- [x] `cargo fmt --all -- --check` (2026-09-30: clean for `ramshared-winsvc`)
+- [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings` (2026-09-30: clean for `ramshared-winsvc`)
+- [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc` (2026-09-30: `ramshared-winsvc` **216 passed / 0 failed**)
 - [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
 - [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
-  (also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
-- [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
+  (2026-09-30: all seven slices ≥85.8% — gate **PASSED**; also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
+- [x] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.
+  (2026-10-01: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files
+  crates/ramshared-cuda/src/driver.rs --min 80 --report-json tmp/cuda-driver-cov.json` →
+  **88.8% (617/695 lines), gate PASSED**. No planning-logic change to `driver.rs` is pending on
+  this branch; the measurement is recorded so the standing gate is green before any future edit.
+  Hardware-only lines stay live-E2E evidence and are not claimed here.)
 - [x] WDK Release x64 build with `/W4 /WX /wd4324 /Z7` (canonical `Build-Drivers.ps1`; UNC `/Zi`
   C1041 fixed). Evidence: `evidence/wdk-build-audit-20260716T171026Z.md`.
 - [x] `InfVerif.exe /w drivers/windows/ramshared/ramshared.inf` — WDK 10.0.26100.0 exit 0 after

@@ -11,6 +11,7 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/monitor.rs",
           "scripts/docs-check.sh",
           "tools/ci/check-benchmark-evidence.mjs",
           "tools/ci/check-spec-evidence.mjs"
@@ -261,6 +262,7 @@
       "documented_surface": {
         "implementation_paths": [
           "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-vulkan/src/lib.rs",
           "scripts/docs-check.sh",
           "scripts/package/build-linux-bundle.sh",
           "scripts/windows/Test-WindowsCiStatic.ps1",
@@ -382,11 +384,19 @@
       },
       "documented_surface": {
         "implementation_paths": [
-          "crates/ramshared-cuda/Cargo.toml",
-          "crates/ramshared-cuda/src/lib.rs",
-          "crates/ramshared-vram/src/lib.rs"
+          "crates/ramshared-block/src/compressed_cache.rs",
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-vram/src/codec.rs",
+          "crates/ramshared-vram/src/worker_telemetry.rs",
+          "tools/ci/check-rust-slice-coverage.mjs"
         ],
-        "test_paths": []
+        "test_paths": [
+          "crates/ramshared-block/tests/cpu_codec_control_arm.rs",
+          "crates/ramshared-block/tests/gpu_cache_compression.rs"
+        ]
       },
       "documents": {
         "implementation": "docs/specs/no-milestone/cuda-rust-native-tiering/IMPL.md",
@@ -561,6 +571,45 @@
         "registry_state": null
       },
       "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/origin_cache.rs",
+          "crates/ramshared-block/src/sparse_vram.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-vram/src/lib.rs",
+          "crates/ramshared-vram/src/reserve_policy.rs",
+          "crates/ramshared-wsl2d/src/gpu_budget.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/p0/bench.sh",
+          "scripts/p0/measure-gpu-reserve-floor.sh",
+          "scripts/safety/preflight.sh",
+          "scripts/safety/test-preflight-reserve-floor.sh",
+          "tools/ci/check-rust-slice-coverage.mjs"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/gpu-reserve-floor-authority/IMPL.md",
+        "prd": "docs/specs/no-milestone/gpu-reserve-floor-authority/PRD.md",
+        "spec": "docs/specs/no-milestone/gpu-reserve-floor-authority/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "gpu-reserve-floor-authority"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
         "implementation_paths": [],
         "test_paths": []
       },
@@ -663,6 +712,7 @@
       "documented_surface": {
         "implementation_paths": [
           "crates/ramshared-agent/src/bin/ramshared_host_agent.rs",
+          "crates/ramshared-agent/src/lib.rs",
           "crates/ramshared-agent/src/local.rs",
           "crates/ramshared-agent/src/main.rs",
           "crates/ramshared-agent/src/win_mem.rs",
@@ -739,6 +789,49 @@
     },
     {
       "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-ipc/Cargo.toml",
+          "crates/ramshared-ipc/README.md",
+          "crates/ramshared-ipc/src/lib.rs",
+          "crates/ramshared-ipc/src/vsock.rs",
+          "crates/ramshared-winbroker/src/pipe.rs",
+          "crates/ramshared-winsvc/src/broker_tenant.rs",
+          "crates/ramshared-winsvc/src/config.rs",
+          "crates/ramshared-winsvc/src/control_plane.rs",
+          "crates/ramshared-winsvc/src/ipc.rs",
+          "crates/ramshared-winsvc/src/product_online.rs",
+          "crates/ramshared-winsvc/src/proto.rs",
+          "crates/ramshared-wsl2d/src/host_gate.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh",
+          "scripts/package/build-deb-package.sh",
+          "scripts/safety/ramshared-host-gate.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1",
+          "scripts/windows/Watch-RamSharedWsl.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/IMPL.md",
+        "prd": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/PRD.md",
+        "spec": "docs/specs/no-milestone/native-vsock-host-guest-control-plane/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "native-vsock-host-guest-control-plane"
+    },
+    {
+      "claim_reconciliation": {
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",
@@ -751,9 +844,11 @@
           "crates/ramshared-winsvc/src/config.rs",
           "crates/ramshared-winsvc/src/evidence.rs",
           "crates/ramshared-winsvc/src/runtime.rs",
-          "crates/ramshared-wsl2d/src/main.rs",
           "scripts/docs-check.sh",
+          "scripts/install.sh",
           "scripts/p0/measure-cascade-demote.sh",
+          "scripts/safety/install-cascade-boot.sh",
+          "scripts/safety/nbd-product-preflight.sh",
           "scripts/windows/Build-Drivers.ps1",
           "scripts/windows/Install-InfAndBackend.ps1",
           "scripts/windows/Install-WinDriveVm.ps1",
@@ -833,6 +928,81 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/origin_cache.rs",
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-cli/src/resource_config.rs",
+          "crates/ramshared-cli/src/resource_config/linux.rs",
+          "crates/ramshared-config/src/lib.rs",
+          "crates/ramshared-config/src/resource_profile.rs",
+          "crates/ramshared-wsl2d/src/gpu_budget.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh",
+          "scripts/linux/ramshared-resource-config-helper",
+          "scripts/linux/test-resource-config-helper.sh",
+          "scripts/safety/wslconfig-lib.sh",
+          "scripts/windows/Manage-RamSharedOrigin.ps1"
+        ],
+        "test_paths": [
+          "crates/ramshared-cli/tests/cli_dispatch.rs",
+          "crates/ramshared-config/tests/resource_profile.rs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/resource-configuration-center/IMPL.md",
+        "prd": "docs/specs/no-milestone/resource-configuration-center/PRD.md",
+        "spec": "docs/specs/no-milestone/resource-configuration-center/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "resource-configuration-center"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/IMPL.md",
+        "prd": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/PRD.md",
+        "spec": "docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "vmbus-ring-buffer-upstream-v2"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-cuda/src/nvml.rs",
+          "crates/ramshared-cuda/src/vram_impl.rs",
+          "crates/ramshared-vram/src/lib.rs",
+          "crates/ramshared-wsl2d/src/gpu_budget.rs",
           "crates/ramshared-wsl2d/src/main.rs"
         ],
         "test_paths": []
@@ -978,6 +1148,7 @@
           "scripts/windows/Invoke-WinDriveIoctlValidation.ps1",
           "scripts/windows/Measure-RamSharedDiskIo.ps1",
           "scripts/windows/README.md",
+          "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
           "scripts/windows/Run-GuestExhaustive.ps1",
           "scripts/windows/Run-GuestProductOnline.ps1",
           "scripts/windows/Run-HostExhaustive.ps1",
@@ -989,6 +1160,7 @@
           "scripts/windows/Test-GuestProductOnlineStatic.ps1",
           "scripts/windows/Test-HostExhaustiveStatic.ps1",
           "scripts/windows/Test-PagefileRefusalManufacturedStatic.ps1",
+          "scripts/windows/Test-ProductOnlineStatic.ps1",
           "scripts/windows/Test-WinDrivePreflightStatic.ps1",
           "scripts/windows/Test-WinPagingFilesConcreteStatic.ps1",
           "scripts/windows/WinDriveBackend.cs"
@@ -1023,10 +1195,15 @@
           "crates/ramshared-broker/src/model.rs",
           "crates/ramshared-cuda/Cargo.toml",
           "crates/ramshared-cuda/src/ffi.rs",
+          "crates/ramshared-cuda/src/loader_win.rs",
+          "crates/ramshared-winsvc/src/driver_link.rs",
+          "crates/ramshared-winsvc/src/ntpagefile.rs",
           "crates/ramshared-winsvc/src/proto.rs",
           "crates/ramshared-wsl2d/src/backend.rs",
           "crates/ramshared-wsl2d/src/broker_srv.rs",
-          "scripts/windows/Build-Drivers.ps1"
+          "scripts/windows/Build-Drivers.ps1",
+          "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+          "scripts/windows/Test-AutonomousBrokerStatic.ps1"
         ],
         "test_paths": []
       },
@@ -1115,15 +1292,57 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
           "crates/ramshared-cli/src/main.rs",
-          "scripts/safety/cascade-preflight.sh",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-autonomous-cascade-up/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-autonomous-cascade-up"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/boot.rs",
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-cli/src/cascade/lifecycle.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-tier/src/nbd_readiness.rs",
+          "crates/ramshared-wsl2d/src/host_gate.rs",
+          "scripts/docs-check.sh",
+          "scripts/safety/cascade-controller.sh",
           "scripts/safety/cascade-up.sh",
           "scripts/safety/cascade.conf.example",
           "scripts/safety/install-cascade-boot.sh",
+          "scripts/safety/nbd-product-preflight.sh",
+          "scripts/safety/preflight.sh",
           "scripts/safety/systemd/ramshared-cascade.service",
+          "scripts/safety/test-control-plane-units.sh",
+          "scripts/safety/test-nbd-product-preflight.sh",
           "scripts/safety/uninstall-cascade-boot.sh"
         ],
-        "test_paths": []
+        "test_paths": [
+          "crates/ramshared-cli/tests/cli_dispatch.rs"
+        ]
       },
       "documents": {
         "implementation": "docs/specs/no-milestone/wsl2-cascade-boot/IMPL.md",
@@ -1200,8 +1419,10 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/inflight.rs",
           "crates/ramshared-wsl2d/src/conn.rs",
-          "crates/ramshared-wsl2d/src/main.rs"
+          "crates/ramshared-wsl2d/src/main.rs",
+          "crates/ramshared-wsl2d/src/state.rs"
         ],
         "test_paths": []
       },
@@ -1326,14 +1547,25 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/stress.rs",
+          "crates/ramshared-cli/src/supervisor.rs",
           "scripts/safety/Test-CascadePressureIntegrityWorker.sh",
+          "scripts/safety/Test-Wsl2FreezeCampaignStatic.sh",
+          "scripts/safety/cascade-pressure-probe.sh",
           "scripts/safety/cascade_pressure_integrity_worker.py",
+          "scripts/safety/guest-pressure-runtime-guard.sh",
+          "scripts/safety/ramshared-guest-memory-admission.sh",
+          "scripts/safety/test-cascade-pressure-probe-static.sh",
+          "scripts/safety/test-guest-pressure-runtime-guard.sh",
+          "scripts/safety/test-ramshared-guest-memory-admission.sh",
           "scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh",
           "scripts/safety/validate-wsl2-freeze-campaign-artifact.sh",
           "scripts/safety/wsl2-freeze-campaign.sh",
+          "scripts/windows/Invoke-RamSharedThreeTierStress.ps1",
           "scripts/windows/Invoke-SharedWslPressureCampaign.ps1",
           "scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1",
           "scripts/windows/SharedWslHostMemoryGate.psm1",
+          "scripts/windows/Test-RamSharedThreeTierStressStatic.ps1",
           "scripts/windows/Test-SharedWslPressureCampaignMemoryGate.ps1",
           "scripts/windows/Test-SharedWslPressureCampaignStatic.ps1",
           "scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1"
@@ -1352,6 +1584,40 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "wsl2-freeze-elimination-campaign"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-block/src/isolated_origin.rs",
+          "crates/ramshared-block/src/lib.rs",
+          "crates/ramshared-dxg/src/lib.rs",
+          "crates/ramshared-vulkan/src/lib.rs",
+          "crates/ramshared-wsl2d/src/gpu_budget.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/docs-check.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-isolated-gpu-cache-worker/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-isolated-gpu-cache-worker"
     },
     {
       "claim_reconciliation": {
@@ -1636,7 +1902,19 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-block/src/gpu_cache_worker.rs",
+          "crates/ramshared-block/src/ipc_cache_client.rs",
+          "crates/ramshared-cli/src/cascade/lifecycle.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-cli/src/monitor.rs",
           "crates/ramshared-cli/src/stress.rs",
+          "crates/ramshared-cuda/src/driver.rs",
+          "crates/ramshared-cuda/src/vram_impl.rs",
+          "crates/ramshared-dxg/src/lib.rs",
+          "crates/ramshared-vram/src/lib.rs",
+          "crates/ramshared-vulkan/src/lib.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
           "scripts/docs-check.sh"
         ],
         "test_paths": []

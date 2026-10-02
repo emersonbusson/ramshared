@@ -177,7 +177,7 @@ None.
 - [x] Local static test RED exists before production code.
 - [x] Local static test is GREEN after production code.
 - [x] `git diff --check` passes.
-- [ ] `./scripts/docs-check.sh` passes.
+- [x] `./scripts/docs-check.sh` passes (2026-10-01: `✓ docs-check OK`, all gates green.)
 - [ ] Target-tree checkpatch/sparse/kselftest passes (environment-bound).
 - [ ] Isolated PCI device accepted/refusal drill passes (environment-bound).
-- [ ] No live WSL2 pressure action is run for this slice.
+- [x] No live WSL2 pressure action is run for this slice (2026-10-01: static/code slice only; zero pressure commands executed.)

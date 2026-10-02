@@ -147,7 +147,7 @@ termination action ran during the subsequent correction slice.
   GREEN.
 - Format/lint: `cargo fmt --all -- --check` → pass; `cargo clippy -p
   ramshared-cli -p ramshared-tier --all-targets -- -D warnings` → pass.
-- Cover: `crates/ramshared-tier/src/nbd_readiness.rs` → 83.9% (251/299);
+- Cover: `crates/ramshared-tier/src/nbd_readiness.rs` → 99.4% (168/169);
   `crates/ramshared-cli/src/cascade/cascade_io.rs` → 85.6% (1259/1471), both
   above the 80% per-file gate. The report JSON is local-only under `tmp/`.
 - Generated/docs hygiene: capability-observation `--check`, `./scripts/docs-check.sh`,

@@ -16,6 +16,8 @@
 #       evidence campaign)
 #   - Action uses cgroup-bounded cascade-pressure-probe
 #     (not full-VM thrash) with a hard watchdog.
+#   - The probe admission marker is passed only after the selected lab/shared
+#     host gates succeed; direct probe invocation refuses by default.
 #
 # Promotion claim for "WSL2 freeze elimination" requires:
 #   2× before → action → after, watchdog/timeout, swapoff-first, ghost check,
@@ -359,13 +361,13 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
       set +e
       action_pid=""
       if [[ "$(id -u)" -eq 0 ]]; then
-        bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+        RAMSHARED_PRESSURE_PROBE_ADMITTED=1 bash "$pressure" --max-sec "$WATCHDOG_SEC" \
           --alloc-gib "$PRESSURE_ALLOC_GIB" \
           --mem-max "$PRESSURE_MEM_MAX" \
           --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       elif sudo -n true 2>/dev/null; then
-        sudo -n bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+        sudo -n env RAMSHARED_PRESSURE_PROBE_ADMITTED=1 bash "$pressure" --max-sec "$WATCHDOG_SEC" \
           --alloc-gib "$PRESSURE_ALLOC_GIB" \
           --mem-max "$PRESSURE_MEM_MAX" \
           --integrity-result "$rdir/integrity-result.json" &

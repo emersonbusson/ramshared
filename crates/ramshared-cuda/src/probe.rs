@@ -179,4 +179,47 @@ mod tests {
         ));
         assert!(validate_hardware_specs(8, 9, 1024).is_ok());
     }
+
+    #[test]
+    fn plan_offsets_refuses_unaligned_size() {
+        assert!(matches!(
+            plan_probe_offsets(64 * 1024 * 1024 + 1),
+            Err(ProbePlanError::Unaligned { .. })
+        ));
+    }
+
+    #[test]
+    fn probe_plan_error_display_names_every_variant() {
+        // Each variant's exact Display text is operator-facing diagnostic
+        // surface; a silent change would hide the refusal reason.
+        let cases = [
+            (
+                ProbePlanError::TooSmall { size: 4096 },
+                "probe size 4096 too small for three 4 KiB patterns",
+            ),
+            (
+                ProbePlanError::Unaligned { size: 4097 },
+                "probe size 4097 not 4 KiB aligned",
+            ),
+            (
+                ProbePlanError::NonDistinct {
+                    size: 12288,
+                    mid: 0,
+                    last: 8192,
+                },
+                "probe offsets not distinct size=12288 mid=0 last=8192",
+            ),
+            (
+                ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 },
+                "invalid compute capability major=0 minor=0",
+            ),
+            (
+                ProbePlanError::InvalidTotalMemory { size: 0 },
+                "invalid total memory size 0",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 }

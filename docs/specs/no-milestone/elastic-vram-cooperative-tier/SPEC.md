@@ -187,18 +187,19 @@
 | `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_spillover_on_dma_timeout` | unit | #15 | $\ge 80\%$ |
 | `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_eviction_worker_flushes_cold_chunks_under_deadline` | unit | #16 | $\ge 80\%$ |
 | `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_sparse_extent_idempotent_read_write` | unit | #17 | $\ge 80\%$ |
+| `crates/ramshared-block/src/elastic_cache.rs` | `elastic_cache::tests::test_elastic_recovery_promotes_on_green_settle` | unit | #13 | $\ge 80\%$ |
 
 ---
 
 ## 12. Validation Checklist
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test -p ramshared-block -p ramshared-wsl2d`
-- [ ] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80 --report-json tmp/elastic-vram-cooperative-tier-cov.json`
-- [ ] `./scripts/docs-check.sh`
-- [ ] Every matrix row has a real test name
-- [ ] Kahneman critical rows have executable evidence
+- [x] `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` (2026-10-01: exit 0, zero warnings.)
+- [x] `cargo test -p ramshared-block -p ramshared-wsl2d` (2026-10-01: 350 passed, 0 failed, 19 hardware-gated ignored.)
+- [x] Cover gate: `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-wsl2d --files crates/ramshared-block/src/elastic_cache.rs,crates/ramshared-wsl2d/src/governor.rs --min 80 --report-json tmp/elastic-vram-cooperative-tier-cov.json` (2026-10-01: elastic_cache.rs 89.7% 442/493, governor.rs 93.8% 45/48 — PASSED.)
+- [x] `./scripts/docs-check.sh` (2026-10-01: `✓ docs-check OK`.)
+- [x] Every matrix row has a real test name (2026-10-01: 7 rows, all named tests present and green.)
+- [x] Kahneman critical rows have executable evidence (2026-10-01: #13/#15/#16/#17 each map to a named unit test above.)
 
 <!-- rust-slice-structural-contract-v1
 {

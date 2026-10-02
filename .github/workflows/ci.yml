@@ -40,6 +40,40 @@ jobs:
       - name: Tests (ignored cases require GPU/root)
         run: cargo test --workspace -- --test-threads=1
 
+  guest-pressure-safety:
+    name: guest pressure safety guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Shell syntax
+        run: |
+          set -euo pipefail
+          for script in \
+            scripts/safety/cascade-pressure-probe.sh \
+            scripts/safety/guest-pressure-runtime-guard.sh \
+            scripts/safety/test-cascade-pressure-probe-static.sh \
+            scripts/safety/test-guest-pressure-runtime-guard.sh \
+            scripts/safety/ramshared-guest-memory-admission.sh \
+            scripts/safety/test-ramshared-guest-memory-admission.sh \
+            scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh \
+            scripts/safety/wsl2-freeze-campaign.sh \
+            scripts/safety/Test-Wsl2FreezeCampaignStatic.sh; do
+            bash -n "$script"
+          done
+
+      - name: Guest memory and pressure fixtures
+        run: |
+          set -euo pipefail
+          bash scripts/safety/test-guest-pressure-runtime-guard.sh
+          bash scripts/safety/test-cascade-pressure-probe-static.sh
+          bash scripts/safety/test-ramshared-guest-memory-admission.sh
+          bash scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh
+          bash scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
+
   docs:
     name: docs index + links
     runs-on: ubuntu-latest
@@ -145,7 +179,7 @@ jobs:
   ci-summary:
     name: ci-summary
     if: always()
-    needs: [rust, docs]
+    needs: [rust, docs, guest-pressure-safety]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -155,9 +189,10 @@ jobs:
         env:
           RUST_RESULT: ${{ needs.rust.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
+          GUEST_PRESSURE_RESULT: ${{ needs.guest-pressure-safety.result }}
         run: |
           set -euo pipefail
-          for result in "$RUST_RESULT" "$DOCS_RESULT"; do
+          for result in "$RUST_RESULT" "$DOCS_RESULT" "$GUEST_PRESSURE_RESULT"; do
             if [ "$result" != success ]; then
               echo "CI_CORE_SUMMARY=FAIL"
               exit 1

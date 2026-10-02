@@ -21,12 +21,24 @@
 # (--cgroupns=host is mandatory: without it, writing to cgroup.procs returns ENOENT)
 # optional environment:
 #   HOG_MB=2200 CAP_MB=512 MIN_NBD_MIB=150 RESTORE=1 RAW=/tmp/cascade-demote.txt
+#   FILL_TIMEOUT_S=600   # wall clock for the hog fill under the cgroup cap
 set -u
 
 HOG_BIN="${HOG_BIN:-}"
 if [ -z "$HOG_BIN" ]; then
   if [ -x ./target/release/cascade-hog ]; then HOG_BIN=./target/release/cascade-hog
   elif command -v cascade-hog >/dev/null 2>&1; then HOG_BIN=$(command -v cascade-hog)
+  elif [ -f ./scripts/p0/cascade_hog.c ]; then
+    # Day-0: the hog source ships with the harness, so the drill never depends
+    # on an external prebuilt binary. Builds only when no binary is present.
+    mkdir -p ./target/release
+    echo "[demote] building ./target/release/cascade-hog from scripts/p0/cascade_hog.c"
+    if command -v cc >/dev/null 2>&1; then
+      if cc -O2 -Wall -Wextra -Werror -std=gnu11 \
+        -o ./target/release/cascade-hog ./scripts/p0/cascade_hog.c; then
+        HOG_BIN=./target/release/cascade-hog
+      fi
+    fi
   fi
 fi
 RAW="${RAW:-${TMPDIR:-/tmp}/ramshared-cascade-demote-$(date +%Y%m%d-%H%M%S).txt}"
@@ -176,13 +188,15 @@ if [ -r "$CG/cgroup.procs" ]; then
   log "cgroup.procs=$(tr '\n' ' ' <"$CG/cgroup.procs")"
 fi
 
-# waits for fill
-for _ in $(seq 1 180); do
+# waits for fill. Under a tight cgroup cap the fill is reclaimed page by page,
+# so the wall clock is a function of HOG_MB, not a fixed 90 s.
+FILL_TIMEOUT_S="${FILL_TIMEOUT_S:-600}"
+for _ in $(seq 1 $((FILL_TIMEOUT_S * 2))); do
   [ -f /tmp/cv-filled ] && break
   kill -0 "$HOG_PID" 2>/dev/null || { log "hog exited before fill"; wait "$HOG_PID"; exit 1; }
   sleep 0.5
 done
-[ -f /tmp/cv-filled ] || { log "timeout waiting for hog fill"; exit 1; }
+[ -f /tmp/cv-filled ] || { log "timeout waiting for hog fill after ${FILL_TIMEOUT_S}s"; exit 1; }
 
 # waits for spill to NBD
 for _ in $(seq 1 90); do

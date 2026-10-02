@@ -10,6 +10,7 @@ UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
 HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service
 WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice
 CURRENT_SELECTOR="$PRODUCT_ROOT/current"
+APPROVAL_DIR=/var/lib/ramshared/approvals
 APPROVED_VERSION=
 LEGACY_UNIT_APPROVED_HASH=
 LOWER_SINK=
@@ -184,10 +185,12 @@ record_installed_provenance() {
 import json
 import os
 import sys
+from datetime import datetime, timezone
 
 out, input_digest, commit, branch, tree_state, sink, identity, fs_block, available = sys.argv[1:]
 record = {
-    "schema_version": "ramshared-installed-release-provenance/v1",
+    "schema_version": "ramshared-installed-release-provenance/v2",
+    "installed_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "input_bundle_manifest_sha256": input_digest,
     "source_commit": commit,
     "source_branch": branch,
@@ -244,7 +247,19 @@ try:
         "schema_version", "input_bundle_manifest_sha256", "source_commit",
         "source_branch", "source_tree_state", "lower_sink",
     }
-    if set(record) != expected or record["schema_version"] != "ramshared-installed-release-provenance/v1":
+    schema = record.get("schema_version")
+    if schema == "ramshared-installed-release-provenance/v1":
+        if set(record) != expected:
+            raise ValueError("schema")
+    elif schema == "ramshared-installed-release-provenance/v2":
+        if set(record) != expected | {"installed_at_utc"}:
+            raise ValueError("schema")
+        installed_at = record["installed_at_utc"]
+        if not isinstance(installed_at, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", installed_at
+        ):
+            raise ValueError("installed_at_utc")
+    else:
         raise ValueError("schema")
     lower = record["lower_sink"]
     lower_expected = {
@@ -921,6 +936,17 @@ systemctl daemon-reload
 SYSTEMD_RELOAD_COMPLETED=1
 # NBD_INSTALL_POST_WRITE_PHASE=daemon-reloaded
 cleanup_replaced_auxiliary_unit_backups
+
+# RF-9 / DT-4: write the version-scoped approval token for the release just
+# installed. Remove any token for a different version so a stale approval
+# cannot authorize the wrong binary.
+mkdir -p -- "$APPROVAL_DIR"
+chmod 0755 -- "$APPROVAL_DIR"
+for stale in "$APPROVAL_DIR"/activate-*.token; do
+  [[ -e $stale ]] && [[ $stale != "$APPROVAL_DIR/activate-$RELEASE_VERSION.token" ]] && rm -f -- "$stale"
+done
+printf 'activate:%s\n' "$RELEASE_VERSION" >"$APPROVAL_DIR/activate-$RELEASE_VERSION.token"
+chmod 0400 "$APPROVAL_DIR/activate-$RELEASE_VERSION.token"
 
 trap - EXIT
 printf 'NBD_INSTALL_STATE=INSTALLED\n'

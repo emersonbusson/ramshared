@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 ramshared-vram = { path = "../ramshared-vram" }
+serde_json = "1"
 
 [lints.clippy]
 unwrap_used = "deny"

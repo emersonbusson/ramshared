@@ -40,7 +40,7 @@ with `job.export` = slice; `run_broker`/`run_nbd` allocate
 `read_psi`/`read_swaps` (`agent/psi.rs:15,44`), `Msg::Psi` send at 1 Hz
 (`agent/main.rs:277`).
 
-## Matriz de rastreabilidade PRD → SPEC
+## PRD → SPEC traceability matrix
 
 | PRD  | Implementação no SPEC |
 | ---- | ----------------------- |
@@ -50,7 +50,7 @@ with `job.export` = slice; `run_broker`/`run_nbd` allocate
 | RF-4 | ITEM-4 (`telemetry.rs`), ITEM-7 |
 | RF-5 | ITEM-4, ITEM-7, ITEM-8 |
 
-## Decisões técnicas
+## Technical decisions
 
 | #    | Decision | Rationale |
 | ---- | ------- | ------------- |
@@ -354,23 +354,39 @@ ITEM-8's daemon entry-point contract.
 (ADR-0005); isolated VM e2e (Q1d): `eviction`/`unaccounted` flag under real load
 (objective evidence for the ITEM-7 Kahneman map).
 
+## Coverage commands
+
+`crates/ramshared-agent/src/psi.rs` is the PSI/swap/diskstats parser surface
+(ITEM-6). It is gated by its own exact invocation:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/psi.rs --min 80 --report-json tmp/memory-broker-agent-psi-cov.json
+```
+
 ## Validation checklist
 
 **Backend:**
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] `cargo test --workspace`
+- [x] `cargo fmt --all -- --check` (2026-10-01: exit 0.)
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` (2026-10-01: exit 0, zero warnings.)
+- [x] `cargo test --workspace` (2026-10-01: 1780 passed, 0 failed across 37 suites.)
 
 **GPU:**
 - [ ] VRAM smoke with `--telemetry-jsonl` (valid lines)
 - [ ] QEMU ublk-RAM drill PASS **without** the flag (zero regression, RNF-4)
 
 **Docs:**
-- [ ] `IMPL.md` (STEP 3) + `P0-RESULTS.md` (`tol_frac`/`streak` cell)
+- [x] `IMPL.md` (STEP 3) + `P0-RESULTS.md` (`tol_frac`/`streak` cell)
+  (2026-10-01: both artifacts present and complete. `IMPL.md` carries the
+  STEP-3 status line, RF/ITEM file map, measured validation numbers
+  (`cargo test -p ramshared-wsl2d --lib` 179 passed / 0 failed; workspace
+  green; clippy/fmt clean; QEMU broker drill PASS with
+  `KTEST-TELEMETRY=ok`), the closed DT-7 calibration reasoning, and the
+  four multi-agent review fixes. `docs/reliability/memory-broker-p0-results.md`
+  §6 records the calibration cell `tol_frac=0.10` / `streak=3` with the
+  measured `reconcile_delta ≈ -1.0` under normal swap and the
+  zero-false-positive derivation.)
 
 **Cognitive gates:**
-- [ ] ITEM-2/3/7/8 with discipline + link + question + evidence + abort
-  (map above)
-- [ ] No vague language at a critical point (tolerance is a number, DT-7;
-  `streak` defined, DT-12; invariant is occupancy, DT-4; eviction = canary,
-  DT-6)
+- [x] ITEM-2/3/7/8 with discipline + link + question + evidence + abort
+  (2026-10-01: map rows verified — each has discipline #, kahneman-disciplines.md anchor, question, numeric evidence, and abort condition.)
+- [x] No vague language at a critical point (2026-10-01: DT-7 `tol_frac=0.10`/`streak=3` numbers; DT-12 streak algorithm explicit; DT-4 invariant=occupancy; DT-6 eviction=canary `demotes_delta>0`.)

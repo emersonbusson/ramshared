@@ -16,8 +16,6 @@ The source of truth for architecture and coding rules is:
 - [`.claude/rules/coding.md`](.claude/rules/coding.md)
 - [`.claude/rules/governance.md`](.claude/rules/governance.md)
 - [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md)
-- Agent orchestration and dispatch: [`.claude/rules/agent-orchestration.md`](.claude/rules/agent-orchestration.md).
-- Its rendered policy and canonical typed records are the machine-checked source.
 
 ### Before planning, editing, or opening a patch/PR
 
@@ -41,12 +39,19 @@ The source of truth for architecture and coding rules is:
 
 - `README.md` and `README.pt-BR.md` have a fixed scope ceiling. When a new benchmark qualification is added, superseded historical benchmarks must be pruned from the README and archived in `docs/benchmarks/history/`.
 - The public READMEs must never mention internal agent/bot names ("Jules", "Codex", "Aider") or intermediate bot PR batch censuses. All audit census records belong exclusively in `docs/reliability/`.
+- Tracked files and local session memory must not name external host-monitor tooling or preserve its operator-only telemetry and status output. The public-hygiene gate rejects the protected external label from candidate files and checks local session memory when present.
 - One-off dispatch scripts and ephemeral utilities must NEVER be committed to the production tree (enforced by CI via `.ci-ephemeral-blocklist` and `tools/ci/check-ephemeral-blocklist.mjs`). Use local scratch directories instead.
 
 ## Commits and patches
 
 Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.
 Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollback trigger: ...` in the body.
+
+**No authorship trailers.** Commit messages and PR descriptions never carry
+`Co-Authored-By`, `Generated-with`, `Assisted-by`, or any other attribution
+line — neither a harness-generated form nor a hand-written equivalent. Do not
+append one "to be safe"; leave the message clean. If a commit message is
+supplied with such a trailer, strip it before committing.
 PR descriptions must follow `.github/pull_request_template.md` strictly: canonical 4-column commits table (`| Commit | What was done | Why it was done | Details |`) with per-row `<details>` block (`**Arquivos:** ...<br>**Validacao:** ...<br>**Risco/rollback:** ...`). Every branch commit must be visible. Performance/hardware PRs must include the full 4-category hardware benchmark comparison table (1. Workload & Capacity, 2. Speed & Transfer Latency, 3. Pressure & Stalls, 4. Integrity & Stability), with mandatory Tier 3 (SSD) qualification metrics and `PASS_ZERO_PANIC` verdict (merges are strictly blocked by CI if missing). No internal methodology buzzwords or external links to raw JSON. PRs may be reviewed in PT-BR during draft/collaboration, but must transition to English before merge.
 
 ## Methodologies (SSDV3 and Kahneman)
@@ -76,5 +81,6 @@ PR descriptions must follow `.github/pull_request_template.md` strictly: canonic
 - No persisting secrets.
 - No undocumented dependencies.
 - **Reliability Gap Register & Release Parity**: Keep `docs/reliability/GAP-REGISTER.md`
-  semantically synchronized with active CI status and releases (`v0.14.0`). Phantom
+  semantically synchronized with active CI status and the `v0.15.0` source target;
+  distinguish that target from the latest published release until promotion. Phantom
   blockers (such as resolved Guard repairs) are strictly forbidden when CI gates pass.

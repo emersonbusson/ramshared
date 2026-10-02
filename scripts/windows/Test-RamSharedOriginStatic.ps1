@@ -13,7 +13,16 @@ $source = Get-Content -Raw -LiteralPath $target
 foreach ($required in @(
     'ValidateSet("plan", "install", "configure", "status", "uninstall", "attach", "test")',
     'Get-WslDistroStorageRoot',
+    'Do not infer distro storage from the independent WSL swap VHDX path.',
+    'Source = "c_default"',
+    '$volumes.Count -ne 1',
+    '[IO.DriveType]::Fixed',
+    '@("NTFS", "ReFS")',
+    'Assert-OriginPathFreeSpace -Path $OriginVhdx',
+    'Purpose "before explicit origin allocation"',
+    'source = "manufactured_test"',
     'Get-ConfiguredWslSwapVhdxPath',
+    'Test-SameWindowsPath',
     'OriginVhdxPath',
     'ExistingSwapVhdxPath',
     '25GB',
@@ -62,7 +71,7 @@ foreach ($required in @(
         throw "ramshared_origin: missing contract $required"
     }
 }
-foreach ($forbidden in @('Clear-Disk', 'Remove-Partition', 'Remove-Item -Recurse', 'Get-Disk |', '--shutdown', '--unmount')) {
+foreach ($forbidden in @('Clear-Disk', 'Remove-Partition', 'Remove-Item -Recurse', 'Get-Disk |', '--shutdown', '--unmount', 'configured_swap_volume', '$swapRoot')) {
     if ($source.Contains($forbidden)) {
         throw "ramshared_origin: forbidden storage action $forbidden"
     }
@@ -78,6 +87,28 @@ if ($installText -notmatch 'try\s*\{' -or $installText -notmatch 'finally\s*\{' 
     $installText -notmatch 'Dismount-VHD\s+-Path\s+\$transaction\.staging_vhdx') {
     throw "ramshared_origin: provisioned VHDX must be detached in an install finally block"
 }
+$preflightIndex = $installText.IndexOf('Purpose "before fixed origin allocation"')
+$transactionIndex = $installText.IndexOf('New-OriginInstallTransaction')
+$postAllocationIndex = $installText.IndexOf('Purpose "post-allocation origin reserve"')
+$proofIndex = $installText.IndexOf('Get-OriginVhdxOwnershipProof -VhdxPath $transaction.staging_vhdx')
+$promotionIndex = $installText.IndexOf('$transaction.origin_promoted = $true')
+$manifestIndex = $installText.IndexOf('Write-OriginManifest')
+if ($preflightIndex -lt 0 -or $transactionIndex -le $preflightIndex -or
+    $postAllocationIndex -lt 0 -or $proofIndex -le $postAllocationIndex -or
+    $promotionIndex -le $postAllocationIndex -or $manifestIndex -le $postAllocationIndex) {
+    throw "ramshared_origin: reserve checks must bracket staging allocation before proof, promotion, and manifest publication"
+}
+$resolutionStart = $source.IndexOf('$requestedOriginPath =')
+$testModeIndex = $source.IndexOf('if ($Action -eq "test") {', $resolutionStart)
+$manifestReadIndex = $source.IndexOf('$sealedOriginPath = Get-SealedOriginVhdxPath', $resolutionStart)
+$explicitReserveIndex = $source.IndexOf('Purpose "before explicit origin allocation"', $resolutionStart)
+$explicitSelectionIndex = $source.IndexOf('source = "explicit_path"', $resolutionStart)
+if ($resolutionStart -lt 0 -or $testModeIndex -le $resolutionStart -or
+    $manifestReadIndex -le $testModeIndex -or $explicitReserveIndex -lt 0 -or
+    $explicitSelectionIndex -le $explicitReserveIndex) {
+    throw "ramshared_origin: tests must bypass live host discovery and explicit plans must prove volume headroom"
+}
+Write-Output "PASS origin_test_mode_skips_live_host_discovery"
 foreach ($required in @(
     'New-OriginInstallTransaction',
     'Rollback-OriginInstallTransaction -Transaction $transaction',
@@ -141,7 +172,15 @@ foreach ($required in @(
     'PASS canonical_vhdx_guid_and_partuuid_are_accepted',
     'PASS malformed_or_foreign_origin_identity_is_refused'
     'PASS origin_uninstall_failure_restores_vhdx_and_manifest_authority'
-    'PASS origin_attach_decision_is_idempotent_and_fail_closed'
+    'PASS origin_attach_decision_is_idempotent_and_fail_closed',
+    'PASS origin_volume_prefers_distro_volume_with_reserve',
+    'PASS origin_volume_falls_back_to_c_when_preferred_lacks_reserve',
+    'PASS origin_single_volume_c_satisfies_default',
+    'PASS origin_volume_refuses_when_all_candidates_below_reserve',
+    'PASS origin_volume_rejects_removable_and_unsupported_filesystem',
+    'PASS origin_existing_manifest_path_survives_distro_volume_change',
+    'PASS origin_existing_manifest_override_mismatch_is_refused',
+    'PASS origin_install_rechecks_post_create_reserve_before_manifest'
 )) {
     if (-not ($manufactured -join "`n").Contains($required)) {
         throw "ramshared_origin: manufactured output missing $required"

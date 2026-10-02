@@ -18,11 +18,13 @@ mod bounded_process;
 mod cascade;
 mod diagnose;
 mod monitor;
+mod resource_config;
 mod stress;
 mod supervisor;
 mod workload;
 
 use monitor::MonitorOptions;
+use resource_config::ConfigMode;
 
 const PROBE_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const KERNEL_CONFIG_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
@@ -199,6 +201,7 @@ impl CheckReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CliCommand {
     Version,
+    BuildInfo,
     Run { args: Vec<String> },
     Session { args: Vec<String> },
     Supervise { args: Vec<String> },
@@ -207,9 +210,11 @@ enum CliCommand {
     Doctor { json: bool },
     Up { args: Vec<String> },
     MigrateLegacyCascade,
+    Boot,
     Down,
     Status { json: bool },
     Monitor { options: MonitorOptions },
+    Config { mode: ConfigMode },
     Diagnose { args: Vec<String> },
     Stress { args: Vec<String> },
     Help,
@@ -248,12 +253,82 @@ fn parse_json_option(command: &'static str, options: &[String]) -> Result<bool, 
     }
 }
 
+fn parse_config_mode(options: &[String]) -> Result<ConfigMode, CliParseError> {
+    match options {
+        [] => Ok(ConfigMode::Interactive),
+        [command] if command == "show" => Ok(ConfigMode::Show { json: false }),
+        [command, format] if command == "show" && format == "--json" => {
+            Ok(ConfigMode::Show { json: true })
+        }
+        [command, ..] if command == "plan" => parse_config_plan(&options[1..]),
+        [command, ..] if command == "draft" => parse_config_draft(&options[1..]),
+        _ => Err(CliParseError::InvalidOption {
+            command: "config",
+            options: options.to_vec(),
+        }),
+    }
+}
+
+fn parse_config_draft(options: &[String]) -> Result<ConfigMode, CliParseError> {
+    match options {
+        [flag, path] if flag == "--output" && !path.is_empty() && !path.starts_with("--") => {
+            Ok(ConfigMode::Draft {
+                output_path: path.clone(),
+            })
+        }
+        _ => Err(CliParseError::InvalidOption {
+            command: "config",
+            options: options.to_vec(),
+        }),
+    }
+}
+
+fn parse_config_plan(options: &[String]) -> Result<ConfigMode, CliParseError> {
+    let mut json = false;
+    let mut profile_path = None;
+    let mut index = 0;
+    while index < options.len() {
+        match options[index].as_str() {
+            "--json" if !json => json = true,
+            "--profile" if profile_path.is_none() && index + 1 < options.len() => {
+                index += 1;
+                let path = options[index].as_str();
+                if path.is_empty() || path.starts_with("--") {
+                    return Err(CliParseError::InvalidOption {
+                        command: "config",
+                        options: options.to_vec(),
+                    });
+                }
+                profile_path = Some(path.to_string());
+            }
+            _ => {
+                return Err(CliParseError::InvalidOption {
+                    command: "config",
+                    options: options.to_vec(),
+                });
+            }
+        }
+        index += 1;
+    }
+    Ok(ConfigMode::Plan { json, profile_path })
+}
+
 fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
     let Some((command, options)) = args.split_first() else {
         return Ok(CliCommand::Help);
     };
 
     match command.as_str() {
+        "--build-info" => {
+            if options.is_empty() {
+                Ok(CliCommand::BuildInfo)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "--build-info",
+                    options: options.to_vec(),
+                })
+            }
+        }
         "version" | "-V" | "--version" => {
             if options.is_empty() {
                 Ok(CliCommand::Version)
@@ -296,6 +371,9 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "doctor" => Ok(CliCommand::Doctor {
             json: parse_json_option("doctor", options)?,
         }),
+        "config" => Ok(CliCommand::Config {
+            mode: parse_config_mode(options)?,
+        }),
         "up" => Ok(CliCommand::Up {
             args: options.to_vec(),
         }),
@@ -305,6 +383,20 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
             } else {
                 Err(CliParseError::InvalidOption {
                     command: "migrate-cascade",
+                    options: options.to_vec(),
+                })
+            }
+        }
+        "boot" => {
+            // DT-1 / DT-7: `boot` is the single native bootstrap verb and takes
+            // no options. Unknown flags (including deploy-shaped ones) are
+            // refused by the parser before any gate runs; `parse_boot_invocation`
+            // is the in-depth backstop inside `boot` itself.
+            if options.is_empty() {
+                Ok(CliCommand::Boot)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "boot",
                     options: options.to_vec(),
                 })
             }
@@ -351,8 +443,15 @@ trait CliActionRunner {
         stdout: &mut dyn Write,
         stderr: &mut dyn Write,
     ) -> ExitCode;
+    fn boot(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn config(
+        &mut self,
+        mode: ConfigMode,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
     fn monitor(
         &mut self,
         options: &MonitorOptions,
@@ -433,6 +532,12 @@ impl CliActionRunner for SystemCliActions {
     }
 
     fn up(&mut self, args: &[String], _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        if should_auto_wrap_systemd_scope(
+            &|k| std::env::var(k),
+            Path::new("/run/systemd/system").exists(),
+        ) {
+            return dispatch_systemd_scope(args, stderr);
+        }
         to_exit(cascade::up_with_args(args), stderr)
     }
 
@@ -444,12 +549,41 @@ impl CliActionRunner for SystemCliActions {
         to_exit(cascade::migrate_legacy_cascade(), stderr)
     }
 
+    fn boot(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        let result: Result<cascade::BootConfig, cascade::BootError> = cascade::boot::boot();
+        match &result {
+            Ok(config) => {
+                let _ = writeln!(
+                    stdout,
+                    "[boot] cascade active (vram={}MiB zram={}MiB headroom={}MiB)",
+                    config.vram_mib, config.zram_mib, config.min_vram_headroom_mib
+                );
+            }
+            Err(error) => {
+                // NFR-6: the refusal reason is visible on the invoking surface
+                // (journal via `StandardOutput=journal`) and stable enough for
+                // `status` to surface later.
+                let _ = writeln!(stdout, "[boot] REFUSED: {error}");
+            }
+        }
+        to_exit(result.map(|_| ()), stderr)
+    }
+
     fn down(&mut self, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
         to_exit(cascade::down(), stderr)
     }
 
     fn status(&mut self, json: bool, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
         to_exit(cascade::status(json), stderr)
+    }
+
+    fn config(
+        &mut self,
+        mode: ConfigMode,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        resource_config::run(mode, stdout, stderr)
     }
 
     fn monitor(
@@ -560,9 +694,13 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Version) => {
             let _ = writeln!(
                 stdout,
-                "ramshared {} (Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)",
-                env!("CARGO_PKG_VERSION")
+                "{}\n(Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)",
+                monitor::version_status_lines()
             );
+            ExitCode::SUCCESS
+        }
+        Ok(CliCommand::BuildInfo) => {
+            let _ = writeln!(stdout, "{}", monitor::build_info_lines());
             ExitCode::SUCCESS
         }
         Ok(CliCommand::Run { args }) => actions.run_workload(&args, stdout, stderr),
@@ -573,8 +711,10 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
         Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
         Ok(CliCommand::MigrateLegacyCascade) => actions.migrate_legacy_cascade(stdout, stderr),
+        Ok(CliCommand::Boot) => actions.boot(stdout, stderr),
         Ok(CliCommand::Down) => actions.down(stdout, stderr),
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
+        Ok(CliCommand::Config { mode }) => actions.config(mode, stdout, stderr),
         Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
         Ok(CliCommand::Stress { args }) => actions.stress(&args, stdout, stderr),
@@ -600,6 +740,58 @@ fn to_exit<E: fmt::Display>(r: Result<(), E>, stderr: &mut dyn Write) -> ExitCod
     }
 }
 
+fn should_auto_wrap_systemd_scope<F>(env_lookup: &F, systemd_running: bool) -> bool
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
+    if !systemd_running {
+        return false;
+    }
+    if env_lookup("RAMSHARED_NO_AUTO_SCOPE").is_ok() {
+        return false;
+    }
+    if env_lookup("_RAMSHARED_SCOPED").is_ok() {
+        return false;
+    }
+    env_lookup("INVOCATION_ID").is_err()
+}
+
+fn dispatch_systemd_scope(args: &[String], stderr: &mut dyn Write) -> ExitCode {
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = writeln!(
+                stderr,
+                "failed to resolve current binary path for systemd scope: {error}"
+            );
+            return ExitCode::from(1);
+        }
+    };
+    let mut cmd = Command::new("systemd-run");
+    cmd.arg("--scope")
+        .arg("-q")
+        .arg("--")
+        .arg(current_exe)
+        .arg("up");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.env("_RAMSHARED_SCOPED", "1");
+    match cmd.status() {
+        Ok(status) => {
+            if let Some(code) = status.code() {
+                ExitCode::from(code as u8)
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(error) => {
+            let _ = writeln!(stderr, "failed to spawn systemd-run --scope: {error}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "usage:");
     let _ = writeln!(stderr, "  ramshared --version");
@@ -615,6 +807,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "  ramshared recover --status|--resume");
     let _ = writeln!(stderr, "  ramshared check [--json]");
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
+    let _ = writeln!(
+        stderr,
+        "  ramshared config [show [--json] | plan [--json] [--profile PATH] | draft --output PATH]"
+    );
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
     let _ = writeln!(
         stderr,
@@ -626,7 +822,16 @@ fn print_usage(stderr: &mut dyn Write) {
     );
     let _ = writeln!(
         stderr,
-        "      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB"
+        "  ramshared boot   # native fail-closed bootstrap (systemd unit entrypoint)"
+    );
+    let _ = writeln!(stderr, "      up defaults: vram = sealed origin capacity");
+    let _ = writeln!(
+        stderr,
+        "      zram sizing: /etc/ramshared/cascade.conf, then RAMSHARED_ZRAM_MIB, then 1024 MiB"
+    );
+    let _ = writeln!(
+        stderr,
+        "      boot sizing: /etc/ramshared/cascade.conf, then those env vars, then 1024 MiB each"
     );
     let _ = writeln!(stderr, "      --zram 0  skip zram (VRAM/NBD only)");
     let _ = writeln!(
@@ -643,7 +848,7 @@ fn print_usage(stderr: &mut dyn Write) {
     );
     let _ = writeln!(
         stderr,
-        "  ramshared stress [--start %] [--target %] [--step %] [--interval-ms N] [--hold-sec N] [--min-ram-mb N] [--json]"
+        "  ramshared stress [--tier3-only --tier3-target-pct %] [--full-three-tier] [--tier1-target-pct %] [--tier2-target-pct %] [--tier3-target-pct %] [--physical-cache-target-mib N] [--json]"
     );
     let _ = writeln!(
         stderr,
@@ -668,7 +873,7 @@ fn run_check() -> CheckReport {
     let cuda = probe_cuda();
     let backends = probe_backends(&kernel);
 
-    let mut blockers = Vec::new();
+    let mut blockers = active_swap_activation_blockers(&swaps);
     let mut warnings = Vec::new();
 
     if wsl.status == Status::Fail {
@@ -854,6 +1059,23 @@ fn parse_swaps(text: &str) -> Vec<SwapEntry> {
                 used_kib,
                 priority,
             })
+        })
+        .collect()
+}
+
+fn active_swap_activation_blockers(swaps: &[SwapEntry]) -> Vec<String> {
+    swaps
+        .iter()
+        .filter(|swap| {
+            cascade::is_nbd_device_path(&swap.filename)
+                || cascade::is_ublk_device_path(&swap.filename)
+                || cascade::is_zram_device_path(&swap.filename)
+        })
+        .map(|swap| {
+            format!(
+                "managed-style swap is already active at {} (used_kib={}); refuse a new activation and inspect `ramshared status`",
+                swap.filename, swap.used_kib
+            )
         })
         .collect()
 }
@@ -1644,6 +1866,15 @@ mod tests {
             self.result()
         }
 
+        fn boot(
+            &mut self,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Boot);
+            self.result()
+        }
+
         fn down(
             &mut self,
             _stdout: &mut dyn std::io::Write,
@@ -1660,6 +1891,16 @@ mod tests {
             _stderr: &mut dyn std::io::Write,
         ) -> ExitCode {
             self.calls.push(CliCommand::Status { json });
+            self.result()
+        }
+
+        fn config(
+            &mut self,
+            mode: ConfigMode,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Config { mode });
             self.result()
         }
 
@@ -1807,13 +2048,75 @@ mod tests {
         );
         assert_eq!(exit, ExitCode::SUCCESS);
         assert!(actions.calls.is_empty());
-        assert_eq!(
-            String::from_utf8(stdout).expect("version output is UTF-8"),
-            format!(
-                "ramshared {} (Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)\n",
-                env!("CARGO_PKG_VERSION")
-            )
+        let output = String::from_utf8(stdout).expect("version output is UTF-8");
+        let mut lines = output.lines();
+        let build_line = lines.next().expect("version/build identity line");
+        assert!(
+            build_line.starts_with(&format!("RamShared CLI v{} · ", env!("CARGO_PKG_VERSION")))
         );
+        assert!(!build_line.contains("git "));
+        let build_info = monitor::build_info_lines();
+        if let Some(commit) = build_info
+            .lines()
+            .find_map(|line| line.strip_prefix("source_commit="))
+            .filter(|commit| commit.len() == 40)
+        {
+            assert!(build_line.contains(&commit[..8]));
+            assert!(!build_line.contains(commit));
+        }
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Running: "))
+        );
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Installed direct /usr/local:"))
+        );
+        assert!(
+            lines
+                .next()
+                .is_some_and(|line| line.starts_with("Installed active /opt/ramshared/current:"))
+        );
+        assert_eq!(
+            lines.next(),
+            Some("(Author: Emerson Busson - https://www.linkedin.com/in/emersonbusson)")
+        );
+        assert!(lines.next().is_none());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn build_info_keeps_full_commit_for_audit_tools() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_from_args(
+            &cli_args(&["--build-info"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(actions.calls.is_empty());
+        let output = String::from_utf8(stdout).expect("build info is UTF-8");
+        let fields = output
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            fields.get("version").copied(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert!(fields.get("source_commit").copied().is_some_and(|commit| {
+            commit == "unavailable"
+                || (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        }));
+        assert!(matches!(
+            fields.get("source_tree_state").copied(),
+            Some("clean" | "dirty" | "unavailable")
+        ));
         assert!(stderr.is_empty());
     }
 
@@ -1833,6 +2136,157 @@ mod tests {
                     once: false,
                 }
             }
+        );
+    }
+
+    #[test]
+    fn config_command_accepts_interactive_show_and_read_only_plan_modes() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config"])).expect("interactive config parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Interactive,
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "show"])).expect("show parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Show { json: false },
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "show", "--json"])).expect("json show parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Show { json: true },
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "plan"])).expect("plan parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: false,
+                    profile_path: None,
+                },
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "plan",
+                "--json",
+                "--profile",
+                "/tmp/draft.toml",
+            ]))
+            .expect("profile-backed json plan parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: true,
+                    profile_path: Some("/tmp/draft.toml".into()),
+                },
+            }
+        );
+        assert!(parse_cli_command(&cli_args(&["config", "apply"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "show", "--write"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "plan", "--profile"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "plan", "--profile", "--json"])).is_err());
+        assert_eq!(
+            parse_cli_command(&cli_args(&["config", "plan", "--profile", " draft.toml "]))
+                .expect("profile path whitespace is preserved"),
+            CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: false,
+                    profile_path: Some(" draft.toml ".into()),
+                },
+            }
+        );
+        assert!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "plan",
+                "--profile",
+                "a",
+                "--profile",
+                "b"
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn config_command_accepts_draft_mode_and_requires_output_path() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "draft",
+                "--output",
+                "/tmp/ramshared-draft.toml",
+            ]))
+            .expect("draft mode parses"),
+            CliCommand::Config {
+                mode: ConfigMode::Draft {
+                    output_path: "/tmp/ramshared-draft.toml".into(),
+                },
+            }
+        );
+        assert!(parse_cli_command(&cli_args(&["config", "draft"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "draft", "--output"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["config", "draft", "--output", "--json"])).is_err());
+        assert!(
+            parse_cli_command(&cli_args(&[
+                "config",
+                "draft",
+                "--output",
+                "/tmp/a.toml",
+                "--output",
+                "/tmp/b.toml",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn config_show_dispatches_to_read_only_action() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit = run_from_args(
+            &cli_args(&["config", "show", "--json"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(
+            actions.calls,
+            vec![CliCommand::Config {
+                mode: ConfigMode::Show { json: true },
+            }]
+        );
+    }
+
+    #[test]
+    fn config_plan_dispatches_to_read_only_action() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let exit = run_from_args(
+            &cli_args(&["config", "plan", "--json"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(
+            actions.calls,
+            vec![CliCommand::Config {
+                mode: ConfigMode::Plan {
+                    json: true,
+                    profile_path: None,
+                },
+            }]
         );
     }
 
@@ -1966,6 +2420,53 @@ mod tests {
     }
 
     #[test]
+    fn boot_command_parses_and_dispatches() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&["boot"])).unwrap(),
+            CliCommand::Boot
+        );
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_from_args(&cli_args(&["boot"]), &mut actions, &mut stdout, &mut stderr);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert_eq!(actions.calls, vec![CliCommand::Boot]);
+    }
+
+    #[test]
+    fn boot_command_rejects_unknown_options() {
+        // DT-7: `boot` has no deploy API. Every deploy-shaped flag and every
+        // unknown flag is refused by the parser before any gate runs.
+        for args in [
+            cli_args(&["boot", "--install"]),
+            cli_args(&["boot", "--upgrade"]),
+            cli_args(&["boot", "--deploy"]),
+            cli_args(&["boot", "--replace"]),
+            cli_args(&["boot", "--release"]),
+            cli_args(&["boot", "--release=0.14.0"]),
+            cli_args(&["boot", "--force"]),
+            cli_args(&["boot", "--uninstall"]),
+            cli_args(&["boot", "--json"]),
+            cli_args(&["boot", "--check"]),
+        ] {
+            let mut actions = RecordingCliActions::default();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = run_from_args(&args, &mut actions, &mut stdout, &mut stderr);
+
+            assert_eq!(exit, ExitCode::from(2), "{args:?} must refuse");
+            assert!(
+                actions.calls.is_empty(),
+                "{args:?} must not reach the boot action"
+            );
+            assert!(
+                String::from_utf8_lossy(&stderr).contains("invalid"),
+                "{args:?} must explain the refusal"
+            );
+        }
+    }
+
+    #[test]
     fn parses_proc_swaps() {
         let text = "\
 Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
@@ -1979,6 +2480,78 @@ Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
         assert_eq!(swaps[0].size_kib, 8_388_608);
         assert_eq!(swaps[0].used_kib, 5_643_764);
         assert_eq!(swaps[0].priority, -2);
+    }
+
+    #[test]
+    fn check_blocks_existing_managed_swap_even_when_backend_is_available() {
+        let disk = SwapEntry {
+            filename: "/dev/sdb".to_string(),
+            kind: "partition".to_string(),
+            size_kib: 4_194_304,
+            used_kib: 0,
+            priority: -2,
+        };
+        assert!(active_swap_activation_blockers(&[disk]).is_empty());
+
+        for (device, used_kib) in [
+            ("/nbd0", 346_316),
+            ("/dev/nbd0", 0),
+            ("/dev/ublkb0", 0),
+            ("/zram1", 0),
+        ] {
+            let swaps = [SwapEntry {
+                filename: device.to_string(),
+                kind: "partition".to_string(),
+                size_kib: 3_801_084,
+                used_kib,
+                priority: 50,
+            }];
+            let blockers = active_swap_activation_blockers(&swaps);
+            assert_eq!(blockers.len(), 1, "{device} must block a new activation");
+            assert!(blockers[0].contains(device));
+        }
+    }
+
+    #[test]
+    fn up_auto_envelops_in_systemd_scope_when_invocation_id_missing() {
+        let env_empty = |_key: &str| Err(std::env::VarError::NotPresent);
+        assert!(should_auto_wrap_systemd_scope(&env_empty, true));
+
+        // When systemd is not running, do not attempt systemd-run
+        assert!(!should_auto_wrap_systemd_scope(&env_empty, false));
+
+        // When RAMSHARED_NO_AUTO_SCOPE is set, do not auto-wrap
+        let env_no_scope = |key: &str| {
+            if key == "RAMSHARED_NO_AUTO_SCOPE" {
+                Ok("1".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert!(!should_auto_wrap_systemd_scope(&env_no_scope, true));
+
+        // When recursion guard _RAMSHARED_SCOPED is set, do not re-wrap
+        let env_scoped = |key: &str| {
+            if key == "_RAMSHARED_SCOPED" {
+                Ok("1".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert!(!should_auto_wrap_systemd_scope(&env_scoped, true));
+    }
+
+    #[test]
+    fn up_executes_inline_when_invocation_id_present() {
+        let env_with_invocation = |key: &str| {
+            if key == "INVOCATION_ID" {
+                Ok("0123456789abcdef0123456789abcdef".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert!(!should_auto_wrap_systemd_scope(&env_with_invocation, true));
+        assert!(!should_auto_wrap_systemd_scope(&env_with_invocation, false));
     }
 
     #[test]
@@ -2260,6 +2833,9 @@ CONFIG_BLK_DEV_NBD=m\n\
             &["check", "--json"][..],
             &["doctor"][..],
             &["doctor", "--json"][..],
+            &["config"][..],
+            &["config", "show"][..],
+            &["config", "show", "--json"][..],
             &["up", "--vram", "1024"][..],
             &["migrate-cascade", "--from-legacy"][..],
             &["down"][..],

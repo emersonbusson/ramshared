@@ -519,4 +519,75 @@ mod tests {
             other => panic!("expected Psi, got {other:?}"),
         }
     }
+
+    #[test]
+    fn error_display_names_every_variant() {
+        let cases = [
+            (BrokerTenantError::Io("disk".into()), "broker io: disk"),
+            (
+                BrokerTenantError::Protocol("bad".into()),
+                "broker protocol: bad",
+            ),
+            (
+                BrokerTenantError::Denied("full".into()),
+                "lease denied: full",
+            ),
+            (
+                BrokerTenantError::ReleaseAmbiguous { lease: 9 },
+                "lease release 9 is ambiguous and will not be replayed",
+            ),
+            (
+                BrokerTenantError::CoresidenceFailClosed { free: 1, need: 2 },
+                "coresidence_fail_closed free=1 need=2",
+            ),
+            (BrokerTenantError::Eof, "broker EOF"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn register_refuses_protocol_error_and_eof() {
+        let mut dual = Dual::new(Vec::new());
+        write_msg(
+            dual.reply_buf(),
+            &Msg::Error {
+                reason: "denied".into(),
+            },
+        )
+        .unwrap();
+        dual.reset_read();
+        let mut t = BrokerTenant::new("wd", Duration::from_secs(5));
+        let error = t
+            .register(&mut dual)
+            .expect_err("an Error reply is a protocol refusal");
+        assert!(matches!(error, BrokerTenantError::Protocol(_)));
+
+        let mut empty = Dual::new(Vec::new());
+        let mut t2 = BrokerTenant::new("wd", Duration::from_secs(5));
+        let error = t2.register(&mut empty).expect_err("an empty stream is EOF");
+        assert!(matches!(error, BrokerTenantError::Eof));
+    }
+
+    #[test]
+    fn release_already_sent_reflects_release_state() {
+        let mut t = BrokerTenant::new("wd", Duration::from_secs(5));
+        assert!(!t.release_already_sent(), "no release has been sent yet");
+        t.force_lease_for_test(5, 1024);
+        let mut dual = Dual::new(Vec::new());
+        t.release(&mut dual)
+            .expect("release with a lease writes and flushes");
+        assert!(t.release_already_sent());
+    }
+
+    #[test]
+    fn release_without_lease_is_noop() {
+        let mut t = BrokerTenant::new("wd", Duration::from_secs(5));
+        let mut dual = Dual::new(Vec::new());
+        t.release(&mut dual)
+            .expect("release with no lease is a no-op");
+        assert!(dual.written().is_empty());
+        assert!(!t.release_already_sent());
+    }
 }

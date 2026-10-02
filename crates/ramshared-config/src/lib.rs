@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod resource_profile;
 pub use error::ConfigError;
 
 use serde::Deserialize;

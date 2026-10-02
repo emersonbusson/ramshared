@@ -32,6 +32,18 @@
     {
       "benchmark_id": "2026-08-25-hardware-dma-and-ublk-vs-ssd",
       "legacy_id": "legacy-2026-08-25-hardware-dma-and-ublk-vs-ssd"
+    },
+    {
+      "benchmark_id": "2026-09-30-gpu-budget-chain-condition-snapshot",
+      "run_id": "wsl2-gpu-budget-chain-20260930-0929"
+    },
+    {
+      "benchmark_id": "2026-09-30-gpu-budget-containment-nvml",
+      "run_id": "wsl2-gpu-containment-20260930-0451"
+    },
+    {
+      "benchmark_id": "2026-10-01-vram-headroom-loaded",
+      "run_id": "vram-headroom-loaded-20261001-0201"
     }
   ]
 }

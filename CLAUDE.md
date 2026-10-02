@@ -5,9 +5,6 @@
 
 [`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.
 
-- Agent orchestration and dispatch: [`.claude/rules/agent-orchestration.md`](.claude/rules/agent-orchestration.md).
-- Its rendered policy and canonical typed records are the machine-checked source.
-
 **Documentation scope:** only this repository. Do not load or invent requirements from other products/monorepos when working here.
 
 Before changing code:
@@ -45,6 +42,7 @@ Source filenames use `snake_case`; CLI and package identifiers may use hyphens.
 ## Commits & Patches
 
 - **English** is mandatory across the entire project: source code, comments, commits, PRs, issues, and root/`/docs/` documents.
+- **No authorship trailers** (`Co-Authored-By`, `Generated-with`, `Assisted-by`, …) in commits or PRs — ever. Strip any that appear; never append one.
 - Structural commits or those affecting the MMU/DRM require a `Rollback trigger:` in the body. Explicit Tier 3 (SSD) qualification metrics are mandatory in performance PR descriptions before merge.
 
 ## Tech Stack Overview

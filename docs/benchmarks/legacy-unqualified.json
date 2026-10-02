@@ -51,6 +51,27 @@
       "benchmark_id": "2026-08-25-hardware-dma-and-ublk-vs-ssd",
       "qualified": false,
       "reason": "Direct live host hardware DMA and native ublk io_uring benchmark; formal regression comparison requires an attended sealed matrix."
+    },
+    {
+      "id": "legacy-wsl2-gpu-budget-chain-20260930-0929",
+      "benchmark_id": "2026-09-30-gpu-budget-chain-condition-snapshot",
+      "run_id": "wsl2-gpu-budget-chain-20260930-0929",
+      "qualified": false,
+      "reason": "Host-private raw output with no in-repo SHA-256 artifact manifest and no matched baseline; this idle condition snapshot cannot be a regression baseline, a regression PASS, or a promotion claim."
+    },
+    {
+      "id": "legacy-wsl2-gpu-containment-20260930-0451",
+      "benchmark_id": "2026-09-30-gpu-budget-containment-nvml",
+      "run_id": "wsl2-gpu-containment-20260930-0451",
+      "qualified": false,
+      "reason": "Host-private raw sampler output with no in-repo SHA-256 artifact manifest and no matched baseline; this loaded-condition containment observation cannot be a regression baseline, a regression PASS, or a promotion claim."
+    },
+    {
+      "id": "legacy-vram-headroom-loaded-20261001-0201",
+      "benchmark_id": "2026-10-01-vram-headroom-loaded",
+      "run_id": "vram-headroom-loaded-20261001-0201",
+      "qualified": false,
+      "reason": "Read-only headroom snapshot with no ramshared-evidence/v1 envelope, no in-repo SHA-256 artifact manifest, and no matched baseline; this loaded-condition observation cannot be a regression baseline, a regression PASS, or a promotion claim."
     }
   ]
 }

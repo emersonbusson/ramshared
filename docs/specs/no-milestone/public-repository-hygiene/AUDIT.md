@@ -19,7 +19,7 @@
 | High | DT-12 | Workflow-dispatch recovery checks out the historical beta after current source, causing its older manifest writer to reject the current immutable Rust provenance argument. | Current reviewed writer/checker/artifact helper/SBOM merger are preserved before the historical checkout and selected only for dispatch recovery. Exact tag/SHA, read-only permissions, and nonpublication remain unchanged. |
 | High | evidence governance | In-place sanitization of `validation.md` violated the append-only schema, while retaining raw values in a new correction would repeat the exposure. | Restore the 3,869-line historical prefix byte-for-byte, keep legitimate later facts as appended entries, and bind the sanitized correction by SHA-256 in `docs/governance/redaction-ledger.json` without copying a private value. |
 
-## Open questions
+## Historical open questions (observed 2026-08-24; superseded below)
 
 1. The strict canonical `--all` run now finds duplicate pure owners for
    `crates/ramshared-cli/src/cascade/lifecycle.rs`,
@@ -36,7 +36,7 @@
    clean-commit fixtures are green; hosted same-revision status remains an
    external observation.
 
-## Verdict
+## Historical verdict (2026-08-24)
 
 **GO for the current immutable-Git and binary-parser remediations and the five
 earlier owned validator remediations; the prior canonical planner residuals
@@ -44,6 +44,40 @@ were not revalidated in this narrowly scoped dispatch.** The repository
 claim remains `PARTIAL` until the externally owned residuals are closed. No
 host, WSL, VM, device, storage, swap, GPU, driver, service, publication, commit,
 or remote-write action is authorized by this verdict.
+
+## Current reconciliation — 2026-09-27
+
+The residual list above records the 2026-08-24 checkout and is not the current
+state. Revalidation on the current worktree found:
+
+- `node tools/ci/plan-rust-slice-coverage.mjs --all` exits 0 with
+  `RUST_SLICE_COVERAGE_STATUS=READY`; the five historical duplicate owners are
+  absent from the current map.
+- The documentation inventory, capability observations, campaign evidence
+  lifecycle, docs index, and SPEC evidence manifest checks all pass in check
+  mode.
+- The former required name
+  `daemon_worker_shutdown_drains_queued_io_before_stop` is obsolete. The
+  current memory-broker DT-50 contract makes the terminal flag win at an
+  iteration boundary, preempting queued I/O. Its current named proof is
+  `daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary`, with
+  `daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills` proving
+  shutdown is not starved by refills. An operation already executing may finish
+  at its bounded completion barrier. The source and SPEC agree; restoring a
+  drain guarantee would contradict DT-50.
+- Current public hygiene candidate and Node named-test/per-file gates pass; the
+  exact measurements are recorded in `evidence/validation-summary.json` and
+  `evidence-manifest.json`.
+
+**Current verdict:** the scoped repository-hygiene and planner checks are green.
+The final aggregate `docs-check` passed after the concurrent release
+identity/evidence edits stabilized; the RamShared CLI test suite passed 355
+unit and 10 integration tests, the `ramshared-wsl2d` test suite passed with
+its hardware/root/device-specific tests intentionally ignored, and the three
+changed shell scripts passed syntax checks. The localization gate has no hash findings; it remains
+`PARTIAL` because the informational translation has no current human review
+receipt. Keep this slice `PARTIAL` until hosted required CI reports success
+for the final committed source revision; no hosted workflow was dispatched.
 
 ## Re-audit trigger
 

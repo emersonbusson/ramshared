@@ -69,8 +69,8 @@
       "immutable": true,
       "promotion_eligible": false,
       "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
-      "bytes": 4450,
-      "sha256": "294b1994eca9a14140cec128b89e117eef3f7a27201c9c67ec6d7fee79266def",
+      "bytes": 25704,
+      "sha256": "d6a10e388e1dacd3ba55e3ed740488b1ab365f92715ed139ecb57ba98539ece8",
       "bounded": true
     },
     {
