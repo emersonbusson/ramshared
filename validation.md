@@ -15490,3 +15490,124 @@ before parsing), or if `ramshared-vram-tier.service` is enabled or rewritten
 into the sealed tree.
 
 ---
+
+---
+
+## 2026-10-01 21:35 -03 — repointing the guardian at the installed copy fails; 9P action restored (EVD-0169)
+
+**What:** GAP row 36 records that the `RamSharedWslGuardian.v1` task runs its
+script over a mutable 9P checkout path rather than an immutable deployment.
+An attempt was made to close it. It failed, and the failure is the finding.
+
+Measured drift before any change:
+
+| Copy | SHA-256 (prefix) | Date | Sufficient alone? |
+| --- | --- | --- | --- |
+| repo checkout `scripts/windows/Watch-RamSharedWsl.ps1` (what the task runs) | `b0e66909…` | 2026-09-26 | yes — imports `SharedWslHostMemoryGate.psm1` from `$PSScriptRoot` |
+| installed `C:\ProgramData\RamShared\Watch-RamSharedWsl.ps1` | `e0509025…` | 2026-09-23 | no — **and it is the stale pre-fix**: lacks `Test-HcsServiceRunning`, so it still has the HCS status serialization weakness EVD-0077 identified |
+| repo `scripts/windows/SharedWslHostMemoryGate.psm1` | `cf171c4a…` | 2026-09-26 | n/a — was **absent** from `C:\ProgramData\RamShared\` entirely |
+
+**Classification:**
+
+- **incorrect conclusion in the existing gap phrasing:** "point at the
+  immutable deployment" is not sufficient. The immutable copy was **behind**
+  the running one. Repointing without promoting would have regressed the
+  guardian onto the pre-fix HCS status handling — the exact bug that can
+  falsely corroborate host failure when the WSL status probe also fails.
+- **reproduced defect (open):** promoting the fixed pair and repointing the
+  task at `C:\ProgramData\RamShared\Watch-RamSharedWsl.ps1` **stops the
+  guardian**. The task ends `Ready` with `LastTaskResult=1`, and the health
+  proof ages past `stale_after_seconds` (15 s) instead of refreshing every
+  1 s. The 9P path runs the *same* bytes and stays `Running`.
+- **not a code defect in the guardian itself:** invoking the promoted script
+  directly under PowerShell prints its PLAN envelope and exits 0. The failure
+  is in the scheduled-task execution context against that directory (ACL,
+  module load from `$PSScriptRoot`, or `-File` resolution), not in the watch
+  logic.
+
+**What was done, in order:**
+
+1. Backed up the stale installed copy to `Watch-RamSharedWsl.ps1.bak-20261001-pre-promote`
+   (SHA `e0509025…` preserved).
+2. Promoted both files from the checkout. Post-promote hashes matched the repo
+   exactly: `b0e66909…` and `cf171c4a…`.
+3. Repointed the task action's `-File` to the installed path, leaving every
+   other argument identical (`-Action watch -Run`, same `-Distro`, `-UserSid`,
+   `-HeartbeatPath`, `-ArtifactRoot`, `-StaleAfterSec 15`, `-PollSec 1`,
+   `-GuestCommandTimeoutSec 5`, same approval token). Substitution was
+   verified to leave no `wsl.localhost` substring.
+4. **Observed failure:** task `State=Ready`, `LastTaskResult=1`, health proof
+   age climbing 16 s → 25 s with no refresh. Not a stale-file artefact — the
+   proof stopped being written.
+5. **Reverted** the action to the 9P path, byte-identical to the pre-change
+   arguments. Recovery confirmed: proof age dropped to 2 s, task
+   `State=Running`, `timestamp_utc` advancing at 1 s cadence again.
+
+**Post-revert state (the guardian is healthy again):**
+
+```
+proof_age_s 3.2
+schema_version 3
+state HEALTHY
+boot_id_matches True
+```
+
+Installed tree is left with the **fixed** pair (`b0e66909…` / `cf171c4a…`)
+plus the `e0509025…` backup, while the task still runs the 9P checkout. That
+is deliberate: the installed copy is now correct and self-sufficient (the
+module is present), so the next attempt to repoint starts from a good
+deployment rather than a stale one. The execution-context failure is what
+remains.
+
+**What this run does NOT prove:**
+
+- **GAP row 36 is still open.** The task still executes a mutable 9P checkout
+  path. Immutability was not achieved.
+- **The root cause of `LastTaskResult=1` is not identified.** No ACL dump, no
+  module-load trace, no Task Scheduler Operational-channel read was taken
+  while the failure was live. The next attempt needs those before another
+  repoint.
+- **No boot round.** EVD-0168's units are still armed but unexercised. This
+  entry does not qualify `wsl2-cascade-boot`.
+- **The gate still has not run for real** on this host. The guardian proof it
+  would consume is healthy again, which is what EVD-0167's dry-run used.
+- Not vsock, multi-vendor GPU, CoCo, screenshot-challenge, or
+  `cache_state: ACTIVE` evidence. The live zombie under the pre-fix
+  `v0.15.0-de32b421` daemon is unchanged.
+
+**Verdict:** ✅ works (drift measured; failure reproduced; revert verified;
+guardian healthy again), ❌ gap remains (immutable guardian deployment not
+achieved; root cause of the repoint failure unidentified)
+
+**Category:** guardian deployment provenance; Windows scheduled-task
+execution context; gap-row-36 correction
+**How to measure:** `Get-ScheduledTask -TaskName RamSharedWslGuardian.v1`
+must show a `-File` argument that is **not** a `\\wsl.localhost\…` path, and
+`Get-FileHash` of that file must equal the promoted deployment hash, and the
+health proof under the product data directory must have `mtime` within
+`stale_after_seconds` of `Get-ScheduledTaskInfo`. All three must hold at once;
+today only the third does. Re-run after any ACL change under the product data
+directory, any change to `Watch-RamSharedWsl.ps1`'s `Import-Module` line, or
+any change to the task's principal. The negative case is mandatory: a repoint
+that leaves the proof aging past `stale_after_seconds` must be treated as a
+failed attempt and reverted, not as a step forward.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0169`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T00:35:00Z`.
+**Verified at:** `2026-10-02T00:36:30Z`.
+**Source revision:** `cf11f0b9`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three-row drift table with its "the immutable copy was
+behind" sentence — that is the correction to GAP row 36 and must not be
+re-read as "just repoint the task". Keep the failing `LastTaskResult=1` and
+the climbing proof age beside the post-revert `proof_age_s 3.2` /
+`boot_id_matches True` pair; that pair is what separates a reverted experiment
+from an unexplained outage. Keep the `e0509025…` backup path. Never cite this
+entry as evidence that the guardian is immutably deployed.
+**Freshness:** Superseded on the next repoint attempt, on any ACL or
+`Import-Module` change under the product data directory, on any change to the
+task's principal or arguments, or if the 9P checkout path is ever removed.
+
+---
