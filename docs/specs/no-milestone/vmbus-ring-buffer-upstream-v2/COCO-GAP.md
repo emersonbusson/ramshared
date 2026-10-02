@@ -137,14 +137,22 @@ qualified — the following are **true and separately evidenced**:
   every run including a gate self-test. See
   [`COCO-STATIC-PROOF.md`](COCO-STATIC-PROOF.md). This is stronger than a
   design argument and **still does not close any row of the table above**.
-- Hosted build/Sparse/checkpatch/KUnit gates pass for the current six-patch
-  pinned bytes (run 36763981097 on `7e4ccc98d32f`, all three jobs green,
-  including both CoCo gate self-tests). Runs 36574925363 and 36590352003
-  qualified the predecessor seven-patch bytes and are not evidence for this
-  candidate.
-- Ordinary x86_64 Hyper-V runtime on an earlier four-commit snapshot passed
-  normal-path GPADL create/teardown and UIO mmap (`EVD-0054`). That is not
-  the current candidate and not a CoCo platform.
+- Hosted build/Sparse/checkpatch/KUnit gates pass for the current
+  **nine-patch** pinned bytes: runs **36970357736** and **36970357645**
+  on `f2713da10608`, against mainline base `93f51579e7df`, all jobs
+  green including both CoCo gate self-tests and 20/20 named KUnit
+  cases. Runs 36763981097, 36574925363 and 36590352003 qualified
+  earlier candidates and are not evidence for this one.
+- Ordinary x86_64 Hyper-V runtime on the **current** candidate is
+  qualified for GPADL/UIO lifecycle and forced order-7 fragmentation:
+  eight drill runs across sixteen guest-runs, 100 rebind cycles back to
+  the exact map baseline, hold-in-mmap across teardown, and
+  `high_order_7plus` driven to zero on fourteen of sixteen guest-runs
+  with `accept4_failures=0 oops=0`. That is still not a CoCo platform,
+  and it does not exercise the chunked order-N → order-0 degrade.
+- Ordinary x86_64 Hyper-V runtime on an earlier four-commit snapshot
+  (`EVD-0054`) is retained as history and is superseded by the runs
+  above.
 - The code **refuses to claim** universal CoCo support. Removing the
   unsupported claim is already part of the series.
 
