@@ -8,18 +8,34 @@
 
 - **Target Repository:** [`microsoft/WSL#41634`](https://github.com/microsoft/WSL/issues/41634) (combined proposal) · [`microsoft/WSL#40795`](https://github.com/microsoft/WSL/issues/40795#issuecomment-5716513649) (solution comment) & Linux Hyper-V Subsystem (LKML)
 - **Kernel Subsystem:** `drivers/hv/` (Hyper-V Synthetic Transport)
-- **Patch Reference:** [six-patch v2 series](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series) (in the contribution fork) · [older consolidated draft](patches/vmbus-ring-buffer-v2-draft.patch)
+- **Patch Reference:** [nine-patch v2 series](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/vmbus-ring-buffer-upstream-v2/Documentation/virt/hyperv/vmbus-ring-buffer-upstream-v2/series) (in the contribution fork) · [older consolidated draft](patches/vmbus-ring-buffer-v2-draft.patch)
 - **Cover letter:** [DRAFT — do not send](vmbus-ring-v2-cover-letter-DRAFT.md). Prepared so the send is mechanical once the gates close; the PRD send gate is closed and the draft carries its own checklist.
 - **CoCo static proof:** [`COCO-STATIC-PROOF.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-STATIC-PROOF.md) — machine-checked negative proof that the guest-fatal vmalloc-decryption pattern is unreachable from any allocation this series introduces. Enforced in CI with a self-test. Does **not** close [`COCO-GAP.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md).
-- **Status (2026-09-30):** v1 proposal submitted 2026-09-17 and reviewed by
-  Michael Kelley on 2026-09-22. The six-patch v2 candidate is an **unsent
-  draft by policy**. It is source-complete against the maintainer's five-point
-  refactor request and its hosted build/KUnit gates pass (run 36574925363, and
-  run 36590352003 for audit SHA `de5138b5`); the series bytes are pinned by
-  `series/SHA256SUMS` and the CoCo static invariants are machine-checked in
-  CI. Live GPADL/UIO lifecycle, forced order-zero fallback under real
-  fragmentation, and SEV-SNP/TDX/Arm CCA evidence remain open. **Not ready
-  to send.** Blocking gates live in
+- **Status (2026-10-02):** v1 proposal submitted 2026-09-17 and reviewed
+  by Michael Kelley on 2026-09-22. The **nine-patch** v2 candidate is an
+  **unsent draft by policy**. It is source-complete against the
+  maintainer's five-point refactor request. Every patch is a
+  `git format-patch` mail carrying `Signed-off-by`, the bytes are pinned
+  by `series/SHA256SUMS`, and `checkpatch.pl --strict` reports 0 errors
+  and 0 warnings at all nine stages. Runs **36970357736** (build,
+  checkpatch, KUnit) and **36970357645** (Hyper-V runtime) are the
+  byte-exact evidence for the current revision against pinned base
+  `93f51579e7df` ("Linux 7.3-rc4"): 20/20 named KUnit cases on x86_64
+  plus 15 on the WSL 6.18.40.1 backport, and eight Hyper-V drill runs
+  across sixteen guest-runs.
+  **Closed:** live GPADL/UIO lifecycle (100 rebind cycles returning to
+  the exact map baseline, hold-in-mmap across teardown, `cycle_fails=0`
+  over 400 steps) and forced order-7 buddy fragmentation with channel
+  open surviving (fourteen of sixteen guest-runs reached full order-7
+  depletion; zero `accept4` failures, oops, splats or faults).
+  **Still open:** the chunked order-N → order-0 degrade under real
+  fragmentation — an ordinary x86_64 guest always takes the `vzalloc()`
+  path, so that degrade is covered by fault injection only — and
+  **SEV-SNP / TDX / Arm CCA platform evidence**
+  ([`COCO-GAP.md`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/COCO-GAP.md)).
+  CoCo static invariants INV-1..INV-6 are machine-checked in CI on both
+  arches and do **not** close that gap. The series therefore stays
+  **PARTIAL** and **not ready to send**. Blocking gates live in
   [`GAP-REGISTER.md`](../reliability/GAP-REGISTER.md) and the SSDV3 suite at
   [`docs/specs/no-milestone/vmbus-ring-buffer-upstream-v2/`](../specs/no-milestone/vmbus-ring-buffer-upstream-v2/).
 
