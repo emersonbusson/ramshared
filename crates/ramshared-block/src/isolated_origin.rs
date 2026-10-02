@@ -337,12 +337,30 @@ impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
         self.telemetry
     }
 
+    /// Revokes the best-effort cache and reports a successful control outcome.
+    ///
+    /// The returned byte count is `0` by contract: the isolated cache is revoked
+    /// wholesale and the client never reports how much it held
+    /// (`release_cache_returns_zero_only_after_dedicated_control_acknowledgement`).
+    ///
+    /// `telemetry.releases` counts only a cache that was actually revoked.
+    /// `Skipped` means the cache was already `Off`/`Unavailable` and
+    /// [`revoke_cache`] sent nothing, so counting it would publish a release
+    /// for a no-op. That is not academic: the control plane keeps a
+    /// `control_pressure` request live under memory pressure, this runs on the
+    /// per-job serving path, and an ungated counter therefore grows with I/O
+    /// while `cache_state` is `OFF` and `vram_cached_kib` is `0`. The sibling
+    /// `invalidations` counter is gated the same way in [`revoke_cache`] and
+    /// reported 1 beside 1.5M of these.
     pub fn release_cache(&mut self) -> Result<u64, IoError> {
         match self.revoke_cache() {
-            CacheMutation::Accepted | CacheMutation::Skipped => {
+            CacheMutation::Accepted => {
                 self.telemetry.releases = self.telemetry.releases.saturating_add(1);
                 Ok(0)
             }
+            // Already released: still a successful control outcome, but there
+            // was no cache to release and nothing to acknowledge.
+            CacheMutation::Skipped => Ok(0),
             CacheMutation::Failed => Err(IoError(
                 "cache release acknowledgement was unavailable".into(),
             )),
@@ -959,6 +977,50 @@ mod tests {
             AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, 8, 4).unwrap();
         assert!(unacknowledged.release_cache().is_err());
         assert_eq!(unacknowledged.cache_state(), CacheState::Stuck);
+    }
+
+    /// A release that finds nothing to release is a successful control outcome
+    /// and is not a cache release.
+    ///
+    /// Counting `Skipped` made `cache_releases` grow with the serving-loop rate
+    /// under a live `control_pressure` request while the cache was already `Off`
+    /// and `vram_cached_kib` was `0`. The sibling `invalidations` counter never
+    /// had that problem: `revoke_cache` gates it on there being something to
+    /// invalidate. Both counters must describe cache work, not request traffic.
+    #[test]
+    // TestName: a_release_that_finds_nothing_to_release_is_not_counted
+    fn a_release_that_finds_nothing_to_release_is_not_counted() {
+        let bytes = Rc::new(RefCell::new(b"durable!".to_vec()));
+        let (cache, worker) = isolated_cache_channel(1, Duration::from_millis(100));
+        let control = std::thread::spawn(move || {
+            let IsolatedCacheControl::Disable { reply } = worker.control.recv().unwrap();
+            reply.send(Ok(())).unwrap();
+        });
+        let mut backend =
+            AuthoritativeOriginBackend::new(MemoryOrigin(bytes), cache, 8, 4).unwrap();
+        assert_eq!(backend.cache_state(), CacheState::Active);
+
+        // First release: a real revoke, acknowledged by the worker.
+        assert_eq!(backend.release_cache().unwrap(), 0);
+        control.join().unwrap();
+        assert_eq!(backend.cache_state(), CacheState::Off);
+        assert_eq!(backend.telemetry().releases, 1);
+
+        // Second release: the cache is already `Off`, so `disable` reports
+        // `Skipped` and no control frame is sent. Still a successful outcome —
+        // and still not a second cache release.
+        for _ in 0..8 {
+            assert_eq!(backend.release_cache().unwrap(), 0);
+        }
+        assert_eq!(backend.cache_state(), CacheState::Off);
+        assert_eq!(
+            backend.telemetry().releases,
+            1,
+            "a no-op release must not publish a cache release"
+        );
+        // `revoke_cache` gates `invalidations` on there being something to
+        // invalidate, so it cannot absorb the no-ops either.
+        assert_eq!(backend.telemetry().invalidations, 1);
     }
 
     #[test]
