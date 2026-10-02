@@ -179,7 +179,10 @@ Three acceptable resolutions, in order of preference:
    remains the one row that likely needs partner or lab hardware. This path
    needs an Azure subscription and someone to run the guest-side drills
    (`scripts/kernel/vmbus-lifecycle-drill.sh` already refuses to run on the
-   daily WSL2 host).
+   daily WSL2 host). The guest-side procedure — provisioning, byte-pinning
+   the nine patches, what to capture per row, and the rollback trigger on a
+   `#GP`/`#VC`/panic — is written down in
+   [`COCO-LAB-RUNBOOK.md`](COCO-LAB-RUNBOOK.md).
 3. **Keep it a draft indefinitely** — the PRD explicitly permits this. The
    work is not lost: the design, the source fixes, and the non-CoCo evidence
    all remain valid and reusable the moment a lab appears.
