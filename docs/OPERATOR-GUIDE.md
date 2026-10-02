@@ -175,23 +175,73 @@ ramshared monitor --format json --interval 1s
 
 ## 5. WSL2 & Systemd Boot Autostart
 
-To automatically configure the multi-tier cascade whenever WSL2 or your Linux workstation boots:
+To bring the multi-tier cascade up automatically whenever WSL2 or your Linux
+workstation boots, enable the boot-path units. This is an opt-in lifecycle
+decision (RF-1): a sealed install deliberately leaves them **disabled**, so an
+installed product that is not yet set to autostart is expected behaviour and
+not a fault.
+
+### Prerequisites
+
+Before enabling, confirm all of the following. If any is missing, the boot
+gate will fail closed and the cascade will not start.
+
+1. The installed release selector points at the release you intend to boot
+   (the `current` symlink under the product root).
+2. The sealed origin is attached and its config is present at
+   `/etc/ramshared/origin.conf`.
+3. The Windows guardian is publishing a fresh health proof (age under
+   `stale_after_seconds`) and `safe-mode/` is empty. The boot gate consumes
+   that proof and mints `/run/ramshared/host-resume-lease.json` from it.
+4. `scripts/safety/install-cascade-boot.sh` has completed an attended install
+   for this release version.
 
 ### Enabling Boot Integration
 
-```bash
-sudo scripts/safety/install-cascade-boot.sh --enable
-```
+Enable the three boot-path units with `systemctl enable` for
+`ramshared-host-gate.service`, `ramshared-cascade.service` and
+`ramshared-supervisor.service`, run under `sudo`.
 
-This installs:
-- `/etc/systemd/system/ramshared-cascade.service`: Manages the lifecycle of the block daemon and swap priority tables.
-- Resource slice controls (`ramshared-control.slice` and `ramshared-workloads.slice`) to protect supervisor memory.
+`systemctl enable` only links the units into `multi-user.target`. Nothing runs
+until the next boot. Confirm that by checking `systemctl is-active` on the
+gate and the cascade reports `inactive`, and that `systemctl show
+ramshared-cascade.service -p ExecMainStartTimestamp` is empty.
+
+What each unit does at boot:
+
+| Unit | Role |
+| --- | --- |
+| `ramshared-host-gate.service` | Verifies the Windows guardian proof and mints the boot-bound host-resume lease. `Before=ramshared-cascade.service`. |
+| `ramshared-cascade.service` | Runs `ramshared boot`, which walks the fail-closed gate chain (identity → approval → lease → dirty) and then activates the cascade. `Requires=ramshared-host-gate.service`. |
+| `ramshared-supervisor.service` | Control-plane supervisor. |
+| `ramshared-control.slice`, `ramshared-workloads.slice` | Resource slices that protect supervisor memory. Already `static`; nothing to enable. |
 
 ### Disabling Boot Integration
 
-```bash
-sudo scripts/safety/install-cascade-boot.sh --disable
-```
+The revert is `systemctl disable` for those same three units. It takes effect
+at the next boot; to stop a running cascade in the current boot use
+`ramshared down`.
+
+### Why `install-cascade-boot.sh --enable` is not the command
+
+`scripts/safety/install-cascade-boot.sh` installs the units **disabled** on
+purpose and refuses `--enable` with
+`BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL`. It has no `--disable` flag at all.
+The installer never touches unit enablement; that is a separate operator
+decision, made with `systemctl` as described above. See
+`docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md` (RF-1) and
+`validation.md` EVD-0167/EVD-0168.
+
+### Fail-closed behaviour to expect at boot
+
+`ramshared-host-gate.sh` deletes `/etc/ramshared/origin.conf` and the lease
+**before** parsing any host-controlled data, then re-mints from a fresh proof.
+If the Windows guardian proof is stale, the Windows mount is not ready, or the
+identity does not match, it exits without minting and the cascade stays down.
+That is deliberate: a failed or foreign proof must never retain authority
+minted by an earlier invocation. Recover by making the guardian proof fresh,
+then starting `ramshared-host-gate.service` followed by
+`ramshared-cascade.service`.
 
 ---
 
