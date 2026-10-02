@@ -16386,3 +16386,178 @@ implemented against that answer. Finding B is superseded if RamShared ever
 creates or changes `/dev/dxg`, or if the platform changes the node's mode.
 
 ---
+
+## 2026-10-01 23:41 -03 — the unambiguous half of ITEM-3 exists, with two RF-3 defects it found (EVD-0175)
+
+**What:** The transport and lease-maintenance composition of `native-vsock`
+ITEM-3 is implemented and tested: length-checked stream framing in
+`ramshared-ipc`, and `ControlPlane` / `VsockControlPlane` / `HeartbeatLoop` in a
+new `ramshared-wsl2d/src/control_plane.rs`. The swap-serving I/O path was not
+touched.
+
+EVD-0174 Finding A correctly blocked ITEM-3 *production wiring*. It did not
+block the composition itself. The distinction that made this implementable:
+
+| Question | Status |
+| --- | --- |
+| Can a vsock peer hold a lease and keep it alive over frames? | unambiguous — implemented |
+| May a host with **no** vsock peer populate the VRAM cache? | still open (EVD-0174 Finding A) — **not** implemented |
+| Should `run_nbd_with_startup` accept the trait? | still open — **not** implemented |
+
+Because the second question is open, `ControlPlane` has exactly **one**
+production implementation. No file-backed control plane is defined. Writing
+one would have picked a side of the SPEC contradiction; refusing to write one
+is the only position that does not.
+
+### What was built
+
+**`crates/ramshared-ipc` — length-checked framing**
+
+`write_frame` / `read_frame` now exist (they did not). The declared payload
+length is validated against the caller's cap **before any allocation**, so a
+hostile peer cannot make the reader reserve an arbitrary buffer
+(`.claude/rules/security.md`: "Protocol frames: length-prefixed or
+length-checked; reject oversized payloads"). Two error variants were added so
+fail-closed decisions land on the right reason: `TruncatedFrame` (peer closed
+early — never mistaken for a clean empty body) and `StreamIo` (transport
+failure). `HandshakeError::ProofMismatch` was added for the same reason: an
+authenticity failure is not a malformed frame.
+
+**`crates/ramshared-wsl2d/src/control_plane.rs` — the composition**
+
+| Symbol | Role |
+| --- | --- |
+| `ControlPlane` | `state` / `admit_cache` / `admit_origin_io` / `heartbeat` — the seam a future I/O wiring would consult |
+| `VsockControlPlane` | drives DT-3 and keeps the lease alive over one stream |
+| `HeartbeatLoop` | bounded campaign; stops at the tick count or the consecutive-failure budget |
+
+`VsockControlPlane::perform_handshake` runs `Handshake` → `HandshakeAck`
+(verified) → `HandshakeFinish` → `LeaseRequest` → `LeaseGranted`. Refused
+before any authority is granted: a peer-supplied zero heartbeat interval, a
+zero lease timeout, a lease timeout that does not outlive the heartbeat, a
+version outside the negotiated range, a bad host proof, and an
+already-expired granted lease. Every transport failure during handshake or
+heartbeat moves the authority to safe mode, so a connection failure can never
+grant a lease (`host_gate::lease_after_connect`).
+
+`HeartbeatLoop` takes its clock and its sleep as arguments. It is bounded by
+construction (Kahneman #16): it never spins on a dead peer.
+
+**Dependency edge:** `ramshared-wsl2d` now depends on `ramshared-ipc`. That
+crate previously had **zero** consumers, which is why `vsock.rs` had no
+production callers.
+
+### Two defects the new assertions found, both RF-3
+
+These are reproduced defects in the first draft of this slice, found by
+assertions written before the code was trusted. Both are fixed in the same
+revision.
+
+| Defect | Observed | Correct behaviour |
+| --- | --- | --- |
+| A clean lease expiry was downgraded to safe mode | `a_beat_that_reports_no_remaining_lease_moves_the_plane_to_origin_only` reported `SafeMode` where `OriginOnly` was required | Lease loss revokes cache and leaves the verified origin path **up**. Only a transport disconnect may enter safe mode. `heartbeat` now distinguishes `LeaseExpired` from a transport failure instead of funnelling both through `on_vsock_disconnect`. |
+| The verified origin identity existed only after `accept_lease` | `an_invalid_host_proof_never_grants_a_lease` saw `admit_origin_io()` fail after a refused handshake | Origin identity is established independently of the lease (the caller passes an already-verified `SealedOrigin`). `ControlPlaneAuthority::adopt_verified_origin` installs it at construction, which is what makes RF-3 expressible at all. |
+
+The second one is worth a reader's attention: `ControlPlaneAuthority` had
+`lose_origin_identity` but no way to *install* an origin except as a side
+effect of accepting a lease. That made `admit_origin_io` unusable before a
+lease existed and after a failed handshake — the two moments RF-3 exists to
+cover.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p ramshared-ipc` | `ok. 54 passed; 0 failed` |
+| `cargo test -p ramshared-wsl2d` (lib) | `ok. 199 passed; 0 failed` (was 176; 23 new) |
+| `cargo test -p ramshared-wsl2d` (bin `ramsharedd`) | `ok. 133 passed; 0 failed` — no regression |
+| `cargo clippy -p ramshared-ipc -p ramshared-wsl2d --all-targets -- -D warnings` | clean |
+| `node tools/ci/check-public-hygiene.mjs --check` | `PUBLIC_HYGIENE_STATUS=PASS` (`FILES=1204`) |
+
+Named tests added, all passing: `write_then_read_frame_round_trips`,
+`write_then_read_empty_payload_frame_round_trips`,
+`write_frame_rejects_unknown_message_type`,
+`write_frame_rejects_oversized_payload`,
+`read_frame_rejects_declared_length_above_the_caller_cap_before_reading_the_body`,
+`read_frame_rejects_declared_length_above_the_global_cap`,
+`read_frame_reports_truncation_instead_of_an_empty_body`,
+`read_frame_reports_truncation_of_the_header_itself`,
+`read_frame_surfaces_bad_magic_as_a_decode_error`,
+`read_frame_over_a_socket_pair_round_trips_several_frames_in_order`,
+`a_zero_heartbeat_interval_from_the_peer_is_refused_before_any_authority`,
+`a_zero_lease_timeout_from_the_peer_is_refused`,
+`a_lease_timeout_that_does_not_outlive_the_heartbeat_is_refused`,
+`an_invalid_host_proof_never_grants_a_lease`,
+`an_unexpected_message_type_mid_handshake_is_refused`,
+`a_truncated_stream_during_handshake_fails_closed`,
+`a_write_failure_during_handshake_fails_closed`,
+`heartbeat_before_a_lease_is_refused_without_touching_the_stream`,
+`heartbeat_loop_rejects_a_zero_interval_or_zero_failure_budget`,
+`heartbeat_loop_runs_every_requested_tick_when_all_beats_succeed`,
+`heartbeat_loop_stops_at_the_consecutive_failure_budget`,
+`heartbeat_loop_treats_an_isolated_failure_as_transient_and_continues`,
+`heartbeat_loop_of_zero_ticks_is_a_no_op`,
+`a_full_handshake_grants_a_lease_that_admits_cache`,
+`a_beat_that_reports_no_remaining_lease_moves_the_plane_to_origin_only`,
+`a_transport_failure_on_a_beat_fails_closed_to_safe_mode`,
+`a_host_thread_can_reject_the_lease_and_the_guest_keeps_no_authority`,
+`a_verified_origin_admitted_at_construction_survives_lease_loss_and_disconnect`,
+`losing_the_origin_identity_blocks_every_path`,
+`origin_loss_on_a_leased_authority_is_reported_as_origin_authority_revoked`.
+
+**What this run does NOT prove:**
+
+- **No production caller exists.** `ControlPlane` is not consulted by
+  `AuthoritativeOriginBackend` or by `run_nbd_with_startup`. This is a
+  composition with tests, not a wired product behaviour.
+- **`cache_state` is still `OFF`.** Nothing here changes that. Do not cite
+  this entry as cache-active evidence.
+- **EVD-0174 Finding A is still open.** Whether a file-only host may populate
+  the VRAM cache is unanswered, and this entry deliberately does not answer it.
+- **No vsock peer exists on this host.** Every end-to-end test ran over a
+  `UnixStream` pair with an in-process host thread. That exercises the
+  protocol, not a Windows host.
+- **No contention round for the supervisor.** EVD-0173's Freshness clause is
+  untouched by this work.
+- Not a boot round, not the host gate, not the screenshot challenge, not
+  multi-vendor GPU, not CoCo, not the capacity-boundary campaign.
+
+**Verdict:** ✅ works (the ITEM-3 transport composition is implemented with
+named tests, two RF-3 defects it exposed are fixed and asserted, and the live
+cascade is untouched), ⚠️ partial (nothing is wired into the I/O path, because
+EVD-0174 Finding A still decides whether that wiring is even the right
+product)
+
+**Category:** control-plane transport composition; protocol framing security;
+fail-closed lease lifecycle
+**How to measure:** Framing is measured by feeding a header whose declared
+length exceeds the caller's cap and requiring the reader to refuse **before**
+consuming the body (asserted by cursor position), and by truncating a body and
+requiring `TruncatedFrame` rather than a short success. The lease lifecycle is
+measured by driving the DT-3 exchange over a real socket pair with an
+in-process host that can accept, deny, expire, or drop the connection, and
+requiring exactly one of `VsockLeased` / `OriginOnly` / `SafeMode` after each
+outcome. RF-3 is measured by requiring `admit_origin_io()` to succeed before
+any lease, after lease expiry, and after a disconnect, and to fail only after
+`lose_origin_identity`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0175`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T02:41:33Z`.
+**Verified at:** `2026-10-02T02:41:33Z`.
+**Source revision:** `619d1c86`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the scope table — the three rows are the whole reason this
+was implementable without guessing EVD-0174 Finding A, and a reader must not
+collapse "the composition exists" into "ITEM-3 is wired". Keep both defect
+rows: the lease-expiry-vs-disconnect confusion and the origin-installed-only-
+by-accept_lease gap are the two properties RF-3 depends on, and each has a
+named test as its executable form. Keep the "no production caller" line.
+**Freshness:** Superseded when `run_nbd_with_startup` or
+`AuthoritativeOriginBackend` consults a `ControlPlane`, on any change to
+`write_frame` / `read_frame` / `VsockControlPlane` / `HeartbeatLoop` /
+`adopt_verified_origin`, or when EVD-0174 Finding A is settled and the wiring
+is implemented against that answer.
+
+---
