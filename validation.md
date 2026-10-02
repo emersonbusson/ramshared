@@ -15873,3 +15873,237 @@ opt-in contract in `docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md`
 changes.
 
 ---
+
+## 2026-10-01 22:59 -03 — the sealed release is live with four fixes, and the supervisor crash-looped on a transient lock (EVD-0172)
+
+**What:** Two things, deliberately kept in one entry because the second was
+found while verifying the first.
+
+1. **The sealed release `v0.14.1-384-gaf91cf23-dirty` is installed on this
+   host and carries four source fixes that were previously only in the tree.**
+   Each was then observed on the live cascade, not only in unit tests.
+2. **The control-plane supervisor crash-looped five times in one evening** on
+   `reservation ledger transition is busy or ambiguous`. That is a reproduced
+   product defect, root-caused to a Kahneman #15 violation and fixed at
+   revision `93958592`.
+
+### 1. Sealed install and the four live fixes
+
+Built with `scripts/package/build-linux-bundle.sh` under GuardWSL
+(`CARGO_BUILD_JOBS=1`), then installed with the attended installer's
+`--approve-nbd-product-install` and `--lower-sink`. The tree was `dirty` only
+because of another session's VMBus fragmentation-drill files under
+`scripts/kernel/`; none of those are in the payload, and the binaries match
+committed `af91cf23`.
+
+| Measurement | Value |
+| --- | --- |
+| Provenance schema | `ramshared-installed-release-provenance/v2` |
+| Installed at | `2026-10-02T01:36:07Z` |
+| Source commit | `af91cf23aa053ba39811f1b4454984d0730b12e5` |
+| Source tree state | `dirty` (VMBus drill scripts only; not in payload) |
+| Input bundle manifest SHA-256 | `01ea7d61afbf73a6eef140655f689fb6906f1c209bcba3f47ac2008aa4ff6ba6` |
+| Lower sink | `/mnt/c/ProgramData/RamShared/nbd-lower-sink`, identity `d8571730…`, filesystem block 4096 |
+| `BINARY_MATCH` | `2d0f4c85877c4d5d5f5b5d32b39591ac4939fa1f1f55d21c903e69042a38c3b8`, identical for the release directory and the live selector |
+| Release selector | `releases/v0.14.1-384-gaf91cf23-dirty` |
+| `NBD_INSTALL_ENABLED` | `0` (RF-1 stays opt-in) |
+
+The four fixes, each verified live after `ramshared down` then `ramshared up`:
+
+| Fix | Commit | Live proof |
+| --- | --- | --- |
+| Reap an exited GPU cache worker instead of leaving it a zombie | `3b78f65b` | Before: zombie PID `195541` had stood for **2 h 49 m** of daemon uptime. After: zero `ramsharedd` zombies at `2026-10-02T01:59:49Z`. The new daemon's startup zombie is transient and reaped within seconds by `recover_isolated_gpu_worker_if_failed` → `gpu_worker_has_exited` → `try_wait()`. |
+| Released cache reports `OFF`, not `UNAVAILABLE` | `a6eb8b5c` | `cache-status.json` reports `cache_state: "OFF"` beside `ok: false`, and `ramshared status` reports the cascade `ok: true`, `phase: UsingZram`, `protection: READY`. |
+| Bare `up` honours the host zram policy | `4f88e421` | Live `zram0` `disksize` is `2147483648` (2048 MiB), matching `ZRAM_MIB=2048`. Pre-fix bare `up` produced 1024 MiB. |
+| Refuse a `--vram` below the sealed origin capacity | `ce9c70f7` | Refusal is parse-time, before any device mutation. |
+
+Live cascade at `2026-10-02T01:59:49Z`, after the restart:
+
+```
+phase: UsingZram (zram_used_ge_threshold)
+protection: READY (guaranteed_vram_tier_ready)
+ok: true
+zram: present=true prio=200 size_kib=2097148 used_kib=1607812
+vram: present=true prio=100 size_kib=4194300 used_kib=0
+disk: present=true prio=-2  size_kib=4194304 used_kib=131004
+daemon: alive pid=659589
+```
+
+Tests before the supervisor fix: **681 passed, 0 failed** (`cargo test -p
+ramshared-cli -p ramshared-wsl2d --bins`). After: **686 passed, 0 failed**
+(553 cli + 133 wsl2d).
+
+### 2. The supervisor crash-loop — reproduced defect
+
+**Symptom.** `ramshared-supervisor.service` exited `status=1/FAILURE` five
+times between 18:44 and 22:12 local, each time with:
+
+```
+admission close failed after pressure actions were recorded: reservation ledger transition is busy or ambiguous
+```
+
+| Crash (local) | PID | Restart counter |
+| --- | --- | --- |
+| 2026-10-01 18:44:02 | `14819` | 1 |
+| 2026-10-01 19:59:13 | `83674` | 2 |
+| 2026-10-01 20:26:40 | `228417` | 3 |
+| 2026-10-01 20:45:28 | `388905` | 4 |
+| 2026-10-01 22:12:16 | `438949` | 5 |
+
+`NRestarts=5` at `2026-10-02T01:59:49Z`; the process has been up since
+22:12:17, so the loop is intermittent and contention-driven, not continuous.
+
+**Root-cause chain, traced to source:**
+
+1. `workload.rs` `acquire_lock` takes `flock(LOCK_EX | LOCK_NB)` on the ledger
+   root directory. On `Errno::WOULDBLOCK` it returns
+   `"reservation ledger transition is busy or ambiguous"`.
+2. `workload.rs` `publish_admission_state_at` propagates that error.
+3. `supervisor.rs` `SupervisorAction::CloseAdmission` called it once, with no
+   retry, from both `apply_decision_with` call sites (the healthy republish and
+   the pressure action).
+4. A `Failed` CloseAdmission became `DecisionApplyError { detail: "admission
+   close failed after pressure actions were recorded: …" }`.
+5. `run()` returned that `Err`, the process exited 1, and systemd restarted it.
+
+Contending actors are the other `acquire_lock` users — reservation add and
+release at the ledger transition.
+
+**Classification:**
+
+- **reproduced defect:** yes. Five journal entries, same signature, same
+  chain, and the unit-test surface reproduces it deterministically by holding
+  the ledger lock across `apply_decision_with`.
+- **static risk:** not the finding. The static risk (a `flock` `EWOULDBLOCK`
+  treated as fatal anywhere else in the ledger surface) is a separate question
+  and was not asserted here.
+- **incorrect conclusion a reader might draw:** that CloseAdmission is wrong
+  to fail. It is not. Recording a synthetic success while the canonical lock
+  is busy would be the real bug.
+
+The CloseAdmission *failure* is correct fail-closed behaviour: the supervisor
+must never claim admission closed without having written
+`admission-state.json`. That property is asserted by
+`critical_actions_remain_executable_when_admission_transition_busy`, which
+holds the lock for the whole test and still demands `close["status"] ==
+"failed"` with the actual publication error retained. **That test is unchanged
+and still passes.**
+
+The *defect* is narrower: a **transient** `EWOULDBLOCK` — the one error in this
+surface that resolves on its own — was allowed to kill a long-lived supervisor.
+That is a Kahneman #15 violation (retry only transient signatures; this is the
+transient signature) and a #17 violation (the write is idempotent, so a replay
+after the lock releases is safe).
+
+**What was changed (revision `93958592`):**
+
+- `LEDGER_BUSY_SIGNATURE` + `is_ledger_busy` classify the one transient ledger
+  error. Every other error still fails fast on the first attempt.
+- `retry_transient_ledger_publish` bounds the budget at **8 attempts** with a
+  **25 ms** backoff and returns the original error **unchanged** on exhaustion.
+  Split out from the publish so tests can count invocations and prove fail-fast
+  without timing assertions.
+- `publish_admission_state_at_with_transient_retry` wraps the publish.
+  Idempotent under #17: each attempt republishes the same immutable state bytes
+  for a given `written_at_unix_ms`.
+- Both `apply_decision_with` call sites use the retry boundary.
+
+**The retry deliberately does not live inside `acquire_lock`.** That function
+must keep reporting `EWOULDBLOCK` immediately, so callers that require strict
+ledger exclusivity can still observe interleaving. Putting the retry there
+would silently break
+`workload_start_serializes_against_close_admission_transition`, which proves a
+workload start and a close-admission transition cannot interleave.
+
+**Tests added (all named, all passing):**
+
+| Test | Proves |
+| --- | --- |
+| `only_the_ledger_busy_signature_is_treated_as_transient` | Classification: five deterministic error strings and the empty string are not transient; both busy phrasings are. |
+| `deterministic_ledger_errors_fail_fast_after_one_attempt` | Attempt counter is exactly **1** for a deterministic error. |
+| `transient_ledger_busy_exhausts_the_bounded_retry_budget` | Attempt counter is exactly **8** for a permanently busy lock, and the original error is preserved. |
+| `transient_ledger_busy_is_retried_until_the_contending_lock_releases` | Real `flock` contention released after 40 ms; the publish then succeeds and writes `GUARDED`. |
+| `transient_admission_lock_contention_does_not_terminate_the_supervisor` | The regression itself: `apply_decision_with` under a real 40 ms contention returns `Ok`, not `DecisionApplyError`, and CloseAdmission is recorded `succeeded` — for real, not synthetically. |
+
+Preserved, unchanged and still passing:
+
+| Test | Property that must not regress |
+| --- | --- |
+| `critical_actions_remain_executable_when_admission_transition_busy` | A still-busy lock records `failed` and never a synthetic success. |
+| `close_admission_publishes_a_serialized_closed_gate_before_guarded_state` | The closed gate is serialized before the guarded state. |
+| `workload_start_serializes_against_close_admission_transition` | Exclusivity: a close-admission transition interleaved with workload start still reports `transition is busy` immediately. |
+
+**Gate evidence:**
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p ramshared-cli --bins` | `ok. 553 passed; 0 failed` |
+| `cargo test -p ramshared-wsl2d --bins` | `ok. 133 passed; 0 failed` |
+| `cargo clippy -p ramshared-cli --bins -- -D warnings` | clean, `Finished dev profile` |
+| `node tools/ci/check-public-hygiene.mjs` | `PUBLIC_HYGIENE_STATUS=PASS` (`FILES=1203`, `MODE=candidate`) |
+| live supervisor after the fix | not yet deployed — see below |
+
+**What this run does NOT prove:**
+
+- **The supervisor fix is not deployed.** Revision `93958592` is committed and
+  tested; the installed release is still `af91cf23`. The live supervisor still
+  carries the defect. A rebuild + reinstall is required before the five crashes
+  can be called closed on this host.
+- **No boot round.** EVD-0168's units remain armed but unexercised.
+- **The host gate has still not run for real** on this host.
+- **GAP row 36 is still open.** EVD-0170's sealed activation procedure is
+  identified, not executed.
+- **`cache_state: ACTIVE` is not achieved.** The live value is `OFF`. Do not
+  cite this entry as cache-active evidence.
+- **Not screenshot-challenge evidence.** A supervised Windows before→after
+  around a real GPU workload is still missing. The idle `nvidia-smi` sample
+  (RTX 2060, 883 MiB / 6144 MiB used, driver 617.14) is a now-sample only.
+- Not vsock production wiring, multi-vendor GPU, CoCo, or capacity-boundary
+  campaign evidence.
+
+**Verdict:** ✅ works (the sealed release is installed and its four fixes are
+observed live; the supervisor defect is reproduced, classified and fixed with
+named tests that keep the fail-closed and exclusivity properties), ⚠️ partial
+(the fix is not yet on this host, and no boot round has exercised the armed
+units)
+
+**Category:** sealed-release deployment; cascade lifecycle; supervisor
+control-plane reliability; ledger lock concurrency
+**How to measure:** For the install, read
+`INSTALL_PROVENANCE.json` under the installed release and require schema
+`ramshared-installed-release-provenance/v2` with the expected source commit,
+then hash the `ramsharedd` that the release selector resolves to and require
+it to equal the same hash under the release directory (`BINARY_MATCH`). For the
+four fixes: zombie count of `ramsharedd` processes must be zero outside the
+startup window; `cache-status.json` must report `cache_state` equal to `OFF`
+when `ok` is false and `UNAVAILABLE` only when the cache genuinely is; live
+`zram0` `disksize` must equal the host policy `ZRAM_MIB` scaled to bytes; and a
+`--vram` below the sealed origin capacity must be refused before any device
+mutation. For the supervisor defect: reproduce by holding an exclusive lock on
+the ledger root directory across a guarded `apply_decision_with`, and require
+that the call returns `Ok` once the lock releases within the retry budget, and
+still returns an error with `close["status"]` equal to `failed` if the lock is
+held past it. The unit tests above are the executable form of that measurement.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0172`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T01:59:49Z`.
+**Verified at:** `2026-10-02T01:59:49Z`.
+**Source revision:** `93958592`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the five crash timestamps and the exact journal signature
+next to the chain — the gap between "the failure is correct" and "killing the
+supervisor over a transient is the defect" is the evidence, and a reader must
+not "fix" CloseAdmission into a synthetic success. Keep the statement that the
+retry must not live inside `acquire_lock`, with
+`workload_start_serializes_against_close_admission_transition` named as the
+property that would break. Keep the "not deployed" line until a reinstall
+lands; never cite this entry as live closure of the crash-loop.
+**Freshness:** Superseded when revision `93958592` (or its descendants) is
+installed on this host and the supervisor survives a contention round with
+`NRestarts` unchanged, or on any change to `acquire_lock`,
+`publish_admission_state_at`, `retry_transient_ledger_publish`, `run`, or the
+CloseAdmission action path.
+
+---
