@@ -16107,3 +16107,136 @@ installed on this host and the supervisor survives a contention round with
 CloseAdmission action path.
 
 ---
+
+
+## 2026-10-01 23:11 -03 — the supervisor fix is live without touching the cascade (EVD-0173)
+
+**What:** Revision `93958592`'s transient-retry fix is installed on this host
+as release `v0.14.1-386-gdffa5ea2-dirty`, and the supervisor is running it.
+The cascade was **not** restarted.
+
+EVD-0172 recorded the fix as "not yet deployed" and the crash-loop as open.
+This entry closes the deployment half of that. The "survives a contention
+round with `NRestarts` unchanged" half is **not** closed here — no contention
+round has been observed yet.
+
+### Why the cascade did not need a restart
+
+The fix touches only `crates/ramshared-cli/src/workload.rs` and
+`crates/ramshared-cli/src/supervisor.rs`. Neither is in `ramsharedd`
+(`crates/ramshared-wsl2d`). The three hashes below are identical:
+
+| `ramsharedd` | SHA-256 |
+| --- | --- |
+| previous bundle `v0.14.1-384-gaf91cf23-dirty` | `2d0f4c85877c4d5d5f5b5d32b39591ac4939fa1f1f55d21c903e69042a38c3b8` |
+| new bundle `v0.14.1-386-gdffa5ea2-dirty` | `2d0f4c85877c4d5d5f5b5d32b39591ac4939fa1f1f55d21c903e69042a38c3b8` |
+| live running daemon (PID `659589`, started from the previous release path) | `2d0f4c85877c4d5d5f5b5d32b39591ac4939fa1f1f55d21c903e69042a38c3b8` |
+
+Only the CLI/supervisor binary changed:
+
+| `bin/ramshared` | SHA-256 |
+| --- | --- |
+| previous release | `1ba99496825785a0860dffa75c71c74c1d84e0338404f94f1e7b8c8e941af070` |
+| new release (live) | `756dde76c1183da96421124af81273d0585161fadb7a53805fdba054457ef822` |
+
+So the deploy is a supervisor-only restart. No `ramshared down`, no `swapoff`,
+no zram teardown, no NBD detach — the teardown that has been risky on this
+memory-constrained host was deliberately avoided.
+
+### Install
+
+| Measurement | Value |
+| --- | --- |
+| Provenance schema | `ramshared-installed-release-provenance/v2` |
+| Installed at | `2026-10-02T02:10:06Z` |
+| Source commit | `dffa5ea27590e34606fce57eb30df9e9b93ea2a0` (descendant of `93958592`) |
+| Source tree state | `dirty` (another session's VMBus drill files; not in payload) |
+| Input bundle manifest SHA-256 | `ace1554ef9ec28496489c144f77b910f4b97eb2eb4e129f5e3a81aaafb796858` |
+| Release selector | `releases/v0.14.1-386-gdffa5ea2-dirty` |
+| `NBD_INSTALL_ENABLED` | `0` (RF-1 still opt-in) |
+
+The install ran with `ramshared-cascade.service` temporarily disabled so
+`check_unit_inert` would pass, then re-enabled — the same attended path as
+EVD-0168. After the install all three boot-path units are `enabled`,
+`ramshared-host-gate.service` and `ramshared-cascade.service` are `inactive`
+(RF-1 opt-in; no boot round), and `ramshared-supervisor.service` is `active`.
+
+### Post-deploy observations
+
+| Check | Result |
+| --- | --- |
+| Supervisor live binary | `756dde76…` — the new build |
+| `LEDGER_BUSY_SIGNATURE` present in the live binary | yes (`strings` reports `reservation ledger transition is busy`) |
+| Supervisor start | clean at `2026-10-01 23:10:18` local, `NRestarts=0`, `ExecMainStatus=0` |
+| `ramsharedd` zombies | 0 |
+| Cascade after the supervisor restart | untouched: same daemon PID `659589`, `ok: true`, `topology_ok: true` |
+| Live supervisor decision | `supervisor-state.json` reports `control_state: GUARDED` with `close_admission` `status: succeeded`, `error: null` |
+| Live admission gate | `admission-state.json` reports `admission_open: false`, `control_state: GUARDED` |
+
+That last pair is the important one. The supervisor has already applied a real
+pressure decision on this host on the new binary, and the canonical close
+landed as a **successful** write rather than a failure. That is the happy end
+of the path EVD-0172 found crash-looping.
+
+**What this run does NOT prove:**
+
+- **No contention round yet.** `NRestarts=0` after a clean start proves the
+  process is up, not that it survives a busy lock. The unit tests
+  (`transient_admission_lock_contention_does_not_terminate_the_supervisor`,
+  `transient_ledger_busy_is_retried_until_the_contending_lock_releases`) are
+  still the only proof of the retry behaviour. EVD-0172's Freshness clause
+  requires an observed contention round before the crash-loop can be called
+  closed on this host.
+- **`cache_state` is still `OFF`.** `cache-status.json` reports `ok: false`,
+  `cache_state: "OFF"`, `vram_cached_kib: 0`, `physical_cache_slab_bytes: 0`.
+  `ramshared status` separately reports `protection: ACTIVE
+  (guaranteed_vram_tier_active)` and `vram: used_kib=36220` — those mean the
+  VRAM tier is attached and `/proc/swaps` is serving pages on it. **They are
+  not the same claim.** Do not cite this entry as `cache_state: ACTIVE`
+  evidence.
+- **No boot round.** EVD-0168's units remain armed but unexercised.
+- **The host gate has still not run for real** on this host.
+- **GAP row 36 is still open.** EVD-0170's sealed activation is identified,
+  not executed.
+- Not screenshot-challenge evidence, vsock production wiring, multi-vendor
+  GPU, CoCo, or capacity-boundary campaign evidence.
+
+**Verdict:** ✅ works (the fix is installed and live on the supervisor binary;
+the cascade was preserved byte-identical so no teardown was needed; a real
+pressure decision has already been applied successfully on the new code),
+⚠️ partial (no contention round has been observed, so crash-loop survival is
+still only unit-tested)
+
+**Category:** sealed-release deployment; supervisor control-plane
+reliability; low-blast-radius rollout
+**How to measure:** Hash the `ramshared` process's own executable through its
+`/proc/<pid>/exe` and require it to equal the `bin/ramshared` the release
+selector resolves to; that pair is the deployment proof. Require the
+`ramsharedd` hash to equal the pre-deploy value, which is what authorises
+skipping a cascade restart. Then read `NRestarts` and `ExecMainStatus` after
+the supervisor start and require a clean start. The crash-loop itself is
+measured by holding an exclusive lock on the ledger root directory across a
+guarded decision and requiring the supervisor to return success once the lock
+releases within the retry budget, and to record `failed` — never a synthetic
+success — if it does not. The named unit tests are the executable form.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0173`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T02:11:26Z`.
+**Verified at:** `2026-10-02T02:11:26Z`.
+**Source revision:** `dffa5ea2`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three identical `ramsharedd` hashes next to the two
+different `bin/ramshared` hashes — that pair is what justified a
+supervisor-only restart and is the reason the risky cascade teardown was
+avoided. Keep the explicit `cache_state: "OFF"` note beside the
+`protection: ACTIVE` reading; a reader must not conflate "the VRAM tier is
+attached and serving swap pages" with "the cache is populated". Keep the "no
+contention round yet" line until one is observed.
+**Freshness:** Superseded when a live contention round is observed with
+`NRestarts` unchanged, or on any change to `acquire_lock`,
+`publish_admission_state_at`, `retry_transient_ledger_publish`, or the
+CloseAdmission action path.
+
+---
