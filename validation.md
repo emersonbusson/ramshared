@@ -15169,3 +15169,186 @@ lease-gate qualification evidence.
 performed under an approved window.
 
 ---
+
+---
+
+## 2026-10-01 21:11 -03 — the host gate mints on this host; cascades stay down at WSL2 start because RF-1 is opt-in (EVD-0167)
+
+**What:** Two independent facts, one conclusion for the standing question
+"RamShared does not come up with cascades active when WSL2 starts — is it a
+bug?".
+
+1. **The gate mints correctly on this host.** A full dry-run of
+   `scripts/safety/ramshared-host-gate.sh` under
+   `RAMSHARED_HOST_GATE_TEST_ROOT` — fed this host's live Windows
+   `guardian-config.json`, live `guardian-state` health proof, and live sealed
+   origin manifest — returned `RAMSHARED_HOST_GATE=NORMAL_BOOT` with exit 0,
+   wrote a host-resume lease, and wrote an `etc/ramshared/origin.conf` that
+   `sudo diff` reports **IDENTICAL** to the live `/etc/ramshared/origin.conf`
+   (same `host_manifest_sha256`, same `configuration_sha256`, same PARTUUID,
+   same `partition_dev_t=8:50` / `parent_dev_t=8:48`, same
+   `logical_capacity_mib=4096` / `physical_cache_cap_mib=4096`).
+2. **Cascades are not active at WSL2 start because the boot units are
+   deliberately not enabled.** `scripts/safety/install-cascade-boot.sh` prints
+   `NBD_INSTALL_ENABLED=0` on every successful install (line 955) and `--enable`
+   unconditionally refuses with `BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL`
+   (line 835). The SPEC states this as the contract, not as a defect:
+   *"No `systemctl enable` is added (RF-1 stays opt-in; the script already
+   refuses `systemctl enable`)"* —
+   `docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md`, installer row.
+
+**Classification:** three parts, kept apart on purpose.
+
+- **reproduced behaviour (not a defect):** the gate's minting path works against
+  this host's real guardian proof and sealed manifest. The test root is the only
+  isolation; the inputs were the live ones.
+- **incorrect conclusion:** calling "cascades not active on WSL2 start" a code
+  bug. It is not. The boot path is complete: `ramshared-cascade.service` has
+  `Requires=ramshared-host-gate.service` / `After=ramshared-host-gate.service`
+  and `ExecStart=… ramshared boot`, which runs the fail-closed gate chain
+  (identity → approval → lease → dirty) before activating. The installed unit
+  files and the installed gate script are byte-identical to their repo sources
+  (SHA-256 match on all four). What is absent is the opt-in lifecycle approval
+  that RF-1 requires before anything may enable them.
+- **installation lifecycle gap (the real open item):** `ramshared-host-gate.service`,
+  `ramshared-cascade.service`, `ramshared-supervisor.service` and
+  `ramshared-vram-tier.service` are installed and `disabled`. Only the observers
+  (`ramshared-cascade-health.service`, `ramshared-kmsg-recorder.service`,
+  `ramshared-postmortem.service`) are `enabled`. Until a lifecycle approval
+  enables the gate + cascade pair, `ramshared boot` cannot pass
+  `verify_host_lease` on a fresh WSL2 start, because the lease is boot-bound and
+  is minted only by the gate.
+
+**Live unit state and source identity (this host):**
+
+| Unit | State | Installed == repo source | Role at WSL2 start |
+| --- | --- | --- | --- |
+| `ramshared-host-gate.service` | `disabled` | yes | mints the boot-bound lease; `Before=ramshared-cascade.service` |
+| `ramshared-cascade.service` | `disabled` | yes | `ramshared boot` → verify lease → activate cascade |
+| `ramshared-supervisor.service` | `disabled` | yes | control-plane supervisor |
+| `ramshared-vram-tier.service` | `disabled` | n/a (no repo unit; drives an unsealed script) | persistent VRAM tier |
+| `ramshared-cascade-health.service` | `enabled` | yes | observer only |
+| `ramshared-kmsg-recorder.service` | `enabled` | n/a | observer only |
+| `ramshared-postmortem.service` | `enabled` | n/a | observer only |
+
+The observer-only set is exactly why `ramshared top` can show the daemon
+stopped and TIER 1 `OFF` at WSL2 start while the product is "installed": the
+things that *watch* are on and the things that *act* are off.
+
+**Dry-run transcript — the three refusals first (Kahneman #13 negative
+cases), then the pass.** Each refusal is a manufactured negative case the gate
+must fail closed on; all three were fixed in the test root only. The live
+`/etc/ramshared/origin.conf` was never touched.
+
+| # | Refusal observed | Root cause | Fix (test root only) |
+| --- | --- | --- | --- |
+| 1 | `origin identity fixture invalid: No such file or directory …/windows/origin-identity.json` | test mode requires the identity fixture; production leaves the path empty | staged a fixture carrying the live identity |
+| 2 | `origin aliases current root or active swap identity` | the fixture listed the origin's **own** `parent_dev_t`/`partition_dev_t` in `critical_dev_ts`; the gate is `if partition_dev_t in critical_dev_ts or parent_dev_t in critical_dev_ts` | `critical_dev_ts` = root + active swap devices only (`8:32`, `8:16`, `253:0`, `43:0` — decimal `os.major`/`os.minor`, not `stat -c '%t:%T'` hex) |
+| 3 | `guardian health proof is stale` | copied health proof was older than `stale_after_seconds` and read-only (`cp` preserved the Windows `-r-xr-x` mode) | `rm -f` then `cp` then `chmod u+w`, run immediately |
+
+Passing run:
+
+```
+RAMSHARED_HOST_GATE=NORMAL_BOOT
+gate_exit=0
+```
+
+Minted lease body (boot id withheld; it equals
+`/proc/sys/kernel/random/boot_id` on this boot, which is the property the
+gate enforces):
+
+```json
+{"schema_version":1,"boot_id":"SANITIZED","source":"fresh_sealed_guardian_proof"}
+```
+
+Minted `etc/ramshared/origin.conf` under the test root: `sudo diff` against the
+live `/etc/ramshared/origin.conf` → **no output, exit 0 (IDENTICAL)**.
+
+Supporting live inputs the dry-run consumed unchanged:
+
+```
+$ grep -E '^(VRAM_MIB|ZRAM_MIB|MIN_VRAM_HEADROOM_MIB)=' /etc/ramshared/cascade.conf
+VRAM_MIB=4096
+ZRAM_MIB=2048
+MIN_VRAM_HEADROOM_MIB=2048
+```
+
+```
+$ sudo grep -E '^(schema_version|partition_dev_t|parent_dev_t|logical_capacity_mib|physical_cache_cap_mib)=' /etc/ramshared/origin.conf
+schema_version=3
+partition_dev_t=8:50
+parent_dev_t=8:48
+logical_capacity_mib=4096
+physical_cache_cap_mib=4096
+```
+
+`safe-mode/` under the Windows product data directory is empty, so the gate
+takes the guardian path rather than the SAFE_MODE path (which would exit 0
+**without** minting). The guardian proof is live and refreshed roughly every
+1 s, schema version 3, `state: HEALTHY`, `stale_after_seconds: 15`, and its
+`boot_id` matches the guest's `/proc/sys/kernel/random/boot_id`.
+
+**What this run does NOT prove:**
+
+- **The gate was not run for real.** A real run does `rm -f` on
+  `/etc/ramshared/origin.conf` and the host-resume lease *before* parsing any
+  host-controlled data, then re-mints. If minting failed, this host would be
+  left with no origin authority until a later successful run. That deletion is
+  deliberate fail-closed behaviour and is why the run stayed in a test root.
+- **The lease was minted only under the test root.** The live
+  `/run/ramshared/host-resume-lease.json` is still **absent**, so `ramshared
+  boot` still cannot pass `verify_host_lease` on this boot.
+- **No unit was enabled and no reboot round was performed.** RF-1 remains
+  opt-in; flipping `ramshared-host-gate.service` / `ramshared-cascade.service`
+  is a boot-behaviour change on a live host and needs its own lifecycle
+  approval and its own evidence entry.
+- **The live zombie is still present.** GPU worker PID `195541` is `Z`
+  `<defunct>` under daemon `195515`; the running daemon is the pre-fix
+  `v0.15.0-de32b421` binary. This entry does not clear it.
+- Not boot-round, vsock, multi-vendor GPU, CoCo, screenshot-challenge, or
+  `cache_state: ACTIVE` evidence. Idle `PSI memory full avg10` is still
+  ≥ 2.0 with `healthy_samples: 0`, so `ACTIVE` remains unclaimable.
+
+**Verdict:** ✅ works (gate mints on this host; dry-run `NORMAL_BOOT`; minted
+origin.conf identical to the live seal), ⚠️ partial (not run for real; lease
+absent on the live boot; boot units still disabled; RF-1 lifecycle approval
+still open)
+
+**Category:** cascade lifecycle; host-resume lease; RF-1 opt-in boot enablement
+**How to measure:** On a host with a live guardian proof and a sealed origin,
+a dry-run of `scripts/safety/ramshared-host-gate.sh` under
+`RAMSHARED_HOST_GATE_TEST_ROOT` must print `RAMSHARED_HOST_GATE=NORMAL_BOOT`,
+exit 0, write a lease whose `boot_id` equals the guest's
+`/proc/sys/kernel/random/boot_id`, and write an `origin.conf` that diffs clean
+against the live one. The three negative cases above must each still refuse —
+a gate that accepts a stale proof, a self-aliasing `critical_dev_ts` set, or a
+missing identity fixture is not the gate being tested. Separately, `systemctl
+is-enabled ramshared-host-gate.service ramshared-cascade.service` must both
+report `enabled` before "cascades active at WSL2 start" can be claimed at all;
+until then the claim is refused.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0167`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T00:11:46Z`.
+**Verified at:** `2026-10-02T00:11:46Z`.
+**Source revision:** `cf22d861`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three-row refusal table beside the passing
+`RAMSHARED_HOST_GATE=NORMAL_BOOT` line — the refusals are the negative cases
+that make the pass meaningful. Keep the `diff` → IDENTICAL result next to the
+minted lease body; that pair is the minting proof. Keep the unit-state table
+and the `NBD_INSTALL_ENABLED=0` / `BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL`
+citations together: they are what turns "is it a bug?" into "no, RF-1 is
+opt-in". Never cite this entry as a live host-gate run, a boot-round, or
+lease-gate qualification.
+**Freshness:** Superseded on any change to
+`scripts/safety/ramshared-host-gate.sh`, to
+`scripts/safety/install-cascade-boot.sh`'s `--enable` handling or
+`NBD_INSTALL_ENABLED` emission, to the RF-1 wording in
+`docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md`, or on the first real
+(non-test-root) host-gate execution. Re-run the dry-run if the guardian proof
+schema, the origin manifest schema, or the `critical_dev_ts` alias check
+changes.
+
+---
