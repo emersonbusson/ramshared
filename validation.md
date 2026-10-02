@@ -16561,3 +16561,92 @@ named test as its executable form. Keep the "no production caller" line.
 is implemented against that answer.
 
 ---
+
+## 2026-10-01 23:52 -03 — accepted-version refusal made explicit, coverage 85.4% (EVD-0176)
+
+**What:** A follow-up to EVD-0175 on the same module: the handshake's
+"did the peer stay in version range" check is now a direct range test with its
+own named unit test, instead of being derived through `negotiate_version` with
+a clamped upper bound and a value compared back to itself.
+
+### Why this was not left alone
+
+`negotiate_version(guest_min, guest_max)` answers *"which version should this
+side pick"*. The question the handshake actually needs answered is *"is the
+peer's `accepted_version` inside the range this build speaks"* — a different
+question. The old code encoded the right rule but hid it behind a round trip,
+so a reader could not tell which of the two questions was being asked.
+
+The distinction is not academic. `VsockFrameHeader::decode` bounds the
+**frame header's** `version` field to `IPC_MIN_VERSION..=IPC_VERSION_3`. The
+payload's `accepted_version` is a **different** field. Nothing else bounds it,
+so a peer that puts version 1 (below the minimum) or 4 (above the maximum) in
+the `HandshakeAck` body needed a refusal of its own, and a test that says so.
+
+| Change | Detail |
+| --- | --- |
+| `validate_accepted_version(u32)` | rejects anything outside `IPC_MIN_VERSION..=IPC_VERSION_3` with the range in the message |
+| `accepted_version_outside_the_supported_range_is_refused` | covers 0, 1 and 4 refused; 2 and 3 accepted |
+
+Behaviour is unchanged for every in-range version. Only the refusal path's
+shape and its test moved.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p ramshared-ipc` | `ok. 54 passed; 0 failed` |
+| `cargo test -p ramshared-wsl2d` (lib) | `ok. 200 passed; 0 failed` |
+| `cargo test -p ramshared-wsl2d` (bin `ramsharedd`) | `ok. 133 passed; 0 failed` |
+| `cargo clippy -p ramshared-ipc -p ramshared-wsl2d --all-targets -- -D warnings` | clean |
+| `check-rust-slice-coverage.mjs -p ramshared-wsl2d --files …/control_plane.rs --min 80` | **85.4%** (234/274 lines) — up from 81.8%, gate PASSED |
+
+### Relationship to EVD-0175
+
+EVD-0175's Freshness clause names `VsockControlPlane` as a supersede trigger,
+and this revision changes it. **EVD-0175's findings are not superseded and
+remain in force** — specifically, and a reader must keep all of these:
+
+- the three-row scope table: the composition exists, ITEM-3 is **not** wired;
+- both RF-3 defects and their named tests (lease expiry stays `OriginOnly`;
+  origin identity is installed at construction via `adopt_verified_origin`);
+- "no production caller exists";
+- `cache_state` is still `OFF` and must not be conflated with `protection:
+  ACTIVE`;
+- EVD-0174 Finding A is still open and unanswered.
+
+What moved is only the measured revision point of the composition. This entry
+supersedes EVD-0175's *measurement* and leaves its *claims* standing.
+
+**What this run does NOT prove:** identical to EVD-0175. No production caller,
+no live vsock peer, no `cache_state: ACTIVE`, no supervisor contention round,
+no boot round, no host gate, no screenshot-challenge evidence.
+
+**Verdict:** ✅ works (the version-range refusal is now explicit and directly
+tested; slice coverage on the new module is above the gate), ⚠️ partial (the
+same partials as EVD-0175: nothing is wired into the I/O path)
+
+**Category:** protocol negotiation correctness; slice coverage
+**How to measure:** feed a `HandshakeAck` whose `accepted_version` is below
+`IPC_MIN_VERSION` or above `IPC_VERSION_3` and require a `Protocol` refusal
+naming the rejected value and the supported range; then require 2 and 3 to be
+accepted. Coverage is measured by the repository slice-coverage gate on
+`crates/ramshared-wsl2d/src/control_plane.rs` at a minimum of 80% lines.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0176`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T02:52:10Z`.
+**Verified at:** `2026-10-02T02:52:10Z`.
+**Source revision:** `c4226e27`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the EVD-0175 relationship paragraph. A reader must not
+treat this entry as a reason to drop EVD-0175's scope table or its two RF-3
+defect rows — those claims are still the load-bearing ones. Keep the note that
+the frame header's `version` and the payload's `accepted_version` are different
+fields; that is the whole reason a second check exists.
+**Freshness:** Superseded on any further change to
+`validate_accepted_version`, `VsockControlPlane::handshake_exchange`, or the
+control-plane module's coverage below the 80% gate.
+
+---
