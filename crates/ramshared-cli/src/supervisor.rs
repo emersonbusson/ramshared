@@ -1108,7 +1108,7 @@ fn apply_decision_with(
             detail,
             action_results: action_results.clone(),
         })?;
-        workload::publish_admission_state_at(
+        workload::publish_admission_state_at_with_transient_retry(
             ledger_root,
             supervisor_identity,
             decision.state.as_str(),
@@ -1124,8 +1124,14 @@ fn apply_decision_with(
     // Close admission exactly when its action is executed. A refusal remains
     // that action's definitive typed result; later pressure actions still run
     // and every outcome is published in execution order.
+    //
+    // A transient ledger lock contention is retried here rather than treated
+    // as fatal: a supervisor that exits on `EWOULDBLOCK` crash-loops under
+    // ordinary reservation churn. The retry is bounded and only matches the
+    // busy signature, so a still-busy lock after the budget is recorded as
+    // this action's definitive failure — never as a synthetic success.
     let action_results = execute_actions_with(decision, action_paths, runner, || {
-        workload::publish_admission_state_at(
+        workload::publish_admission_state_at_with_transient_retry(
             ledger_root,
             supervisor_identity,
             decision.state.as_str(),
@@ -2721,6 +2727,79 @@ mod tests {
                 .as_str()
                 .is_some_and(|error| error.contains("busy")),
             "CloseAdmission did not retain the actual publication failure"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    // TestName: transient_admission_lock_contention_does_not_terminate_the_supervisor
+    fn transient_admission_lock_contention_does_not_terminate_the_supervisor() {
+        let root = fixture();
+        let state_path = root.join("supervisor-state.json");
+        let ledger_root = root.join("admission");
+        fs::create_dir_all(&ledger_root).unwrap();
+        let authority = std::fs::File::open(&ledger_root).unwrap();
+        authority.try_lock().unwrap();
+        let runtime = root.join("runtime");
+        let decision = SupervisorDecision {
+            state: SupervisorState::Guarded,
+            actions: vec![SupervisorAction::CloseAdmission],
+            healthy_samples: 0,
+        };
+        let identity = OwnerIdentity::current().unwrap();
+
+        // A DecisionApplyError here is what makes `run()` return Err and lets
+        // systemd restart the supervisor. A lock that another ledger actor is
+        // about to release must not reach that outcome.
+        let contended_state_path = state_path.clone();
+        let contended_ledger_root = ledger_root.clone();
+        let contended_runtime = runtime.clone();
+        let contended_identity = identity.clone();
+        let apply = std::thread::spawn(move || {
+            let runner = FakeUnitRunner {
+                calls: RefCell::new(Vec::new()),
+                fail: false,
+            };
+            let action_paths = ActionPaths {
+                runtime: &contended_runtime,
+                ledger: &contended_ledger_root.join("reservations.json"),
+                daemon_instance_id: Some("fixture-daemon"),
+                issued_at_unix_ms: Some(1_000),
+            };
+            apply_decision_with(
+                &contended_state_path,
+                &contended_ledger_root,
+                &decision,
+                &action_paths,
+                &runner,
+                &contended_identity,
+                1_000,
+            )
+        });
+        std::thread::sleep(Duration::from_millis(40));
+        drop(authority);
+        let results = apply.join().unwrap().expect(
+            "a transient admission lock contention terminated the supervisor \
+             instead of being retried",
+        );
+        assert_eq!(results[0].status, SupervisorActionStatus::Succeeded);
+        let gate: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(ledger_root.join("admission-state.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(gate["admission_open"], false);
+        assert_eq!(gate["control_state"], "GUARDED");
+        let state: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+        let close = state["action_results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|result| result["action"] == "close_admission")
+            .unwrap();
+        assert_eq!(
+            close["status"], "succeeded",
+            "a retried transient must close admission for real, not record a failure"
         );
         fs::remove_dir_all(root).unwrap();
     }

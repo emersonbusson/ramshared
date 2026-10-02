@@ -448,6 +448,70 @@ pub(crate) fn publish_admission_state_at(
     store_named_locked(&lock, "admission-state.json", contents.as_bytes())
 }
 
+/// The one transient error signature this surface retries (Kahneman #15).
+///
+/// `flock(LOCK_EX | LOCK_NB)` returns `EWOULDBLOCK` when another ledger actor
+/// — typically a reservation add/release — holds the transition lock for a
+/// bounded critical section. That contention resolves on its own, so killing
+/// a long-lived supervisor over it is a defect. Every other ledger error is
+/// deterministic (identity, path, I/O) and must fail fast instead.
+///
+/// The signature is a stable substring of the `acquire_lock` busy message so
+/// callers can classify without the string having to match verbatim. A
+/// self-held conflicting lock also reports this signature and is likewise
+/// retried; if the conflict is genuine self-deadlock the retry budget is
+/// exhausted and the original error is returned unchanged.
+pub(crate) const LEDGER_BUSY_SIGNATURE: &str = "reservation ledger transition is busy";
+
+pub(crate) fn is_ledger_busy(error: &str) -> bool {
+    error.contains(LEDGER_BUSY_SIGNATURE)
+}
+
+/// `publish_admission_state_at`, retried only on the transient busy signature.
+///
+/// Each attempt republishes the same immutable state bytes for a given
+/// `written_at_unix_ms`, so a replay after a released lock is idempotent
+/// (Kahneman #17). The retry budget is bounded and deliberately lives at this
+/// action boundary rather than inside `acquire_lock`, which must keep
+/// reporting `EWOULDBLOCK` immediately so callers that require strict ledger
+/// exclusivity can still observe interleaving.
+pub(crate) fn publish_admission_state_at_with_transient_retry(
+    root: &Path,
+    supervisor_identity: &OwnerIdentity,
+    control_state: &str,
+    written_at_unix_ms: u64,
+) -> Result<(), String> {
+    retry_transient_ledger_publish(|| {
+        publish_admission_state_at(root, supervisor_identity, control_state, written_at_unix_ms)
+    })
+}
+
+/// Retry loop over a ledger publication attempt.
+///
+/// Split out from `publish_admission_state_at_with_transient_retry` so the
+/// retry policy itself is observable: tests count invocations to prove that a
+/// deterministic error is attempted exactly once and only the busy signature
+/// consumes the budget.
+fn retry_transient_ledger_publish(mut publish: impl FnMut() -> Result<(), String>) -> Result<(), String> {
+    const MAX_ATTEMPTS: u32 = 8;
+    const RETRY_BACKOFF: Duration = Duration::from_millis(25);
+    let mut last_error = String::new();
+    for attempt in 0..MAX_ATTEMPTS {
+        match publish() {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let transient = is_ledger_busy(&error);
+                last_error = error;
+                if !transient || attempt + 1 == MAX_ATTEMPTS {
+                    return Err(last_error);
+                }
+                std::thread::sleep(RETRY_BACKOFF);
+            }
+        }
+    }
+    Err(last_error)
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Reservation {
     pub id: String,
@@ -3693,5 +3757,93 @@ mod tests {
         let mut unexpected = ScopeStatus::active(unit);
         unexpected.active_state = "stopping".into();
         assert!(unexpected.terminal_exit_status().is_err());
+    }
+
+    #[test]
+    // TestName: only_the_ledger_busy_signature_is_treated_as_transient
+    fn only_the_ledger_busy_signature_is_treated_as_transient() {
+        assert!(is_ledger_busy("reservation ledger transition is busy"));
+        assert!(is_ledger_busy(
+            "reservation ledger transition is busy or ambiguous"
+        ));
+        for deterministic in [
+            "lock reservation ledger transition: Permission denied",
+            "ledger authority is a symlink",
+            "owner identity mismatch",
+            "admission-state.json: No such file or directory",
+            "",
+        ] {
+            assert!(
+                !is_ledger_busy(deterministic),
+                "deterministic ledger error misclassified as transient: {deterministic:?}"
+            );
+        }
+    }
+
+    #[test]
+    // TestName: deterministic_ledger_errors_fail_fast_after_one_attempt
+    fn deterministic_ledger_errors_fail_fast_after_one_attempt() {
+        let attempts = AtomicUsize::new(0);
+        let error = retry_transient_ledger_publish(|| {
+            attempts.fetch_add(1, AtomicOrdering::SeqCst);
+            Err("ledger authority is a symlink".to_string())
+        })
+        .unwrap_err();
+        assert_eq!(error, "ledger authority is a symlink");
+        assert_eq!(
+            attempts.load(AtomicOrdering::SeqCst),
+            1,
+            "a deterministic ledger error must not consume the retry budget"
+        );
+    }
+
+    #[test]
+    // TestName: transient_ledger_busy_exhausts_the_bounded_retry_budget
+    fn transient_ledger_busy_exhausts_the_bounded_retry_budget() {
+        let attempts = AtomicUsize::new(0);
+        let error = retry_transient_ledger_publish(|| {
+            attempts.fetch_add(1, AtomicOrdering::SeqCst);
+            Err("reservation ledger transition is busy or ambiguous".to_string())
+        })
+        .unwrap_err();
+        assert!(
+            error.contains("transition is busy"),
+            "the original busy failure must be preserved after exhaustion: {error}"
+        );
+        assert_eq!(
+            attempts.load(AtomicOrdering::SeqCst),
+            8,
+            "the busy signature must consume exactly the bounded retry budget"
+        );
+    }
+
+    #[test]
+    // TestName: transient_ledger_busy_is_retried_until_the_contending_lock_releases
+    fn transient_ledger_busy_is_retried_until_the_contending_lock_releases() {
+        let root = fixture();
+        let identity = OwnerIdentity::current().unwrap();
+        let authority = File::open(&root).unwrap();
+        authority.try_lock().unwrap();
+        // The main thread owns the release so a delayed dropper cannot outlast
+        // the retry budget and turn a real transient into a flake.
+        let contended_root = root.clone();
+        let contended_identity = identity.clone();
+        let publisher = std::thread::spawn(move || {
+            publish_admission_state_at_with_transient_retry(
+                &contended_root,
+                &contended_identity,
+                "GUARDED",
+                7_000,
+            )
+        });
+        std::thread::sleep(Duration::from_millis(40));
+        drop(authority);
+        publisher.join().unwrap().unwrap();
+        let gate: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join("admission-state.json")).unwrap())
+                .unwrap();
+        assert_eq!(gate["admission_open"], false);
+        assert_eq!(gate["control_state"], "GUARDED");
+        fs::remove_dir_all(root).unwrap();
     }
 }
