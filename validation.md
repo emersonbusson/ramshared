@@ -16240,3 +16240,149 @@ contention round yet" line until one is observed.
 CloseAdmission action path.
 
 ---
+
+
+## 2026-10-01 23:22 -03 — two findings classified and left open rather than guessed (EVD-0174)
+
+**What:** While working the next in-session gaps after EVD-0173, two
+questions came up whose correct answer is "record it, do not implement it
+yet". Both are recorded here with a classification, because the standing rule
+is that every audit finding is separated into a reproduced defect, a static
+risk, or an incorrect conclusion — and because inventing either one would be a
+worse defect than leaving them open.
+
+### Finding A — `native-vsock` ITEM-3 production wiring has an unresolved SPEC contradiction
+
+**Classification: static risk in the SPEC, not a reproduced product defect.**
+
+The task was to implement ITEM-3 production wiring: add `VsockControlPlane`,
+add a `ControlPlane` trait, add `HeartbeatLoop`, and make `run_nbd_with_startup`
+accept the control-plane authority. GAP-REGISTER row 37 is accurate that
+"neither daemon starts the listener or the client", so the gap is real.
+
+The SPEC contradicts itself on a decision that changes product behaviour:
+
+| Source | Says |
+| --- | --- |
+| `native-vsock-host-guest-control-plane/SPEC.md` §MODIFY symbols | "modify `run_nbd_with_startup` to accept `ControlPlane` trait (**vsock or file fallback**)" |
+| same SPEC, ITEM-3 integration note | "There is **no file fallback**; a connection failure must not grant a lease" |
+| `host_gate.rs` `ControlPlaneAuthority::admit_cache` | refuses unless `state == VsockLeased` — a file-only authority can never admit cache |
+| `host_gate.rs` `lease_after_connect` | "There is no file fallback (RF-6 / SPEC §MODIFY)" |
+| `ramshared-block/src/isolated_origin.rs` `AuthoritativeOriginBackend` | cache admission is governed by `CacheState` alone; it has **no** lease or control-plane awareness at all |
+
+So the two readings that the SPEC text permits give opposite products:
+
+1. **`ControlPlane` has two implementations (vsock, file), and "no file
+   fallback" only forbids falling back to files to mint a lease after a vsock
+   failure.** Then a file-only host keeps the current behaviour: cache is
+   governed by `CacheState`, and `ControlPlaneAuthority` applies only when a
+   vsock peer exists.
+2. **The file path is being deleted and cache admission always requires a
+   `VsockLeased` authority.** Then this host — which has no Windows vsock peer
+   and runs the product today over the file manifest path — could never use the
+   VRAM cache again.
+
+Reading 2 also collides with Day-0: a `ControlPlane` trait with a file
+implementation is a dual path unless the file implementation is explicitly
+exceptioned. Reading 1 leaves a live authority that is consulted on one host
+and not the other, which is the same dual path wearing a trait.
+
+**Why this was not implemented:** both readings are defensible from the text,
+they produce different products, and the change lands inside
+`AuthoritativeOriginBackend` — the live I/O path serving swap on this host
+right now. Guessing would violate Day-0 ("no temporary workarounds", no
+undocumented dual paths) and risks the running cascade. The SPEC needs one
+sentence settling whether a file-only host may populate the VRAM cache, and
+whether the file manifest path survives.
+
+**What is already true in source and must not be redone:** `ControlPlaneAuthority`
+(`host_gate.rs`) is complete and tested — `lease_expiry_revokes_cache_and_keeps_verified_origin`,
+`origin_identity_loss_blocks_io`, `vsock_disconnect_triggers_safe_mode`,
+`connection_failure_never_grants_lease`. The DT-3 handshake with
+`HandshakeFinish` (`MSG_HANDSHAKE_FINISH = 22`) is complete in `ramshared-ipc`.
+`crates/ramshared-ipc/src/vsock.rs` has bounded `connect_vsock` and
+`listen_hyperv`. None of that is missing; only the production composition is.
+
+### Finding B — `/dev/dxg` is world-writable on this host
+
+**Classification: static risk on a platform surface RamShared consumes. Not a
+reproduced RamShared defect. Not an incorrect conclusion.**
+
+```
+crw-rw-rw- 1 root root 10, 258 Oct  1 17:56 /dev/dxg
+```
+
+`/sys/class/misc/dxg/uevent` reports `DEVNAME=dxg`, `MAJOR=10`, `MINOR=258`,
+`DEVMODE=0666`. The node is a `misc` device created by `dxgkrnl`, the WSL2
+GPU-PV driver that ships with Microsoft's WSL kernel. RamShared only **opens**
+it — `crates/ramshared-dxg/src/lib.rs` `Self::open_path("/dev/dxg", requested)`.
+RamShared does not create the node, does not `mknod` it, and does not `chmod`
+it.
+
+This matters because `.claude/rules/security.md` lists "World-writable `/dev`
+nodes for convenience" as a DON'T, and requires device nodes not be
+world-writable by default. A local unprivileged user can open `/dev/dxg` and
+issue WDDM ioctls.
+
+**Why this was not "fixed":** chmod'ing a driver-created node is exactly the
+kind of temporary workaround RamShared's Day-0 policy forbids — it would be
+undone by the next driver re-create, it would mask upstream behaviour, and it
+is not RamShared's node to change. The correct home for this is an upstream or
+platform note, not a product code change. It is recorded so the security
+checklist is not read as "RamShared has world-writable devices it created".
+
+### Passive observation — the EVD-0173 supervisor deploy is holding
+
+| Check | Result |
+| --- | --- |
+| `ramshared-supervisor.service` uptime | 11 m 26 s since the `23:10:18` start |
+| `NRestarts` | `0` |
+| `ExecMainStatus` | `0` |
+| Journal since the start | no `admission close failed` line |
+
+This is still **not** a contention round. EVD-0172's Freshness clause stands:
+crash-loop survival on this host needs an observed busy-lock round, and the
+named unit tests remain the only proof of the retry.
+
+**What this run does NOT prove:**
+
+- Nothing about ITEM-3 live behaviour. No vsock peer exists on this host.
+- No conclusion about whether the VRAM cache should work on a file-only host.
+  That is precisely the open question in Finding A.
+- Not evidence that `/dev/dxg` is a RamShared defect, and not a fix for it.
+- Not contention-round evidence for the supervisor retry.
+
+**Verdict:** ✅ works (both findings are classified and recorded rather than
+acted on incorrectly; the supervisor deploy continues to hold), ⚠️ partial
+(Finding A blocks ITEM-3 production wiring until the SPEC settles the
+file-only cache question)
+
+**Category:** specification coherence; security surface inventory; supervisor
+control-plane reliability
+**How to measure:** For Finding A, the test is textual and decisive: the SPEC
+must answer in one place whether a host with no vsock peer may populate the
+VRAM cache, and whether the file manifest path is retained. Until that answer
+exists, any `ControlPlane` implementation is a guess. For Finding B, `stat -c
+'%a %t %T'` on the device node and the `DEVMODE=` line in its `uevent` are the
+measurement; the classification turns on whether product source creates or
+changes the node, which is greppable and currently does not.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0174`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T02:22:49Z`.
+**Verified at:** `2026-10-02T02:22:49Z`.
+**Source revision:** `4f9405e9`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep both classifications. A reader must not implement ITEM-3
+production wiring before Finding A is settled, and must not chmod `/dev/dxg`
+into looking like a RamShared defect or a RamShared fix. Keep the
+`DEVMODE=0666` provenance line — that it comes from `dxgkrnl`'s `uevent` and
+not from product source is the whole classification.
+**Freshness:** Finding A is superseded when
+`docs/specs/no-milestone/native-vsock-host-guest-control-plane/SPEC.md`
+answers the file-only cache question and ITEM-3 production wiring is
+implemented against that answer. Finding B is superseded if RamShared ever
+creates or changes `/dev/dxg`, or if the platform changes the node's mode.
+
+---
