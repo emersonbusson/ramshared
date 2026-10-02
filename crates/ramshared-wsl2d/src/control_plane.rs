@@ -119,9 +119,25 @@ pub struct NegotiatedCadence {
     pub lease_timeout_secs: u64,
 }
 
+/// Refuse a peer `accepted_version` outside the versions this build speaks.
+///
+/// The frame header's version and the payload's `accepted_version` are
+/// different fields: `VsockFrameHeader::decode` bounds the former, nothing
+/// else bounds the latter. A peer that claims version 1 (below
+/// `IPC_MIN_VERSION`) or 4 (above `IPC_VERSION_3`) is refused here.
+fn validate_accepted_version(accepted: u32) -> Result<u32, ControlPlaneError> {
+    if !(ipc::IPC_MIN_VERSION..=ipc::IPC_VERSION_3).contains(&accepted) {
+        return Err(ControlPlaneError::Protocol(format!(
+            "peer accepted version {accepted}, outside the supported range {}..={}",
+            ipc::IPC_MIN_VERSION,
+            ipc::IPC_VERSION_3
+        )));
+    }
+    Ok(accepted)
+}
+
 /// Reject a peer-supplied cadence that would spin the loop or outrun the lease.
-fn validate_cadence(c: NegotiatedCadence) -> Result<NegotiatedCadence, ControlPlaneError> {
-    if c.heartbeat_secs == 0 {
+fn validate_cadence(c: NegotiatedCadence) -> Result<NegotiatedCadence, ControlPlaneError> {    if c.heartbeat_secs == 0 {
         return Err(ControlPlaneError::Protocol(
             "peer negotiated a zero heartbeat interval".into(),
         ));
@@ -253,23 +269,7 @@ impl<S: ipc::vsock::VsockStreamTrait> VsockControlPlane<S> {
             )));
         }
         let ack: HandshakeAck = ipc::decode_control(&ack_payload)?;
-
-        let negotiated = ipc::negotiate_version(
-            ipc::IPC_MIN_VERSION,
-            ack.accepted_version.max(ipc::IPC_MIN_VERSION),
-        )
-        .ok_or_else(|| {
-            ControlPlaneError::Protocol(format!(
-                "no mutually supported version (peer accepted {})",
-                ack.accepted_version
-            ))
-        })?;
-        if negotiated != ack.accepted_version {
-            return Err(ControlPlaneError::Protocol(format!(
-                "peer accepted version {} which is outside the negotiated range",
-                ack.accepted_version
-            )));
-        }
+        validate_accepted_version(ack.accepted_version)?;
 
         let cadence = validate_cadence(NegotiatedCadence {
             heartbeat_secs: ack.heartbeat_secs,
@@ -610,6 +610,30 @@ mod tests {
     }
 
     // --- Handshake: fail-closed paths ------------------------------------
+
+    #[test]
+    fn accepted_version_outside_the_supported_range_is_refused() {
+        assert_eq!(
+            validate_accepted_version(0),
+            Err(ControlPlaneError::Protocol(
+                "peer accepted version 0, outside the supported range 2..=3".into()
+            ))
+        );
+        assert_eq!(
+            validate_accepted_version(1),
+            Err(ControlPlaneError::Protocol(
+                "peer accepted version 1, outside the supported range 2..=3".into()
+            ))
+        );
+        assert_eq!(
+            validate_accepted_version(4),
+            Err(ControlPlaneError::Protocol(
+                "peer accepted version 4, outside the supported range 2..=3".into()
+            ))
+        );
+        assert_eq!(validate_accepted_version(2), Ok(2));
+        assert_eq!(validate_accepted_version(3), Ok(3));
+    }
 
     #[test]
     fn a_zero_heartbeat_interval_from_the_peer_is_refused_before_any_authority() {
