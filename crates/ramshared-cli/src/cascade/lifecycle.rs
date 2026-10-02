@@ -247,6 +247,17 @@ pub fn overall_state(view: &LifecycleView, snap: &CascadeSnapshot) -> OverallSta
         .unwrap_or(OverallState::Blocked)
 }
 
+/// The single `ok` verdict both status surfaces report.
+///
+/// The human text and `status --json` used to compute this independently, and
+/// the human line stopped at `view.ok && protection.is_ok()`. A guarded control
+/// plane or a released cache therefore printed `ok: true` while the JSON — the
+/// one the monitor reads — printed `ok: false`. One function, called from both
+/// renderers, is what keeps the two from drifting apart again.
+pub fn status_ok(view: &LifecycleView, snap: &CascadeSnapshot) -> bool {
+    view.ok && protection_state(view, snap).is_ok() && overall_state(view, snap).is_ok()
+}
+
 /// Parse `RAMSHARED_STATUS_ACTIVE_KIB`; invalid or missing → default.
 pub fn active_threshold_kib_from_env() -> u64 {
     match env::var("RAMSHARED_STATUS_ACTIVE_KIB") {
@@ -510,7 +521,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
     let protection = protection_state(view, snap);
     let protection_reason = protection_reason(view, snap);
     let overall = overall_state(view, snap);
-    let status_ok = view.ok && protection.is_ok() && overall.is_ok();
+    let ok = status_ok(view, snap);
     let guaranteed_kib = if snap.daemon_alive && snap.vram.present && snap.capacity_guaranteed {
         snap.vram.size_kib.to_string()
     } else {
@@ -583,7 +594,7 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
         origin_state = json_escape(snap.origin_state.as_str()),
         guardian_state = json_escape(snap.guardian_state.as_str()),
         overall_state = json_escape(overall.as_str()),
-        ok = if status_ok { "true" } else { "false" },
+        ok = if ok { "true" } else { "false" },
         topology_ok = if view.ok { "true" } else { "false" },
         reasons = reasons,
         z = tier_json(&snap.zram),
@@ -872,6 +883,43 @@ mod tests {
         assert!(j.contains("\"thresholds_kib\":{\"active\":1024}"));
         assert!(j.contains("\"in_progress\":false"));
         assert!(j.starts_with('{') && j.ends_with('}'));
+    }
+
+    #[test]
+    fn status_ok_includes_the_rollup_the_json_reports() {
+        // The human `ok:` line and the JSON `ok` field used to be computed
+        // separately. The human one stopped at `view.ok && protection.is_ok()`
+        // and so called a guarded control plane healthy while the JSON — the
+        // surface the monitor reads — said false. Both now call `status_ok`.
+        let mut snapshot = base();
+        snapshot.control_state = ControlState::Guarded;
+        let view = derive_lifecycle(&snapshot);
+        assert!(
+            view.ok,
+            "tier order is fine here; that is topology_ok, not the verdict"
+        );
+        assert!(!status_ok(&view, &snapshot));
+        let json = render_status_json(&view, &snapshot, "2026-10-02T00:00:00Z");
+        assert!(json.contains("\"ok\":false"), "{json}");
+        assert!(json.contains("\"topology_ok\":true"), "{json}");
+    }
+
+    #[test]
+    fn a_released_cache_or_a_measurement_error_is_not_ok() {
+        // Both are the live shape on this host: `cache: OFF` beside
+        // `protection: ACTIVE`, and a stale GPU-budget sample. Neither is a
+        // healthy product, so neither may print `ok: true`.
+        let mut released = base();
+        released.cache_state = CacheState::Off;
+        let view = derive_lifecycle(&released);
+        assert!(view.ok);
+        assert!(!status_ok(&view, &released));
+
+        let mut unmeasured = base();
+        unmeasured.measurement_errors = vec!["gpu_budget_telemetry_invalid_or_stale".to_string()];
+        let view = derive_lifecycle(&unmeasured);
+        assert!(view.ok);
+        assert!(!status_ok(&view, &unmeasured));
     }
 
     #[test]

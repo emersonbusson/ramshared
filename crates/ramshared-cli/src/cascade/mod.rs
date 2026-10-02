@@ -1486,9 +1486,9 @@ fn guardian_state_from_files(
 
 mod lifecycle;
 use lifecycle::{
-    CacheState, CascadeSnapshot, ControlState, DemoteSnapshot, GuardianState, OriginState,
-    TierSample, active_threshold_kib_from_env, derive_lifecycle, protection_reason,
-    protection_state, render_status_json,
+    CacheState, CascadeSnapshot, ControlState, DemoteSnapshot, GuardianState, LifecycleView,
+    OriginState, TierSample, active_threshold_kib_from_env, derive_lifecycle, overall_state,
+    protection_reason, protection_state, render_status_json, status_ok,
 };
 
 pub mod boot;
@@ -1857,8 +1857,21 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
     let protection_reason = protection_reason(&view, &snap);
     println!("phase: {} ({})", view.phase.as_str(), view.phase_reason);
     println!("protection: {} ({protection_reason})", protection.as_str());
-    println!("ok: {}", view.ok && protection.is_ok());
+    // Cache residency is a separate claim from tier protection. `protection:
+    // ACTIVE` means the VRAM tier is attached and serving swap pages; it does
+    // not mean the GPU cache is populated. Both lines are printed so the two
+    // cannot be read as one.
+    println!("{}", cache_line(&snap));
+    // The roll-up inputs are printed before the verdict they produce. `ok` is
+    // the same verdict the JSON reports and the monitor reads; if the human
+    // line stopped at the tier order it would call a guarded control plane or
+    // a released cache healthy while the product itself reports BLOCKED.
+    println!("{}", overall_line(&view, &snap));
+    println!("ok: {}", status_ok(&view, &snap));
     println!("topology_ok: {}", view.ok);
+    if !snap.measurement_errors.is_empty() {
+        println!("measurement_errors: {}", snap.measurement_errors.join(", "));
+    }
     if !view.reasons.is_empty() {
         println!("reasons: {}", view.reasons.join(", "));
     }
@@ -1925,6 +1938,41 @@ fn print_tier(name: &str, t: &TierSample) {
         "{name}: present={} prio={prio} size_kib={} used_kib={}",
         t.present, t.size_kib, t.used_kib
     );
+}
+
+/// One human-readable line for GPU cache residency.
+///
+/// Deliberately separate from `protection:`: a healthy cascade can have the
+/// VRAM tier serving swap with the cache released (`OFF`), and a populated
+/// cache is not what `protection: ACTIVE` claims. Rendering both is what stops
+/// the two being read as the same fact.
+fn cache_line(snap: &CascadeSnapshot) -> String {
+    let cached = snap
+        .vram_cached_kib
+        .map_or_else(|| "null".to_string(), |v| v.to_string());
+    let headroom = snap
+        .gpu_headroom_kib
+        .map_or_else(|| "null".to_string(), |v| v.to_string());
+    format!(
+        "cache: {} (vram_cached_kib={cached} gpu_headroom_kib={headroom}; separate claim from protection)",
+        snap.cache_state.as_str()
+    )
+}
+
+/// One human-readable line for the severity roll-up behind `ok`.
+///
+/// Lists every input `overall_state` weighs. Leaving one out is how a reader
+/// comes to treat the missing input as fine — the same conflation the `cache:`
+/// line exists to prevent, one level up.
+fn overall_line(view: &LifecycleView, snap: &CascadeSnapshot) -> String {
+    format!(
+        "overall: {} (control={} origin={} guardian={} cache={})",
+        overall_state(view, snap).as_str(),
+        snap.control_state.as_str(),
+        snap.origin_state.as_str(),
+        snap.guardian_state.as_str(),
+        snap.cache_state.as_str(),
+    )
 }
 
 mod cascade_io;
@@ -2003,6 +2051,159 @@ mod tests {
             CacheState::Unavailable
         );
         assert_eq!(cache_state_from_status(None, false, false), CacheState::Off);
+    }
+
+    /// Minimal snapshot for rendering tests. Every field that `cache_line` does
+    /// not read is a healthy default, so a failure points at the field the test
+    /// is about.
+    fn snapshot_for_cache_line(
+        cache_state: CacheState,
+        vram_cached_kib: Option<u64>,
+        gpu_headroom_kib: Option<u64>,
+    ) -> CascadeSnapshot {
+        CascadeSnapshot {
+            zram: TierSample::default(),
+            vram: TierSample::default(),
+            disk: TierSample::default(),
+            ghost: false,
+            order_ok: true,
+            daemon_alive: true,
+            daemon_pid: Some(1),
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
+            demote: DemoteSnapshot::default(),
+            active_kib: 1024,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(1024),
+            vram_cached_kib,
+            gpu_headroom_kib,
+            gpu_budget: None,
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_released_cache_renders_off_with_zero_cached_kib() {
+        // This is the live shape after a control-pressure release: the tier is
+        // still serving swap while the GPU cache is empty. The line must say
+        // so in the same words the status JSON uses, or a reader will take
+        // `protection: ACTIVE` as a claim about the cache.
+        let snap = snapshot_for_cache_line(CacheState::Off, Some(0), Some(2853175296 / 1024));
+        assert_eq!(
+            cache_line(&snap),
+            "cache: OFF (vram_cached_kib=0 gpu_headroom_kib=2786304; \
+             separate claim from protection)"
+        );
+    }
+
+    #[test]
+    fn absent_residency_numbers_render_as_null_not_as_zero() {
+        // `null` and `0` mean different things: `0` is a measured empty cache,
+        // `null` is "no sample". Collapsing them would let a missing
+        // measurement read as a successful empty one.
+        let snap = snapshot_for_cache_line(CacheState::Unavailable, None, None);
+        assert_eq!(
+            cache_line(&snap),
+            "cache: UNAVAILABLE (vram_cached_kib=null gpu_headroom_kib=null; \
+             separate claim from protection)"
+        );
+    }
+
+    #[test]
+    fn every_cache_state_renders_its_own_label() {
+        // A reader must be able to tell ACTIVE from RESTRICTED from STUCK on
+        // one line. If these collapse, the status line cannot be the place a
+        // user learns the cache died.
+        for (state, label) in [
+            (CacheState::Off, "OFF"),
+            (CacheState::Active, "ACTIVE"),
+            (CacheState::Restricted, "RESTRICTED"),
+            (CacheState::Unavailable, "UNAVAILABLE"),
+            (CacheState::Stuck, "STUCK"),
+        ] {
+            let line = cache_line(&snapshot_for_cache_line(state, Some(1), Some(2)));
+            assert!(
+                line.starts_with(&format!("cache: {label} ")),
+                "state {state:?} rendered as {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cache_line_is_never_a_protection_claim() {
+        // The whole reason this line exists: `protection: ACTIVE` and
+        // `cache: ACTIVE` are two facts, and the status text must not let one
+        // stand in for the other. The cache line names its own subject and
+        // never emits a `protection:` label of its own.
+        let snap = snapshot_for_cache_line(CacheState::Off, Some(0), Some(1));
+        let line = cache_line(&snap);
+        assert!(line.starts_with("cache: "), "{line}");
+        assert!(!line.starts_with("protection"), "{line}");
+        assert!(
+            !line.contains("protection: "),
+            "cache line must not emit a protection label: {line}"
+        );
+        assert!(
+            line.contains("separate claim from protection"),
+            "the line has to say the two are different claims: {line}"
+        );
+    }
+
+    #[test]
+    fn the_overall_line_names_every_input_the_verdict_weighs() {
+        // A reader who sees `ok: false` has to be able to see which input
+        // drove it. Dropping one from the parenthetical is how a missing
+        // input starts to read as fine.
+        let mut snap = snapshot_for_cache_line(CacheState::Off, Some(0), None);
+        snap.control_state = ControlState::Guarded;
+        snap.origin_state = OriginState::Ready;
+        snap.guardian_state = GuardianState::Healthy;
+        let view = derive_lifecycle(&snap);
+        assert_eq!(
+            overall_line(&view, &snap),
+            "overall: BLOCKED (control=GUARDED origin=READY guardian=HEALTHY cache=OFF)"
+        );
+    }
+
+    #[test]
+    fn the_ok_line_states_the_same_verdict_the_json_does() {
+        // This is the snapshot the live host actually publishes: tiers in
+        // order, VRAM tier serving, control plane guarded, cache released,
+        // GPU budget unmeasured. The human line used to print `ok: true` here
+        // while `status --json` printed `ok: false` for the same read.
+        let mut snap = snapshot_for_cache_line(CacheState::Off, Some(0), None);
+        snap.control_state = ControlState::Guarded;
+        snap.zram = TierSample {
+            present: true,
+            prio: Some(200),
+            size_kib: 2_097_148,
+            used_kib: 1_722_644,
+        };
+        snap.vram = TierSample {
+            present: true,
+            prio: Some(100),
+            size_kib: 4_194_300,
+            used_kib: 132_500,
+        };
+        snap.disk = TierSample {
+            present: true,
+            prio: Some(-2),
+            size_kib: 4_194_304,
+            used_kib: 111_060,
+        };
+        snap.measurement_errors = vec!["gpu_budget_telemetry_invalid_or_stale".to_string()];
+        let view = derive_lifecycle(&snap);
+
+        let human = format!("ok: {}", status_ok(&view, &snap));
+        let json = render_status_json(&view, &snap, "2026-10-02T00:21:47-03:00");
+        assert_eq!(human, "ok: false");
+        assert!(json.contains("\"ok\":false"), "{json}");
+        assert!(json.contains("\"topology_ok\":true"), "{json}");
     }
 
     #[test]
