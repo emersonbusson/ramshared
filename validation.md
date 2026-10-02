@@ -16802,3 +16802,88 @@ verdict is `false`.
 are resolved and a later entry reports a true verdict.
 
 ---
+
+## 2026-10-02 01:01 -03 — a stale bound gpu budget is an alarm, not a missing budget (EVD-0178)
+
+**What:** Classification correction and withdrawal of an incorrect fix.
+`68f1874a` rewrote a stale published `gpu_budget` to `null` at the publish seam,
+treating staleness as a producer defect. Wrong. Reverted in `b2c2a6f4`, whose
+body holds the full rationale and quotes.
+
+| Finding | Classification | Action |
+| --- | --- | --- |
+| `gpu_budget` sample stale while the document is fresh | **Observation (fact)** | Recorded. Not a defect. |
+| Publishing `null` for a **bound-but-stale** budget | **Incorrect conclusion** | Reverted. Silences a mandated alarm. |
+| `cache_state: "OFF"` beside live `cache_target_kib`, climbing `cache_releases` | **Reproduced, cause unknown** | Open. Cache state machine. |
+
+### Why
+
+SPEC DT-8 (`docs/specs/no-milestone/wsl2-control-plane-pressure-incident/
+SPEC.md`): stale mandatory telemetry is never green. PRD RF-6: `ok` is true only
+when the worst mandatory plane is healthy. A bound adapter budget is mandatory
+telemetry, so its staleness is the alarm; publishing `null` deletes it.
+
+The CLI's `null` is a **different** condition — `gpu_budget_guard=allocator_only`,
+never bound — and must not alarm. Reusing `null` for "bound but I cannot
+reconfirm it" spends that semantic on the wrong case.
+
+### Live, one sitting
+
+Document age 1,912 ms; `gpu_budget.sampled_at_unix_ms` age 8,656,889 ms —
+**1,731.4x** `TELEMETRY_MAX_AGE_MS` (5,000). Arithmetic identities pass;
+`cache_state: OFF`, `vram_cached_kib: 0`, `cache_target_kib: 33,792`,
+`cache_releases: 1,090,711`. Every `trusted_available_at` predicate passes
+**except age** — freshness only.
+
+### Open question
+
+`cache_state` is `"OFF"` while `cache_target_kib` is 33,792 and `cache_releases`
+has passed one million: a target is requested and the cache released at high
+frequency while the plane reports OFF and `vram_cached_kib` stays 0. Cache state
+machine, not budget publishing. No patch written for it here.
+
+### Must not be done
+
+Do **not** publish `null` for a bound-but-stale `gpu_budget` to clear
+`gpu_budget_telemetry_invalid_or_stale` — that alarm is DT-8 working. Do **not**
+conflate `protection: ACTIVE` with `cache_state: ACTIVE`. Live verdict at
+`b2c2a6f4`, correct and unchanged: `overall: BLOCKED`, `ok: false`,
+`measurement_errors: gpu_budget_telemetry_invalid_or_stale`.
+
+Tests 200 lib + 133 bin; clippy clean; no attribution trailers on `b2c2a6f4`.
+Bin count 138 to 133: the five tests of the reverted function left with it.
+
+**What this run does NOT prove:** product health (`ok: false`); that the stale
+budget is resolved; the cache-state question; `cache_state: ACTIVE`; no
+contention or boot round, host gate, screenshot challenge, vsock peer,
+multi-vendor GPU, or CoCo.
+
+**Verdict:** ✅ works (incorrect conclusion withdrawn and reverted; observation
+recorded as numbers; the two conflated contracts stated separately; a named
+must-not clause exists), ⚠️ partial (stale budget and the cache-state question
+are open; verdict is still `ok: false`)
+
+**Category:** telemetry contract; audit classification; corrected conclusion
+**How to measure:** read the daemon's cache-status document; compute
+`now - gpu_budget.sampled_at_unix_ms` against `TELEMETRY_MAX_AGE_MS` (5,000).
+If adapter bound, `driver_reported`, arithmetic identities hold and only age
+fails, require the error `gpu_budget_telemetry_invalid_or_stale` **and** the
+published `gpu_budget` to keep its original `sampled_at_unix_ms`. Catches a
+publish seam rewriting a bound-but-untrusted sample to `null`.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0178`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T04:01:53Z`.
+**Verified at:** `2026-10-02T04:01:53Z`.
+**Source revision:** `b2c2a6f4`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the three-way split (middle row is the point), the DT-8 vs
+CLI-`null` contrast, the must-not clause, and the 1,731.4x ratio. This log was
+1,044,204 of the 1 MiB cap before this entry; rotation is undecided.
+**Freshness:** Superseded by any change to `publish_origin_cache_status`'s
+budget choice, `trusted_available_at`, `TELEMETRY_MAX_AGE_MS`, the CLI's
+`gpu_budget_telemetry_invalid_or_stale` predicate, or when the cache-state
+question is answered.
+
+---
