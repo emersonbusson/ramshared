@@ -15744,3 +15744,132 @@ change to `Get-GuardianTaskXmlFingerprint`, `Assert-GuardianTaskXmlSeal`,
 schema.
 
 ---
+
+## 2026-10-01 21:53 -03 — the operator guide documented boot commands that cannot work (EVD-0171)
+
+**What:** `docs/OPERATOR-GUIDE.md` §5 told operators to enable boot
+autostart with `sudo scripts/safety/install-cascade-boot.sh --enable` and to
+revert with `sudo scripts/safety/install-cascade-boot.sh --disable`. Neither
+command can work:
+
+| Documented command | Actual behaviour |
+| --- | --- |
+| `install-cascade-boot.sh --enable` | Unconditional refusal: `refuse BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL` (`scripts/safety/install-cascade-boot.sh`). The installer's usage text already says the units install disabled and that "a separate scoped lifecycle approval is required before it can activate or deactivate a cascade". |
+| `install-cascade-boot.sh --disable` | Flag does not exist. The accepted set is `--plan`, `--approve-nbd-product-install`, `--lower-sink`, `--approve-legacy-unit-replacement`, `--approve-legacy-auxiliary-unit-replacement`, `--enable`, `--help`/`-h`. Anything else is `UNSUPPORTED_ARGUMENT`. |
+
+The old section, reproduced from revision `5c2529ba`:
+
+```
+### Enabling Boot Integration
+
+sudo scripts/safety/install-cascade-boot.sh --enable
+
+### Disabling Boot Integration
+
+sudo scripts/safety/install-cascade-boot.sh --disable
+```
+
+**Why this matters beyond a typo:** an operator who follows that section runs
+the enable command, reads `BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL`, and
+concludes boot autostart is broken. That is the shape of the "is it a bug?"
+question this session has been answering. EVD-0167 established the gate mints
+on this host; EVD-0168 established the units were simply never enabled
+because RF-1 is opt-in. The remaining gap was the documentation, not the
+product.
+
+**Classification:**
+
+- **reproduced defect (documentation).** The commands were wrong, they were
+  in the operator-facing runbook, and they fail on a clean invocation. This
+  is a defect in the same sense as a wrong CLI example in a man page.
+- **not a code defect — correct fail-closed behaviour.** The installer
+  refusing `--enable` is the RF-1 contract (`docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md`:
+  "No `systemctl enable` is added (RF-1 stays opt-in; the script already
+  refuses `systemctl enable`)"). The documentation contradicted the product;
+  the product was right.
+- **incorrect conclusion the doc produced:** "boot autostart is broken" /
+  "cascades not coming up at WSL2 start is a bug". It is expected behaviour
+  for an installed product that has not been set to autostart.
+
+**What was changed (revision `b3be264f`):** §5 now documents the real
+opt-in procedure — enable `ramshared-host-gate.service`,
+`ramshared-cascade.service` and `ramshared-supervisor.service` with
+`systemctl` under `sudo`, which links them into `multi-user.target` without
+starting anything, and revert with `systemctl disable` — plus the
+prerequisites the boot gate fails closed on, a unit role table, why the
+installer is not the enablement surface, and what to expect from the
+fail-closed gate at boot. The commands are written as prose with inline code
+spans rather than bare fenced command lines, matching every other `systemctl`
+reference in `docs/`, so `tools/ci/check-public-hygiene.mjs` keeps treating
+them the way it treats the SPECs.
+
+**Gate evidence for the rewrite:**
+
+| Gate | Result |
+| --- | --- |
+| `node tools/ci/check-public-hygiene.mjs --check` | `PUBLIC_HYGIENE_STATUS=PASS` (`FILES=1203`) |
+| `./scripts/docs-check.sh` | `✓ docs-check OK` |
+| `node tools/check-broken-links.mjs` | `✓ no broken markdown links (scan=docs/)` |
+| baseline before the fix | stashing `docs/OPERATOR-GUIDE.md` restored `PUBLIC_HYGIENE_STATUS=PASS` — the file was the only source of the findings |
+
+The first draft of the rewrite used bare fenced `sudo systemctl enable …`
+command lines and tripped the hygiene gate with
+`UNGUARDED_ACTIVATION` at four lines and `RAW_ARTIFACT_RUN_PATH` at the
+literal release-selector path. Those findings were **not** worked around with
+a false "historical / do not execute" marker: live operator procedures must
+not be labelled inert. The rewrite follows the documentation convention the
+rest of the tree already uses, which is how the SPECs write `systemctl` and
+pass.
+
+**What this run does NOT prove:**
+
+- **No boot round.** EVD-0168's units remain armed but unexercised. Writing
+  the procedure down is not exercising it.
+- **The gate has still not run for real** on this host.
+- **GAP row 36 is still open.** The guardian still runs the 9P checkout path;
+  EVD-0170's sealed activation procedure is identified, not executed.
+- **The pre-existing public-hygiene backlog is untouched.** `--check` passes
+  over the candidate tree; a tracked-file sweep still reports historical
+  findings across older SPEC/PRD/IMPL and `validation.md` text, and
+  `validation.md` is append-only so those cannot be rewritten in place.
+- Not vsock, multi-vendor GPU, CoCo, screenshot-challenge, or
+  `cache_state: ACTIVE` evidence.
+
+**Verdict:** ✅ works (the defect is reproduced, root-caused to documentation
+rather than product, and the corrected procedure passes every gate that
+covers it), ⚠️ partial (the documented procedure is not yet exercised by a
+boot round)
+
+**Category:** operator documentation accuracy; boot lifecycle procedure;
+fail-closed refusal cited as a symptom
+**How to measure:** For any runbook command, execute the documented line on a
+clean shell and compare the exit path to the documented outcome. Here the
+enable command must exit non-zero with
+`BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL` and the disable command must exit
+non-zero with `UNSUPPORTED_ARGUMENT` — that pair is the reproduction. After
+the fix, the same two lines must no longer appear as the enablement surface:
+grep the runbook for `install-cascade-boot.sh --enable` and
+`install-cascade-boot.sh --disable` and expect zero hits outside prose that
+explains why they are not the command. The positive case is a `systemctl
+is-enabled` of the three boot-path units reporting `enabled` after the
+documented enablement step, and `disabled` after the documented revert.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0171`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T00:53:59Z`.
+**Verified at:** `2026-10-02T00:53:59Z`.
+**Source revision:** `b3be264f`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the two failed commands visible next to the refusal and
+`UNSUPPORTED_ARGUMENT` strings — the mismatch between the runbook and the
+installer's own usage text is the evidence. Keep the "not a code defect"
+classification; a reader must not "fix" the installer's refusal. Keep the
+note that the first rewrite draft tripped `UNGUARDED_ACTIVATION` and that
+false inert-labels were refused as a way past it.
+**Freshness:** Superseded when §5 is edited again, when
+`install-cascade-boot.sh` gains or loses a lifecycle flag, or when the RF-1
+opt-in contract in `docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md`
+changes.
+
+---
