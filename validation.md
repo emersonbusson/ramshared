@@ -16650,3 +16650,155 @@ fields; that is the whole reason a second check exists.
 control-plane module's coverage below the 80% gate.
 
 ---
+
+## 2026-10-02 00:31 -03 — the human status said ok while the JSON said blocked (EVD-0177)
+
+**What:** `ramshared status` text output is now the same product status as
+`ramshared status --json`. Two omissions on the human surface are closed:
+`cache_state` is printed at all, and the `ok:` verdict is computed from one
+function shared with the JSON renderer.
+
+### Defect 1 — the cache claim was invisible (reproduced)
+
+The human renderer printed `protection: ACTIVE (guaranteed_vram_tier_active)`
+and never printed `cache_state`. `render_status_json` has published
+`cache_state` since schema 4. On this host the two claims disagree right now:
+the VRAM tier is attached and serving swap pages while the GPU cache is
+released. A reader who saw `protection: ACTIVE` and nothing else had no way to
+learn that, which is the conflation every entry since EVD-0168 has warned
+about.
+
+### Defect 2 — the two surfaces reported different `ok` (reproduced)
+
+This one is a contradiction, not an omission. For the **same read-only
+snapshot**:
+
+| Surface | Formula | Value on this host |
+| --- | --- | --- |
+| human `ok:` | `view.ok && protection.is_ok()` | `true` |
+| JSON `ok` | `view.ok && protection.is_ok() && overall.is_ok()` | `false` |
+
+`overall_state` rolls up control, guardian, origin, cache and
+`measurement_errors`. Here `control_state` is `GUARDED`, `cache_state` is
+`OFF` with the product active, and `measurement_errors` holds
+`gpu_budget_telemetry_invalid_or_stale`, so `overall` is `BLOCKED`. The human
+line stopped early and called that healthy. `monitor.rs` reads the JSON `ok`
+(`observation.bool_value("ok")`), so the product's own monitor and a user
+running `ramshared status` were being told opposite things.
+
+`status_ok(view, snap)` in `lifecycle.rs` is now the only place that verdict is
+computed, and both renderers call it. The human surface also prints the
+roll-up inputs and `measurement_errors:`, so a `false` is explained.
+
+### Live before / after, same host, same cascade
+
+Captured against the installed binary and against this revision's binary in
+the same sitting.
+
+Before (`/usr/local/bin/ramshared status`):
+
+```text
+phase: UsingVram (vram_used_ge_threshold)
+protection: ACTIVE (guaranteed_vram_tier_active)
+ok: true
+topology_ok: true
+```
+
+After (`./target/debug/ramshared status` at `5fbaa995`):
+
+```text
+phase: UsingVram (vram_used_ge_threshold)
+protection: ACTIVE (guaranteed_vram_tier_active)
+cache: OFF (vram_cached_kib=0 gpu_headroom_kib=null; separate claim from protection)
+overall: BLOCKED (control=GUARDED origin=READY guardian=HEALTHY cache=OFF)
+ok: false
+topology_ok: true
+measurement_errors: gpu_budget_telemetry_invalid_or_stale
+```
+
+`status --json` on the same snapshot agrees field for field: `ok: false`,
+`topology_ok: true`, `overall_state: "BLOCKED"`, `cache_state: "OFF"`,
+`control_state: "GUARDED"`, `capacity.vram_cached_kib: 0`,
+`capacity.gpu_headroom_kib: null`,
+`measurement_errors: ["gpu_budget_telemetry_invalid_or_stale"]`.
+
+`gpu_headroom_kib` rendering as `null` and not `0` is the `absent_residency_
+numbers_render_as_null_not_as_zero` case in production: no sample is not a
+measured empty.
+
+### Named tests
+
+All passing at `5fbaa995`:
+
+- `a_released_cache_renders_off_with_zero_cached_kib`
+- `absent_residency_numbers_render_as_null_not_as_zero`
+- `every_cache_state_renders_its_own_label`
+- `the_cache_line_is_never_a_protection_claim`
+- `the_overall_line_names_every_input_the_verdict_weighs`
+- `the_ok_line_states_the_same_verdict_the_json_does`
+- `status_ok_includes_the_rollup_the_json_reports`
+- `a_released_cache_or_a_measurement_error_is_not_ok`
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| `cargo test -p ramshared-cli --bins` | `ok. 561 passed; 0 failed` (was 552; 9 new) |
+| `cargo clippy -p ramshared-cli --all-targets -- -D warnings` | clean |
+| `rustfmt --edition 2024 --check` on the three touched files | clean |
+| `node tools/ci/check-public-hygiene.mjs --check` | `PUBLIC_HYGIENE_STATUS=PASS` (`FILES=1204`) |
+
+`cargo clippy` was **failing** before this work, on
+`supervisor.rs:2781` `used expect() on a Result value`. That is a separate
+reproduced defect — a test-only lint attribute missing from one test module —
+and is fixed in `0ac0d8c1` so the crate gate is green again. It is not
+evidence about cascade behaviour.
+
+**What this run does NOT prove:**
+
+- The live verdict is now **`ok: false`**, not `ok: true`. This entry is
+  evidence that the surfaces agree and that the text no longer lies. It is
+  **not** evidence that the product is healthy.
+- `cache_state` is still `OFF`. Nothing here populates the GPU cache.
+- The underlying reasons the verdict is false — `control_state: GUARDED`,
+  `cache_state: OFF` with the product active,
+  `gpu_budget_telemetry_invalid_or_stale` — are **unchanged and still open**.
+  This work reports them; it does not resolve them.
+- No contention round for the supervisor, no boot round, no host gate, no
+  screenshot-challenge evidence, no `cache_state: ACTIVE`, no vsock peer, no
+  multi-vendor GPU, no CoCo.
+
+**Verdict:** ✅ works (the human surface now states the same facts as the
+JSON, the two `ok` verdicts cannot drift because they share one function, and
+every claim has a named test with live before/after on this host), ⚠️ partial
+(the verdict the product now honestly reports is `ok: false`; the conditions
+behind it are untouched)
+
+**Category:** status surface truthfulness; product clarity; cli observability
+**How to measure:** take one snapshot and render it both ways. Require the
+human `ok:` and the JSON `ok` to be identical, and require that a snapshot
+with `view.ok == true` and `protection.is_ok() == true` but a non-healthy
+`overall_state` (guarded control plane, released cache, or a non-empty
+`measurement_errors`) renders `ok: false` on both. Require the `cache:` line
+to carry the residency numbers and to contain no `protection:` label. The
+regression this catches is one renderer re-inlining its own `ok` formula.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0177`.
+**Owner role:** `core-runtime-engineer`.
+**Observed at:** `2026-10-02T00:31:53-03:00`.
+**Verified at:** `2026-10-02T00:31:53-03:00`.
+**Source revision:** `5fbaa995`.
+**Lifecycle:** `reviewable`.
+**Retention:** Keep the two-defect split and the formula table. The formula
+table is the whole finding: two surfaces, one field name, two different
+definitions. Keep the before/after block — a reader must be able to see that
+`ok: true` was being printed beside a product the monitor reported as blocked.
+Keep the "not evidence that the product is healthy" clause; the honest live
+verdict is `false`.
+**Freshness:** Superseded on any change to `status_ok`, `render_status_json`'s
+`ok` field, `overall_state`, `cache_line`, `overall_line`, or the human
+`status()` renderer — or when the conditions behind the current `ok: false`
+are resolved and a later entry reports a true verdict.
+
+---
