@@ -9,8 +9,8 @@ publish.workspace = true
 
 [dependencies]
 ramshared-vram = { path = "../ramshared-vram" }
-cuda-core = { version = "0.3.1", optional = true }
-cuda-async = { version = "0.3.1", optional = true }
+cuda-core = { version = "0.4.0", optional = true }
+cuda-async = { version = "0.4.0", optional = true }
 
 [features]
 default = []
