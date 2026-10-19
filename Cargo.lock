@@ -197,7 +197,7 @@ dependencies = [
  "document-features",
  "mio",
  "parking_lot",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "signal-hook",
  "signal-hook-mio",
  "winapi",
@@ -229,9 +229,9 @@ dependencies = [
 
 [[package]]
 name = "cuda-async"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6d51fe2c9b1a89f4ac760d72a197761789f4e60db1d07d3f4d48de65a78adc9"
+checksum = "c7c3b4fa318d58c66d64b16768c610a56cd7dcb7824626dabf6022eb4c9eb71b"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -246,9 +246,9 @@ dependencies = [
 
 [[package]]
 name = "cuda-bindings"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f42e2c99c56bf2eef9d569435bfd72a478dfaea3f178b8e5bae891875bbbe2e"
+checksum = "6056dad2ab4855a22eb1b16f597e4d3ef7fae6bfde80eed47f2acf90ddcfe78a"
 dependencies = [
  "bindgen",
  "libloading",
@@ -260,9 +260,9 @@ dependencies = [
 
 [[package]]
 name = "cuda-core"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84bdb592a2844148fb13bdfbbab158879f56916bde1d1a1b6580ca27f23850cd"
+checksum = "dedfb4b1351063f77ca85e6f72d22cae5cd591e538b950da452d1e88a66a601d"
 dependencies = [
  "anyhow",
  "cuda-bindings",
@@ -273,9 +273,9 @@ dependencies = [
 
 [[package]]
 name = "cuda-core-derive"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a48da7d10c1078f7fbb87d7176e9476affadea148babf31946e348073872d44"
+checksum = "f466efc33480f95d2968fd078ba4215d19d95e2a54274b2ab01cc5ee484dc587"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -676,9 +676,9 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libloading"
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-agent"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -945,14 +945,14 @@ dependencies = [
 
 [[package]]
 name = "ramshared-block"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-vram",
 ]
 
 [[package]]
 name = "ramshared-broker"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -960,13 +960,13 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cli"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "libc",
  "ramshared-cuda",
  "ramshared-tier",
  "ratatui",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-config"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cuda"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "cuda-async",
  "cuda-core",
@@ -993,22 +993,22 @@ dependencies = [
 
 [[package]]
 name = "ramshared-dxg"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ramshared-integrity"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 
 [[package]]
 name = "ramshared-tier"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 
 [[package]]
 name = "ramshared-uring"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "io-uring",
  "libc",
@@ -1016,11 +1016,11 @@ dependencies = [
 
 [[package]]
 name = "ramshared-vram"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 
 [[package]]
 name = "ramshared-vulkan"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ash",
  "ramshared-vram",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winbroker"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -1041,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winsvc"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "base64",
  "ramshared-block",
@@ -1059,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-wsl2d"
-version = "0.14.1" # x-release-please-version
+version = "0.14.1"
 dependencies = [
  "ramshared-block",
  "ramshared-broker",
@@ -1070,7 +1070,7 @@ dependencies = [
  "ramshared-uring",
  "ramshared-vram",
  "ramshared-vulkan",
- "rustix 1.1.4",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2",
@@ -1216,9 +1216,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "891efababe418670775f199f0d233d84843c227a0949a883ce15b37c78d6629d"
 dependencies = [
  "bitflags",
  "errno",
@@ -1283,9 +1283,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
  "itoa",
  "memchr",
@@ -1307,18 +1307,18 @@ dependencies = [
 
 [[package]]
 name = "serde_spanned"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
 dependencies = [
  "serde_core",
 ]
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -1492,9 +1492,9 @@ checksum = "9e1c906769ad99c88eaa54e728060edef082f8e358ff32030cb7c7d315e81109"
 
 [[package]]
 name = "toml"
-version = "1.1.6+spec-1.1.0"
+version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+checksum = "20489e00e4d8741d6be680764cc12e270655e375a20d1011e844a9c3379e678d"
 dependencies = [
  "indexmap",
  "serde_core",
@@ -1507,27 +1507,27 @@ dependencies = [
 
 [[package]]
 name = "toml_datetime"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+checksum = "2b86d767906c6c42421dcba507eb9d203e779497710a47782a224bb871653053"
 dependencies = [
  "serde_core",
 ]
 
 [[package]]
 name = "toml_parser"
-version = "1.1.3+spec-1.1.0"
+version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
 
 [[package]]
 name = "toml_writer"
-version = "1.1.2+spec-1.1.0"
+version = "1.1.3+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "typenum"
